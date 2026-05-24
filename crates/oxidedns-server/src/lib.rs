@@ -681,6 +681,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tcp_connection_serves_back_to_back_framed_queries() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("mail.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 20].to_vec()],
+                ),
+            ],
+        ));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_tcp_connection(
+                stream,
+                zones,
+                std::time::Duration::from_secs(5),
+                1232,
+                8,
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(5),
+                0,
+                AnyResponseMode::Minimal,
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let first = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let mut second = query(b"\x04mail\x07example\x04test\x00", RecordType::A as u16, 1);
+        second[0..2].copy_from_slice(&0x5678u16.to_be_bytes());
+        let mut pipelined = frame_tcp_message(&first);
+        pipelined.extend_from_slice(&frame_tcp_message(&second));
+        client.write_all(&pipelined).await.unwrap();
+
+        let first_response = read_framed_tcp_response(&mut client).await;
+        let second_response = read_framed_tcp_response(&mut client).await;
+        drop(client);
+        server.await.unwrap();
+
+        assert_eq!(Header::parse(&first_response).unwrap().id, 0x1234);
+        assert_eq!(Header::parse(&second_response).unwrap().id, 0x5678);
+        assert_eq!(
+            u16::from_be_bytes([first_response[6], first_response[7]]),
+            1
+        );
+        assert_eq!(
+            u16::from_be_bytes([second_response[6], second_response[7]]),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn tcp_connection_closes_after_idle_timeout() {
         let zones = ZoneStore::new();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -891,6 +966,15 @@ mod tests {
         packet.extend_from_slice(&qtype.to_be_bytes());
         packet.extend_from_slice(&qclass.to_be_bytes());
         packet
+    }
+
+    async fn read_framed_tcp_response(stream: &mut TcpStream) -> Vec<u8> {
+        let mut length_prefix = [0u8; 2];
+        stream.read_exact(&mut length_prefix).await.unwrap();
+        let response_len = u16::from_be_bytes(length_prefix) as usize;
+        let mut response = vec![0u8; response_len];
+        stream.read_exact(&mut response).await.unwrap();
+        response
     }
 
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {

@@ -123,6 +123,7 @@ Slice 4 is in progress:
 - TCP listeners bind from static configuration;
 - DNS-over-TCP messages use the two-octet length prefix;
 - zero-length DNS-over-TCP frames close the connection and emit a warning log;
+- back-to-back framed TCP queries on one connection receive independently framed responses matched by query ID;
 - TCP query handling reuses the same authoritative response core as UDP;
 - idle TCP connections close after the configured `[limits].tcp_idle_timeout_secs`, defaulting to 30 seconds;
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds.
