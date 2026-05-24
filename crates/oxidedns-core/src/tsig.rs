@@ -193,6 +193,14 @@ impl TsigKey {
         verify_response(message, self, request_mac, now_unix)
     }
 
+    pub fn verify_request(
+        &self,
+        message: &[u8],
+        now_unix: u64,
+    ) -> Result<VerifiedMessage, TsigError> {
+        verify_request(message, self, now_unix)
+    }
+
     pub fn verify_tcp_response_stream(
         &self,
         messages: &[Vec<u8>],
@@ -400,6 +408,58 @@ pub fn verify_response(
         &tsig.other_data,
     );
     let mut mac_input = response_mac_input(request_mac, &unsigned_message, &variables);
+    let expected_mac = key.sign(&mac_input)?;
+    mac_input.zeroize();
+    if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
+        return Err(TsigError::InvalidMac);
+    }
+
+    Ok(VerifiedMessage {
+        message: unsigned_message,
+        mac: tsig.mac,
+        time_signed: tsig.time_signed,
+    })
+}
+
+pub fn verify_request(
+    message: &[u8],
+    key: &TsigKey,
+    now_unix: u64,
+) -> Result<VerifiedMessage, TsigError> {
+    let (unsigned_message, tsig) = remove_tsig(message)?;
+    if tsig.owner.canonical_key() != key.name.canonical_key() {
+        return Err(TsigError::KeyMismatch);
+    }
+    if tsig.algorithm != key.algorithm {
+        return Err(TsigError::AlgorithmMismatch);
+    }
+    if tsig.error != TSIG_ERROR_NOERROR {
+        return Err(TsigError::ResponseError(tsig.error));
+    }
+    if tsig.original_id
+        != u16::from_be_bytes([
+            unsigned_message[DNS_HEADER_ID_OFFSET],
+            unsigned_message[DNS_HEADER_ID_OFFSET + 1],
+        ])
+    {
+        return Err(TsigError::MalformedTsig);
+    }
+    if now_unix.saturating_add(tsig.fudge as u64) < tsig.time_signed
+        || tsig.time_signed.saturating_add(tsig.fudge as u64) < now_unix
+    {
+        return Err(TsigError::TimeOutsideFudge);
+    }
+
+    let variables = tsig_variables(
+        key,
+        tsig.time_signed,
+        tsig.fudge,
+        tsig.error,
+        &tsig.other_data,
+    );
+    let mut mac_input = Vec::with_capacity(unsigned_message.len() + variables.len());
+    mac_input.extend_from_slice(&unsigned_message);
+    mac_input.extend_from_slice(&variables);
     let expected_mac = key.sign(&mac_input)?;
     mac_input.zeroize();
     if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
@@ -932,6 +992,40 @@ mod tests {
         offset += 2;
         assert_eq!(offset, rdata_end);
         assert_eq!(offset, signed.message.len());
+    }
+
+    #[test]
+    fn verifies_request_and_returns_unsigned_message() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let query = sample_soa_query();
+        let signed = key
+            .sign_request(&query, 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+
+        let verified = key
+            .verify_request(&signed.message, 1_700_000_000)
+            .expect("verified request");
+
+        assert_eq!(verified.message, query);
+        assert_eq!(verified.mac, signed.mac);
+    }
+
+    #[test]
+    fn rejects_request_with_invalid_mac() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let mut signed = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+        let unsigned_len = sample_soa_query().len();
+        signed.message[unsigned_len - 1] ^= 0x01;
+
+        let error = key
+            .verify_request(&signed.message, 1_700_000_000)
+            .expect_err("tampered request");
+
+        assert_eq!(error, TsigError::InvalidMac);
     }
 
     #[test]

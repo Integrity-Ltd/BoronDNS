@@ -21,7 +21,7 @@ use oxidedns_core::{
     axfr::{self, AxfrError, IxfrResponse},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Transport, answer_message_with_notify_hooks,
+        DomainName, Header, Opcode, Question, Transport, answer_message_with_notify_hooks,
     },
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
     zone::{SoaTimers, ZoneSnapshot, ZoneStore},
@@ -692,8 +692,14 @@ async fn serve_udp(
             .await
             .map_err(RuntimeError::Udp)?;
         let peer_ip = peer.ip();
+        let Some(prepared) =
+            prepare_notify_packet(&buffer[..len], &settings.notify_authority, peer_ip)
+        else {
+            debug!(%peer, bytes = len, "discarded DNS datagram");
+            continue;
+        };
         match answer_message_with_notify_hooks(
-            &buffer[..len],
+            &prepared.packet,
             &zones,
             AnswerOptions {
                 transport: Transport::Udp,
@@ -726,6 +732,13 @@ async fn serve_udp(
                 debug!(%peer, bytes = len, "discarded DNS datagram");
             }
             DatagramAction::Respond(response) => {
+                let response = match sign_notify_response(response, prepared.response_tsig) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        warn!(%peer, %error, "failed to sign NOTIFY response");
+                        continue;
+                    }
+                };
                 socket
                     .send_to(&response, peer)
                     .await
@@ -1192,11 +1205,22 @@ fn jitter_seed() -> u64 {
 #[derive(Debug, Clone, Default)]
 struct NotifyAuthority {
     sources_by_zone: Arc<HashMap<String, HashSet<IpAddr>>>,
+    tsig_keys_by_zone: Arc<HashMap<String, Arc<TsigKey>>>,
 }
 
 impl NotifyAuthority {
     fn from_config(config: &ServerConfig) -> Self {
         let mut sources_by_zone = HashMap::new();
+        let tsig_keys = config
+            .tsig_keys
+            .iter()
+            .map(|key| {
+                let key = TsigKey::from_base64(&key.name, &key.algorithm, &key.secret)
+                    .expect("configuration validation rejects invalid TSIG keys");
+                (key.name.canonical_key(), Arc::new(key))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut tsig_keys_by_zone = HashMap::new();
         for zone in &config.zones {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
@@ -1207,10 +1231,20 @@ impl NotifyAuthority {
                 .collect::<HashSet<_>>();
             sources.extend(zone.notify_sources.iter().copied());
             sources_by_zone.insert(origin.canonical_key(), sources);
+            if let Some(tsig_key) = &zone.tsig_key {
+                let key_name = DomainName::from_absolute_str(tsig_key)
+                    .expect("configuration validation rejects invalid TSIG key references");
+                let key = tsig_keys
+                    .get(&key_name.canonical_key())
+                    .expect("configuration validation rejects unknown TSIG key references")
+                    .clone();
+                tsig_keys_by_zone.insert(origin.canonical_key(), key);
+            }
         }
 
         Self {
             sources_by_zone: Arc::new(sources_by_zone),
+            tsig_keys_by_zone: Arc::new(tsig_keys_by_zone),
         }
     }
 
@@ -1221,6 +1255,83 @@ impl NotifyAuthority {
                 .get(&qname.canonical_key())
                 .is_some_and(|sources| sources.contains(&source))
     }
+
+    fn tsig_key_for_notify(&self, qname: &DomainName, qclass: u16) -> Option<Arc<TsigKey>> {
+        if qclass != 1 {
+            return None;
+        }
+        self.tsig_keys_by_zone.get(&qname.canonical_key()).cloned()
+    }
+}
+
+struct PreparedDnsMessage {
+    packet: Vec<u8>,
+    response_tsig: Option<ResponseTsig>,
+}
+
+struct ResponseTsig {
+    key: Arc<TsigKey>,
+    request_mac: Vec<u8>,
+}
+
+fn prepare_notify_packet(
+    packet: &[u8],
+    notify_authority: &NotifyAuthority,
+    source: IpAddr,
+) -> Option<PreparedDnsMessage> {
+    let unsigned = || PreparedDnsMessage {
+        packet: packet.to_vec(),
+        response_tsig: None,
+    };
+
+    let header = match Header::parse(packet) {
+        Ok(header) => header,
+        Err(_) => return Some(unsigned()),
+    };
+    if header.is_response() || header.opcode() != Some(Opcode::Notify) {
+        return Some(unsigned());
+    }
+
+    let question = match Question::parse(packet) {
+        Ok(question) => question,
+        Err(_) => return Some(unsigned()),
+    };
+    let Some(key) = notify_authority.tsig_key_for_notify(&question.qname, question.qclass) else {
+        return Some(unsigned());
+    };
+
+    match key.verify_request(packet, tsig_time_signed()) {
+        Ok(verified) => Some(PreparedDnsMessage {
+            packet: verified.message,
+            response_tsig: Some(ResponseTsig {
+                key,
+                request_mac: verified.mac,
+            }),
+        }),
+        Err(error) => {
+            warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
+            None
+        }
+    }
+}
+
+fn sign_notify_response(
+    response: Vec<u8>,
+    response_tsig: Option<ResponseTsig>,
+) -> Result<Vec<u8>, TsigError> {
+    let Some(response_tsig) = response_tsig else {
+        return Ok(response);
+    };
+
+    Ok(response_tsig
+        .key
+        .sign_response(
+            &response,
+            &response_tsig.request_mac,
+            tsig_time_signed(),
+            DEFAULT_TSIG_FUDGE_SECS,
+        )?
+        .message)
 }
 
 #[derive(Debug, Clone)]
@@ -1683,8 +1794,12 @@ async fn handle_tcp_connection(
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
+        let Some(prepared) = prepare_notify_packet(&packet, &notify_authority, peer_ip) else {
+            debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
+            continue;
+        };
         match answer_message_with_notify_hooks(
-            &packet,
+            &prepared.packet,
             &zones,
             AnswerOptions {
                 transport: Transport::Tcp,
@@ -1709,6 +1824,13 @@ async fn handle_tcp_connection(
                 debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
             }
             DatagramAction::Respond(response) => {
+                let response = match sign_notify_response(response, prepared.response_tsig) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        warn!(%peer_ip, %error, "failed to sign NOTIFY response");
+                        continue;
+                    }
+                };
                 match tokio::time::timeout(
                     write_timeout,
                     stream.write_all(&frame_dns_tcp_message(&response)),
@@ -1786,7 +1908,7 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        dns::{AnyResponseMode, DomainName, Header, RecordType},
+        dns::{AnyResponseMode, DomainName, Header, Opcode, RecordType},
         tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
@@ -1795,9 +1917,10 @@ mod tests {
         IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
         RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
         handle_tcp_connection, jitter_interval, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, query_id_from_random_bytes, refresh_zone_from_primaries,
-        serial_after, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
+        refresh_zone_from_primaries, serial_after, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id,
     };
 
     #[test]
@@ -1839,6 +1962,76 @@ mod tests {
         assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 1, "203.0.113.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 255, "192.0.2.53".parse().unwrap()));
+    }
+
+    #[test]
+    fn notify_authority_requires_tsig_for_configured_zone() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("valid config");
+        let authority = NotifyAuthority::from_config(&config);
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+
+        let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.53".parse().unwrap());
+
+        assert!(prepared.is_none());
+    }
+
+    #[test]
+    fn signed_notify_is_verified_stripped_and_response_signed() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("valid config");
+        let authority = NotifyAuthority::from_config(&config);
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+
+        let prepared = prepare_notify_packet(
+            &signed_notify.message,
+            &authority,
+            "192.0.2.53".parse().unwrap(),
+        )
+        .expect("verified NOTIFY");
+
+        assert_eq!(prepared.packet, packet);
+        let response = notify_response(0x1234);
+        let signed_response = sign_notify_response(response.clone(), prepared.response_tsig)
+            .expect("signed NOTIFY response");
+        let verified_response = key
+            .verify_response(&signed_response, &signed_notify.mac, current_unix_time())
+            .expect("verified NOTIFY response");
+        assert_eq!(verified_response.message, response);
     }
 
     #[test]
@@ -3291,6 +3484,38 @@ mod tests {
         out.extend_from_slice(&(soa.rdata.len() as u16).to_be_bytes());
         out.extend_from_slice(&soa.rdata);
         out
+    }
+
+    fn notify_packet(qid: u16, qname: &str, qtype: u16, qclass: u16) -> Vec<u8> {
+        let qname = DomainName::from_absolute_str(qname).unwrap();
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&qid.to_be_bytes());
+        packet.extend_from_slice(&((Opcode::Notify as u16) << 11).to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&qname.to_wire());
+        packet.extend_from_slice(&qtype.to_be_bytes());
+        packet.extend_from_slice(&qclass.to_be_bytes());
+        packet
+    }
+
+    fn notify_response(qid: u16) -> Vec<u8> {
+        let qname = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut response = Vec::new();
+        response.extend_from_slice(&qid.to_be_bytes());
+        response.extend_from_slice(
+            &(0x8000u16 | ((Opcode::Notify as u16) << 11) | 0x0400).to_be_bytes(),
+        );
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&qname.to_wire());
+        response.extend_from_slice(&(RecordType::Soa as u16).to_be_bytes());
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response
     }
 
     fn query(qname: &[u8], qtype: u16, qclass: u16) -> Vec<u8> {
