@@ -682,6 +682,20 @@ fn answer_notify_message(
         ));
     }
 
+    if validate_notify_answer_soa(header, packet, &question).is_err() {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
+
     if question.qclass != DNS_CLASS_IN || zone_store.find_exact_zone(&question.qname).is_none() {
         return DatagramAction::Respond(build_response(
             header,
@@ -711,6 +725,44 @@ fn answer_notify_message(
         metadata,
         options,
     ))
+}
+
+fn validate_notify_answer_soa(
+    header: &Header,
+    packet: &[u8],
+    question: &Question,
+) -> Result<Option<u32>, EdnsError> {
+    let mut offset = DNS_HEADER_LEN + question.wire().len();
+    let mut serial = None;
+    for _ in 0..header.ancount {
+        let (record, consumed) = parse_additional_record(packet, offset)?;
+        offset += consumed;
+        if record.rr_type == RecordType::Soa as u16 {
+            if record.owner.canonical_key() != question.qname.canonical_key()
+                || record.class != question.qclass
+            {
+                return Err(EdnsError::FormErr);
+            }
+            serial = Some(soa_serial(&record.rdata)?);
+        }
+    }
+    Ok(serial)
+}
+
+fn soa_serial(rdata: &[u8]) -> Result<u32, EdnsError> {
+    let (_, consumed_mname) = DomainName::parse(rdata, 0).map_err(|_| EdnsError::FormErr)?;
+    let offset = consumed_mname;
+    let (_, consumed_rname) = DomainName::parse(rdata, offset).map_err(|_| EdnsError::FormErr)?;
+    let offset = offset + consumed_rname;
+    if offset + 20 != rdata.len() {
+        return Err(EdnsError::FormErr);
+    }
+    Ok(u32::from_be_bytes([
+        rdata[offset],
+        rdata[offset + 1],
+        rdata[offset + 2],
+        rdata[offset + 3],
+    ]))
 }
 
 fn parse_echoable_question(header: &Header, packet: &[u8]) -> Option<Question> {
@@ -1240,6 +1292,17 @@ mod tests {
         packet.extend_from_slice(rdata);
     }
 
+    fn append_answer(packet: &mut Vec<u8>, owner: &str, rr_type: u16, class: u16, rdata: Vec<u8>) {
+        let answer_count = u16::from_be_bytes([packet[6], packet[7]]) + 1;
+        packet[6..8].copy_from_slice(&answer_count.to_be_bytes());
+        packet.extend_from_slice(&DomainName::from_absolute_str(owner).unwrap().to_wire());
+        packet.extend_from_slice(&rr_type.to_be_bytes());
+        packet.extend_from_slice(&class.to_be_bytes());
+        packet.extend_from_slice(&300u32.to_be_bytes());
+        packet.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        packet.extend_from_slice(&rdata);
+    }
+
     fn example_name() -> Vec<u8> {
         b"\x07Example\x04test\x00".to_vec()
     }
@@ -1466,6 +1529,61 @@ mod tests {
         assert_eq!(flags & 0x0400, 0x0400);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(&response[12..], &packet[12..]);
+    }
+
+    #[test]
+    fn notify_embedded_soa_matching_question_is_accepted() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::Soa as u16,
+            1,
+            soa_rdata(),
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn notify_embedded_soa_owner_mismatch_gets_formerr() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        append_answer(
+            &mut packet,
+            "other.example.test.",
+            RecordType::Soa as u16,
+            1,
+            soa_rdata(),
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+    }
+
+    #[test]
+    fn notify_embedded_soa_class_mismatch_gets_formerr() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::Soa as u16,
+            3,
+            soa_rdata(),
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
     }
 
     #[test]

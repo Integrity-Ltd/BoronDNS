@@ -135,6 +135,7 @@ Slice 6 has initial NOTIFY intake foundations:
 - NOTIFY requests require QDCOUNT=1 and QTYPE=SOA, otherwise they receive FORMERR;
 - NOTIFY requests for unconfigured zones or non-IN classes receive REFUSED;
 - accepted NOTIFY requests receive a NOTIFY response with AA set and the question copied verbatim;
+- embedded SOA records in NOTIFY answer sections are validated against the NOTIFY QNAME and QCLASS, and malformed or mismatched embedded SOAs receive FORMERR;
 - runtime NOTIFY source authorization is derived from each zone's primaries plus `notify_sources`; unauthorized NOTIFY requests are silently discarded and logged at warning level.
 
 EDNS/query-size work is partially started:
@@ -151,7 +152,7 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - recurring zone refresh, retry, and expire timers;
-- NOTIFY embedded-SOA validation, deduplication, and refresh triggering;
+- NOTIFY deduplication and refresh triggering from the accepted message and optional embedded SOA serial;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.
