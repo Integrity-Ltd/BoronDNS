@@ -6,6 +6,8 @@ use tracing_subscriber::EnvFilter;
 use oxidedns_core::{LogFormatConfig, ServerConfig};
 use oxidedns_server::Runtime;
 
+const DEFAULT_CONFIG_PATH: &str = "/etc/oxidedns-secondary/config.toml";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "oxidedns",
@@ -20,11 +22,11 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     CheckConfig {
-        #[arg(short, long, env = "OXIDEDNS_CONFIG")]
+        #[arg(short, long, env = "OXIDEDNS_CONFIG", default_value = DEFAULT_CONFIG_PATH)]
         config: PathBuf,
     },
     Serve {
-        #[arg(short, long, env = "OXIDEDNS_CONFIG")]
+        #[arg(short, long, env = "OXIDEDNS_CONFIG", default_value = DEFAULT_CONFIG_PATH)]
         config: PathBuf,
     },
 }
@@ -91,6 +93,37 @@ fn normalize_log_level(level: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_default_to_srs_config_path() {
+        let cli = Cli::try_parse_from(["oxidedns", "check-config"]).expect("check-config CLI");
+        match cli.command {
+            Command::CheckConfig { config } => {
+                assert_eq!(config, PathBuf::from(DEFAULT_CONFIG_PATH));
+            }
+            Command::Serve { .. } => panic!("expected check-config command"),
+        }
+
+        let cli = Cli::try_parse_from(["oxidedns", "serve"]).expect("serve CLI");
+        match cli.command {
+            Command::Serve { config } => {
+                assert_eq!(config, PathBuf::from(DEFAULT_CONFIG_PATH));
+            }
+            Command::CheckConfig { .. } => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn explicit_config_path_overrides_default() {
+        let cli = Cli::try_parse_from(["oxidedns", "serve", "--config", "config/oxidedns.example.toml"])
+            .expect("serve CLI");
+        match cli.command {
+            Command::Serve { config } => {
+                assert_eq!(config, PathBuf::from("config/oxidedns.example.toml"));
+            }
+            Command::CheckConfig { .. } => panic!("expected serve command"),
+        }
+    }
 
     #[test]
     fn warning_log_level_is_normalized_for_tracing_subscriber() {
