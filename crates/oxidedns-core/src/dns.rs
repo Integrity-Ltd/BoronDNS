@@ -1636,6 +1636,12 @@ mod tests {
         rdata
     }
 
+    fn nsec_rdata(next_owner: &str) -> Vec<u8> {
+        let mut rdata = cname_rdata(next_owner);
+        rdata.extend_from_slice(&[0, 1, 0x40]);
+        rdata
+    }
+
     #[test]
     fn discards_short_header() {
         assert_eq!(
@@ -3610,6 +3616,99 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+    }
+
+    #[test]
+    fn explicit_rrsig_query_without_do_returns_rrsig_without_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::A)],
+            )],
+        ));
+        let mut packet = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Rrsig as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
+    }
+
+    #[test]
+    fn explicit_rrsig_query_with_do_does_not_mark_answer_as_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::Rrsig as u16,
+                1,
+                300,
+                vec![rrsig_rdata(RecordType::A)],
+            )],
+        ));
+        let mut packet = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Rrsig as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
+    }
+
+    #[test]
+    fn explicit_nsec_query_without_do_returns_nsec_without_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::Nsec as u16,
+                1,
+                300,
+                vec![nsec_rdata("zzz.example.test.")],
+            )],
+        ));
+        let mut packet = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Nsec as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Nsec as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
     }
 
     #[test]
