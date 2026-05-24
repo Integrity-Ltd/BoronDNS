@@ -260,6 +260,7 @@ IXFR and fallback coverage:
 
 ```sh
 scripts/interop-bind-ixfr-refresh.sh
+scripts/interop-knot-ixfr-refresh-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
 ```
 

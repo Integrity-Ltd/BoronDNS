@@ -254,6 +254,7 @@ Interop harness foundations:
 - `scripts/interop-knot-axfr-docker.sh` starts Knot DNS inside an Alpine Docker container with the `alpha.test.` fixture, validates Knot SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-knot-tsig-axfr-docker.sh` starts Knot DNS with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-knot-notify-refresh-docker.sh` starts Knot DNS inside Docker, observes a Knot-generated NOTIFY through a forwarding probe, verifies OxideDNS accepts the NOTIFY response path, and confirms OxideDNS refreshes and republishes the newer serial and data.
+- `scripts/interop-knot-ixfr-refresh-docker.sh` starts Knot DNS with deterministic IXFR journal settings, verifies Knot exposes a true incremental IXFR after zone reload, routes OxideDNS transfer traffic through a classifier proxy, triggers OxideDNS refresh with NOTIFY, and verifies OxideDNS publishes the updated serial/data from a mode 1 IXFR response.
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
 - `scripts/interop-knot-xot-tsig-docker.sh` starts Knot DNS with an XoT listener and TSIG-restricted transfer ACL, verifies unsigned XoT AXFR rejection and signed XoT AXFR success, starts OxideDNS with `transport = "xot"` plus the matching TSIG key, and verifies served data, transfer metrics, and secret redaction.
 - `scripts/interop-knot-dnssec-docker.sh` starts Knot DNS inside Docker with automatic ECDSAP256SHA256 NSEC3 signing, verifies primary AXFR carries DNSKEY, RRSIG, NSEC3, and NSEC3PARAM, then starts OxideDNS and verifies DO-sensitive positive, NXDOMAIN, NODATA, direct DNSKEY/NSEC3, non-DO suppression, and metrics behavior from the signed transfer, including an SRV fixture that makes Knot emit an empty-non-terminal NSEC3 record.
@@ -278,7 +279,7 @@ Fuzzing foundations:
 
 Open near-term work:
 
-- broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
+- broaden IXFR fault and interop coverage beyond BIND and Knot true-incremental evidence;
 - broaden real-primary XoT interop evidence;
 - split DNSSEC evidence into release traceability and broader conformance matrix entries;
 - start collecting long-run performance, fuzz, interop, and soak evidence for MVP verification.
