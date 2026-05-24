@@ -3413,6 +3413,68 @@ mod tests {
     }
 
     #[test]
+    fn do_referral_for_unsigned_child_includes_nsec_and_covering_rrsigs() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("next.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Ns), rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(flags & 0x0400, 0);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Ns as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
     fn non_do_referral_omits_ds_dnssec_augmentation() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -3446,6 +3508,58 @@ mod tests {
                     1,
                     300,
                     vec![rrsig_rdata(RecordType::Ns), rrsig_rdata(RecordType::Ds)],
+                ),
+            ],
+        ));
+        let packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Ns as u16]
+        );
+    }
+
+    #[test]
+    fn non_do_referral_omits_nsec_dnssec_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("next.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Ns), rrsig_rdata(RecordType::Nsec)],
                 ),
             ],
         ));

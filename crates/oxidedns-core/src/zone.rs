@@ -151,7 +151,7 @@ impl ZoneSnapshot {
         let mut seen = HashSet::new();
         let mut dnssec_augmented = false;
         let authorities =
-            self.add_referral_ds_augmentations(lookup.authorities, &mut dnssec_augmented);
+            self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_augmented);
         let answers =
             self.add_rrsig_augmentations(lookup.answers, &mut seen, &mut dnssec_augmented);
         let authorities =
@@ -435,7 +435,7 @@ impl ZoneSnapshot {
         additionals
     }
 
-    fn add_referral_ds_augmentations(
+    fn add_referral_dnssec_augmentations(
         &self,
         authorities: Vec<ResourceRecord>,
         dnssec_augmented: &mut bool,
@@ -449,14 +449,17 @@ impl ZoneSnapshot {
             if record.rr_type != RecordType::Ns as u16 {
                 continue;
             }
-            let Some(ds_rrset) = self.rrset(&record.owner, RecordType::Ds as u16, record.class)
-            else {
-                continue;
-            };
-            for ds in ds_rrset.records() {
-                if seen.insert(record_identity(&ds)) {
-                    augmented.push(ds);
-                    *dnssec_augmented = true;
+
+            let proof_rrset = self
+                .rrset(&record.owner, RecordType::Ds as u16, record.class)
+                .or_else(|| self.rrset(&record.owner, RecordType::Nsec as u16, record.class));
+
+            if let Some(proof_rrset) = proof_rrset {
+                for proof in proof_rrset.records() {
+                    if seen.insert(record_identity(&proof)) {
+                        augmented.push(proof);
+                        *dnssec_augmented = true;
+                    }
                 }
             }
         }
