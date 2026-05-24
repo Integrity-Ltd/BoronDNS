@@ -80,12 +80,73 @@ pub enum SoaQueryError {
     ReservedType,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum IxfrError {
+    #[error("IXFR query requires the currently held apex SOA")]
+    InvalidCurrentSoa,
+
+    #[error("IXFR response stream is empty")]
+    EmptyResponse,
+
+    #[error("IXFR response message is malformed")]
+    MalformedMessage,
+
+    #[error("IXFR response QID does not match query QID")]
+    MismatchedQid,
+
+    #[error("IXFR response opcode is not QUERY")]
+    MismatchedOpcode,
+
+    #[error("IXFR response returned error RCODE {0}")]
+    ErrorRcode(u8),
+
+    #[error("IXFR response did not start with SOA at the zone apex")]
+    MissingInitialSoa,
+
+    #[error("IXFR response ended before a complete mode could be determined")]
+    IncompleteResponse,
+
+    #[error("IXFR mode 1 incremental responses are not implemented yet")]
+    IncrementalUnsupported,
+
+    #[error("IXFR mode 2 AXFR fallback response validation failed: {0}")]
+    Axfr(#[from] AxfrError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IxfrResponse {
+    Updated(ZoneSnapshot),
+    Current,
+}
+
 pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
     build_query(qid, zone_apex, RecordType::Axfr as u16, qclass)
 }
 
 pub fn build_soa_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
     build_query(qid, zone_apex, RecordType::Soa as u16, qclass)
+}
+
+pub fn build_ixfr_query(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa: &ResourceRecord,
+) -> Result<Vec<u8>, IxfrError> {
+    validate_current_soa(current_soa, zone_apex, qclass)?;
+
+    let mut message = Vec::new();
+    message.extend_from_slice(&qid.to_be_bytes());
+    message.extend_from_slice(&0u16.to_be_bytes());
+    message.extend_from_slice(&1u16.to_be_bytes());
+    message.extend_from_slice(&0u16.to_be_bytes());
+    message.extend_from_slice(&1u16.to_be_bytes());
+    message.extend_from_slice(&0u16.to_be_bytes());
+    message.extend_from_slice(&zone_apex.to_wire());
+    message.extend_from_slice(&(RecordType::Ixfr as u16).to_be_bytes());
+    message.extend_from_slice(&qclass.to_be_bytes());
+    append_record(&mut message, current_soa);
+    Ok(message)
 }
 
 fn build_query(qid: u16, zone_apex: &DomainName, qtype: u16, qclass: u16) -> Vec<u8> {
@@ -100,6 +161,15 @@ fn build_query(qid: u16, zone_apex: &DomainName, qtype: u16, qclass: u16) -> Vec
     message.extend_from_slice(&qtype.to_be_bytes());
     message.extend_from_slice(&qclass.to_be_bytes());
     message
+}
+
+fn append_record(message: &mut Vec<u8>, record: &ResourceRecord) {
+    message.extend_from_slice(&record.owner.to_wire());
+    message.extend_from_slice(&record.rr_type.to_be_bytes());
+    message.extend_from_slice(&record.class.to_be_bytes());
+    message.extend_from_slice(&record.ttl.to_be_bytes());
+    message.extend_from_slice(&(record.rdata.len() as u16).to_be_bytes());
+    message.extend_from_slice(&record.rdata);
 }
 
 pub fn frame_tcp_message(message: &[u8]) -> Vec<u8> {
@@ -219,6 +289,93 @@ pub fn parse_soa_response(
     }
 
     Err(SoaQueryError::MissingSoa)
+}
+
+pub fn parse_ixfr_response(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa: &ResourceRecord,
+    messages: &[Vec<u8>],
+) -> Result<IxfrResponse, IxfrError> {
+    validate_current_soa(current_soa, zone_apex, qclass)?;
+    if messages.is_empty() {
+        return Err(IxfrError::EmptyResponse);
+    }
+
+    let mut answers = Vec::new();
+    for message in messages {
+        let header = Header::parse(message).map_err(|_| IxfrError::MalformedMessage)?;
+        if header.id != qid {
+            return Err(IxfrError::MismatchedQid);
+        }
+        if header.opcode_value() != 0 {
+            return Err(IxfrError::MismatchedOpcode);
+        }
+        let rcode = (header.flags & 0x000f) as u8;
+        if rcode != 0 {
+            return Err(IxfrError::ErrorRcode(rcode));
+        }
+
+        let mut offset =
+            skip_questions(message, header.qdcount).map_err(|_| IxfrError::MalformedMessage)?;
+        for _ in 0..header.ancount {
+            let (record, consumed) =
+                parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
+            offset += consumed;
+            validate_record_scope(&record, zone_apex, qclass).map_err(ixfr_scope_error)?;
+            answers.push(record);
+        }
+    }
+
+    let Some(first) = answers.first() else {
+        return Err(IxfrError::MissingInitialSoa);
+    };
+    if first.owner != *zone_apex || first.rr_type != RecordType::Soa as u16 {
+        return Err(IxfrError::MissingInitialSoa);
+    }
+
+    if answers.len() == 1 {
+        let response_serial = soa_serial(&first.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+        let current_serial =
+            soa_serial(&current_soa.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
+        if response_serial == current_serial {
+            return Ok(IxfrResponse::Current);
+        }
+        return Err(IxfrError::IncompleteResponse);
+    }
+
+    if answers[1].rr_type == RecordType::Soa as u16 {
+        return Err(IxfrError::IncrementalUnsupported);
+    }
+
+    parse_axfr_response(qid, zone_apex, qclass, messages)
+        .map(IxfrResponse::Updated)
+        .map_err(IxfrError::Axfr)
+}
+
+fn ixfr_scope_error(error: AxfrError) -> IxfrError {
+    match error {
+        AxfrError::MalformedMessage => IxfrError::MalformedMessage,
+        AxfrError::ErrorRcode(rcode) => IxfrError::ErrorRcode(rcode),
+        AxfrError::MissingInitialSoa => IxfrError::MissingInitialSoa,
+        other => IxfrError::Axfr(other),
+    }
+}
+
+fn validate_current_soa(
+    record: &ResourceRecord,
+    zone_apex: &DomainName,
+    qclass: u16,
+) -> Result<(), IxfrError> {
+    if record.owner != *zone_apex
+        || record.rr_type != RecordType::Soa as u16
+        || record.class != qclass
+    {
+        return Err(IxfrError::InvalidCurrentSoa);
+    }
+    soa_serial(&record.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
+    Ok(())
 }
 
 fn validate_soa_response_question(
@@ -485,6 +642,36 @@ mod tests {
     }
 
     #[test]
+    fn builds_ixfr_query_with_current_soa_in_authority() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let query = build_ixfr_query(0x1234, &apex, 1, &soa).expect("IXFR query");
+
+        assert_eq!(&query[0..2], &0x1234u16.to_be_bytes());
+        assert_eq!(&query[2..4], &0u16.to_be_bytes());
+        assert_eq!(&query[4..6], &1u16.to_be_bytes());
+        assert_eq!(&query[8..10], &1u16.to_be_bytes());
+        assert_eq!(&query[12..26], b"\x07example\x04test\x00");
+        assert_eq!(&query[26..28], &(RecordType::Ixfr as u16).to_be_bytes());
+        assert_eq!(&query[28..30], &1u16.to_be_bytes());
+        assert_eq!(&query[30..44], b"\x07example\x04test\x00");
+        assert_eq!(&query[44..46], &(RecordType::Soa as u16).to_be_bytes());
+    }
+
+    #[test]
+    fn rejects_ixfr_query_without_current_apex_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = build_ixfr_query(0x1234, &apex, 1, &a).expect_err("invalid current SOA");
+
+        assert_eq!(error, IxfrError::InvalidCurrentSoa);
+    }
+
+    #[test]
     fn frames_tcp_message_with_length_prefix() {
         let framed = frame_tcp_message(&[1, 2, 3]);
         assert_eq!(framed, vec![0, 3, 1, 2, 3]);
@@ -540,6 +727,68 @@ mod tests {
             parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![soa])).expect("SOA");
 
         assert_eq!(serial, 1);
+    }
+
+    #[test]
+    fn parses_ixfr_mode2_axfr_fallback_into_active_zone() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_soa,
+            &[message(0x1234, vec![new_soa.clone(), a, new_soa])],
+        )
+        .expect("mode 2 fallback");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
+        assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
+    fn parses_ixfr_mode3_current_response() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_soa,
+            &[message(0x1234, vec![current_soa.clone()])],
+        )
+        .expect("mode 3 current");
+
+        assert_eq!(response, IxfrResponse::Current);
+    }
+
+    #[test]
+    fn rejects_ixfr_mode1_incremental_until_diff_application_exists() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let response_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_soa,
+            &[message(
+                0x1234,
+                vec![response_soa, current_soa.clone(), current_soa.clone()],
+            )],
+        )
+        .expect_err("mode 1 unsupported");
+
+        assert_eq!(error, IxfrError::IncrementalUnsupported);
     }
 
     #[test]

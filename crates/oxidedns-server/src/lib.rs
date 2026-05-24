@@ -18,7 +18,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
-    axfr::{self, AxfrError},
+    axfr::{self, AxfrError, IxfrResponse},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Transport, answer_message_with_notify_hooks,
@@ -75,6 +75,9 @@ pub enum TransferError {
 
     #[error("AXFR response validation failed: {0}")]
     Axfr(#[from] AxfrError),
+
+    #[error("IXFR response validation failed: {0}")]
+    Ixfr(#[from] axfr::IxfrError),
 
     #[error("SOA poll response validation failed: {0}")]
     Soa(#[from] axfr::SoaQueryError),
@@ -136,6 +139,7 @@ impl Runtime {
             transfer_plan.clone(),
             refresh_registry.clone(),
             Duration::from_secs(self.config.limits.axfr_timeout_secs),
+            Duration::from_secs(self.config.limits.ixfr_timeout_secs),
         ));
         listeners.spawn(serve_scheduled_refreshes(
             self.zones.clone(),
@@ -238,6 +242,7 @@ impl Runtime {
                 &self.zones,
                 &plan,
                 None,
+                Duration::from_secs(self.config.limits.ixfr_timeout_secs),
                 Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 "initial",
             )
@@ -324,6 +329,92 @@ async fn poll_soa_from_primary_inner(
         })?;
 
     axfr::parse_soa_response(qid, zone_apex, qclass, &buffer[..len]).map_err(TransferError::Soa)
+}
+
+pub async fn transfer_ixfr_from_primary(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    current_soa: &oxidedns_core::zone::ResourceRecord,
+    timeout_duration: Duration,
+) -> Result<IxfrResponse, TransferError> {
+    tokio::time::timeout(timeout_duration, async {
+        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_soa).await
+    })
+    .await
+    .map_err(|_| TransferError::Timeout {
+        timeout_secs: timeout_duration.as_secs(),
+    })?
+}
+
+async fn transfer_ixfr_from_primary_inner(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    current_soa: &oxidedns_core::zone::ResourceRecord,
+) -> Result<IxfrResponse, TransferError> {
+    let mut stream =
+        TcpStream::connect(primary)
+            .await
+            .map_err(|source| TransferError::ConnectTcp {
+                addr: primary,
+                source,
+            })?;
+
+    let query = axfr::frame_tcp_message(&axfr::build_ixfr_query(
+        qid,
+        zone_apex,
+        qclass,
+        current_soa,
+    )?);
+    stream
+        .write_all(&query)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary,
+            source,
+        })?;
+
+    let mut messages = Vec::new();
+    loop {
+        let mut length_prefix = [0u8; 2];
+        match stream.read_exact(&mut length_prefix).await {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return axfr::parse_ixfr_response(qid, zone_apex, qclass, current_soa, &messages)
+                    .map_err(TransferError::Ixfr);
+            }
+            Err(source) => {
+                return Err(TransferError::Io {
+                    addr: primary,
+                    source,
+                });
+            }
+        }
+
+        let message_len = u16::from_be_bytes(length_prefix) as usize;
+        let mut message = vec![0u8; message_len];
+        stream.read_exact(&mut message).await.map_err(|source| {
+            if source.kind() == std::io::ErrorKind::UnexpectedEof {
+                TransferError::Ixfr(axfr::IxfrError::IncompleteResponse)
+            } else {
+                TransferError::Io {
+                    addr: primary,
+                    source,
+                }
+            }
+        })?;
+        messages.push(message);
+
+        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_soa, &messages) {
+            Ok(response) => return Ok(response),
+            Err(axfr::IxfrError::IncompleteResponse)
+            | Err(axfr::IxfrError::Axfr(AxfrError::MissingTerminatingSoa)) => {}
+            Err(error) => return Err(TransferError::Ixfr(error)),
+        }
+    }
 }
 
 fn outbound_udp_bind_addr(primary: SocketAddr) -> SocketAddr {
@@ -977,6 +1068,7 @@ async fn serve_refresh_requests(
     transfer_plan: TransferPlan,
     refresh_registry: ZoneRefreshRegistry,
     axfr_timeout: Duration,
+    ixfr_timeout: Duration,
 ) -> Result<(), RuntimeError> {
     while let Some(request) = refresh_rx.recv().await {
         let Some(plan) = transfer_plan.get(&request.zone) else {
@@ -1006,6 +1098,7 @@ async fn serve_refresh_requests(
             &zones,
             &plan,
             request.requested_serial,
+            ixfr_timeout,
             axfr_timeout,
             request.reason.as_str(),
         )
@@ -1080,6 +1173,7 @@ async fn refresh_zone_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
+    ixfr_timeout: Duration,
     axfr_timeout: Duration,
     reason: &str,
 ) -> Option<ZoneSnapshot> {
@@ -1089,6 +1183,9 @@ async fn refresh_zone_from_primaries(
     let current_serial = current_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.serial);
+    let current_soa = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.soa_record(plan.qclass));
 
     if let (Some(snapshot), Some(current_serial), Some(primary_serial)) =
         (&current_snapshot, current_serial, primary_serial_hint)
@@ -1163,6 +1260,66 @@ async fn refresh_zone_from_primaries(
                         "SOA poll failed"
                     );
                     continue;
+                }
+            }
+        }
+
+        if let Some(current_soa) = &current_soa {
+            let qid = match transfer_query_id() {
+                Ok(qid) => qid,
+                Err(error) => {
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        %error,
+                        %reason,
+                        "IXFR failed"
+                    );
+                    continue;
+                }
+            };
+            match transfer_ixfr_from_primary(
+                *primary,
+                &plan.origin,
+                plan.qclass,
+                qid,
+                current_soa,
+                ixfr_timeout,
+            )
+            .await
+            {
+                Ok(IxfrResponse::Updated(snapshot)) => {
+                    let serial = snapshot.serial;
+                    zones.insert_snapshot(snapshot.clone());
+                    info!(
+                        zone = %plan.origin,
+                        %primary,
+                        ?serial,
+                        %reason,
+                        "IXFR completed"
+                    );
+                    return Some(snapshot);
+                }
+                Ok(IxfrResponse::Current) => {
+                    if let Some(snapshot) = &current_snapshot {
+                        info!(
+                            zone = %plan.origin,
+                            %primary,
+                            current_serial,
+                            %reason,
+                            "IXFR confirmed zone current"
+                        );
+                        return Some((**snapshot).clone());
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        %error,
+                        %reason,
+                        "IXFR failed; falling back to AXFR"
+                    );
                 }
             }
         }
@@ -1347,7 +1504,7 @@ mod tests {
     };
     use oxidedns_core::{
         ServerConfig,
-        axfr::frame_tcp_message,
+        axfr::{IxfrResponse, frame_tcp_message},
         dns::{AnyResponseMode, DomainName, Header, RecordType},
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
@@ -1357,7 +1514,8 @@ mod tests {
         TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection,
         jitter_interval, poll_soa_from_primary, query_id_from_random_bytes,
         refresh_zone_from_primaries, serial_after, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary, transfer_query_id,
+        serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id,
     };
 
     #[test]
@@ -1440,6 +1598,44 @@ mod tests {
 
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_ixfr_from_primary_accepts_mode2_axfr_fallback() {
+        let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(1),
+        );
+        let response = transfer_ixfr_from_primary(
+            primary,
+            &apex,
+            1,
+            0x1234,
+            &current_soa,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("IXFR transfer");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(snapshot.serial, Some(2));
         assert_eq!(
             snapshot
                 .lookup(
@@ -1640,7 +1836,7 @@ mod tests {
 
     #[tokio::test]
     async fn notify_refresh_worker_publishes_requested_refresh() {
-        let primary = spawn_axfr_primary_with_serial(2).await;
+        let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
@@ -1685,6 +1881,7 @@ mod tests {
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
             ),
+            std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -1733,6 +1930,7 @@ mod tests {
             &zones,
             &plan,
             None,
+            std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
             "test",
         )
@@ -2163,6 +2361,31 @@ mod tests {
                 &query[query.len() - 4..query.len() - 2],
                 &(RecordType::Axfr as u16).to_be_bytes()
             );
+
+            let response = axfr_response(header.id, serial);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        addr
+    }
+
+    async fn spawn_ixfr_mode2_primary_with_serial(serial: u32) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut length_prefix = [0u8; 2];
+            stream.read_exact(&mut length_prefix).await.unwrap();
+            let query_len = u16::from_be_bytes(length_prefix) as usize;
+            let mut query = vec![0u8; query_len];
+            stream.read_exact(&mut query).await.unwrap();
+
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(header.nscount, 1);
+            assert_eq!(&query[26..28], &(RecordType::Ixfr as u16).to_be_bytes());
 
             let response = axfr_response(header.id, serial);
             stream

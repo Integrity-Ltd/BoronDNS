@@ -71,6 +71,11 @@ impl ZoneSnapshot {
         }
     }
 
+    pub fn soa_record(&self, qclass: u16) -> Option<ResourceRecord> {
+        self.soa_rrset(qclass)
+            .and_then(|rrset| rrset.records().into_iter().next())
+    }
+
     pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
         self.lookup_with_options(
             qname,
