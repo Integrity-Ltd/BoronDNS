@@ -76,6 +76,7 @@ pub fn parse_axfr_response(
     }
 
     let mut initial_soa = None;
+    let mut zone_serial = None;
     let mut zone_records = Vec::new();
     let mut complete = false;
 
@@ -105,6 +106,7 @@ pub fn parse_axfr_response(
                         if record.owner != *zone_apex {
                             return Err(AxfrError::MissingInitialSoa);
                         }
+                        zone_serial = Some(soa_serial(&record.rdata)?);
                         initial_soa = Some(record.clone());
                         zone_records.push(record);
                     }
@@ -136,9 +138,26 @@ pub fn parse_axfr_response(
 
     Ok(ZoneSnapshot::active(
         zone_apex.clone(),
-        None,
+        zone_serial,
         rrsets_from_records(zone_records),
     ))
+}
+
+fn soa_serial(rdata: &[u8]) -> Result<u32, AxfrError> {
+    let (_, consumed_mname) = DomainName::parse(rdata, 0)?;
+    let rname_offset = consumed_mname;
+    let (_, consumed_rname) = DomainName::parse(rdata, rname_offset)?;
+    let serial_offset = rname_offset + consumed_rname;
+    if serial_offset + 20 != rdata.len() {
+        return Err(AxfrError::MalformedMessage);
+    }
+
+    Ok(u32::from_be_bytes([
+        rdata[serial_offset],
+        rdata[serial_offset + 1],
+        rdata[serial_offset + 2],
+        rdata[serial_offset + 3],
+    ]))
 }
 
 fn skip_questions(message: &[u8], qdcount: u16) -> Result<usize, AxfrError> {
@@ -335,6 +354,7 @@ mod tests {
 
         assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
         assert_eq!(snapshot.origin, apex);
+        assert_eq!(snapshot.serial, Some(1));
         assert!(
             snapshot
                 .lookup(

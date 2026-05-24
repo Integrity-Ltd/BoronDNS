@@ -114,8 +114,8 @@ Slice 5 is in progress:
 
 - AXFR query construction is implemented only for TCP framing;
 - AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, class, bailiwick, and reserved RR types;
-- successful AXFR responses are converted into active zone snapshots;
-- the runtime performs an initial AXFR over TCP from configured primaries in order and publishes the first successful snapshot;
+- successful AXFR responses are converted into active zone snapshots with the SOA serial captured from the initial SOA record;
+- the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
 Slice 4 is in progress:
@@ -138,6 +138,7 @@ Slice 6 has initial NOTIFY intake foundations:
 - embedded SOA records in NOTIFY answer sections are validated against the NOTIFY QNAME and QCLASS, and malformed or mismatched embedded SOAs receive FORMERR;
 - runtime NOTIFY source authorization is derived from each zone's primaries plus `notify_sources`; unauthorized NOTIFY requests are silently discarded and logged at warning level.
 - accepted NOTIFY requests call a refresh-signalling hook with the optional embedded SOA serial, and the runtime deduplicates per-zone refresh signals using `[limits].notify_dedup_secs`, defaulting to 1 second, while still responding to duplicate NOTIFY messages.
+- non-duplicate accepted NOTIFY signals are queued for the transfer worker; if the embedded SOA serial is newer than the active zone serial, or no comparable serial is available, the worker attempts AXFR against configured primaries and publishes the first successful snapshot.
 
 EDNS/query-size work is partially started:
 
@@ -153,7 +154,7 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - recurring zone refresh, retry, and expire timers;
-- wiring deduplicated NOTIFY refresh signals into the transfer state machine;
+- replacing NOTIFY-triggered AXFR-only refresh with the full ZSM refresh-check flow;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

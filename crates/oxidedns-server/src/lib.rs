@@ -12,6 +12,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
+    sync::mpsc,
     task::JoinSet,
 };
 use tracing::{debug, info, warn};
@@ -76,6 +77,8 @@ pub struct Runtime {
     zones: ZoneStore,
 }
 
+const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
+
 impl Runtime {
     pub fn new(config: ServerConfig) -> Self {
         let zones = ZoneStore::new();
@@ -107,6 +110,14 @@ impl Runtime {
         let notify_authority = NotifyAuthority::from_config(&self.config);
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
+        let transfer_plan = TransferPlan::from_config(&self.config);
+        let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
+        listeners.spawn(serve_notify_refreshes(
+            notify_refresh_rx,
+            self.zones.clone(),
+            transfer_plan,
+            Duration::from_secs(self.config.limits.axfr_timeout_secs),
+        ));
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
                 .await
@@ -121,6 +132,7 @@ impl Runtime {
             let any_response = self.config.query.any_response_mode();
             let notify_authority = notify_authority.clone();
             let notify_refresh = notify_refresh.clone();
+            let notify_refresh_tx = notify_refresh_tx.clone();
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
@@ -128,6 +140,7 @@ impl Runtime {
                 any_response,
                 notify_authority,
                 notify_refresh,
+                notify_refresh_tx,
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
@@ -161,6 +174,7 @@ impl Runtime {
                 any_response,
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
+                notify_refresh_tx: notify_refresh_tx.clone(),
                 active_connections: tcp_connections,
             };
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
@@ -189,34 +203,21 @@ impl Runtime {
         for zone in &self.config.zones {
             let zone_apex = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
-            let qclass = 1;
-            let mut loaded = false;
+            let plan = ZoneTransferPlan {
+                origin: zone_apex,
+                qclass: 1,
+                primaries: zone.primaries.clone(),
+            };
 
-            for primary in &zone.primaries {
-                let qid = transfer_query_id(&zone_apex, *primary);
-                match transfer_axfr_from_primary(
-                    *primary,
-                    &zone_apex,
-                    qclass,
-                    qid,
-                    Duration::from_secs(self.config.limits.axfr_timeout_secs),
-                )
-                .await
-                {
-                    Ok(snapshot) => {
-                        let serial = snapshot.serial;
-                        self.zones.insert_snapshot(snapshot);
-                        info!(zone = %zone_apex, %primary, ?serial, "initial AXFR completed");
-                        loaded = true;
-                        break;
-                    }
-                    Err(error) => {
-                        warn!(zone = %zone_apex, %primary, %error, "initial AXFR failed");
-                    }
-                }
-            }
-
-            if !loaded {
+            if !refresh_zone_from_primaries(
+                &self.zones,
+                &plan,
+                Duration::from_secs(self.config.limits.axfr_timeout_secs),
+                "initial",
+            )
+            .await
+            {
+                let zone_apex = &plan.origin;
                 warn!(zone = %zone_apex, "zone remains in LOADING state");
             }
         }
@@ -349,7 +350,13 @@ async fn serve_udp(
                 authorized
             },
             |qname, _qclass, serial| {
-                log_notify_refresh(&settings.notify_refresh, qname, peer_ip, serial)
+                signal_notify_refresh(
+                    &settings.notify_refresh,
+                    &settings.notify_refresh_tx,
+                    qname,
+                    peer_ip,
+                    serial,
+                )
             },
         ) {
             DatagramAction::Discard => {
@@ -373,6 +380,7 @@ struct UdpServerSettings {
     any_response: AnyResponseMode,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
 }
 
 async fn serve_tcp(
@@ -415,6 +423,7 @@ async fn serve_tcp(
                 settings.any_response,
                 settings.notify_authority,
                 settings.notify_refresh,
+                settings.notify_refresh_tx,
                 peer.ip(),
             )
             .await
@@ -437,11 +446,59 @@ struct TcpServerSettings {
     any_response: AnyResponseMode,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     active_connections: Arc<AtomicUsize>,
 }
 
 struct TcpConnectionPermit {
     active: Arc<AtomicUsize>,
+}
+
+#[derive(Debug, Clone)]
+struct ZoneTransferPlan {
+    origin: DomainName,
+    qclass: u16,
+    primaries: Vec<SocketAddr>,
+}
+
+#[derive(Debug, Clone)]
+struct TransferPlan {
+    zones_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
+}
+
+impl TransferPlan {
+    fn from_config(config: &ServerConfig) -> Self {
+        let zones_by_key = config
+            .zones
+            .iter()
+            .map(|zone| {
+                let origin = DomainName::from_absolute_str(&zone.name)
+                    .expect("configuration validation rejects invalid zone names");
+                (
+                    origin.canonical_key(),
+                    ZoneTransferPlan {
+                        origin,
+                        qclass: 1,
+                        primaries: zone.primaries.clone(),
+                    },
+                )
+            })
+            .collect();
+
+        Self {
+            zones_by_key: Arc::new(zones_by_key),
+        }
+    }
+
+    fn get(&self, origin: &DomainName) -> Option<ZoneTransferPlan> {
+        self.zones_by_key.get(&origin.canonical_key()).cloned()
+    }
+}
+
+#[derive(Debug)]
+struct RefreshRequest {
+    zone: DomainName,
+    requested_serial: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -516,8 +573,9 @@ impl NotifyRefreshTracker {
     }
 }
 
-fn log_notify_refresh(
+fn signal_notify_refresh(
     notify_refresh: &NotifyRefreshTracker,
+    notify_refresh_tx: &mpsc::Sender<RefreshRequest>,
     qname: &DomainName,
     source: IpAddr,
     soa_serial: Option<u32>,
@@ -531,6 +589,26 @@ fn log_notify_refresh(
                 action = "refresh_signalled",
                 "accepted NOTIFY"
             );
+            match notify_refresh_tx.try_send(RefreshRequest {
+                zone: qname.clone(),
+                requested_serial: soa_serial,
+            }) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!(
+                        %source,
+                        zone = %qname,
+                        "NOTIFY refresh queue full; refresh request dropped"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    warn!(
+                        %source,
+                        zone = %qname,
+                        "NOTIFY refresh queue closed; refresh request dropped"
+                    );
+                }
+            }
         }
         NotifyRefreshAction::Deduplicated => {
             info!(
@@ -542,6 +620,92 @@ fn log_notify_refresh(
             );
         }
     }
+}
+
+async fn serve_notify_refreshes(
+    mut refresh_rx: mpsc::Receiver<RefreshRequest>,
+    zones: ZoneStore,
+    transfer_plan: TransferPlan,
+    axfr_timeout: Duration,
+) -> Result<(), RuntimeError> {
+    while let Some(request) = refresh_rx.recv().await {
+        let Some(plan) = transfer_plan.get(&request.zone) else {
+            let zone = &request.zone;
+            warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
+            continue;
+        };
+
+        if notify_serial_is_current(&zones, &request) {
+            let zone = &request.zone;
+            info!(
+                zone = %zone,
+                requested_serial = ?request.requested_serial,
+                action = "refresh_skipped_current",
+                "NOTIFY serial is not newer than active zone"
+            );
+            continue;
+        }
+
+        refresh_zone_from_primaries(&zones, &plan, axfr_timeout, "notify").await;
+    }
+
+    Ok(())
+}
+
+fn notify_serial_is_current(zones: &ZoneStore, request: &RefreshRequest) -> bool {
+    let Some(requested_serial) = request.requested_serial else {
+        return false;
+    };
+    let Some(snapshot) = zones.find_exact_zone(&request.zone) else {
+        return false;
+    };
+    let Some(current_serial) = snapshot.serial else {
+        return false;
+    };
+
+    !serial_after(requested_serial, current_serial)
+}
+
+fn serial_after(candidate: u32, current: u32) -> bool {
+    candidate != current && candidate.wrapping_sub(current) < 0x8000_0000
+}
+
+async fn refresh_zone_from_primaries(
+    zones: &ZoneStore,
+    plan: &ZoneTransferPlan,
+    axfr_timeout: Duration,
+    reason: &str,
+) -> bool {
+    for primary in &plan.primaries {
+        let qid = transfer_query_id(&plan.origin, *primary);
+        match transfer_axfr_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
+            .await
+        {
+            Ok(snapshot) => {
+                let serial = snapshot.serial;
+                zones.insert_snapshot(snapshot);
+                info!(
+                    zone = %plan.origin,
+                    %primary,
+                    ?serial,
+                    %reason,
+                    "AXFR completed"
+                );
+                return true;
+            }
+            Err(error) => {
+                warn!(
+                    zone = %plan.origin,
+                    %primary,
+                    %error,
+                    %reason,
+                    "AXFR failed"
+                );
+            }
+        }
+    }
+
+    false
 }
 
 impl Drop for TcpConnectionPermit {
@@ -575,6 +739,7 @@ async fn handle_tcp_connection(
     any_response: AnyResponseMode,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
@@ -596,7 +761,9 @@ async fn handle_tcp_connection(
                 }
                 authorized
             },
-            |qname, _qclass, serial| log_notify_refresh(&notify_refresh, qname, peer_ip, serial),
+            |qname, _qclass, serial| {
+                signal_notify_refresh(&notify_refresh, &notify_refresh_tx, qname, peer_ip, serial)
+            },
         ) {
             DatagramAction::Discard => {
                 debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
@@ -674,6 +841,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
+        sync::mpsc,
     };
     use oxidedns_core::{
         ServerConfig,
@@ -683,8 +851,9 @@ mod tests {
     };
 
     use super::{
-        NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, Runtime, TcpServerSettings,
-        handle_tcp_connection, serve_tcp, transfer_axfr_from_primary,
+        NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
+        TcpServerSettings, TransferPlan, handle_tcp_connection, serial_after,
+        serve_notify_refreshes, serve_tcp, transfer_axfr_from_primary,
     };
 
     #[test]
@@ -746,6 +915,11 @@ mod tests {
         assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
     }
 
+    fn notify_refresh_tx() -> mpsc::Sender<RefreshRequest> {
+        let (tx, _rx) = mpsc::channel(1);
+        tx
+    }
+
     #[tokio::test]
     async fn transfer_axfr_from_primary_reads_tcp_messages() {
         let primary = spawn_axfr_primary().await;
@@ -761,6 +935,7 @@ mod tests {
         .expect("AXFR transfer");
 
         assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(snapshot.serial, Some(1));
         assert_eq!(
             snapshot
                 .lookup(
@@ -772,6 +947,68 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn serial_after_handles_wraparound() {
+        assert!(serial_after(2, 1));
+        assert!(serial_after(0, u32::MAX));
+        assert!(!serial_after(1, 1));
+        assert!(!serial_after(1, 2));
+        assert!(!serial_after(0x8000_0001, 1));
+    }
+
+    #[tokio::test]
+    async fn notify_refresh_worker_publishes_requested_refresh() {
+        let primary = spawn_axfr_primary_with_serial(2).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let zones = ZoneStore::new();
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(1)],
+            )],
+        ));
+        let (tx, rx) = mpsc::channel(1);
+        tx.send(RefreshRequest {
+            zone: apex,
+            requested_serial: Some(2),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        serve_notify_refreshes(
+            rx,
+            zones.clone(),
+            transfer_plan,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+        let snapshot = zones
+            .get("example.test.")
+            .expect("published refreshed snapshot");
+        assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(snapshot.serial, Some(2));
     }
 
     #[tokio::test]
@@ -839,6 +1076,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -914,6 +1152,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -964,6 +1203,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -1000,6 +1240,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -1037,6 +1278,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -1075,6 +1317,7 @@ mod tests {
                 any_response: AnyResponseMode::Minimal,
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx: notify_refresh_tx(),
                 active_connections: active.clone(),
             },
         ));
@@ -1102,6 +1345,10 @@ mod tests {
     }
 
     async fn spawn_axfr_primary() -> std::net::SocketAddr {
+        spawn_axfr_primary_with_serial(1).await
+    }
+
+    async fn spawn_axfr_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1120,7 +1367,7 @@ mod tests {
                 &(RecordType::Axfr as u16).to_be_bytes()
             );
 
-            let response = axfr_response(header.id);
+            let response = axfr_response(header.id, serial);
             stream
                 .write_all(&frame_tcp_message(&response))
                 .await
@@ -1129,8 +1376,12 @@ mod tests {
         addr
     }
 
-    fn axfr_response(qid: u16) -> Vec<u8> {
-        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+    fn axfr_response(qid: u16, serial: u32) -> Vec<u8> {
+        let soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(serial),
+        );
         let a = record(
             "www.example.test.",
             RecordType::A as u16,
@@ -1189,6 +1440,15 @@ mod tests {
     }
 
     fn soa_rdata() -> Vec<u8> {
-        b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec()
+        soa_rdata_with_serial(1)
+    }
+
+    fn soa_rdata_with_serial(serial: u32) -> Vec<u8> {
+        let mut rdata = b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec();
+        let (_, consumed_mname) = DomainName::parse(&rdata, 0).unwrap();
+        let (_, consumed_rname) = DomainName::parse(&rdata, consumed_mname).unwrap();
+        let serial_offset = consumed_mname + consumed_rname;
+        rdata[serial_offset..serial_offset + 4].copy_from_slice(&serial.to_be_bytes());
+        rdata
     }
 }
