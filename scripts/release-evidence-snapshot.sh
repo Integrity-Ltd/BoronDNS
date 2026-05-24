@@ -74,6 +74,24 @@ run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
 
+if [[ "${OXIDEDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
+  fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
+  if [[ ! "$fuzz_duration" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'OXIDEDNS_EVIDENCE_FUZZ_DURATION must be a positive integer: %s\n' "$fuzz_duration" >&2
+    exit 1
+  fi
+  run_and_capture fuzz-campaign bash -lc \
+    "cd '$repo_root' && scripts/fuzz-campaign.sh --duration '$fuzz_duration' --evidence-dir '$snapshot_dir/fuzz-campaign'"
+else
+  cat >"$snapshot_dir/logs/fuzz-campaign-skipped.log" <<'EOF'
+Fuzz campaigns were not run by default.
+
+Set OXIDEDNS_EVIDENCE_RUN_FUZZ=1 to run scripts/fuzz-campaign.sh and retain its
+logs and artifacts inside this snapshot. OXIDEDNS_EVIDENCE_FUZZ_DURATION controls
+the per-target duration in seconds and defaults to 10.
+EOF
+fi
+
 if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
   while IFS= read -r command_line; do
     [[ -z "$command_line" || "$command_line" =~ ^# ]] && continue

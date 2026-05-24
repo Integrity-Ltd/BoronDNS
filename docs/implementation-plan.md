@@ -227,6 +227,7 @@ RRL foundations are started:
 - each accounting key uses a token bucket with capacity/refill equal to the configured per-second rate, applies the configured slip policy by dropping or emitting TC=1 empty-section responses that retain the question and OPT pseudo-RR, and evicts least-recently-used keys at the configured cap;
 - `/metrics` exposes RRL subject, dropped, truncated, currently tracked key, and key-eviction counters.
 - `scripts/interop-rrl-udp.sh` starts OxideDNS against a fake AXFR primary, drives repeated UDP positive, NXDOMAIN, NODATA, referral, and error responses through zero-rate RRL buckets, and verifies both dropped/truncated wire behavior and RRL metrics.
+- `scripts/rrl-evidence-campaign.sh` runs the RRL UDP interop script repeatedly by iteration count or wall-clock duration, retains wrapper config, tool versions, git state, per-run command files, logs, and a summary under `target/rrl-evidence/<timestamp>/`, and fails the campaign on the first failed interop run.
 
 XoT foundations are started:
 
@@ -254,13 +255,14 @@ Interop harness foundations:
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
 - `scripts/interop-knot-dnssec-docker.sh` starts Knot DNS inside Docker with automatic ECDSAP256SHA256 NSEC3 signing, verifies primary AXFR carries DNSKEY, RRSIG, NSEC3, and NSEC3PARAM, then starts OxideDNS and verifies DO-sensitive positive, NXDOMAIN, NODATA, direct DNSKEY/NSEC3, non-DO suppression, and metrics behavior from the signed transfer, including an SRV fixture that makes Knot emit an empty-non-terminal NSEC3 record.
 - `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
+- `scripts/rrl-evidence-campaign.sh` wraps the RRL UDP interop script for repeated retained runs, with dry-run and list-config modes for reviewable campaign setup.
 - `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, and NSEC records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, and handles DNSSEC UDP truncation/response-DO semantics.
 - `scripts/interop-dnssec-nsec3-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC3, and NSEC3PARAM records, verifies direct NSEC3/NSEC3PARAM serving, and verifies DO-sensitive NXDOMAIN NSEC3 proof material with covering RRSIGs.
 
 Non-functional evidence foundations:
 
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
-- `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optionally interop script output under `target/evidence/<timestamp>/`.
+- `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 
 Fuzzing foundations:
 
