@@ -198,6 +198,7 @@ DNSSEC work is partially started:
 - explicit RRSIG, NSEC, and NSEC3 queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
 - response header construction unconditionally clears AD and CD bits.
+- inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
 
 Slice 8 has health endpoint foundations:
 

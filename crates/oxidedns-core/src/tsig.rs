@@ -66,6 +66,9 @@ pub enum TsigError {
     #[error("DNS message TSIG MAC verification failed")]
     InvalidMac,
 
+    #[error("DNS message TSIG MAC length is outside the accepted truncation range")]
+    BadTrunc,
+
     #[error("DNS message TSIG time is outside the accepted fudge window")]
     TimeOutsideFudge,
 
@@ -108,6 +111,10 @@ impl TsigAlgorithm {
             Self::HmacSha384 => 48,
             Self::HmacSha512 => 64,
         }
+    }
+
+    pub fn min_mac_len(self) -> usize {
+        self.mac_len() / 2
     }
 }
 
@@ -421,11 +428,9 @@ pub fn verify_response(
         &tsig.other_data,
     );
     let mut mac_input = response_mac_input(request_mac, &unsigned_message, &variables);
-    let expected_mac = key.sign(&mac_input)?;
+    let mac_verification = verify_tsig_mac(key, &mac_input, &tsig.mac);
     mac_input.zeroize();
-    if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
-        return Err(TsigError::InvalidMac);
-    }
+    mac_verification?;
 
     Ok(VerifiedMessage {
         message: unsigned_message,
@@ -473,11 +478,9 @@ pub fn verify_request(
     let mut mac_input = Vec::with_capacity(unsigned_message.len() + variables.len());
     mac_input.extend_from_slice(&unsigned_message);
     mac_input.extend_from_slice(&variables);
-    let expected_mac = key.sign(&mac_input)?;
+    let mac_verification = verify_tsig_mac(key, &mac_input, &tsig.mac);
     mac_input.zeroize();
-    if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
-        return Err(TsigError::InvalidMac);
-    }
+    mac_verification?;
 
     Ok(VerifiedMessage {
         message: unsigned_message,
@@ -775,9 +778,17 @@ fn verify_tcp_tsig_mac(
     append_u48(&mut mac_input, tsig.time_signed);
     mac_input.extend_from_slice(&tsig.fudge.to_be_bytes());
 
-    let expected_mac = key.sign(&mac_input)?;
+    let mac_verification = verify_tsig_mac(key, &mac_input, &tsig.mac);
     mac_input.zeroize();
-    if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
+    mac_verification
+}
+
+fn verify_tsig_mac(key: &TsigKey, mac_input: &[u8], received_mac: &[u8]) -> Result<(), TsigError> {
+    let expected_mac = key.sign(mac_input)?;
+    if received_mac.len() < key.algorithm.min_mac_len() || received_mac.len() > expected_mac.len() {
+        return Err(TsigError::BadTrunc);
+    }
+    if !bool::from(expected_mac[..received_mac.len()].ct_eq(received_mac)) {
         return Err(TsigError::InvalidMac);
     }
     Ok(())
@@ -915,6 +926,14 @@ mod tests {
         assert_eq!(TsigAlgorithm::HmacSha384.mac_len(), 48);
         assert_eq!(TsigAlgorithm::HmacSha512.name(), "hmac-sha512");
         assert_eq!(TsigAlgorithm::HmacSha512.mac_len(), 64);
+    }
+
+    #[test]
+    fn algorithm_minimum_tsig_mac_lengths_are_half_digest_lengths() {
+        assert_eq!(TsigAlgorithm::HmacSha1.min_mac_len(), 10);
+        assert_eq!(TsigAlgorithm::HmacSha256.min_mac_len(), 16);
+        assert_eq!(TsigAlgorithm::HmacSha384.min_mac_len(), 24);
+        assert_eq!(TsigAlgorithm::HmacSha512.min_mac_len(), 32);
     }
 
     #[test]
@@ -1115,6 +1134,52 @@ mod tests {
     }
 
     #[test]
+    fn verifies_request_with_minimum_truncated_tsig_mac() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let query = sample_soa_query();
+        let signed = key
+            .sign_request(&query, 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+        let truncated_mac = &signed.mac[..key.algorithm.min_mac_len()];
+        let truncated_message = replace_tsig_mac(&signed.message, &key, truncated_mac);
+
+        let verified = key
+            .verify_request(&truncated_message, 1_700_000_000)
+            .expect("verified request with truncated TSIG MAC");
+
+        assert_eq!(verified.message, query);
+        assert_eq!(verified.mac, truncated_mac);
+    }
+
+    #[test]
+    fn verifies_response_with_minimum_truncated_tsig_mac() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let response = sample_soa_response();
+        let signed_response = key
+            .sign_response(
+                &response,
+                &request.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .expect("signed response");
+        let truncated_mac = &signed_response.mac[..key.algorithm.min_mac_len()];
+        let truncated_message = replace_tsig_mac(&signed_response.message, &key, truncated_mac);
+
+        let verified = key
+            .verify_response(&truncated_message, &request.mac, 1_700_000_001)
+            .expect("verified response with truncated TSIG MAC");
+
+        assert_eq!(verified.message, response);
+        assert_eq!(verified.mac, truncated_mac);
+    }
+
+    #[test]
     fn rejects_request_with_invalid_mac() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
@@ -1129,6 +1194,41 @@ mod tests {
             .expect_err("tampered request");
 
         assert_eq!(error, TsigError::InvalidMac);
+    }
+
+    #[test]
+    fn rejects_request_with_tsig_mac_below_truncation_minimum() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let signed = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+        let too_short_mac = &signed.mac[..key.algorithm.min_mac_len() - 1];
+        let too_short_message = replace_tsig_mac(&signed.message, &key, too_short_mac);
+
+        let error = key
+            .verify_request(&too_short_message, 1_700_000_000)
+            .expect_err("too-short TSIG MAC");
+
+        assert_eq!(error, TsigError::BadTrunc);
+    }
+
+    #[test]
+    fn rejects_request_with_overlong_tsig_mac() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let signed = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed request");
+        let mut overlong_mac = signed.mac.clone();
+        overlong_mac.push(0);
+        let overlong_message = replace_tsig_mac(&signed.message, &key, &overlong_mac);
+
+        let error = key
+            .verify_request(&overlong_message, 1_700_000_000)
+            .expect_err("overlong TSIG MAC");
+
+        assert_eq!(error, TsigError::BadTrunc);
     }
 
     #[test]
@@ -1390,6 +1490,25 @@ mod tests {
         response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
         response.extend_from_slice(&rdata);
         response
+    }
+
+    fn replace_tsig_mac(message: &[u8], key: &TsigKey, replacement_mac: &[u8]) -> Vec<u8> {
+        let (mut unsigned, tsig) = remove_tsig(message).expect("message has TSIG");
+        let arcount = u16::from_be_bytes([unsigned[10], unsigned[11]]);
+        unsigned[10..12].copy_from_slice(&(arcount + 1).to_be_bytes());
+        append_tsig_rr(
+            &mut unsigned,
+            key,
+            TsigRecordFields {
+                time_signed: tsig.time_signed,
+                fudge: tsig.fudge,
+                mac: replacement_mac,
+                original_id: tsig.original_id,
+                error: tsig.error,
+                other_data: &tsig.other_data,
+            },
+        );
+        unsigned
     }
 
     fn signed_tcp_response_for_messages(
