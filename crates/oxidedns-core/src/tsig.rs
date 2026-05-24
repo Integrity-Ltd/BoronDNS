@@ -20,6 +20,7 @@ const TSIG_TTL: u32 = 0;
 const TSIG_ERROR_NOERROR: u16 = 0;
 pub const TSIG_ERROR_BADSIG: u16 = 16;
 pub const TSIG_ERROR_BADTIME: u16 = 18;
+pub const TSIG_ERROR_BADALG: u16 = 21;
 pub const TSIG_ERROR_BADTRUNC: u16 = 22;
 
 #[derive(Debug, Error, PartialEq, Eq)]
