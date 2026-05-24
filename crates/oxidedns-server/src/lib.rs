@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -114,6 +114,9 @@ pub struct Runtime {
 
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
 const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
+const RUNTIME_STATUS_RUNNING: u8 = 0;
+const RUNTIME_STATUS_DRAINING: u8 = 1;
+const RUNTIME_STATUS_UNHEALTHY: u8 = 2;
 
 impl Runtime {
     pub fn new(config: ServerConfig) -> Self {
@@ -158,8 +161,10 @@ impl Runtime {
         );
 
         let mut listeners = JoinSet::new();
+        let mut health_listeners = JoinSet::new();
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
+        let runtime_status = RuntimeStatus::new();
         let notify_authority = NotifyAuthority::from_config(&self.config);
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
@@ -186,7 +191,13 @@ impl Runtime {
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|source| RuntimeError::BindHealth { addr, source })?;
-            listeners.spawn(serve_health(listener, self.zones.clone()));
+            health_listeners.spawn(serve_health(
+                listener,
+                HealthEndpointState {
+                    zones: self.zones.clone(),
+                    runtime_status: runtime_status.clone(),
+                },
+            ));
         }
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
@@ -258,6 +269,7 @@ impl Runtime {
                     active_tcp_connections = tcp_connections.load(Ordering::Acquire),
                     "shutdown signal received; draining runtime"
                 );
+                runtime_status.mark_draining();
                 listeners.abort_all();
                 if drain_tcp_connections(
                     tcp_connections.clone(),
@@ -271,6 +283,7 @@ impl Runtime {
                         "shutdown grace period elapsed with active TCP connections"
                     );
                 }
+                health_listeners.abort_all();
             }
             result = listeners.join_next(), if !listeners.is_empty() => {
                 match result {
@@ -278,6 +291,15 @@ impl Runtime {
                     Some(Ok(Err(error))) => return Err(error),
                     Some(Err(error)) => {
                         warn!(%error, "listener task failed");
+                    }
+                }
+            }
+            result = health_listeners.join_next(), if !health_listeners.is_empty() => {
+                match result {
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(error))) => return Err(error),
+                    Some(Err(error)) => {
+                        warn!(%error, "health listener task failed");
                     }
                 }
             }
@@ -918,47 +940,53 @@ async fn serve_tcp(
     }
 }
 
-async fn serve_health(listener: TcpListener, zones: ZoneStore) -> Result<(), RuntimeError> {
+async fn serve_health(
+    listener: TcpListener,
+    state: HealthEndpointState,
+) -> Result<(), RuntimeError> {
     let local_addr = listener.local_addr().map_err(RuntimeError::Health)?;
     info!(%local_addr, "health listener bound");
 
-    axum::serve(listener, health_router(zones))
+    axum::serve(listener, health_router(state))
         .await
         .map_err(RuntimeError::Health)
 }
 
-fn health_router(zones: ZoneStore) -> Router {
+fn health_router(state: HealthEndpointState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
-        .with_state(zones)
+        .with_state(state)
 }
 
-async fn healthz(State(zones): State<ZoneStore>) -> Response {
-    if zones.has_active_zone() {
-        plain_text(StatusCode::OK, "ready\n")
-    } else {
-        plain_text(StatusCode::SERVICE_UNAVAILABLE, "starting\n")
+async fn healthz(State(state): State<HealthEndpointState>) -> Response {
+    match state.runtime_status.status() {
+        RuntimeStatusValue::Running if state.zones.has_active_zone() => {
+            plain_text(StatusCode::OK, "ready\n")
+        }
+        RuntimeStatusValue::Running => plain_text(StatusCode::SERVICE_UNAVAILABLE, "starting\n"),
+        RuntimeStatusValue::Draining => plain_text(StatusCode::SERVICE_UNAVAILABLE, "draining\n"),
+        RuntimeStatusValue::Unhealthy => plain_text(StatusCode::SERVICE_UNAVAILABLE, "unhealthy\n"),
     }
 }
 
-async fn readyz(State(zones): State<ZoneStore>) -> Response {
-    if zones.has_active_zone() {
+async fn readyz(State(state): State<HealthEndpointState>) -> Response {
+    if state.runtime_status.is_running() && state.zones.has_active_zone() {
         plain_text(StatusCode::OK, "ready\n")
     } else {
         plain_text(StatusCode::SERVICE_UNAVAILABLE, "not ready\n")
     }
 }
 
-async fn metrics(State(zones): State<ZoneStore>) -> Response {
+async fn metrics(State(state): State<HealthEndpointState>) -> Response {
     (
         StatusCode::OK,
         [(
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        metrics_body(&zones),
+        metrics_body(&state.zones),
     )
         .into_response()
 }
@@ -983,6 +1011,55 @@ fn plain_text(status: StatusCode, body: &'static str) -> Response {
         body,
     )
         .into_response()
+}
+
+#[derive(Clone)]
+struct HealthEndpointState {
+    zones: ZoneStore,
+    runtime_status: RuntimeStatus,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeStatus {
+    value: Arc<AtomicU8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeStatusValue {
+    Running,
+    Draining,
+    Unhealthy,
+}
+
+impl RuntimeStatus {
+    fn new() -> Self {
+        Self {
+            value: Arc::new(AtomicU8::new(RUNTIME_STATUS_RUNNING)),
+        }
+    }
+
+    fn mark_draining(&self) {
+        self.value.store(RUNTIME_STATUS_DRAINING, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn mark_unhealthy(&self) {
+        self.value
+            .store(RUNTIME_STATUS_UNHEALTHY, Ordering::Release);
+    }
+
+    fn is_running(&self) -> bool {
+        self.status() == RuntimeStatusValue::Running
+    }
+
+    fn status(&self) -> RuntimeStatusValue {
+        match self.value.load(Ordering::Acquire) {
+            RUNTIME_STATUS_RUNNING => RuntimeStatusValue::Running,
+            RUNTIME_STATUS_DRAINING => RuntimeStatusValue::Draining,
+            RUNTIME_STATUS_UNHEALTHY => RuntimeStatusValue::Unhealthy,
+            _ => RuntimeStatusValue::Unhealthy,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2140,14 +2217,14 @@ mod tests {
     };
 
     use super::{
-        IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
-        RefreshRequest, RefreshWorkerSettings, Runtime, TcpServerSettings, TransferPlan,
-        ZoneRefreshRegistry, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-        query_id_from_random_bytes, refresh_zone_from_primaries, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, sign_notify_response,
-        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
-        write_tcp_message,
+        HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
+        NotifyRefreshTracker, RefreshRequest, RefreshWorkerSettings, Runtime, RuntimeStatus,
+        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
+        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -2223,7 +2300,7 @@ mod tests {
         let zones = ZoneStore::new();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_health(listener, zones.clone()));
+        let server = tokio::spawn(serve_health(listener, health_state(zones.clone())));
 
         let starting = http_request(addr, "GET", "/healthz").await;
         assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
@@ -2252,7 +2329,7 @@ mod tests {
         ));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_health(listener, zones));
+        let server = tokio::spawn(serve_health(listener, health_state(zones)));
 
         let ready = http_request(addr, "GET", "/readyz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
@@ -2269,6 +2346,43 @@ mod tests {
 
         let method_not_allowed = http_request(addr, "POST", "/metrics").await;
         assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_reports_draining_and_unready_during_shutdown() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+        let runtime_status = RuntimeStatus::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_health(
+            listener,
+            HealthEndpointState {
+                zones,
+                runtime_status: runtime_status.clone(),
+            },
+        ));
+
+        runtime_status.mark_draining();
+
+        let health = http_request(addr, "GET", "/healthz").await;
+        assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(health.ends_with("draining\n"));
+
+        let ready = http_request(addr, "GET", "/readyz").await;
+        assert!(ready.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(ready.ends_with("not ready\n"));
+
+        runtime_status.mark_unhealthy();
+        let unhealthy = http_request(addr, "GET", "/healthz").await;
+        assert!(unhealthy.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(unhealthy.ends_with("unhealthy\n"));
 
         server.abort();
     }
@@ -4089,6 +4203,13 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).await.unwrap();
         response
+    }
+
+    fn health_state(zones: ZoneStore) -> HealthEndpointState {
+        HealthEndpointState {
+            zones,
+            runtime_status: RuntimeStatus::new(),
+        }
     }
 
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
