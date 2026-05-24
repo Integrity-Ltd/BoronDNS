@@ -708,6 +708,12 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
     match record.rr_type {
         rr_type if rr_type == RecordType::A as u16 => validate_fixed_rdata(record, 4),
         rr_type if rr_type == RecordType::Aaaa as u16 => validate_fixed_rdata(record, 16),
+        rr_type if rr_type == RecordType::Hinfo as u16 => {
+            validate_character_strings(&record.rdata, Some(2))
+        }
+        rr_type if rr_type == RecordType::Txt as u16 => {
+            validate_character_strings(&record.rdata, None)
+        }
         rr_type if rr_type == RecordType::Srv as u16 => {
             validate_uncompressed_domain_name_at_end(&record.rdata, 6)
         }
@@ -730,6 +736,28 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
 
 fn validate_fixed_rdata(record: &ResourceRecord, expected_len: usize) -> Result<(), AxfrError> {
     if record.rdata.len() == expected_len {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
+}
+
+fn validate_character_strings(
+    rdata: &[u8],
+    expected_count: Option<usize>,
+) -> Result<(), AxfrError> {
+    if rdata.is_empty() {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let mut offset = 0usize;
+    let mut count = 0usize;
+    while offset < rdata.len() {
+        offset = skip_character_string(rdata, offset)?;
+        count += 1;
+    }
+
+    if expected_count.is_none_or(|expected| count == expected) {
         Ok(())
     } else {
         Err(AxfrError::InvalidRdata)
@@ -2088,6 +2116,58 @@ mod tests {
         .expect_err("invalid AAAA RDATA length");
 
         assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_axfr_txt_with_invalid_character_string_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let cases = [
+            (Vec::new(), "empty TXT RDATA"),
+            (vec![3, b'f', b'o'], "truncated TXT character-string"),
+        ];
+
+        for (rdata, context) in cases {
+            let bad_txt = record("txt.example.test.", RecordType::Txt as u16, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), bad_txt, soa.clone()],
+                )],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
+    }
+
+    #[test]
+    fn rejects_axfr_hinfo_with_wrong_character_string_count() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let cases = [
+            (vec![3, b'c', b'p', b'u'], "single HINFO string"),
+            (vec![0, 0, 0], "three HINFO strings"),
+        ];
+
+        for (rdata, context) in cases {
+            let bad_hinfo = record("host.example.test.", RecordType::Hinfo as u16, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), bad_hinfo, soa.clone()],
+                )],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
     }
 
     #[test]

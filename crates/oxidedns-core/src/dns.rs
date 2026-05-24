@@ -38,6 +38,7 @@ pub enum RecordType {
     Cname = 5,
     Soa = 6,
     Ptr = 12,
+    Hinfo = 13,
     Mx = 15,
     Txt = 16,
     Aaaa = 28,
