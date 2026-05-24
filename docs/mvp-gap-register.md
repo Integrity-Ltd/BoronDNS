@@ -1,12 +1,24 @@
-# MVP Gap Register
+# Engineering MVP and SRS Acceptance Gap Register
 
-This register keeps the active MVP work tied to reviewable evidence. The
+This register keeps active implementation work tied to reviewable evidence. The
 implementation plan describes feature status in detail; this file is the shorter
-queue for remaining release blockers.
+queue for release blockers.
+
+Terminology:
+
+- **Engineering MVP** is the first deployable secondary DNS server with the core
+  operational path and retained verification evidence.
+- **SRS acceptance** is the later ODS-VER-008 gate. It requires full SRS
+  conformance, the complete interop matrix, performance targets, 30-day soak,
+  long-run fuzzing, documentation completion, and external operator acceptance.
+
+Rows below deliberately separate current evidence from remaining acceptance
+gaps. A row with substantial implementation evidence is not a claim of full SRS
+compliance.
 
 ## Protocol Coverage
 
-| Area | Current Evidence | Remaining MVP Gap |
+| Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
 | AXFR | Unit parser coverage; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
 | IXFR | Unit parser/fault coverage; BIND and Knot true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
@@ -17,7 +29,7 @@ queue for remaining release blockers.
 
 ## Non-Functional Evidence
 
-| Area | Current Evidence | Remaining MVP Gap |
+| Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks; `scripts/fuzz-campaign.sh` and optional release-snapshot fuzz campaign capture | 24-hour campaigns per parser target with retained logs/artifacts |
 | Safe Rust Audit | Workspace `unsafe_code = "forbid"` lint; `scripts/audit-safe-rust.sh` first-party unsafe construct scan | Release-review transitive dependency unsafe enumeration, for example with `cargo geiger` or equivalent |

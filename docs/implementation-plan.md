@@ -1,10 +1,44 @@
 # OxideDNS Implementation Plan
 
-This plan tracks the implementation path from the current Rust scaffold to the SRS milestones.
+This plan tracks the path from the current Rust project to a working
+secondary-authoritative DNS server while preserving traceability to Tibor's SRS.
 
-## Goal
+The SRS-defined "MVP" in ODS-VER-008 is not the first useful engineering
+milestone. It is a full acceptance/compliance gate: all SRS requirements,
+three-primary interoperability, performance evidence, a 30-day soak, 24-hour
+fuzz campaigns per parser, complete documentation, and external operator
+acceptance. This plan therefore uses two targets:
 
-Reach the SRS-defined MVP:
+- **Engineering MVP**: the first deployable and reviewable secondary DNS server
+  that exercises the core operational path with retained evidence.
+- **SRS acceptance**: the later ODS-VER-008 compliance gate.
+
+## Engineering MVP Target
+
+The near-term implementation target is:
+
+- static TOML configuration with no runtime reload;
+- secondary-only operation from configured primaries;
+- memory-resident zone snapshots with atomic publication;
+- UDP and TCP authoritative serving for active zones;
+- AXFR initial load and refresh, with IXFR attempted where existing zone state
+  permits it and AXFR fallback retained;
+- authorized NOTIFY-triggered refresh;
+- TSIG HMAC-SHA256 for transfer and NOTIFY paths;
+- health, readiness, metrics, structured logs, and graceful shutdown;
+- safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
+  evidence commands retained in the repo;
+- interoperability evidence against at least one real primary for AXFR, TSIG,
+  and NOTIFY, with the broader matrix tracked separately.
+
+The Engineering MVP may include more than the Alpha subset where implementation
+has already moved ahead, such as IXFR, XoT, DNSSEC serving of transferred data,
+and RRL. Those features still need SRS acceptance evidence before they are
+claimed complete.
+
+## SRS Acceptance Target
+
+The ODS-VER-008 acceptance target remains:
 
 - all requirements in SRS sections 3 through 6 satisfied;
 - interoperability with NSD, Knot DNS, and BIND 9 primaries;
@@ -15,9 +49,9 @@ Reach the SRS-defined MVP:
 - SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
 - at least one production-representative external operator has independently deployed and validated the server.
 
-## First Milestone: Alpha
+## SRS Alpha Reference
 
-The SRS Alpha gate is the practical route to MVP. Alpha requires:
+The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 
 - all architectural invariants;
 - DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
@@ -26,7 +60,7 @@ The SRS Alpha gate is the practical route to MVP. Alpha requires:
 - selected reliability, maintainability, portability, observability, and resource NFRs;
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
 
-Deferred from Alpha to MVP per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue, performance NFR conformance, full security/maintainability verification, second and third primary interop.
+Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue, performance NFR conformance, full security/maintainability verification, second and third primary interop.
 
 ## Implementation Slices
 
@@ -282,4 +316,4 @@ Open near-term work:
 - broaden IXFR fault and interop coverage beyond BIND and Knot true-incremental evidence;
 - broaden real-primary XoT interop evidence;
 - split DNSSEC evidence into release traceability and broader conformance matrix entries;
-- start collecting long-run performance, fuzz, interop, and soak evidence for MVP verification.
+- start collecting long-run performance, fuzz, interop, and soak evidence for SRS acceptance verification.

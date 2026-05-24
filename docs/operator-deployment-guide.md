@@ -1,15 +1,16 @@
 # OxideDNS Operator Deployment Guide
 
-Status: MVP evidence artifact
+Status: Engineering MVP operator guide and SRS acceptance evidence artifact
 
 This guide describes how to deploy and operate OxideDNS as a secondary-only
-authoritative DNS server for MVP validation. It is derived from the SRS,
-implementation plan, MVP gap register, repository README, example
-configuration, and interoperability scripts.
+authoritative DNS server for Engineering MVP validation and later SRS
+acceptance review. It is derived from the SRS, implementation plan, gap
+register, repository README, example configuration, and interoperability
+scripts.
 
 The SRS remains the normative source for required behavior. This guide is the
 practical operator view: supported boundaries, build and install steps,
-configuration, service management, checks, and known MVP limitations.
+configuration, service management, checks, and known limitations.
 
 ## Supported Platform Boundaries
 
@@ -17,7 +18,7 @@ OxideDNS is currently scoped for Linux hosts and OCI-compatible containers. The 
 target is current Linux LTS kernels or later, with standard POSIX networking and
 signal handling. The server has no distribution-specific runtime requirement.
 
-Supported MVP deployment forms:
+Supported Engineering MVP deployment forms:
 
 - Native Linux process managed by systemd, another supervisor, or a test
   harness.
@@ -204,7 +205,7 @@ SOA serials, refresh timestamps, transfer counters, query counters, RCODE
 counters, truncation counters, CNAME limit/loop counters, NOTIFY counters, TSIG
 verification outcomes for authorized NOTIFY, and RRL counters.
 
-Alerting is external to OxideDNS. For MVP deployments, alert on at least:
+Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 
 - `/readyz` remaining 503 beyond the expected initial transfer window.
 - A zone entering or remaining in EXPIRED state.
@@ -214,9 +215,10 @@ Alerting is external to OxideDNS. For MVP deployments, alert on at least:
 
 ## Primary Interoperability Scripts
 
-The repository includes primary interoperability scripts that double as MVP
-evidence collection commands. Run them from the repository root after building
-the debug binary or allow the scripts to build as needed.
+The repository includes primary interoperability scripts that double as
+Engineering MVP and SRS acceptance evidence collection commands. Run them from
+the repository root after building the debug binary or allow the scripts to
+build as needed.
 
 General validation:
 
@@ -230,7 +232,7 @@ General validation:
 compile check, cargo-deny output, tool versions, git state, and the current
 verification command list. Set `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz
 campaign helper inside the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to
-run the interop commands listed in the MVP gap register as part of the snapshot.
+run the interop commands listed in the gap register as part of the snapshot.
 
 Primary AXFR coverage:
 
@@ -379,8 +381,9 @@ Back up and version-control:
 - XoT trust anchors, client certificates, and client private keys.
 - Service manager units, container manifests, firewall policy, and monitoring
   rules.
-- MVP evidence artifacts: check logs, interop script output, fuzz campaign logs,
-  dependency audit results, performance reports, and soak-test reports.
+- SRS acceptance evidence artifacts: check logs, interop script output, fuzz
+  campaign logs, dependency audit results, performance reports, and soak-test
+  reports.
 
 Upgrade procedure:
 
@@ -404,16 +407,16 @@ Rollback procedure:
 Because OxideDNS has no persistent runtime state, rollback is a binary and
 configuration rollback followed by zone reacquisition from the primary.
 
-## Known MVP Limitations
+## Known Limitations
 
-The MVP gap register is the live source for remaining acceptance gaps. The
+The gap register is the live source for remaining acceptance gaps. The
 current operator-relevant limitations are:
 
-- The implementation is still early Alpha toward MVP. Some protocol areas have
-  partial evidence rather than full release traceability.
-- The Operator Deployment Guide itself is one of the required MVP evidence
-  artifacts; external operator deployment evidence is still required before MVP
-  acceptance.
+- The implementation is still moving toward Engineering MVP. Some protocol
+  areas have partial evidence rather than full release traceability.
+- The Operator Deployment Guide itself is one of the required SRS acceptance
+  evidence artifacts; external operator deployment evidence is still required
+  before ODS-VER-008 acceptance.
 - Full per-requirement traceability against the SRS is still pending.
 - IXFR has BIND true incremental interop and fallback coverage, but broader
   real-primary IXFR behavior matrix evidence remains pending.
@@ -425,7 +428,7 @@ current operator-relevant limitations are:
 - RRL has runtime behavior and metrics coverage; release threshold decisions
   and longer-running evidence remain pending.
 - Performance targets, 30-day soak evidence, and 24-hour fuzz campaigns per
-  parser target remain MVP blockers.
+  parser target remain SRS acceptance blockers.
 - Container image size and static-binary release packaging are SRS targets; the
   repository currently documents source build and script-driven evidence paths.
 - Health and metrics are plain HTTP and unauthenticated. They should not be

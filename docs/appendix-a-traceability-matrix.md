@@ -1,6 +1,6 @@
 # Appendix A - Requirements Traceability Matrix
 
-Status: first-pass MVP evidence artifact
+Status: first-pass Engineering MVP and SRS acceptance evidence artifact
 
 This matrix is the working Appendix A traceability record for SRS requirements
 in `docs/OxideDNS-Secondary-SRS-v0.1.md` sections 3 through 6. It is derived
@@ -9,8 +9,11 @@ the evidence pointers they already cite.
 
 This is not a final release conformance claim. The status column records the
 current evidence state for each requirement family, not implementation
-completion. Requirement IDs are kept as exact SRS IDs or same-prefix ranges so
-the table can be checked mechanically for identifier drift.
+completion. `MVP` in the phase column means the SRS-defined ODS-VER-008
+acceptance gate, which is broader than the near-term Engineering MVP described
+in `docs/implementation-plan.md`. Requirement IDs are kept as exact SRS IDs or
+same-prefix ranges so the table can be checked mechanically for identifier
+drift.
 
 ## Status Values
 
@@ -22,13 +25,13 @@ the table can be checked mechanically for identifier drift.
 
 ## Architectural Invariants
 
-| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
 | ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; `docs/verification-ledger.md` | Add explicit inspection artifacts for secondary-only state flow, memory-resident serving, atomic publication, no persistent state, static configuration, and safe-Rust discipline. |
 
 ## Functional Requirements
 
-| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
 | ODS-FR-CORE-001..ODS-FR-CORE-028 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; `scripts/interop-bind-axfr.sh`; `scripts/interop-nsd-axfr-docker.sh`; `scripts/interop-knot-axfr-docker.sh` | Split broad query and interop evidence into per-requirement release artifacts for parser, header, lookup, referral, wildcard, RRset, TTL, and name-octet behavior. |
 | ODS-FR-QRY-001..ODS-FR-QRY-024 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; AXFR interop scripts listed above | Minimal-ANY behavior, CNAME/DNAME edge cases, additional-section composition, compression policy, and query counter evidence still need per-requirement release traceability. |
@@ -73,7 +76,7 @@ the table can be checked mechanically for identifier drift.
 
 ## Non-Functional Requirements
 
-| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
 | ODS-NFR-PERF-001..ODS-NFR-PERF-005 | MVP / Partial | `scripts/perf-smoke.sh`; `scripts/release-evidence-snapshot.sh`; `docs/mvp-gap-register.md` | Collect release benchmark artifacts for throughput, direct-hit latency, p99 latency, AXFR ingestion rate, and startup timing against SRS targets. |
 | ODS-NFR-REL-001..ODS-NFR-REL-005 | Alpha subset; MVP full / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/check.sh` | Retain shutdown/drain evidence, network-error resilience evidence, rolling-restart evidence, and a 30-day production-representative soak artifact for memory stability. |
@@ -85,7 +88,7 @@ the table can be checked mechanically for identifier drift.
 
 ## External Interface Requirements
 
-| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
 | ODS-IF-NET-001..ODS-IF-NET-004 | Alpha / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/check.sh`; interop scripts | Add retained artifacts for multi-address bind behavior, bind failure exits, outbound source behavior, and IPv4/IPv6 interface coverage. |
 | ODS-IF-CONF-001..ODS-IF-CONF-007 | Alpha / Partial | `config/oxidedns.example.toml`; `docs/operator-deployment-guide.md`; `docs/implementation-plan.md`; `scripts/check.sh` | Add schema/backward-compatibility evidence, environment override evidence, whole-config validation evidence, secret/TLS file-mode evidence, and no-SIGHUP reload evidence. |
@@ -95,12 +98,12 @@ the table can be checked mechanically for identifier drift.
 
 ## Verification Requirements
 
-| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
 | ODS-VER-001 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Map every SRS section 3 through 6 requirement to accepted verification method evidence, not only family-level evidence. |
 | ODS-VER-002 | MVP / Partial | `scripts/release-evidence-snapshot.sh`; `docs/verification-ledger.md` | Ensure CI/release retention captures logs, benchmark results, code-review records, fuzz summaries, and interop outputs for each release. |
 | ODS-VER-003..ODS-VER-004 | Alpha / Partial | BIND, NSD, and Knot interop scripts listed in `docs/verification-ledger.md` | Retain release-review outputs and expand representative-zone matrix where gaps remain. |
 | ODS-VER-005..ODS-VER-006 | MVP / Partial | `docs/OxideDNS-Secondary-SRS-v0.1.md` Appendix A | Keep RFC clause mapping synchronized with requirement verification status and out-of-scope rationale. |
 | ODS-VER-007 | Alpha / Partial | `docs/verification-ledger.md`; interop scripts listed there | Alpha evidence exists as a working scaffold; release review must decide which partial rows are acceptable for Alpha signoff. |
-| ODS-VER-008 | MVP / Deferred | `docs/mvp-gap-register.md`; `docs/verification-ledger.md` | Complete all MVP protocol, non-functional, interop, operator-doc, and retained-evidence gaps before asserting MVP. |
+| ODS-VER-008 | MVP / Deferred | `docs/mvp-gap-register.md`; `docs/verification-ledger.md` | Complete all SRS acceptance protocol, non-functional, interop, operator-doc, and retained-evidence gaps before asserting ODS-VER-008. |
 | ODS-VER-009 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Expand this first-pass family matrix into the canonical per-requirement status table with date and evidence reference for every SRS section 3 through 6 requirement. |
