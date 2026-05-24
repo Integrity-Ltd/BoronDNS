@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::mpsc,
+    sync::{Semaphore, mpsc},
     task::JoinSet,
 };
 use tracing::{debug, info, warn};
@@ -142,8 +142,13 @@ impl Runtime {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
-        self.load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns)
-            .await;
+        self.load_initial_zones(
+            &transfer_plan,
+            &refresh_registry,
+            &ixfr_cooldowns,
+            self.config.limits.max_concurrent_transfers,
+        )
+        .await;
 
         info!(
             udp_listeners = self.config.server.listen_udp.len(),
@@ -283,30 +288,53 @@ impl Runtime {
         transfer_plan: &TransferPlan,
         refresh_registry: &ZoneRefreshRegistry,
         ixfr_cooldowns: &IxfrCooldownRegistry,
+        max_concurrent_transfers: usize,
     ) {
+        let transfer_limit = Arc::new(Semaphore::new(max_concurrent_transfers));
+        let mut transfers = JoinSet::new();
+        let axfr_timeout = Duration::from_secs(self.config.limits.axfr_timeout_secs);
+        let ixfr_timeout = Duration::from_secs(self.config.limits.ixfr_timeout_secs);
+
         for zone in &self.config.zones {
             let zone_apex = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
             let plan = transfer_plan
                 .get(&zone_apex)
                 .expect("configuration validation builds a transfer plan for each zone");
+            let zones = self.zones.clone();
+            let refresh_registry = refresh_registry.clone();
+            let ixfr_cooldowns = ixfr_cooldowns.clone();
+            let transfer_permit = transfer_limit
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("transfer semaphore is not closed");
 
-            if let Some(snapshot) = refresh_zone_from_primaries(
-                &self.zones,
-                &plan,
-                None,
-                ixfr_cooldowns,
-                Duration::from_secs(self.config.limits.ixfr_timeout_secs),
-                Duration::from_secs(self.config.limits.axfr_timeout_secs),
-                "initial",
-            )
-            .await
-            {
-                refresh_registry.record_success(&snapshot);
-            } else {
-                let zone_apex = &plan.origin;
-                refresh_registry.record_failure(zone_apex, self.zones.find_exact_zone(zone_apex));
-                warn!(zone = %zone_apex, "zone remains in LOADING state");
+            transfers.spawn(async move {
+                let _transfer_permit = transfer_permit;
+                if let Some(snapshot) = refresh_zone_from_primaries(
+                    &zones,
+                    &plan,
+                    None,
+                    &ixfr_cooldowns,
+                    ixfr_timeout,
+                    axfr_timeout,
+                    "initial",
+                )
+                .await
+                {
+                    refresh_registry.record_success(&snapshot);
+                } else {
+                    let zone_apex = &plan.origin;
+                    refresh_registry.record_failure(zone_apex, zones.find_exact_zone(zone_apex));
+                    warn!(zone = %zone_apex, "zone remains in LOADING state");
+                }
+            });
+        }
+
+        while let Some(result) = transfers.join_next().await {
+            if let Err(error) = result {
+                warn!(%error, "initial zone transfer task failed");
             }
         }
     }
@@ -3017,7 +3045,7 @@ mod tests {
         );
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
         runtime
-            .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns)
+            .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns, 4)
             .await;
 
         let snapshot = runtime
@@ -3025,6 +3053,60 @@ mod tests {
             .get("example.test.")
             .expect("published zone snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
+    }
+
+    #[tokio::test]
+    async fn runtime_initial_load_honors_transfer_concurrency_limit() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let alpha_primary = spawn_barrier_axfr_primary("alpha.test.", barrier.clone()).await;
+        let beta_primary = spawn_barrier_axfr_primary("beta.test.", barrier.clone()).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_concurrent_transfers = 2
+
+                [[zones]]
+                name = "alpha.test."
+                primaries = ["{alpha_primary}"]
+
+                [[zones]]
+                name = "beta.test."
+                primaries = ["{beta_primary}"]
+            "#
+        ))
+        .expect("valid config");
+
+        let transfer_plan = TransferPlan::from_config(&config);
+        let runtime = Runtime::new(config);
+        let zones = runtime.zones.clone();
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        let loader = tokio::spawn(async move {
+            runtime
+                .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns, 2)
+                .await;
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait())
+            .await
+            .expect("both initial transfers should start before either completes");
+        loader.await.unwrap();
+
+        assert_eq!(
+            zones.get("alpha.test.").expect("alpha zone").state,
+            ZoneState::Active
+        );
+        assert_eq!(
+            zones.get("beta.test.").expect("beta zone").state,
+            ZoneState::Active
+        );
     }
 
     #[tokio::test]
@@ -3380,6 +3462,35 @@ mod tests {
         addr
     }
 
+    async fn spawn_barrier_axfr_primary(
+        zone: &'static str,
+        barrier: Arc<tokio::sync::Barrier>,
+    ) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let query = read_primary_query(&mut stream).await;
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            let (_, qname_len) = DomainName::parse(&query, 12).unwrap();
+            let qtype_offset = 12 + qname_len;
+            assert_eq!(
+                u16::from_be_bytes([query[qtype_offset], query[qtype_offset + 1]]),
+                RecordType::Axfr as u16
+            );
+
+            barrier.wait().await;
+
+            let response = axfr_response_for_zone(header.id, zone, 1);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        addr
+    }
+
     async fn spawn_axfr_primary_recording_query(
         serial: u32,
     ) -> (std::net::SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
@@ -3562,16 +3673,13 @@ mod tests {
     }
 
     fn axfr_response(qid: u16, serial: u32) -> Vec<u8> {
-        let soa = record(
-            "example.test.",
-            RecordType::Soa as u16,
-            soa_rdata_with_serial(serial),
-        );
-        let a = record(
-            "www.example.test.",
-            RecordType::A as u16,
-            vec![192, 0, 2, 10],
-        );
+        axfr_response_for_zone(qid, "example.test.", serial)
+    }
+
+    fn axfr_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
+        let soa = record(zone, RecordType::Soa as u16, soa_rdata_with_serial(serial));
+        let owner = format!("www.{zone}");
+        let a = record(&owner, RecordType::A as u16, vec![192, 0, 2, 10]);
         let answers = vec![soa.clone(), a, soa];
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());

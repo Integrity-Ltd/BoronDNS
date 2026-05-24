@@ -117,6 +117,7 @@ Slice 5 is in progress:
 - AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, rejects answer records after the terminating SOA, and validates class, bailiwick, and reserved RR types;
 - successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
+- initial LOADING-zone transfers are bounded by `[limits].max_concurrent_transfers`, defaulting to 4;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
 Slice 6 has a preliminary AXFR-backed zone state machine:

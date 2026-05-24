@@ -100,6 +100,11 @@ impl ServerConfig {
                 "limits.graceful_shutdown_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.max_concurrent_transfers == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_concurrent_transfers must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.edns_padding_block_size == 1 {
             return Err(ConfigError::Invalid(
                 "limits.edns_padding_block_size must be 0 to disable padding or at least 2"
@@ -440,6 +445,7 @@ mod tests {
         assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
         assert_eq!(config.limits.ixfr_disabled_cooldown_secs, 3600);
+        assert_eq!(config.limits.max_concurrent_transfers, 4);
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
@@ -814,6 +820,46 @@ mod tests {
         .expect_err("zero IXFR disabled cooldown must fail");
 
         assert!(error.to_string().contains("ixfr_disabled_cooldown_secs"));
+    }
+
+    #[test]
+    fn parses_custom_transfer_concurrency_limit() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_concurrent_transfers = 2
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.max_concurrent_transfers, 2);
+    }
+
+    #[test]
+    fn rejects_zero_transfer_concurrency_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_concurrent_transfers = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero transfer concurrency limit must fail");
+
+        assert!(error.to_string().contains("max_concurrent_transfers"));
     }
 
     #[test]
