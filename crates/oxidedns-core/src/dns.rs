@@ -1,5 +1,7 @@
-use std::fmt;
+use std::{fmt, hash::Hasher, net::IpAddr};
 
+use siphasher::sip::SipHasher24;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::zone::{ResourceRecord, Rrset, ZoneState, ZoneStore};
@@ -11,8 +13,14 @@ pub const DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS: u64 = 30;
 const DNS_CLASS_IN: u16 = 1;
 const DNS_CLASS_ANY: u16 = 255;
 const EDNS_NSID_OPTION: u16 = 3;
+const EDNS_COOKIE_OPTION: u16 = 10;
 const EDNS_TCP_KEEPALIVE_OPTION: u16 = 11;
 const EDNS_PADDING_OPTION: u16 = 12;
+const DNS_COOKIE_CLIENT_LEN: usize = 8;
+const DNS_COOKIE_SERVER_V1_LEN: usize = 16;
+const DNS_COOKIE_VERSION_1: u8 = 1;
+const DNS_COOKIE_DEFAULT_PAST_WINDOW_SECS: u32 = 3600;
+const DNS_COOKIE_DEFAULT_FUTURE_WINDOW_SECS: u32 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -383,6 +391,28 @@ pub struct AnswerOptions<'a> {
     pub edns_padding_block_size: u16,
     pub any_response: AnyResponseMode,
     pub nsid: &'a [u8],
+    pub dns_cookie: Option<DnsCookieContext<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DnsCookieContext<'a> {
+    pub client_ip: IpAddr,
+    pub server_secret: &'a [u8; 16],
+    pub now_unix_secs: u32,
+    pub past_window_secs: u32,
+    pub future_window_secs: u32,
+}
+
+impl<'a> DnsCookieContext<'a> {
+    pub fn new(client_ip: IpAddr, server_secret: &'a [u8; 16], now_unix_secs: u32) -> Self {
+        Self {
+            client_ip,
+            server_secret,
+            now_unix_secs,
+            past_window_secs: DNS_COOKIE_DEFAULT_PAST_WINDOW_SECS,
+            future_window_secs: DNS_COOKIE_DEFAULT_FUTURE_WINDOW_SECS,
+        }
+    }
 }
 
 impl AnswerOptions<'_> {
@@ -395,6 +425,7 @@ impl AnswerOptions<'_> {
             edns_padding_block_size: 0,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
+            dns_cookie: None,
         }
     }
 
@@ -407,6 +438,7 @@ impl AnswerOptions<'_> {
             edns_padding_block_size: 0,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
+            dns_cookie: None,
         }
     }
 }
@@ -1068,6 +1100,16 @@ fn encode_edns_response_options(
         rdata.extend_from_slice(options.nsid);
     }
 
+    if let (Some(cookie), Some(context)) = (edns.cookie, options.dns_cookie) {
+        let server_cookie = compute_dns_server_cookie(cookie.client, context);
+        rdata.extend_from_slice(&EDNS_COOKIE_OPTION.to_be_bytes());
+        rdata.extend_from_slice(
+            &((DNS_COOKIE_CLIENT_LEN + DNS_COOKIE_SERVER_V1_LEN) as u16).to_be_bytes(),
+        );
+        rdata.extend_from_slice(&cookie.client);
+        rdata.extend_from_slice(&server_cookie);
+    }
+
     if edns.padding_requested && options.edns_padding_block_size > 0 {
         append_edns_padding_if_it_fits(&mut rdata, options, response_len_before_opt, udp_ceiling);
     }
@@ -1093,6 +1135,99 @@ fn append_edns_padding_if_it_fits(
     rdata.extend_from_slice(&EDNS_PADDING_OPTION.to_be_bytes());
     rdata.extend_from_slice(&(padding_len as u16).to_be_bytes());
     rdata.resize(rdata.len() + padding_len, 0);
+}
+
+pub fn request_has_valid_dns_server_cookie(packet: &[u8], context: DnsCookieContext) -> bool {
+    let Ok(header) = Header::parse(packet) else {
+        return false;
+    };
+    if header.is_response() || header.qdcount != 1 {
+        return false;
+    }
+    let Ok(question) = Question::parse(packet) else {
+        return false;
+    };
+    let Ok(metadata) = RequestMetadata::parse(&header, packet, &question) else {
+        return false;
+    };
+    let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
+        return false;
+    };
+    dns_server_cookie_is_valid(cookie, context)
+}
+
+fn dns_server_cookie_is_valid(cookie: EdnsCookie, context: DnsCookieContext) -> bool {
+    let Some(server_cookie) = cookie.server else {
+        return false;
+    };
+    if server_cookie.len as usize != DNS_COOKIE_SERVER_V1_LEN
+        || server_cookie.bytes[0] != DNS_COOKIE_VERSION_1
+    {
+        return false;
+    }
+
+    let timestamp = u32::from_be_bytes([
+        server_cookie.bytes[4],
+        server_cookie.bytes[5],
+        server_cookie.bytes[6],
+        server_cookie.bytes[7],
+    ]);
+    if !dns_cookie_timestamp_is_valid(timestamp, context) {
+        return false;
+    }
+
+    let expected = compute_dns_server_cookie_with_fields(
+        cookie.client,
+        &server_cookie.bytes[..8],
+        context.client_ip,
+        context.server_secret,
+    );
+    expected
+        .ct_eq(&server_cookie.bytes[8..DNS_COOKIE_SERVER_V1_LEN])
+        .into()
+}
+
+fn compute_dns_server_cookie(
+    cookie: [u8; DNS_COOKIE_CLIENT_LEN],
+    context: DnsCookieContext,
+) -> [u8; DNS_COOKIE_SERVER_V1_LEN] {
+    let mut prefix = [0u8; 8];
+    prefix[0] = DNS_COOKIE_VERSION_1;
+    prefix[4..8].copy_from_slice(&context.now_unix_secs.to_be_bytes());
+    let hash = compute_dns_server_cookie_with_fields(
+        cookie,
+        &prefix,
+        context.client_ip,
+        context.server_secret,
+    );
+
+    let mut server_cookie = [0u8; DNS_COOKIE_SERVER_V1_LEN];
+    server_cookie[..8].copy_from_slice(&prefix);
+    server_cookie[8..].copy_from_slice(&hash);
+    server_cookie
+}
+
+fn compute_dns_server_cookie_with_fields(
+    client_cookie: [u8; DNS_COOKIE_CLIENT_LEN],
+    server_cookie_prefix: &[u8],
+    client_ip: IpAddr,
+    secret: &[u8; 16],
+) -> [u8; 8] {
+    let k0 = u64::from_le_bytes(secret[..8].try_into().expect("secret key half"));
+    let k1 = u64::from_le_bytes(secret[8..].try_into().expect("secret key half"));
+    let mut hasher = SipHasher24::new_with_keys(k0, k1);
+    hasher.write(&client_cookie);
+    hasher.write(server_cookie_prefix);
+    match client_ip {
+        IpAddr::V4(addr) => hasher.write(&addr.octets()),
+        IpAddr::V6(addr) => hasher.write(&addr.octets()),
+    }
+    hasher.finish().to_le_bytes()
+}
+
+fn dns_cookie_timestamp_is_valid(timestamp: u32, context: DnsCookieContext) -> bool {
+    context.now_unix_secs.wrapping_sub(timestamp) <= context.past_window_secs
+        || timestamp.wrapping_sub(context.now_unix_secs) <= context.future_window_secs
 }
 
 fn rejected_qtype(qtype: u16) -> Option<Rcode> {
@@ -1153,6 +1288,7 @@ impl RequestMetadata {
                     do_bit: record.ttl & 0x8000 != 0,
                     tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
                     nsid_requested: parsed_options.nsid_requested,
+                    cookie: parsed_options.cookie,
                     padding_requested: parsed_options.padding_requested,
                 };
                 if metadata.version > 0 {
@@ -1204,6 +1340,7 @@ struct EdnsMetadata {
     do_bit: bool,
     tcp_keepalive_requested: bool,
     nsid_requested: bool,
+    cookie: Option<EdnsCookie>,
     padding_requested: bool,
 }
 
@@ -1211,7 +1348,20 @@ struct EdnsMetadata {
 struct EdnsOptions {
     tcp_keepalive_requested: bool,
     nsid_requested: bool,
+    cookie: Option<EdnsCookie>,
     padding_requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdnsCookie {
+    client: [u8; DNS_COOKIE_CLIENT_LEN],
+    server: Option<EdnsServerCookie>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdnsServerCookie {
+    len: u8,
+    bytes: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1301,6 +1451,12 @@ fn parse_edns_options(rdata: &[u8]) -> Result<EdnsOptions, EdnsError> {
         }
         match option_code {
             EDNS_NSID_OPTION => options.nsid_requested = true,
+            EDNS_COOKIE_OPTION => {
+                let cookie = parse_edns_cookie_option(&rdata[offset..offset + option_len])?;
+                if options.cookie.is_none() {
+                    options.cookie = Some(cookie);
+                }
+            }
             EDNS_TCP_KEEPALIVE_OPTION => options.tcp_keepalive_requested = true,
             EDNS_PADDING_OPTION => options.padding_requested = true,
             _ => {}
@@ -1308,6 +1464,30 @@ fn parse_edns_options(rdata: &[u8]) -> Result<EdnsOptions, EdnsError> {
         offset += option_len;
     }
     Ok(options)
+}
+
+fn parse_edns_cookie_option(rdata: &[u8]) -> Result<EdnsCookie, EdnsError> {
+    if rdata.len() != DNS_COOKIE_CLIENT_LEN
+        && !(DNS_COOKIE_CLIENT_LEN + 8..=DNS_COOKIE_CLIENT_LEN + 32).contains(&rdata.len())
+    {
+        return Err(EdnsError::FormErr);
+    }
+
+    let mut client = [0u8; DNS_COOKIE_CLIENT_LEN];
+    client.copy_from_slice(&rdata[..DNS_COOKIE_CLIENT_LEN]);
+    let server = if rdata.len() > DNS_COOKIE_CLIENT_LEN {
+        let server_data = &rdata[DNS_COOKIE_CLIENT_LEN..];
+        let mut bytes = [0u8; 32];
+        bytes[..server_data.len()].copy_from_slice(server_data);
+        Some(EdnsServerCookie {
+            len: server_data.len() as u8,
+            bytes,
+        })
+    } else {
+        None
+    };
+
+    Ok(EdnsCookie { client, server })
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LookupResult {
@@ -1469,6 +1649,14 @@ mod tests {
         packet.extend_from_slice(&ttl.to_be_bytes());
         packet.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
         packet.extend_from_slice(rdata);
+    }
+
+    fn edns_option(code: u16, data: &[u8]) -> Vec<u8> {
+        let mut option = Vec::new();
+        option.extend_from_slice(&code.to_be_bytes());
+        option.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        option.extend_from_slice(data);
+        option
     }
 
     fn append_answer(packet: &mut Vec<u8>, owner: &str, rr_type: u16, class: u16, rdata: Vec<u8>) {
@@ -1683,6 +1871,33 @@ mod tests {
         }
 
         None
+    }
+
+    fn response_opt_option(response: &[u8], code: u16) -> Option<Vec<u8>> {
+        let rdata = response_opt_rdata(response)?;
+        let mut offset = 0usize;
+        while offset < rdata.len() {
+            let option_code = u16::from_be_bytes([rdata[offset], rdata[offset + 1]]);
+            let option_len = u16::from_be_bytes([rdata[offset + 2], rdata[offset + 3]]) as usize;
+            offset += 4;
+            if option_code == code {
+                return Some(rdata[offset..offset + option_len].to_vec());
+            }
+            offset += option_len;
+        }
+        None
+    }
+
+    fn hex_to_vec(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0);
+        (0..hex.len())
+            .step_by(2)
+            .map(|offset| u8::from_str_radix(&hex[offset..offset + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn hex_to_array_16(hex: &str) -> [u8; 16] {
+        hex_to_vec(hex).try_into().expect("16-octet hex value")
     }
 
     fn response_opt_ttl(response: &[u8]) -> Option<u32> {
@@ -2412,6 +2627,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 
@@ -2479,6 +2695,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 
@@ -3098,6 +3315,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 
@@ -4535,6 +4753,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 
@@ -4581,6 +4800,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
+                dns_cookie: None,
             },
         );
 
@@ -4627,6 +4847,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
+                dns_cookie: None,
             },
         );
 
@@ -4635,6 +4856,195 @@ mod tests {
             response_opt_rdata(&response),
             Some(b"\x00\x03\x00\tdns-bud-1".to_vec())
         );
+    }
+
+    #[test]
+    fn edns_cookie_absent_does_not_emit_cookie_option() {
+        let secret = [7; 16];
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[]);
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn edns_client_cookie_only_returns_rfc9018_server_cookie() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let client_cookie = hex_to_vec("2464c4abcf10c957");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &client_cookie),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+    }
+
+    #[test]
+    fn edns_cookie_server_cookie_validates_for_same_client_ip() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(
+                EDNS_COOKIE_OPTION,
+                &hex_to_vec("2464c4abcf10c957010000005cf79f111f8130c3eee29480"),
+            ),
+        );
+
+        assert!(request_has_valid_dns_server_cookie(&packet, context));
+    }
+
+    #[test]
+    fn edns_cookie_validation_rejects_tamper_changed_source_and_bad_time() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        let mut cookie = hex_to_vec("2464c4abcf10c957010000005cf79f111f8130c3eee29480");
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &cookie),
+        );
+        let valid_context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let changed_source =
+            DnsCookieContext::new("198.51.100.101".parse().unwrap(), &secret, 1_559_731_985);
+        let expired =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_735_586);
+        let future =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_684);
+
+        assert!(request_has_valid_dns_server_cookie(&packet, valid_context));
+        assert!(!request_has_valid_dns_server_cookie(
+            &packet,
+            changed_source
+        ));
+        assert!(!request_has_valid_dns_server_cookie(&packet, expired));
+        assert!(!request_has_valid_dns_server_cookie(&packet, future));
+
+        cookie[23] ^= 0x01;
+        let mut tampered = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut tampered,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &cookie),
+        );
+        assert!(!request_has_valid_dns_server_cookie(
+            &tampered,
+            valid_context
+        ));
+    }
+
+    #[test]
+    fn edns_cookie_tampered_server_cookie_is_leniently_refreshed() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let mut cookie = hex_to_vec("2464c4abcf10c957010000005cf79f111f8130c3eee29480");
+        cookie[23] ^= 0x01;
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &cookie),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+    }
+
+    #[test]
+    fn malformed_cookie_lengths_get_formerr() {
+        for cookie_len in [7usize, 9, 15, 41] {
+            let mut packet = query(&example_name(), RecordType::A as u16, 1);
+            append_opt(
+                &mut packet,
+                4096,
+                0,
+                &edns_option(EDNS_COOKIE_OPTION, &vec![0u8; cookie_len]),
+            );
+
+            let response = store_response_with_options(
+                &packet,
+                &ZoneStore::new(),
+                AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD),
+            );
+
+            assert_eq!(
+                response[3] & 0x0f,
+                Rcode::FormErr as u8,
+                "cookie length {cookie_len} should be FORMERR"
+            );
+        }
     }
 
     #[test]
@@ -4920,6 +5330,7 @@ mod tests {
                 edns_padding_block_size: 32,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 
@@ -4951,6 +5362,7 @@ mod tests {
                 edns_padding_block_size: 600,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                dns_cookie: None,
             },
         );
 

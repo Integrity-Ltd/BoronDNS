@@ -11,6 +11,7 @@ hmac.workspace = true
 serde.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+siphasher.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 toml.workspace = true

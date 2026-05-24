@@ -38,8 +38,9 @@ use oxidedns_core::{
     config::{RrlConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Header, LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType,
-        Transport, answer_message_with_notify_hooks_and_query_observer,
+        DnsCookieContext, DomainName, Header, LookupResult, LookupTermination, Opcode, Question,
+        Rcode, RecordType, Transport, answer_message_with_notify_hooks_and_query_observer,
+        request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -83,6 +84,9 @@ pub enum RuntimeError {
 
     #[error("invalid runtime configuration: {0}")]
     InvalidRuntimeConfig(String),
+
+    #[error("failed to generate DNS Cookie server secret: {0}")]
+    DnsCookieSecret(getrandom::Error),
 }
 
 #[derive(Debug, Error)]
@@ -222,6 +226,7 @@ impl Runtime {
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
+        let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
             self.config.zones.clone(),
@@ -301,6 +306,7 @@ impl Runtime {
                 edns_padding_block_size,
                 any_response,
                 nsid,
+                dns_cookie_secret,
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
@@ -338,6 +344,7 @@ impl Runtime {
                 edns_padding_block_size,
                 any_response,
                 nsid,
+                dns_cookie_secret,
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
@@ -1220,6 +1227,19 @@ fn query_id_from_random_bytes(bytes: [u8; 2]) -> u16 {
     u16::from_be_bytes(bytes)
 }
 
+fn dns_cookie_secret() -> Result<[u8; 16], getrandom::Error> {
+    let mut secret = [0u8; 16];
+    getrandom::fill(&mut secret)?;
+    Ok(secret)
+}
+
+fn current_unix_time_secs() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as u32)
+        .unwrap_or_default()
+}
+
 #[derive(Clone, Debug)]
 struct RrlLimiter {
     inner: Arc<Mutex<RrlState>>,
@@ -1639,6 +1659,11 @@ async fn serve_udp(
                 .map_err(RuntimeError::Udp)?;
             continue;
         }
+        let dns_cookie = DnsCookieContext::new(
+            peer_ip,
+            &settings.dns_cookie_secret,
+            current_unix_time_secs(),
+        );
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -1651,6 +1676,7 @@ async fn serve_udp(
                 edns_padding_block_size: settings.edns_padding_block_size,
                 any_response: settings.any_response,
                 nsid: &settings.nsid,
+                dns_cookie: Some(dns_cookie),
             },
             |qname, qclass| {
                 let authorized = settings
@@ -1687,7 +1713,13 @@ async fn serve_udp(
                         continue;
                     }
                 };
-                match settings.rrl.apply(peer_ip, response) {
+                let rrl_decision =
+                    if request_has_valid_dns_server_cookie(&prepared.packet, dns_cookie) {
+                        RrlDecision::Send(response)
+                    } else {
+                        settings.rrl.apply(peer_ip, response)
+                    };
+                match rrl_decision {
                     RrlDecision::Send(response) => {
                         record_query_response_metric(query_metrics, &response, &settings.metrics);
                         socket
@@ -1826,6 +1858,7 @@ struct UdpServerSettings {
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    dns_cookie_secret: [u8; 16],
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -1872,6 +1905,7 @@ async fn serve_tcp(
                 settings.edns_padding_block_size,
                 settings.any_response,
                 settings.nsid,
+                settings.dns_cookie_secret,
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
@@ -2576,6 +2610,7 @@ struct TcpServerSettings {
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    dns_cookie_secret: [u8; 16],
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3891,6 +3926,7 @@ async fn handle_tcp_connection(
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    dns_cookie_secret: [u8; 16],
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3910,6 +3946,8 @@ async fn handle_tcp_connection(
             }
             continue;
         }
+        let dns_cookie =
+            DnsCookieContext::new(peer_ip, &dns_cookie_secret, current_unix_time_secs());
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -3922,6 +3960,7 @@ async fn handle_tcp_connection(
                 edns_padding_block_size,
                 any_response,
                 nsid: &nsid,
+                dns_cookie: Some(dns_cookie),
             },
             |qname, qclass| {
                 let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
@@ -5506,6 +5545,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                dns_cookie_secret: [7; 16],
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5573,6 +5613,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                dns_cookie_secret: [7; 16],
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5605,6 +5646,108 @@ mod tests {
         assert_eq!(snapshot.rrl_dropped, 1);
         assert_eq!(snapshot.rrl_truncated, 1);
         assert_eq!(snapshot.queries_truncated, 1);
+    }
+
+    #[tokio::test]
+    async fn udp_dns_cookie_client_cookie_only_returns_cookie_option() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            udp_settings_for_test(metrics.clone(), RrlConfig::default()),
+        ));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let request = cookie_query(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        client.send_to(&request, server_addr).await.unwrap();
+        let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("cookie response");
+        server.abort();
+
+        let cookie = response_cookie_option(&response).expect("COOKIE response option");
+        assert_eq!(&cookie[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(cookie.len(), 24);
+    }
+
+    #[tokio::test]
+    async fn udp_valid_dns_cookie_bypasses_rrl_accounting() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let rrl_config = RrlConfig {
+            positive_per_second: 1,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            udp_settings_for_test(metrics.clone(), rrl_config),
+        ));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let learning_query = cookie_query(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        client.send_to(&learning_query, server_addr).await.unwrap();
+        let learned = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("learning response");
+        let valid_cookie = response_cookie_option(&learned).expect("learned cookie");
+        let valid_query = cookie_query(&valid_cookie);
+
+        for _ in 0..3 {
+            client.send_to(&valid_query, server_addr).await.unwrap();
+            let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+                .await
+                .expect("valid-cookie response should not be RRL dropped");
+            assert_eq!(Header::parse(&response).unwrap().ancount, 1);
+        }
+        server.abort();
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 1);
+        assert_eq!(snapshot.rrl_dropped, 0);
+        assert_eq!(snapshot.rrl_truncated, 0);
+    }
+
+    #[tokio::test]
+    async fn udp_invalid_dns_cookie_remains_rrl_subject() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let rrl_config = RrlConfig {
+            positive_per_second: 1,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            udp_settings_for_test(metrics.clone(), rrl_config),
+        ));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut invalid_cookie = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        invalid_cookie.extend_from_slice(&[0; 16]);
+        let invalid_query = cookie_query(&invalid_cookie);
+
+        client.send_to(&invalid_query, server_addr).await.unwrap();
+        let first = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("first invalid-cookie response");
+        client.send_to(&invalid_query, server_addr).await.unwrap();
+        let second = recv_udp_with_timeout(&client, std::time::Duration::from_millis(50)).await;
+        server.abort();
+
+        assert_eq!(Header::parse(&first).unwrap().ancount, 1);
+        assert!(second.is_none());
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 2);
+        assert_eq!(snapshot.rrl_dropped, 1);
     }
 
     #[test]
@@ -7048,6 +7191,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                [7; 16],
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7126,6 +7270,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                [7; 16],
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7179,6 +7324,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                [7; 16],
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7218,6 +7364,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                [7; 16],
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7271,6 +7418,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                [7; 16],
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7312,6 +7460,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                dns_cookie_secret: [7; 16],
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -8442,6 +8591,80 @@ mod tests {
         packet.extend_from_slice(&qtype.to_be_bytes());
         packet.extend_from_slice(&qclass.to_be_bytes());
         packet
+    }
+
+    fn active_example_zone() -> ZoneStore {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        zones
+    }
+
+    fn udp_settings_for_test(metrics: RuntimeMetrics, rrl_config: RrlConfig) -> UdpServerSettings {
+        UdpServerSettings {
+            max_udp_payload: 1232,
+            max_cname_chain: 8,
+            edns_padding_block_size: 0,
+            any_response: AnyResponseMode::Minimal,
+            nsid: Vec::new(),
+            dns_cookie_secret: [7; 16],
+            notify_authority: NotifyAuthority::default(),
+            notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+            notify_refresh_tx: notify_refresh_tx(),
+            metrics: metrics.clone(),
+            rrl: RrlLimiter::from_config(&rrl_config, metrics),
+        }
+    }
+
+    fn append_opt(packet: &mut Vec<u8>, payload_size: u16, ttl: u32, rdata: &[u8]) {
+        packet[11] = packet[11].checked_add(1).unwrap();
+        packet.push(0);
+        packet.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
+        packet.extend_from_slice(&payload_size.to_be_bytes());
+        packet.extend_from_slice(&ttl.to_be_bytes());
+        packet.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+        packet.extend_from_slice(rdata);
+    }
+
+    fn edns_option(code: u16, data: &[u8]) -> Vec<u8> {
+        let mut option = Vec::new();
+        option.extend_from_slice(&code.to_be_bytes());
+        option.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        option.extend_from_slice(data);
+        option
+    }
+
+    fn cookie_query(cookie_data: &[u8]) -> Vec<u8> {
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &edns_option(10, cookie_data));
+        packet
+    }
+
+    fn response_cookie_option(response: &[u8]) -> Option<Vec<u8>> {
+        let header = Header::parse(response).ok()?;
+        let opt = response_opt_record(response, &header)?;
+        let rdlength = u16::from_be_bytes([opt[9], opt[10]]) as usize;
+        let rdata = opt.get(11..11 + rdlength)?;
+        let mut offset = 0usize;
+        while offset < rdata.len() {
+            let option_code = u16::from_be_bytes([rdata[offset], rdata[offset + 1]]);
+            let option_len = u16::from_be_bytes([rdata[offset + 2], rdata[offset + 3]]) as usize;
+            offset += 4;
+            if option_code == 10 {
+                return Some(rdata[offset..offset + option_len].to_vec());
+            }
+            offset += option_len;
+        }
+        None
     }
 
     async fn recv_udp_with_timeout(

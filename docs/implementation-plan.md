@@ -57,7 +57,7 @@ The ODS-VER-008 acceptance target remains:
 - dependency security audit clean;
 - vulnerability disclosure policy published;
 - DNS Cookies, IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue,
-  and all v0.7 interface/NFR additions implemented and verified;
+  and all v0.7 interface/NFR additions fully implemented and verified;
 - test coverage targets met;
 - signed release artifacts produced;
 - SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
@@ -77,7 +77,7 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
 
 Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG,
-XoT, DNSSEC serving, RRL, DNS Cookies, expanded RR catalogue, `/livez` and
+XoT, DNSSEC serving, RRL, full DNS Cookies, expanded RR catalogue, `/livez` and
 `/readyz` split conformance, health response-time and metrics rate-limit
 requirements, performance NFR conformance, full security/maintainability
 verification, reliability/resource/observability extensions, second and third

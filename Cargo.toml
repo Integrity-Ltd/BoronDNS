@@ -26,6 +26,7 @@ hmac = "0.12"
 serde = { version = "1", features = ["derive"] }
 sha1 = "0.10"
 sha2 = "0.10"
+siphasher = "1.0.3"
 subtle = "2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

@@ -913,6 +913,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "siphasher"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1239,6 +1245,7 @@ dependencies = [
  "serde",
  "sha1",
  "sha2",
+ "siphasher",
  "subtle",
  "thiserror",
  "toml",

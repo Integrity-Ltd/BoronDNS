@@ -447,7 +447,10 @@ current operator-relevant limitations are:
   canonical log fields, sysexits-style CLI behavior, and process `--version` /
   `--help` requirements. Several of these are not yet implemented in the
   release CLI shape.
-- DNS Cookies are now MVP scope and are not yet implemented.
+- DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
+  validation, lenient refresh, and valid-cookie RRL exemption. Strict BADCOOKIE
+  mode, operator policy configuration, rotation, logs, metrics, and interop
+  artifacts remain open before MVP acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.
