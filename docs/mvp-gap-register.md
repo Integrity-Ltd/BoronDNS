@@ -29,7 +29,7 @@ compliance.
 | DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve scripts for DO-sensitive RRSIG/NSEC/NSEC3/DNSKEY/NSEC3PARAM and truncation behavior; Knot signed-primary NSEC3 interop script | Release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
 | EDNS v0.7 Additions | EDNS parsing, OPT response foundations, payload-limit tests, and configured NSID response tests for `ODS-FR-EDNS-016..017` exist | Confirm/retain non-EDNS 512-octet ceiling evidence (`ODS-FR-EDNS-015`) and add runtime/interoperability NSID evidence before Alpha signoff |
-| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, and metrics exposition have unit/runtime tests | Add optional in-process secret rotation, BIND/Knot interop evidence, and retained MVP release artifacts |
+| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, metrics exposition, and BIND `dig +cookie` runtime interop have unit/runtime tests | Add optional in-process secret rotation, broader BIND/Knot deployment interop evidence, and retained MVP release artifacts |
 
 ## Non-Functional Evidence
 
@@ -85,6 +85,7 @@ scripts/interop-knot-dnssec-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-rrl-udp.sh
 scripts/rrl-evidence-campaign.sh --iterations 3
+scripts/interop-dns-cookie-dig.sh
 scripts/interop-dnssec-serve.sh
 scripts/interop-dnssec-nsec3-serve.sh
 scripts/perf-smoke.sh

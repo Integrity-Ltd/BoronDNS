@@ -453,8 +453,9 @@ current operator-relevant limitations are:
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
   validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
   valid-cookie RRL exemption. Startup and BADCOOKIE logs plus bounded global and
-  per-source-prefix cookie counters are implemented; optional rotation and
-  interop artifacts remain open before MVP acceptance.
+  per-source-prefix cookie counters are implemented. `scripts/interop-dns-cookie-dig.sh`
+  verifies BIND `dig +cookie` client behavior; optional rotation and broader
+  deployment interop artifacts remain open before MVP acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.
