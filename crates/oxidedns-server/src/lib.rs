@@ -164,6 +164,7 @@ impl Runtime {
 
         let mut listeners = JoinSet::new();
         let mut health_listeners = JoinSet::new();
+        let mut refresh_workers = JoinSet::new();
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let runtime_status = RuntimeStatus::new();
@@ -171,7 +172,7 @@ impl Runtime {
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
-        listeners.spawn(serve_refresh_requests(
+        refresh_workers.spawn(serve_refresh_requests(
             notify_refresh_rx,
             self.zones.clone(),
             transfer_plan.clone(),
@@ -274,12 +275,17 @@ impl Runtime {
                     "shutdown signal received; draining runtime"
                 );
                 runtime_status.mark_draining();
-                listeners.abort_all();
-                if drain_tcp_connections(
-                    tcp_connections.clone(),
-                    shutdown_grace,
-                    Duration::from_millis(50),
-                ).await {
+                abort_task_set(&mut listeners, "listener").await;
+                drop(notify_refresh_tx);
+                let (tcp_drained, refresh_drained) = tokio::join!(
+                    drain_tcp_connections(
+                        tcp_connections.clone(),
+                        shutdown_grace,
+                        Duration::from_millis(50),
+                    ),
+                    drain_task_set(&mut refresh_workers, shutdown_grace, "refresh transfer")
+                );
+                if tcp_drained {
                     info!("TCP connection drain completed");
                 } else {
                     warn!(
@@ -287,25 +293,21 @@ impl Runtime {
                         "shutdown grace period elapsed with active TCP connections"
                     );
                 }
-                health_listeners.abort_all();
+                if refresh_drained {
+                    info!("refresh transfer drain completed");
+                } else {
+                    warn!("shutdown grace period elapsed with active refresh transfers");
+                }
+                abort_task_set(&mut health_listeners, "health listener").await;
             }
             result = listeners.join_next(), if !listeners.is_empty() => {
-                match result {
-                    Some(Ok(Ok(()))) | None => {}
-                    Some(Ok(Err(error))) => return Err(error),
-                    Some(Err(error)) => {
-                        warn!(%error, "listener task failed");
-                    }
-                }
+                handle_runtime_task_result("listener", result)?;
+            }
+            result = refresh_workers.join_next(), if !refresh_workers.is_empty() => {
+                handle_runtime_task_result("refresh transfer", result)?;
             }
             result = health_listeners.join_next(), if !health_listeners.is_empty() => {
-                match result {
-                    Some(Ok(Ok(()))) | None => {}
-                    Some(Ok(Err(error))) => return Err(error),
-                    Some(Err(error)) => {
-                        warn!(%error, "health listener task failed");
-                    }
-                }
+                handle_runtime_task_result("health listener", result)?;
             }
         }
 
@@ -390,6 +392,89 @@ async fn wait_for_shutdown_signal() -> Result<&'static str, std::io::Error> {
 async fn wait_for_shutdown_signal() -> Result<&'static str, std::io::Error> {
     tokio::signal::ctrl_c().await?;
     Ok("SIGINT")
+}
+
+fn handle_runtime_task_result(
+    task_set: &'static str,
+    result: Option<Result<Result<(), RuntimeError>, tokio::task::JoinError>>,
+) -> Result<(), RuntimeError> {
+    match result {
+        Some(Ok(Ok(()))) | None => Ok(()),
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(error)) => {
+            warn!(%error, task_set, "runtime task failed");
+            Ok(())
+        }
+    }
+}
+
+async fn abort_task_set(tasks: &mut JoinSet<Result<(), RuntimeError>>, task_set: &'static str) {
+    tasks.abort_all();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                warn!(%error, task_set, "runtime task returned error during shutdown");
+            }
+            Err(error) if error.is_cancelled() => {
+                debug!(task_set, "runtime task cancelled during shutdown");
+            }
+            Err(error) => {
+                warn!(%error, task_set, "runtime task failed during shutdown");
+            }
+        }
+    }
+}
+
+async fn drain_task_set(
+    tasks: &mut JoinSet<Result<(), RuntimeError>>,
+    grace: Duration,
+    task_set: &'static str,
+) -> bool {
+    if tasks.is_empty() {
+        return true;
+    }
+
+    let drained = tokio::time::timeout(grace, async {
+        let mut clean = true;
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    clean = false;
+                    warn!(%error, task_set, "runtime task returned error while draining");
+                }
+                Err(error) => {
+                    clean = false;
+                    warn!(%error, task_set, "runtime task failed while draining");
+                }
+            }
+        }
+        clean
+    })
+    .await;
+
+    match drained {
+        Ok(clean) => clean,
+        Err(_) => {
+            tasks.abort_all();
+            while let Some(result) = tasks.join_next().await {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        warn!(%error, task_set, "runtime task returned error after drain timeout");
+                    }
+                    Err(error) if error.is_cancelled() => {
+                        debug!(task_set, "runtime task cancelled after drain timeout");
+                    }
+                    Err(error) => {
+                        warn!(%error, task_set, "runtime task failed after drain timeout");
+                    }
+                }
+            }
+            false
+        }
+    }
 }
 
 async fn drain_tcp_connections(
@@ -2336,13 +2421,13 @@ mod tests {
     use super::{
         HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
         NotifyRefreshTracker, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-        Runtime, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
-        ZoneRefreshRegistry, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-        query_id_from_random_bytes, refresh_zone_from_primaries, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, sign_notify_response,
-        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
-        write_tcp_message,
+        Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
+        ZoneRefreshRegistry, drain_task_set, drain_tcp_connections, handle_tcp_connection,
+        jitter_interval, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, query_id_from_random_bytes, refresh_zone_from_primaries,
+        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        sign_notify_response, transfer_axfr_from_primary, transfer_ixfr_from_primary,
+        transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -2626,6 +2711,32 @@ mod tests {
             )
             .await
         );
+    }
+
+    #[tokio::test]
+    async fn drain_task_set_waits_for_tasks_until_grace() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            Ok::<(), RuntimeError>(())
+        });
+
+        assert!(drain_task_set(&mut tasks, std::time::Duration::from_secs(1), "test task").await);
+        assert!(tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn drain_task_set_aborts_after_grace_period() {
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok::<(), RuntimeError>(())
+        });
+
+        assert!(
+            !drain_task_set(&mut tasks, std::time::Duration::from_millis(5), "test task").await
+        );
+        assert!(tasks.is_empty());
     }
 
     fn notify_refresh_tx() -> mpsc::Sender<RefreshRequest> {
