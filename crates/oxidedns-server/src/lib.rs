@@ -538,7 +538,47 @@ struct ZoneRefreshRegistry {
     min_interval: Duration,
     initial_retry: Duration,
     initial_retry_max: Duration,
+    jitter: Jitter,
     statuses: Arc<Mutex<HashMap<String, ZoneRefreshStatus>>>,
+}
+
+#[derive(Debug, Clone)]
+struct Jitter {
+    state: Arc<Mutex<u64>>,
+    enabled: bool,
+}
+
+impl Jitter {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(seed.max(1))),
+            enabled: true,
+        }
+    }
+
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(1)),
+            enabled: false,
+        }
+    }
+
+    fn apply(&self, interval: Duration) -> Duration {
+        if !self.enabled || interval.is_zero() {
+            return interval;
+        }
+        let sample = self.next_u64();
+        jitter_interval(interval, sample)
+    }
+
+    fn next_u64(&self) -> u64 {
+        let mut state = self.state.lock().expect("ZSM jitter state lock poisoned");
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *state
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -558,6 +598,22 @@ impl ZoneRefreshRegistry {
             min_interval,
             initial_retry,
             initial_retry_max,
+            jitter: Jitter::new(jitter_seed()),
+            statuses: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[cfg(test)]
+    fn without_jitter(
+        min_interval: Duration,
+        initial_retry: Duration,
+        initial_retry_max: Duration,
+    ) -> Self {
+        Self {
+            min_interval,
+            initial_retry,
+            initial_retry_max,
+            jitter: Jitter::none(),
             statuses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -676,15 +732,42 @@ impl ZoneRefreshRegistry {
     }
 
     fn effective_interval(&self, seconds: u32) -> Duration {
-        Duration::from_secs(seconds as u64).max(self.min_interval)
+        self.jitter
+            .apply(Duration::from_secs(seconds as u64).max(self.min_interval))
     }
 
     fn initial_retry_delay(&self, failure_count: u32) -> Duration {
         let multiplier = 1u32.checked_shl(failure_count.min(31)).unwrap_or(u32::MAX);
-        self.initial_retry
+        let interval = self
+            .initial_retry
             .saturating_mul(multiplier)
-            .min(self.initial_retry_max)
+            .min(self.initial_retry_max);
+        self.jitter.apply(interval)
     }
+}
+
+fn jitter_interval(interval: Duration, sample: u64) -> Duration {
+    let millis = interval.as_millis();
+    if millis == 0 {
+        return interval;
+    }
+    let spread = (millis / 10).max(1);
+    let offset = (sample as u128) % (spread * 2 + 1);
+    let jittered = if offset <= spread {
+        millis.saturating_sub(spread - offset)
+    } else {
+        millis + (offset - spread)
+    };
+
+    Duration::from_millis(jittered.min(u64::MAX as u128) as u64)
+}
+
+fn jitter_seed() -> u64 {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    (since_epoch as u64) ^ ((since_epoch >> 64) as u64)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1090,8 +1173,9 @@ mod tests {
 
     use super::{
         NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
-        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection, serial_after,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary,
+        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection,
+        jitter_interval, serial_after, serve_refresh_requests, serve_scheduled_refreshes,
+        serve_tcp, transfer_axfr_from_primary,
     };
 
     #[test]
@@ -1197,8 +1281,26 @@ mod tests {
     }
 
     #[test]
+    fn zsm_jitter_stays_within_ten_percent_bounds() {
+        let interval = std::time::Duration::from_secs(100);
+
+        assert_eq!(
+            jitter_interval(interval, 0),
+            std::time::Duration::from_secs(90)
+        );
+        assert_eq!(
+            jitter_interval(interval, 10_000),
+            std::time::Duration::from_secs(100)
+        );
+        assert_eq!(
+            jitter_interval(interval, 20_000),
+            std::time::Duration::from_secs(110)
+        );
+    }
+
+    #[test]
     fn refresh_registry_schedules_refresh_and_retry() {
-        let registry = ZoneRefreshRegistry::new(
+        let registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(10),
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
@@ -1251,7 +1353,7 @@ mod tests {
 
     #[test]
     fn refresh_registry_applies_initial_load_exponential_backoff() {
-        let registry = ZoneRefreshRegistry::new(
+        let registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(180),
@@ -1295,7 +1397,7 @@ mod tests {
 
     #[test]
     fn refresh_registry_expires_zone_once() {
-        let registry = ZoneRefreshRegistry::new(
+        let registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
@@ -1373,7 +1475,7 @@ mod tests {
             rx,
             zones.clone(),
             transfer_plan,
-            ZoneRefreshRegistry::new(
+            ZoneRefreshRegistry::without_jitter(
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
@@ -1393,7 +1495,7 @@ mod tests {
     #[tokio::test]
     async fn scheduled_refresh_worker_expires_zone_and_enqueues_refresh() {
         let zones = ZoneStore::new();
-        let registry = ZoneRefreshRegistry::new(
+        let registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
@@ -1455,7 +1557,7 @@ mod tests {
         .expect("valid config");
 
         let runtime = Runtime::new(config);
-        let refresh_registry = ZoneRefreshRegistry::new(
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,

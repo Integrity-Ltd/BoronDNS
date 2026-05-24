@@ -33,7 +33,7 @@ cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 
 The workspace targets Rust 1.95 with the Rust 2024 edition and Cargo resolver 3.
 
-The `serve` command currently validates configuration, performs AXFR attempts from configured primaries, binds configured UDP/TCP listeners, parses DNS queries, and emits authoritative responses from active in-memory zone snapshots. EDNS0 OPT parsing, UDP truncation, TCP keepalive advertisement, default-off response padding, configurable ANY-query minimisation, authorized NOTIFY-triggered AXFR refresh, and preliminary SOA REFRESH/RETRY/EXPIRE scheduling with initial-load backoff are partially implemented. IXFR, SOA-poll refresh checks, scheduling jitter, TSIG, XoT, DNSSEC record serving, RRL, and full query semantics are tracked by the specification but are not complete yet.
+The `serve` command currently validates configuration, performs AXFR attempts from configured primaries, binds configured UDP/TCP listeners, parses DNS queries, and emits authoritative responses from active in-memory zone snapshots. EDNS0 OPT parsing, UDP truncation, TCP keepalive advertisement, default-off response padding, configurable ANY-query minimisation, authorized NOTIFY-triggered AXFR refresh, and preliminary SOA REFRESH/RETRY/EXPIRE scheduling with initial-load backoff and jitter are partially implemented. IXFR, SOA-poll refresh checks, TSIG, XoT, DNSSEC record serving, RRL, and full query semantics are tracked by the specification but are not complete yet.
 
 ## License
 
