@@ -918,9 +918,12 @@ async fn serve_udp(
             .await
             .map_err(RuntimeError::Udp)?;
         let peer_ip = peer.ip();
-        let Some(prepared) =
-            prepare_notify_packet(&buffer[..len], &settings.notify_authority, peer_ip)
-        else {
+        let Some(prepared) = prepare_notify_packet_with_metrics(
+            &buffer[..len],
+            &settings.notify_authority,
+            peer_ip,
+            &settings.metrics,
+        ) else {
             debug!(%peer, bytes = len, "discarded DNS datagram");
             continue;
         };
@@ -948,6 +951,7 @@ async fn serve_udp(
                     .notify_authority
                     .is_authorized(qname, qclass, peer_ip);
                 if !authorized {
+                    settings.metrics.record_notify_unauthorized();
                     warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
                 }
                 authorized
@@ -956,6 +960,7 @@ async fn serve_udp(
                 signal_notify_refresh(
                     &settings.notify_refresh,
                     &settings.notify_refresh_tx,
+                    &settings.metrics,
                     qname,
                     peer_ip,
                     serial,
@@ -1269,6 +1274,8 @@ fn metrics_body(
         snapshot.ixfr_failed,
     );
     append_query_rcode_metrics(&mut body, metrics);
+    append_notify_metrics(&mut body, snapshot);
+    append_tsig_metrics(&mut body, snapshot);
     append_zone_status_metrics(&mut body, zones);
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
@@ -1299,6 +1306,56 @@ fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
         let count = rcode_counts.get(&rcode).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_query_responses_total{{rcode=\"{rcode}\"}} {count}\n"
+        ));
+    }
+}
+
+fn append_notify_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_notify_messages_received_total NOTIFY request messages received.\n\
+         # TYPE oxidedns_notify_messages_received_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_notify_messages_received_total {}\n",
+        snapshot.notify_received
+    ));
+    body.push_str(
+        "# HELP oxidedns_notify_messages_unauthorized_total NOTIFY request messages discarded due to unauthorized source IP.\n\
+         # TYPE oxidedns_notify_messages_unauthorized_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_notify_messages_unauthorized_total {}\n",
+        snapshot.notify_unauthorized
+    ));
+    body.push_str(
+        "# HELP oxidedns_notify_refresh_actions_total Accepted NOTIFY messages by refresh action.\n\
+         # TYPE oxidedns_notify_refresh_actions_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_notify_refresh_actions_total{{action=\"signalled\"}} {}\n",
+        snapshot.notify_refresh_signalled
+    ));
+    body.push_str(&format!(
+        "oxidedns_notify_refresh_actions_total{{action=\"deduplicated\"}} {}\n",
+        snapshot.notify_refresh_deduplicated
+    ));
+}
+
+fn append_tsig_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_tsig_notify_verifications_total Authorized NOTIFY TSIG verification outcomes.\n\
+         # TYPE oxidedns_tsig_notify_verifications_total counter\n",
+    );
+    for (result, count) in [
+        ("ok", snapshot.notify_tsig_ok),
+        ("badkey", snapshot.notify_tsig_badkey),
+        ("badsig", snapshot.notify_tsig_badsig),
+        ("badtime", snapshot.notify_tsig_badtime),
+        ("badalg", snapshot.notify_tsig_badalg),
+        ("badtrunc", snapshot.notify_tsig_badtrunc),
+    ] {
+        body.push_str(&format!(
+            "oxidedns_tsig_notify_verifications_total{{result=\"{result}\"}} {count}\n"
         ));
     }
 }
@@ -1520,11 +1577,21 @@ struct RuntimeMetricsInner {
     ixfr_started: AtomicU64,
     ixfr_succeeded: AtomicU64,
     ixfr_failed: AtomicU64,
+    notify_received: AtomicU64,
+    notify_unauthorized: AtomicU64,
+    notify_refresh_signalled: AtomicU64,
+    notify_refresh_deduplicated: AtomicU64,
+    notify_tsig_ok: AtomicU64,
+    notify_tsig_badkey: AtomicU64,
+    notify_tsig_badsig: AtomicU64,
+    notify_tsig_badtime: AtomicU64,
+    notify_tsig_badalg: AtomicU64,
+    notify_tsig_badtrunc: AtomicU64,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct RuntimeMetricsSnapshot {
     queries_received: u64,
     queries_truncated: u64,
@@ -1536,6 +1603,16 @@ struct RuntimeMetricsSnapshot {
     ixfr_started: u64,
     ixfr_succeeded: u64,
     ixfr_failed: u64,
+    notify_received: u64,
+    notify_unauthorized: u64,
+    notify_refresh_signalled: u64,
+    notify_refresh_deduplicated: u64,
+    notify_tsig_ok: u64,
+    notify_tsig_badkey: u64,
+    notify_tsig_badsig: u64,
+    notify_tsig_badtime: u64,
+    notify_tsig_badalg: u64,
+    notify_tsig_badtrunc: u64,
 }
 
 impl RuntimeMetrics {
@@ -1589,6 +1666,55 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_notify_received(&self) {
+        self.inner.notify_received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_notify_unauthorized(&self) {
+        self.inner
+            .notify_unauthorized
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_notify_refresh_action(&self, action: NotifyRefreshAction) {
+        match action {
+            NotifyRefreshAction::Signalled => self
+                .inner
+                .notify_refresh_signalled
+                .fetch_add(1, Ordering::Relaxed),
+            NotifyRefreshAction::Deduplicated => self
+                .inner
+                .notify_refresh_deduplicated
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
+    fn record_notify_tsig_result(&self, result: NotifyTsigResult) {
+        match result {
+            NotifyTsigResult::Ok => self.inner.notify_tsig_ok.fetch_add(1, Ordering::Relaxed),
+            NotifyTsigResult::BadKey => self
+                .inner
+                .notify_tsig_badkey
+                .fetch_add(1, Ordering::Relaxed),
+            NotifyTsigResult::BadSig => self
+                .inner
+                .notify_tsig_badsig
+                .fetch_add(1, Ordering::Relaxed),
+            NotifyTsigResult::BadTime => self
+                .inner
+                .notify_tsig_badtime
+                .fetch_add(1, Ordering::Relaxed),
+            NotifyTsigResult::BadAlg => self
+                .inner
+                .notify_tsig_badalg
+                .fetch_add(1, Ordering::Relaxed),
+            NotifyTsigResult::BadTrunc => self
+                .inner
+                .notify_tsig_badtrunc
+                .fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
     fn record_query_response_rcode(&self, rcode: u16) {
         let mut rcodes = self
             .inner
@@ -1637,8 +1763,31 @@ impl RuntimeMetrics {
             ixfr_started: self.inner.ixfr_started.load(Ordering::Relaxed),
             ixfr_succeeded: self.inner.ixfr_succeeded.load(Ordering::Relaxed),
             ixfr_failed: self.inner.ixfr_failed.load(Ordering::Relaxed),
+            notify_received: self.inner.notify_received.load(Ordering::Relaxed),
+            notify_unauthorized: self.inner.notify_unauthorized.load(Ordering::Relaxed),
+            notify_refresh_signalled: self.inner.notify_refresh_signalled.load(Ordering::Relaxed),
+            notify_refresh_deduplicated: self
+                .inner
+                .notify_refresh_deduplicated
+                .load(Ordering::Relaxed),
+            notify_tsig_ok: self.inner.notify_tsig_ok.load(Ordering::Relaxed),
+            notify_tsig_badkey: self.inner.notify_tsig_badkey.load(Ordering::Relaxed),
+            notify_tsig_badsig: self.inner.notify_tsig_badsig.load(Ordering::Relaxed),
+            notify_tsig_badtime: self.inner.notify_tsig_badtime.load(Ordering::Relaxed),
+            notify_tsig_badalg: self.inner.notify_tsig_badalg.load(Ordering::Relaxed),
+            notify_tsig_badtrunc: self.inner.notify_tsig_badtrunc.load(Ordering::Relaxed),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotifyTsigResult {
+    Ok,
+    BadKey,
+    BadSig,
+    BadTime,
+    BadAlg,
+    BadTrunc,
 }
 
 #[derive(Clone)]
@@ -2165,10 +2314,29 @@ struct ResponseTsig {
     request_mac: Vec<u8>,
 }
 
+#[cfg(test)]
 fn prepare_notify_packet(
     packet: &[u8],
     notify_authority: &NotifyAuthority,
     source: IpAddr,
+) -> Option<PreparedDnsMessage> {
+    prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, None)
+}
+
+fn prepare_notify_packet_with_metrics(
+    packet: &[u8],
+    notify_authority: &NotifyAuthority,
+    source: IpAddr,
+    metrics: &RuntimeMetrics,
+) -> Option<PreparedDnsMessage> {
+    prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, Some(metrics))
+}
+
+fn prepare_notify_packet_with_optional_metrics(
+    packet: &[u8],
+    notify_authority: &NotifyAuthority,
+    source: IpAddr,
+    metrics: Option<&RuntimeMetrics>,
 ) -> Option<PreparedDnsMessage> {
     let unsigned = || PreparedDnsMessage {
         packet: packet.to_vec(),
@@ -2182,6 +2350,9 @@ fn prepare_notify_packet(
     };
     if header.is_response() || header.opcode() != Some(Opcode::Notify) {
         return Some(unsigned());
+    }
+    if let Some(metrics) = metrics {
+        metrics.record_notify_received();
     }
 
     let question = match Question::parse(packet) {
@@ -2197,15 +2368,25 @@ fn prepare_notify_packet(
     }
 
     match key.verify_request(packet, tsig_time_signed()) {
-        Ok(verified) => Some(PreparedDnsMessage {
-            packet: verified.message,
-            response_tsig: Some(ResponseTsig {
-                key,
-                request_mac: verified.mac,
-            }),
-            immediate_response: None,
-        }),
+        Ok(verified) => {
+            if let Some(metrics) = metrics {
+                metrics.record_notify_tsig_result(NotifyTsigResult::Ok);
+            }
+            Some(PreparedDnsMessage {
+                packet: verified.message,
+                response_tsig: Some(ResponseTsig {
+                    key,
+                    request_mac: verified.mac,
+                }),
+                immediate_response: None,
+            })
+        }
         Err(error) => {
+            if let Some(metrics) = metrics
+                && let Some(result) = notify_tsig_result(&error)
+            {
+                metrics.record_notify_tsig_result(result);
+            }
             warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
             tsig_error_response(packet, &header, &question, &key, &error).map(|response| {
                 PreparedDnsMessage {
@@ -2215,6 +2396,19 @@ fn prepare_notify_packet(
                 }
             })
         }
+    }
+}
+
+fn notify_tsig_result(error: &TsigError) -> Option<NotifyTsigResult> {
+    match error {
+        TsigError::InvalidMac => Some(NotifyTsigResult::BadSig),
+        TsigError::BadTrunc => Some(NotifyTsigResult::BadTrunc),
+        TsigError::UnsupportedAlgorithm(_) => Some(NotifyTsigResult::BadAlg),
+        TsigError::MissingTsig | TsigError::KeyMismatch | TsigError::AlgorithmMismatch => {
+            Some(NotifyTsigResult::BadKey)
+        }
+        TsigError::TimeOutsideFudge => Some(NotifyTsigResult::BadTime),
+        _ => None,
     }
 }
 
@@ -2371,11 +2565,14 @@ impl NotifyRefreshTracker {
 fn signal_notify_refresh(
     notify_refresh: &NotifyRefreshTracker,
     notify_refresh_tx: &mpsc::Sender<RefreshRequest>,
+    metrics: &RuntimeMetrics,
     qname: &DomainName,
     source: IpAddr,
     soa_serial: Option<u32>,
 ) {
-    match notify_refresh.record(qname) {
+    let action = notify_refresh.record(qname);
+    metrics.record_notify_refresh_action(action);
+    match action {
         NotifyRefreshAction::Signalled => {
             info!(
                 %source,
@@ -2921,7 +3118,9 @@ async fn handle_tcp_connection(
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
-        let Some(prepared) = prepare_notify_packet(&packet, &notify_authority, peer_ip) else {
+        let Some(prepared) =
+            prepare_notify_packet_with_metrics(&packet, &notify_authority, peer_ip, &metrics)
+        else {
             debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
             continue;
         };
@@ -2946,12 +3145,20 @@ async fn handle_tcp_connection(
             |qname, qclass| {
                 let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
                 if !authorized {
+                    metrics.record_notify_unauthorized();
                     warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
                 }
                 authorized
             },
             |qname, _qclass, serial| {
-                signal_notify_refresh(&notify_refresh, &notify_refresh_tx, qname, peer_ip, serial)
+                signal_notify_refresh(
+                    &notify_refresh,
+                    &notify_refresh_tx,
+                    &metrics,
+                    qname,
+                    peer_ip,
+                    serial,
+                )
             },
             |lookup| record_query_termination_metric(query_metrics, lookup, &metrics),
         ) {
@@ -3067,16 +3274,16 @@ mod tests {
 
     use super::{
         HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
-        NotifyRefreshTracker, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
-        RefreshWorkerSettings, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry, drain_task_set,
-        drain_tcp_connections, handle_tcp_connection, jitter_interval, observe_query_metrics,
-        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
-        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
-        write_tcp_message,
+        NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation, RefreshAttemptContext,
+        RefreshRequest, RefreshWorkerSettings, Runtime, RuntimeError, RuntimeMetrics,
+        RuntimeStatus, TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry,
+        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -3208,6 +3415,16 @@ mod tests {
         metrics_state.record_query_cname_loop();
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
+        metrics_state.record_notify_received();
+        metrics_state.record_notify_unauthorized();
+        metrics_state.record_notify_refresh_action(NotifyRefreshAction::Signalled);
+        metrics_state.record_notify_refresh_action(NotifyRefreshAction::Deduplicated);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::Ok);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::BadKey);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::BadSig);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTime);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::BadAlg);
+        metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTrunc);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -3261,6 +3478,16 @@ mod tests {
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_failed_total{protocol=\"axfr\"} 0"));
+        assert!(metrics.contains("oxidedns_notify_messages_received_total 1"));
+        assert!(metrics.contains("oxidedns_notify_messages_unauthorized_total 1"));
+        assert!(metrics.contains("oxidedns_notify_refresh_actions_total{action=\"signalled\"} 1"));
+        assert!(metrics.contains("oxidedns_notify_refresh_actions_total{action=\"deduplicated\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"ok\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badkey\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badsig\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badtime\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badalg\"} 1"));
+        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badtrunc\"} 1"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"active\"} 1"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
@@ -3672,6 +3899,56 @@ mod tests {
         assert_eq!(tsig.original_id, 0x1234);
         assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
         assert_eq!(tsig.other_data.len(), 6);
+    }
+
+    #[test]
+    fn notify_tsig_verification_metrics_classify_results() {
+        let (authority, key) = tsig_notify_authority();
+        let metrics = RuntimeMetrics::new();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+
+        let unsigned_prepared = prepare_notify_packet_with_metrics(
+            &packet,
+            &authority,
+            "192.0.2.53".parse().unwrap(),
+            &metrics,
+        )
+        .expect("TSIG error response");
+        assert!(unsigned_prepared.immediate_response.is_some());
+
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+        let signed_prepared = prepare_notify_packet_with_metrics(
+            &signed_notify.message,
+            &authority,
+            "192.0.2.53".parse().unwrap(),
+            &metrics,
+        )
+        .expect("verified NOTIFY");
+        assert_eq!(signed_prepared.packet, packet);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.notify_received, 2);
+        assert_eq!(snapshot.notify_tsig_badkey, 1);
+        assert_eq!(snapshot.notify_tsig_ok, 1);
+        assert_eq!(snapshot.notify_tsig_badsig, 0);
+    }
+
+    #[test]
+    fn notify_refresh_signalling_records_metrics() {
+        let tracker = NotifyRefreshTracker::new(std::time::Duration::from_secs(60));
+        let (refresh_tx, _refresh_rx) = mpsc::channel(2);
+        let metrics = RuntimeMetrics::new();
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+        let source = "192.0.2.53".parse().unwrap();
+
+        signal_notify_refresh(&tracker, &refresh_tx, &metrics, &zone, source, Some(1));
+        signal_notify_refresh(&tracker, &refresh_tx, &metrics, &zone, source, Some(1));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.notify_refresh_signalled, 1);
+        assert_eq!(snapshot.notify_refresh_deduplicated, 1);
     }
 
     #[test]
@@ -4466,6 +4743,7 @@ mod tests {
                 ixfr_started: 1,
                 ixfr_succeeded: 1,
                 ixfr_failed: 0,
+                ..Default::default()
             }
         );
     }
@@ -4755,6 +5033,7 @@ mod tests {
                 ixfr_started: 1,
                 ixfr_succeeded: 0,
                 ixfr_failed: 1,
+                ..Default::default()
             }
         );
     }
@@ -4860,6 +5139,7 @@ mod tests {
                 ixfr_started: 0,
                 ixfr_succeeded: 0,
                 ixfr_failed: 0,
+                ..Default::default()
             }
         );
     }

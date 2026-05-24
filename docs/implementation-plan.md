@@ -207,7 +207,7 @@ Slice 8 has health endpoint foundations:
 - optional `[server].health` binds a separate plain HTTP/1 listener when configured, and opens no HTTP listener when unset;
 - `GET /healthz` reports `ready` with HTTP 200 once at least one zone is ACTIVE, `starting` with HTTP 503 before readiness, and `draining` with HTTP 503 during graceful shutdown;
 - `GET /readyz` reports HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503;
-- `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, and AXFR/IXFR transfer-session started, completed, and failed counters;
+- `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, AXFR/IXFR transfer-session started/completed/failed counters, NOTIFY receive/unauthorized/refresh-action counters, and authorized NOTIFY TSIG verification outcome counters;
 - unknown paths return HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405.
 
 Open near-term work:
