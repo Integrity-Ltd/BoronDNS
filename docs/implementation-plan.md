@@ -199,7 +199,7 @@ DNSSEC work is partially started:
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
 - response header construction unconditionally clears AD and CD bits.
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
-- authorized signed NOTIFY messages with BADSIG, BADTRUNC, or BADTIME verification failures receive NOTAUTH responses carrying zero-MAC TSIG error records, including server-time other data for BADTIME.
+- authorized signed NOTIFY messages with BADSIG or BADTRUNC verification failures receive NOTAUTH responses carrying zero-MAC TSIG error records, and BADTIME failures receive signed NOTAUTH TSIG error records with server-time other data.
 
 Slice 8 has health endpoint foundations:
 

@@ -35,7 +35,8 @@ use oxidedns_core::{
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC,
-        TsigError, TsigKey, append_unsigned_tsig_error,
+        TsigError, TsigErrorResponseFields, TsigKey, append_unsigned_tsig_error, extract_tsig_mac,
+        sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
@@ -2206,7 +2207,7 @@ fn prepare_notify_packet(
         }),
         Err(error) => {
             warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
-            tsig_error_response(&header, &question, &key, &error).map(|response| {
+            tsig_error_response(packet, &header, &question, &key, &error).map(|response| {
                 PreparedDnsMessage {
                     packet: packet.to_vec(),
                     response_tsig: None,
@@ -2218,13 +2219,13 @@ fn prepare_notify_packet(
 }
 
 fn tsig_error_response(
+    packet: &[u8],
     header: &Header,
     question: &Question,
     key: &TsigKey,
     error: &TsigError,
 ) -> Option<Vec<u8>> {
     let now = tsig_time_signed();
-    let (tsig_error, other_data) = tsig_error_fields(error, now)?;
     let mut response = Vec::new();
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
@@ -2238,23 +2239,44 @@ fn tsig_error_response(
     response.extend_from_slice(&question.qtype.to_be_bytes());
     response.extend_from_slice(&question.qclass.to_be_bytes());
 
-    append_unsigned_tsig_error(
-        &response,
-        key,
-        now,
-        DEFAULT_TSIG_FUDGE_SECS,
-        header.id,
-        tsig_error,
-        &other_data,
-    )
-    .ok()
-}
-
-fn tsig_error_fields(error: &TsigError, now: u64) -> Option<(u16, Vec<u8>)> {
     match error {
-        TsigError::InvalidMac => Some((TSIG_ERROR_BADSIG, Vec::new())),
-        TsigError::BadTrunc => Some((TSIG_ERROR_BADTRUNC, Vec::new())),
-        TsigError::TimeOutsideFudge => Some((TSIG_ERROR_BADTIME, u48_bytes(now))),
+        TsigError::InvalidMac => append_unsigned_tsig_error(
+            &response,
+            key,
+            now,
+            DEFAULT_TSIG_FUDGE_SECS,
+            header.id,
+            TSIG_ERROR_BADSIG,
+            &[],
+        )
+        .ok(),
+        TsigError::BadTrunc => append_unsigned_tsig_error(
+            &response,
+            key,
+            now,
+            DEFAULT_TSIG_FUDGE_SECS,
+            header.id,
+            TSIG_ERROR_BADTRUNC,
+            &[],
+        )
+        .ok(),
+        TsigError::TimeOutsideFudge => {
+            let request_mac = extract_tsig_mac(packet).ok()?;
+            sign_tsig_error_response(
+                &response,
+                key,
+                TsigErrorResponseFields {
+                    request_mac: &request_mac,
+                    time_signed: now,
+                    fudge: DEFAULT_TSIG_FUDGE_SECS,
+                    original_id: header.id,
+                    error: TSIG_ERROR_BADTIME,
+                    other_data: &u48_bytes(now),
+                },
+            )
+            .ok()
+            .map(|signed| signed.message)
+        }
         _ => None,
     }
 }
@@ -3535,7 +3557,7 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
         let tsig = parse_tsig_response_fields(&response);
-        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.mac_len, key.algorithm.mac_len());
         assert_eq!(tsig.original_id, 0x1234);
         assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
         assert_eq!(tsig.other_data.len(), 6);

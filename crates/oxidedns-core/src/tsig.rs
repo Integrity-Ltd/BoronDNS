@@ -149,6 +149,15 @@ struct TsigRecordFields<'a> {
     other_data: &'a [u8],
 }
 
+pub struct TsigErrorResponseFields<'a> {
+    pub request_mac: &'a [u8],
+    pub time_signed: u64,
+    pub fudge: u16,
+    pub original_id: u16,
+    pub error: u16,
+    pub other_data: &'a [u8],
+}
+
 impl fmt::Debug for TsigKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -440,6 +449,62 @@ pub fn append_unsigned_tsig_error(
     );
 
     Ok(signed_message)
+}
+
+pub fn sign_tsig_error_response(
+    message: &[u8],
+    key: &TsigKey,
+    fields: TsigErrorResponseFields<'_>,
+) -> Result<SignedMessage, TsigError> {
+    if message.len() < DNS_HEADER_LEN {
+        return Err(TsigError::MalformedMessage);
+    }
+
+    let arcount = u16::from_be_bytes([
+        message[DNS_HEADER_ARCOUNT_OFFSET],
+        message[DNS_HEADER_ARCOUNT_OFFSET + 1],
+    ]);
+    let signed_arcount = arcount
+        .checked_add(1)
+        .ok_or(TsigError::AdditionalRecordCountOverflow)?;
+
+    let variables = tsig_variables(
+        key,
+        fields.time_signed,
+        fields.fudge,
+        fields.error,
+        fields.other_data,
+    );
+    let mut mac_input = response_mac_input(fields.request_mac, message, &variables);
+    let mac = key.sign(&mac_input)?;
+    mac_input.zeroize();
+
+    let mut signed_message = Vec::with_capacity(message.len() + tsig_rr_len(key, mac.len()));
+    signed_message.extend_from_slice(message);
+    signed_message[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
+        .copy_from_slice(&signed_arcount.to_be_bytes());
+    append_tsig_rr(
+        &mut signed_message,
+        key,
+        TsigRecordFields {
+            time_signed: fields.time_signed,
+            fudge: fields.fudge,
+            mac: &mac,
+            original_id: fields.original_id,
+            error: fields.error,
+            other_data: fields.other_data,
+        },
+    );
+
+    Ok(SignedMessage {
+        message: signed_message,
+        mac,
+    })
+}
+
+pub fn extract_tsig_mac(message: &[u8]) -> Result<Vec<u8>, TsigError> {
+    let (_, tsig) = remove_tsig(message)?;
+    Ok(tsig.mac)
 }
 
 pub fn verify_response(
