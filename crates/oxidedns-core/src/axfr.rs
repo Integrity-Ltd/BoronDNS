@@ -34,6 +34,9 @@ pub enum AxfrError {
     #[error("AXFR response contained an unexpected middle SOA")]
     MiddleSoa,
 
+    #[error("AXFR response contained records after the terminating SOA")]
+    TrailingRecords,
+
     #[error("AXFR response contained a record with an unexpected class")]
     ClassMismatch,
 
@@ -95,6 +98,9 @@ pub fn parse_axfr_response(
 
         let mut offset = skip_questions(message, header.qdcount)?;
         for _ in 0..header.ancount {
+            if complete {
+                return Err(AxfrError::TrailingRecords);
+            }
             let (record, consumed) = parse_record(message, offset)?;
             offset += consumed;
 
@@ -112,7 +118,6 @@ pub fn parse_axfr_response(
                     }
                     Some(initial) if record == *initial => {
                         complete = true;
-                        break;
                     }
                     Some(_) => return Err(AxfrError::MismatchedTerminatingSoa),
                 }
@@ -122,10 +127,6 @@ pub fn parse_axfr_response(
                 }
                 zone_records.push(record);
             }
-        }
-
-        if complete {
-            break;
         }
     }
 
@@ -409,6 +410,25 @@ mod tests {
         let error = parse_axfr_response(0x1234, &apex, 1, &[message(0x1234, vec![soa, other_soa])])
             .expect_err("bad terminating SOA");
         assert_eq!(error, AxfrError::MismatchedTerminatingSoa);
+    }
+
+    #[test]
+    fn rejects_records_after_terminating_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), soa, a])],
+        )
+        .expect_err("trailing AXFR data");
+        assert_eq!(error, AxfrError::TrailingRecords);
     }
 
     #[test]
