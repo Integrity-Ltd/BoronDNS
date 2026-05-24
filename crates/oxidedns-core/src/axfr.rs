@@ -879,6 +879,92 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_response_with_mismatched_qid() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(0x9999, vec![current_soa])],
+        )
+        .expect_err("mismatched IXFR qid");
+
+        assert_eq!(error, IxfrError::MismatchedQid);
+    }
+
+    #[test]
+    fn rejects_ixfr_response_with_mismatched_opcode() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let mut response = message(0x1234, vec![current_soa]);
+        response[2] = 0x88;
+
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("mismatched IXFR opcode");
+
+        assert_eq!(error, IxfrError::MismatchedOpcode);
+    }
+
+    #[test]
+    fn rejects_ixfr_response_with_error_rcode() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let mut response = message(0x1234, vec![current_soa]);
+        response[3] = 4;
+
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("IXFR error RCODE");
+
+        assert_eq!(error, IxfrError::ErrorRcode(4));
+    }
+
+    #[test]
+    fn rejects_ixfr_response_without_initial_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+
+        let error =
+            parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[message(0x1234, vec![a])])
+                .expect_err("missing IXFR initial SOA");
+
+        assert_eq!(error, IxfrError::MissingInitialSoa);
+    }
+
+    #[test]
+    fn rejects_ixfr_single_newer_soa_as_incomplete() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let newer_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(0x1234, vec![newer_soa])],
+        )
+        .expect_err("incomplete newer IXFR response");
+
+        assert_eq!(error, IxfrError::IncompleteResponse);
+    }
+
+    #[test]
     fn parses_ixfr_mode1_incremental_diff_into_active_zone() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
