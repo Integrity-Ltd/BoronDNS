@@ -227,10 +227,10 @@ RRL foundations are started:
 Interop harness foundations:
 
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
+- `scripts/interop-bind-tsig-axfr.sh` starts a BIND 9 primary whose AXFR is restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 
 Open near-term work:
 
 - broader IXFR fault/interop coverage;
-- TSIG interop coverage;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

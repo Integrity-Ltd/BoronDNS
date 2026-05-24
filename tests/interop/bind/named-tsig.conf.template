@@ -1,0 +1,22 @@
+key "transfer-key." {
+    algorithm hmac-sha256;
+    secret "__TSIG_SECRET__";
+};
+
+options {
+    directory "__WORKDIR__";
+    listen-on port __PORT__ { 127.0.0.1; };
+    listen-on-v6 { none; };
+    recursion no;
+    dnssec-validation no;
+    pid-file "__WORKDIR__/named.pid";
+    session-keyfile "__WORKDIR__/session.key";
+};
+
+zone "alpha.test." IN {
+    type primary;
+    file "__ZONEFILE__";
+    allow-query { 127.0.0.1; };
+    allow-transfer { key "transfer-key."; };
+    notify no;
+};
