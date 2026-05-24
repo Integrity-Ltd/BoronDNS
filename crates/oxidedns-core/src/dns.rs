@@ -431,6 +431,24 @@ pub fn answer_message_with_notify_hooks(
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
 ) -> DatagramAction {
+    answer_message_with_notify_hooks_and_query_observer(
+        packet,
+        zone_store,
+        options,
+        notify_authorized,
+        notify_accepted,
+        |_| {},
+    )
+}
+
+pub fn answer_message_with_notify_hooks_and_query_observer(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    query_answered: impl Fn(&LookupResult),
+) -> DatagramAction {
     let header = match Header::parse(packet) {
         Ok(header) => header,
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
@@ -469,7 +487,7 @@ pub fn answer_message_with_notify_hooks(
         }
     }
 
-    answer_query_message(&header, packet, zone_store, options)
+    answer_query_message(&header, packet, zone_store, options, &query_answered)
 }
 
 fn answer_query_message(
@@ -477,6 +495,7 @@ fn answer_query_message(
     packet: &[u8],
     zone_store: &ZoneStore,
     options: AnswerOptions,
+    query_answered: &impl Fn(&LookupResult),
 ) -> DatagramAction {
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -603,6 +622,7 @@ fn answer_query_message(
         options.max_cname_chain,
         options.any_response,
     );
+    query_answered(&lookup);
     DatagramAction::Respond(build_response(
         header,
         lookup.rcode,
@@ -1211,6 +1231,13 @@ pub struct LookupResult {
     pub answers: Vec<ResourceRecord>,
     pub authorities: Vec<ResourceRecord>,
     pub additionals: Vec<ResourceRecord>,
+    pub termination: Option<LookupTermination>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupTermination {
+    CnameChainLimit,
+    CnameLoop,
 }
 
 impl LookupResult {
@@ -1220,6 +1247,16 @@ impl LookupResult {
 
     pub fn positive_records(answers: Vec<ResourceRecord>) -> Self {
         Self::positive_with_additionals(answers, Vec::new())
+    }
+
+    pub fn positive_records_with_termination(
+        answers: Vec<ResourceRecord>,
+        termination: LookupTermination,
+    ) -> Self {
+        Self {
+            termination: Some(termination),
+            ..Self::positive_records(answers)
+        }
     }
 
     pub fn positive_with_additionals(
@@ -1232,6 +1269,7 @@ impl LookupResult {
             answers,
             authorities: Vec::new(),
             additionals,
+            termination: None,
         }
     }
 
@@ -1242,6 +1280,7 @@ impl LookupResult {
             answers: Vec::new(),
             authorities,
             additionals,
+            termination: None,
         }
     }
 
@@ -1252,6 +1291,7 @@ impl LookupResult {
             answers: Vec::new(),
             authorities: soa.map_or_else(Vec::new, Rrset::records),
             additionals: Vec::new(),
+            termination: None,
         }
     }
 
@@ -1262,6 +1302,7 @@ impl LookupResult {
             answers,
             authorities: soa.map_or_else(Vec::new, Rrset::records),
             additionals: Vec::new(),
+            termination: None,
         }
     }
 
@@ -1276,6 +1317,7 @@ impl LookupResult {
             answers,
             authorities: soa.map_or_else(Vec::new, Rrset::records),
             additionals: Vec::new(),
+            termination: None,
         }
     }
 }
@@ -2090,6 +2132,13 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Cname as u16, RecordType::Cname as u16]
         );
+        let zone = store.get("example.test.").expect("zone snapshot");
+        let lookup = zone.lookup(
+            &DomainName::from_absolute_str("a.example.test.").unwrap(),
+            RecordType::A as u16,
+            1,
+        );
+        assert_eq!(lookup.termination, Some(LookupTermination::CnameLoop));
     }
 
     #[test]
@@ -2142,6 +2191,15 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Cname as u16]
         );
+        let zone = store.get("example.test.").expect("zone snapshot");
+        let lookup = zone.lookup_with_options(
+            &DomainName::from_absolute_str("a.example.test.").unwrap(),
+            RecordType::A as u16,
+            1,
+            1,
+            AnyResponseMode::Minimal,
+        );
+        assert_eq!(lookup.termination, Some(LookupTermination::CnameChainLimit));
     }
 
     #[test]

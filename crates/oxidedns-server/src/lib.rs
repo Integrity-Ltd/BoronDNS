@@ -29,8 +29,8 @@ use oxidedns_core::{
     config::ZoneConfig,
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Header, Opcode, Question, RecordType, Transport,
-        answer_message_with_notify_hooks,
+        DomainName, Header, LookupResult, LookupTermination, Opcode, Question, RecordType,
+        Transport, answer_message_with_notify_hooks_and_query_observer,
     },
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
@@ -911,7 +911,7 @@ async fn serve_udp(
             continue;
         };
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
-        match answer_message_with_notify_hooks(
+        match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
             AnswerOptions {
@@ -939,6 +939,9 @@ async fn serve_udp(
                     peer_ip,
                     serial,
                 )
+            },
+            |lookup| {
+                record_query_termination_metric(query_metrics, lookup, &settings.metrics);
             },
         ) {
             DatagramAction::Discard => {
@@ -1007,6 +1010,21 @@ fn record_query_response_metric(
         metrics.record_query_truncated();
     }
     metrics.record_query_response_rcode(response_rcode(response, &header));
+}
+
+fn record_query_termination_metric(
+    observation: QueryMetricObservation,
+    lookup: &LookupResult,
+    metrics: &RuntimeMetrics,
+) {
+    if !observation.is_query {
+        return;
+    }
+    match lookup.termination {
+        Some(LookupTermination::CnameChainLimit) => metrics.record_query_cname_chain_limit(),
+        Some(LookupTermination::CnameLoop) => metrics.record_query_cname_loop(),
+        None => {}
+    }
 }
 
 fn response_rcode(response: &[u8], header: &Header) -> u16 {
@@ -1198,6 +1216,12 @@ fn metrics_body(
          # HELP oxidedns_queries_truncated_total Query responses emitted with the TC bit set.\n\
          # TYPE oxidedns_queries_truncated_total counter\n\
          oxidedns_queries_truncated_total {}\n\
+         # HELP oxidedns_queries_cname_chain_limit_total Query responses terminated by the CNAME chain limit.\n\
+         # TYPE oxidedns_queries_cname_chain_limit_total counter\n\
+         oxidedns_queries_cname_chain_limit_total {}\n\
+         # HELP oxidedns_queries_cname_loop_total Query responses terminated by CNAME loop detection.\n\
+         # TYPE oxidedns_queries_cname_loop_total counter\n\
+         oxidedns_queries_cname_loop_total {}\n\
          # HELP oxidedns_transfer_sessions_started_total Transfer sessions started.\n\
          # TYPE oxidedns_transfer_sessions_started_total counter\n\
          oxidedns_transfer_sessions_started_total{{protocol=\"axfr\"}} {}\n\
@@ -1214,6 +1238,8 @@ fn metrics_body(
         zones.active_count(),
         snapshot.queries_received,
         snapshot.queries_truncated,
+        snapshot.queries_cname_chain_limit,
+        snapshot.queries_cname_loop,
         snapshot.axfr_started,
         snapshot.ixfr_started,
         snapshot.axfr_succeeded,
@@ -1465,6 +1491,8 @@ struct RuntimeMetrics {
 struct RuntimeMetricsInner {
     queries_received: AtomicU64,
     queries_truncated: AtomicU64,
+    queries_cname_chain_limit: AtomicU64,
+    queries_cname_loop: AtomicU64,
     axfr_started: AtomicU64,
     axfr_succeeded: AtomicU64,
     axfr_failed: AtomicU64,
@@ -1479,6 +1507,8 @@ struct RuntimeMetricsInner {
 struct RuntimeMetricsSnapshot {
     queries_received: u64,
     queries_truncated: u64,
+    queries_cname_chain_limit: u64,
+    queries_cname_loop: u64,
     axfr_started: u64,
     axfr_succeeded: u64,
     axfr_failed: u64,
@@ -1526,6 +1556,18 @@ impl RuntimeMetrics {
         self.inner.queries_truncated.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_query_cname_chain_limit(&self) {
+        self.inner
+            .queries_cname_chain_limit
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_query_cname_loop(&self) {
+        self.inner
+            .queries_cname_loop
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_query_response_rcode(&self, rcode: u16) {
         let mut rcodes = self
             .inner
@@ -1566,6 +1608,8 @@ impl RuntimeMetrics {
         RuntimeMetricsSnapshot {
             queries_received: self.inner.queries_received.load(Ordering::Relaxed),
             queries_truncated: self.inner.queries_truncated.load(Ordering::Relaxed),
+            queries_cname_chain_limit: self.inner.queries_cname_chain_limit.load(Ordering::Relaxed),
+            queries_cname_loop: self.inner.queries_cname_loop.load(Ordering::Relaxed),
             axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
             axfr_succeeded: self.inner.axfr_succeeded.load(Ordering::Relaxed),
             axfr_failed: self.inner.axfr_failed.load(Ordering::Relaxed),
@@ -2755,7 +2799,7 @@ async fn handle_tcp_connection(
             continue;
         };
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
-        match answer_message_with_notify_hooks(
+        match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
             AnswerOptions {
@@ -2776,6 +2820,7 @@ async fn handle_tcp_connection(
             |qname, _qclass, serial| {
                 signal_notify_refresh(&notify_refresh, &notify_refresh_tx, qname, peer_ip, serial)
             },
+            |lookup| record_query_termination_metric(query_metrics, lookup, &metrics),
         ) {
             DatagramAction::Discard => {
                 debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
@@ -2879,20 +2924,21 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        dns::{AnyResponseMode, DomainName, Header, Opcode, RecordType},
+        dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, RecordType},
         tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
 
     use super::{
         HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
-        NotifyRefreshTracker, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-        Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
-        ZoneRefreshRegistry, drain_task_set, drain_tcp_connections, handle_tcp_connection,
-        jitter_interval, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
-        record_query_response_metric, refresh_zone_from_primaries, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, sign_notify_response,
+        NotifyRefreshTracker, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
+        RefreshWorkerSettings, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
+        TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry, drain_task_set,
+        drain_tcp_connections, handle_tcp_connection, jitter_interval, observe_query_metrics,
+        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
         transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
         write_tcp_message,
     };
@@ -3013,6 +3059,8 @@ mod tests {
         metrics_state.record_query_received();
         metrics_state.record_query_received();
         metrics_state.record_query_truncated();
+        metrics_state.record_query_cname_chain_limit();
+        metrics_state.record_query_cname_loop();
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
@@ -3059,6 +3107,8 @@ mod tests {
         assert!(metrics.contains("oxidedns_zones_active 1"));
         assert!(metrics.contains("oxidedns_queries_received_total 2"));
         assert!(metrics.contains("oxidedns_queries_truncated_total 1"));
+        assert!(metrics.contains("oxidedns_queries_cname_chain_limit_total 1"));
+        assert!(metrics.contains("oxidedns_queries_cname_loop_total 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NOERROR\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"SERVFAIL\"} 0"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
@@ -3660,6 +3710,106 @@ mod tests {
     }
 
     #[test]
+    fn query_metrics_count_cname_termination_causes_for_queries_only() {
+        let metrics = RuntimeMetrics::new();
+        let observation = QueryMetricObservation { is_query: true };
+        let non_query_observation = QueryMetricObservation { is_query: false };
+        let chain_limit = oxidedns_core::dns::LookupResult::positive_records_with_termination(
+            Vec::new(),
+            LookupTermination::CnameChainLimit,
+        );
+        let loop_detected = oxidedns_core::dns::LookupResult::positive_records_with_termination(
+            Vec::new(),
+            LookupTermination::CnameLoop,
+        );
+
+        record_query_termination_metric(observation, &chain_limit, &metrics);
+        record_query_termination_metric(observation, &loop_detected, &metrics);
+        record_query_termination_metric(non_query_observation, &chain_limit, &metrics);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.queries_cname_chain_limit, 1);
+        assert_eq!(snapshot.queries_cname_loop, 1);
+    }
+
+    #[tokio::test]
+    async fn udp_query_records_cname_chain_limit_metric() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("b.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("c.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+            ],
+        ));
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let server_metrics = metrics.clone();
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            UdpServerSettings {
+                max_udp_payload: 1232,
+                max_cname_chain: 1,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                notify_authority: NotifyAuthority::default(),
+                notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx: notify_refresh_tx(),
+                metrics: server_metrics,
+            },
+        ));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(
+                &query(b"\x01a\x07example\x04test\x00", RecordType::A as u16, 1),
+                server_addr,
+            )
+            .await
+            .unwrap();
+        let mut response = [0u8; 512];
+        let len = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            client.recv(&mut response),
+        )
+        .await
+        .expect("UDP response")
+        .unwrap();
+        server.abort();
+
+        assert_eq!(response[3] & 0x0f, 0);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+        assert!(len > 12);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.queries_received, 1);
+        assert_eq!(snapshot.queries_cname_chain_limit, 1);
+        assert_eq!(snapshot.queries_cname_loop, 0);
+    }
+
+    #[test]
     fn zsm_jitter_stays_within_ten_percent_bounds() {
         let interval = std::time::Duration::from_secs(100);
 
@@ -3952,6 +4102,8 @@ mod tests {
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
                 queries_truncated: 0,
+                queries_cname_chain_limit: 0,
+                queries_cname_loop: 0,
                 axfr_started: 0,
                 axfr_succeeded: 0,
                 axfr_failed: 0,
@@ -4239,6 +4391,8 @@ mod tests {
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
                 queries_truncated: 0,
+                queries_cname_chain_limit: 0,
+                queries_cname_loop: 0,
                 axfr_started: 2,
                 axfr_succeeded: 2,
                 axfr_failed: 0,
@@ -4342,6 +4496,8 @@ mod tests {
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
                 queries_truncated: 0,
+                queries_cname_chain_limit: 0,
+                queries_cname_loop: 0,
                 axfr_started: 1,
                 axfr_succeeded: 1,
                 axfr_failed: 0,

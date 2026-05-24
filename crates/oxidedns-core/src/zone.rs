@@ -5,7 +5,10 @@ use std::{
 
 use tracing::warn;
 
-use crate::dns::{AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, RecordType};
+use crate::dns::{
+    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
+    RecordType,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneState {
@@ -175,7 +178,10 @@ impl ZoneSnapshot {
                 qname = %current,
                 "CNAME chain limit reached; returning constructed response"
             );
-            return LookupResult::positive_records(answers);
+            return LookupResult::positive_records_with_termination(
+                answers,
+                LookupTermination::CnameChainLimit,
+            );
         }
 
         let Some(cname_rrset) = self.rrset(&current, RecordType::Cname as u16, qclass) else {
@@ -210,7 +216,10 @@ impl ZoneSnapshot {
                 qname = %target,
                 "CNAME chain loop detected; returning constructed response"
             );
-            return LookupResult::positive_records(answers);
+            return LookupResult::positive_records_with_termination(
+                answers,
+                LookupTermination::CnameLoop,
+            );
         }
         visited.push(target_key);
 
