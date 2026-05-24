@@ -46,6 +46,9 @@ pub enum AxfrError {
     #[error("AXFR response contained a reserved RR type")]
     ReservedType,
 
+    #[error("AXFR response contained invalid RDATA for a known RR type")]
+    InvalidRdata,
+
     #[error("AXFR response did not contain an apex NS RRset")]
     MissingApexNs,
 
@@ -87,6 +90,9 @@ pub enum SoaQueryError {
 
     #[error("SOA response contained a reserved RR type")]
     ReservedType,
+
+    #[error("SOA response contained invalid RDATA for a known RR type")]
+    InvalidRdata,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -579,6 +585,7 @@ fn validate_record_scope(
     if record.rr_type == 0 || record.rr_type == u16::MAX {
         return Err(AxfrError::ReservedType);
     }
+    validate_known_rdata(record)?;
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
         return Err(AxfrError::OutOfZoneOwner);
     }
@@ -596,10 +603,27 @@ fn validate_soa_answer_scope(
     if record.rr_type == 0 || record.rr_type == u16::MAX {
         return Err(SoaQueryError::ReservedType);
     }
+    validate_known_rdata(record).map_err(|_| SoaQueryError::InvalidRdata)?;
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
         return Err(SoaQueryError::OutOfZoneOwner);
     }
     Ok(())
+}
+
+fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
+    match record.rr_type {
+        rr_type if rr_type == RecordType::A as u16 => validate_fixed_rdata(record, 4),
+        rr_type if rr_type == RecordType::Aaaa as u16 => validate_fixed_rdata(record, 16),
+        _ => Ok(()),
+    }
+}
+
+fn validate_fixed_rdata(record: &ResourceRecord, expected_len: usize) -> Result<(), AxfrError> {
+    if record.rdata.len() == expected_len {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
 }
 
 fn validate_zone_record_set(
@@ -1179,6 +1203,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_record_with_invalid_fixed_size_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let bad_a = record("www.example.test.", RecordType::A as u16, vec![192, 0, 2]);
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, bad_a, new_soa],
+            )],
+        )
+        .expect_err("IXFR invalid A RDATA");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::InvalidRdata));
+    }
+
+    #[test]
     fn rejects_ixfr_starting_old_soa_mismatch() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -1535,6 +1585,48 @@ mod tests {
         .expect_err("DNAME with CNAME data");
 
         assert_eq!(error, AxfrError::DnameCoexistsWithCname);
+    }
+
+    #[test]
+    fn rejects_axfr_a_record_with_invalid_rdata_length() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let bad_a = record("www.example.test.", RecordType::A as u16, vec![192, 0, 2]);
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), bad_a, soa])],
+        )
+        .expect_err("invalid A RDATA length");
+
+        assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_axfr_aaaa_record_with_invalid_rdata_length() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let bad_aaaa = record("www.example.test.", RecordType::Aaaa as u16, vec![0; 15]);
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), bad_aaaa, soa])],
+        )
+        .expect_err("invalid AAAA RDATA length");
+
+        assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_soa_response_with_invalid_fixed_size_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let bad_a = record("www.example.test.", RecordType::A as u16, vec![192, 0, 2]);
+        let error = parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![bad_a]))
+            .expect_err("invalid A RDATA in SOA response");
+
+        assert_eq!(error, SoaQueryError::InvalidRdata);
     }
 
     #[test]
