@@ -1,0 +1,18 @@
+$ORIGIN alpha.test.
+$TTL 3600
+@ IN SOA ns1.alpha.test. hostmaster.alpha.test. (
+    2026052401 ; serial
+    60         ; refresh
+    30         ; retry
+    300        ; expire
+    300        ; minimum
+)
+  IN NS ns1.alpha.test.
+  IN NS ns2.alpha.test.
+ns1 IN A 127.0.0.1
+ns2 IN A 127.0.0.2
+www IN A 192.0.2.10
+mail IN A 192.0.2.20
+alias IN CNAME www.alpha.test.
+txt IN TXT "bind axfr interop fixture"
+_sip._tcp IN SRV 10 20 5060 www.alpha.test.

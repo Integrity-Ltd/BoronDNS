@@ -195,7 +195,7 @@ impl DomainName {
                         return Err(DnsParseError::FormErr);
                     }
                     visited_pointers.push(pointer);
-                    consumed.get_or_insert(pos + 2 - offset);
+                    consumed.get_or_insert_with(|| pos + 2 - offset);
                     pos = pointer;
                 }
                 0x00 => {
@@ -2031,6 +2031,16 @@ mod tests {
         let (name, consumed) = DomainName::parse(&packet, compressed_offset).unwrap();
         assert_eq!(name.to_string(), "Example.test.");
         assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn parses_nested_compression_without_consumed_underflow() {
+        let packet = b"\x07example\x04test\x00\x02ns\xc0\x00\x04mail\xc0\x0e";
+
+        let (name, consumed) = DomainName::parse(packet, 19).unwrap();
+
+        assert_eq!(name.to_string(), "mail.ns.example.test.");
+        assert_eq!(consumed, 7);
     }
 
     #[test]
