@@ -252,6 +252,7 @@ Interop harness foundations:
 - `scripts/interop-knot-notify-refresh-docker.sh` starts Knot DNS inside Docker, observes a Knot-generated NOTIFY through a forwarding probe, verifies OxideDNS accepts the NOTIFY response path, and confirms OxideDNS refreshes and republishes the newer serial and data.
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
 - `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
+- `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, and NSEC records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, and handles DNSSEC UDP truncation/response-DO semantics.
 
 Fuzzing foundations:
 
@@ -264,4 +265,5 @@ Open near-term work:
 
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - add real-primary XoT interop and the remaining TLS fault matrix;
+- broaden DNSSEC runtime evidence to NSEC3 and real signed primary fixtures;
 - add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.

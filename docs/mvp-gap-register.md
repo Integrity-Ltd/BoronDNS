@@ -12,7 +12,7 @@ queue for remaining release blockers.
 | IXFR | Unit parser/fault coverage; BIND true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
 | NOTIFY | Unit/runtime coverage; BIND, NSD, and Knot NOTIFY refresh interop | Release traceability and broader negative interop evidence |
 | XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR interop script | Remaining TLS fault matrix and any additional real-primary XoT evidence |
-| DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records | Release-level conformance matrix for DNSSEC responses and truncation interactions |
+| DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve script for DO-sensitive RRSIG/NSEC/DNSKEY and truncation behavior | NSEC3 and real signed primary evidence; release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks | Release threshold decisions and longer-running evidence |
 
 ## Non-Functional Evidence
@@ -48,4 +48,5 @@ scripts/interop-knot-notify-refresh-docker.sh
 scripts/interop-knot-xot-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-rrl-udp.sh
+scripts/interop-dnssec-serve.sh
 ```
