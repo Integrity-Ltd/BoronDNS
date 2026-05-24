@@ -158,6 +158,8 @@ impl ZoneSnapshot {
         let mut dnssec_augmented = false;
         let nodata_candidate =
             lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
+        let nxdomain_candidate =
+            lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
         let authorities =
             self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_augmented);
         let authorities = self.add_nodata_nsec_augmentations(
@@ -165,6 +167,13 @@ impl ZoneSnapshot {
             qtype,
             qclass,
             nodata_candidate,
+            authorities,
+            &mut dnssec_augmented,
+        );
+        let authorities = self.add_nxdomain_nsec_augmentations(
+            qname,
+            qclass,
+            nxdomain_candidate,
             authorities,
             &mut dnssec_augmented,
         );
@@ -518,6 +527,71 @@ impl ZoneSnapshot {
         augmented
     }
 
+    fn add_nxdomain_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        nxdomain_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        if !nxdomain_candidate
+            || !authorities
+                .iter()
+                .any(|record| record.rr_type == RecordType::Soa as u16)
+        {
+            return authorities;
+        }
+
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
+        if let Some(closest_encloser) = self.closest_encloser(qname, qclass) {
+            self.push_nsec_covering_name(
+                &closest_encloser.wildcard_child(),
+                qclass,
+                &mut augmented,
+                &mut seen,
+                dnssec_augmented,
+            );
+        }
+        augmented
+    }
+
+    fn push_nsec_covering_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        records: &mut Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_augmented: &mut bool,
+    ) {
+        let Some(nsec_rrset) = self.nsec_rrset_covering_name(name, qclass) else {
+            return;
+        };
+
+        for nsec in nsec_rrset.records() {
+            if seen.insert(record_identity(&nsec)) {
+                records.push(nsec);
+                *dnssec_augmented = true;
+            }
+        }
+    }
+
+    fn nsec_rrset_covering_name(&self, name: &DomainName, qclass: u16) -> Option<&Rrset> {
+        self.rrsets.values().find(|rrset| {
+            rrset.rr_type == RecordType::Nsec as u16
+                && (qclass == 255 || rrset.class == qclass)
+                && rrset
+                    .rdatas
+                    .iter()
+                    .any(|rdata| nsec_covers_name(&rrset.owner, rdata, name))
+        })
+    }
+
     fn add_rrsig_augmentations(
         &self,
         records: Vec<ResourceRecord>,
@@ -686,6 +760,30 @@ fn rrsig_type_covered(rdata: &[u8]) -> Option<u16> {
     }
 
     Some(u16::from_be_bytes([rdata[0], rdata[1]]))
+}
+
+fn nsec_covers_name(owner: &DomainName, rdata: &[u8], name: &DomainName) -> bool {
+    let Ok((next_owner, _)) = DomainName::parse(rdata, 0) else {
+        return false;
+    };
+
+    canonical_nsec_range_covers(owner, &next_owner, name)
+}
+
+fn canonical_nsec_range_covers(
+    owner: &DomainName,
+    next_owner: &DomainName,
+    name: &DomainName,
+) -> bool {
+    let owner_key = owner.canonical_order_key();
+    let next_key = next_owner.canonical_order_key();
+    let name_key = name.canonical_order_key();
+
+    if owner_key < next_key {
+        owner_key < name_key && name_key < next_key
+    } else {
+        owner_key < name_key || name_key < next_key
+    }
 }
 
 fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {

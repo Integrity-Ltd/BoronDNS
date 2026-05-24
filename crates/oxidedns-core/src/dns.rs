@@ -291,6 +291,14 @@ impl DomainName {
         key
     }
 
+    pub(crate) fn canonical_order_key(&self) -> Vec<Vec<u8>> {
+        self.labels
+            .iter()
+            .rev()
+            .map(|label| label.iter().map(u8::to_ascii_lowercase).collect::<Vec<_>>())
+            .collect()
+    }
+
     pub fn to_wire(&self) -> Vec<u8> {
         let mut wire = Vec::new();
         for label in &self.labels {
@@ -2208,6 +2216,119 @@ mod tests {
         assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+    }
+
+    #[test]
+    fn do_nxdomain_includes_nsec_denial_proofs_and_covering_rrsigs() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("a.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("z.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn non_do_nxdomain_omits_nsec_dnssec_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("z.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16]
+        );
     }
 
     #[test]
