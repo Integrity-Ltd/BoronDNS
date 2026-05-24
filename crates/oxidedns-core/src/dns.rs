@@ -928,6 +928,12 @@ fn build_truncated_response(
     let mut kept_additionals = additionals.to_vec();
 
     loop {
+        let metadata = metadata.with_dnssec_augmented(truncated_dnssec_augmented(
+            metadata,
+            &kept_answers,
+            &kept_authorities,
+            &kept_additionals,
+        ));
         let response = build_response_inner(
             header,
             rcode,
@@ -937,7 +943,7 @@ fn build_truncated_response(
             &kept_answers,
             &kept_authorities,
             &kept_additionals,
-            metadata,
+            &metadata,
             options,
         );
         if response.len() <= ceiling {
@@ -960,6 +966,28 @@ fn build_truncated_response(
             return response;
         }
     }
+}
+
+fn truncated_dnssec_augmented(
+    metadata: &RequestMetadata,
+    answers: &[ResourceRecord],
+    authorities: &[ResourceRecord],
+    additionals: &[ResourceRecord],
+) -> bool {
+    metadata.dnssec_augmented
+        && answers
+            .iter()
+            .chain(authorities)
+            .chain(additionals)
+            .any(|record| {
+                matches!(
+                    record.rr_type,
+                    rr_type if rr_type == RecordType::Ds as u16
+                        || rr_type == RecordType::Rrsig as u16
+                        || rr_type == RecordType::Nsec as u16
+                        || rr_type == RecordType::Nsec3 as u16
+                )
+            })
 }
 
 fn encode_record(record: &ResourceRecord, response: &mut Vec<u8>) {
@@ -3737,6 +3765,43 @@ mod tests {
 
         assert!(response.len() <= 512);
         assert_eq!(flags & 0x0200, 0x0200);
+    }
+
+    #[test]
+    fn truncated_do_response_clears_do_when_rrsig_is_removed() {
+        let store = ZoneStore::new();
+        let mut large_rrsig = rrsig_rdata(RecordType::A);
+        large_rrsig.extend(vec![0; 400]);
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![large_rrsig],
+                ),
+            ],
+        ));
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response_with_options(&packet, &store, AnswerOptions::udp(128));
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert!(response.len() <= 128);
+        assert_eq!(flags & 0x0200, 0x0200);
+        assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+        assert_eq!(response_opt_ttl(&response), Some(0));
     }
 
     #[test]

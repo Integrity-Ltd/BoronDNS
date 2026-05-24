@@ -186,6 +186,7 @@ EDNS/query-size work is partially started:
 - EDNS padding requests are recognized, and `[limits].edns_padding_block_size` controls default-off zero-padding of response OPT RDATA when the padded response fits the applicable UDP ceiling;
 - UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum, defaulting to 1232.
 - response OPT TTL handling clears the DNSSEC DO bit until DNSSEC augmentation records are actually included, and BADVERS responses preserve only the extended RCODE bits.
+- truncated UDP responses recompute the response OPT DO bit from the DNSSEC augmentation records that remain after size-driven record removal.
 
 DNSSEC work is partially started:
 
