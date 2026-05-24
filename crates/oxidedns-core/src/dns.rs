@@ -806,25 +806,30 @@ fn validate_notify_answer_soa(
             {
                 return Err(EdnsError::FormErr);
             }
-            serial = Some(soa_serial(&record.rdata)?);
+            serial = Some(soa_serial(packet, record.rdata_offset, record.rdata.len())?);
         }
     }
     Ok(serial)
 }
 
-fn soa_serial(rdata: &[u8]) -> Result<u32, EdnsError> {
-    let (_, consumed_mname) = DomainName::parse(rdata, 0).map_err(|_| EdnsError::FormErr)?;
-    let offset = consumed_mname;
-    let (_, consumed_rname) = DomainName::parse(rdata, offset).map_err(|_| EdnsError::FormErr)?;
-    let offset = offset + consumed_rname;
-    if offset + 20 != rdata.len() {
+fn soa_serial(packet: &[u8], rdata_offset: usize, rdata_len: usize) -> Result<u32, EdnsError> {
+    let rdata_end = rdata_offset
+        .checked_add(rdata_len)
+        .ok_or(EdnsError::FormErr)?;
+    let (_, consumed_mname) =
+        DomainName::parse(packet, rdata_offset).map_err(|_| EdnsError::FormErr)?;
+    let rname_offset = rdata_offset + consumed_mname;
+    let (_, consumed_rname) =
+        DomainName::parse(packet, rname_offset).map_err(|_| EdnsError::FormErr)?;
+    let serial_offset = rname_offset + consumed_rname;
+    if serial_offset + 20 != rdata_end {
         return Err(EdnsError::FormErr);
     }
     Ok(u32::from_be_bytes([
-        rdata[offset],
-        rdata[offset + 1],
-        rdata[offset + 2],
-        rdata[offset + 3],
+        packet[serial_offset],
+        packet[serial_offset + 1],
+        packet[serial_offset + 2],
+        packet[serial_offset + 3],
     ]))
 }
 
@@ -1202,6 +1207,7 @@ struct ParsedRecord {
     rr_type: u16,
     class: u16,
     ttl: u32,
+    rdata_offset: usize,
     rdata: Vec<u8>,
 }
 
@@ -1247,6 +1253,7 @@ fn parse_additional_record(
     ]);
     let rdlength = u16::from_be_bytes([packet[offset + 8], packet[offset + 9]]) as usize;
     offset += 10;
+    let rdata_offset = offset;
     if offset + rdlength > packet.len() {
         return Err(EdnsError::FormErr);
     }
@@ -1259,6 +1266,7 @@ fn parse_additional_record(
             rr_type,
             class,
             ttl,
+            rdata_offset,
             rdata,
         },
         offset - start,
@@ -1864,6 +1872,41 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn notify_embedded_soa_accepts_compressed_rdata_names() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        let mut rdata = b"\x02ns\xc0\x0c\x0ahostmaster\xc0\x0c".to_vec();
+        rdata.extend_from_slice(&1u32.to_be_bytes());
+        rdata.extend_from_slice(&60u32.to_be_bytes());
+        rdata.extend_from_slice(&30u32.to_be_bytes());
+        rdata.extend_from_slice(&300u32.to_be_bytes());
+        rdata.extend_from_slice(&300u32.to_be_bytes());
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::Soa as u16,
+            1,
+            rdata,
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+        let observed = std::cell::Cell::new(None);
+
+        let response = match answer_message_with_notify_hooks(
+            &packet,
+            &store,
+            AnswerOptions::default(),
+            |_, _| true,
+            |_, _, serial| observed.set(serial),
+        ) {
+            DatagramAction::Respond(response) => response,
+            DatagramAction::Discard => panic!("expected NOTIFY response"),
+        };
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(observed.get(), Some(1));
     }
 
     #[test]

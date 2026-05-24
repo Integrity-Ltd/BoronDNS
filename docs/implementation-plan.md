@@ -180,6 +180,7 @@ Slice 7 has TSIG HMAC-SHA foundations:
 - signed SOA poll responses are verified against the stored request MAC, TSIG key name and algorithm, MAC, and time fudge before the unsigned DNS response is parsed.
 - signed TCP AXFR/IXFR response streams are verified before publication, including first-message request-MAC verification, subsequent running-MAC verification, terminal TSIG enforcement, the 99-message unsigned compatibility window, and non-decreasing TSIG times.
 - zones that reference a configured TSIG key require incoming NOTIFY messages to carry a valid TSIG; verified NOTIFY requests are stripped before core processing and the NOTIFY response is signed with the verified request MAC.
+- NOTIFY messages with embedded SOA records accept RFC-compliant compression in SOA MNAME/RNAME RDATA, matching BIND 9 NOTIFY behavior.
 
 EDNS/query-size work is partially started:
 
@@ -229,13 +230,15 @@ Interop harness foundations:
 
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-bind-tsig-axfr.sh` starts a BIND 9 primary whose AXFR is restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
+- `scripts/interop-bind-notify-refresh.sh` starts a BIND 9 primary configured to send NOTIFY, updates the primary zone serial, observes the BIND-generated NOTIFY packet through a UDP forwarding probe, verifies that OxideDNS accepts the compressed embedded SOA, and confirms that OxideDNS refreshes and republishes the newer serial and data.
 - `scripts/interop-nsd-axfr-docker.sh` starts NSD inside an Alpine Docker container with the `alpha.test.` fixture, validates NSD SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
+- `scripts/interop-nsd-tsig-axfr-docker.sh` starts NSD inside an Alpine Docker container with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-knot-axfr-docker.sh` starts Knot DNS inside an Alpine Docker container with the `alpha.test.` fixture, validates Knot SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-knot-tsig-axfr-docker.sh` starts Knot DNS with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 
 Open near-term work:
 
-- extend NSD coverage beyond AXFR and Knot coverage beyond AXFR/TSIG to NOTIFY paths;
+- extend NSD and Knot coverage beyond AXFR/TSIG to NOTIFY paths;
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - add XoT configuration and transfer-path foundations;
 - add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.

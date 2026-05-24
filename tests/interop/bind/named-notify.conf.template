@@ -1,0 +1,27 @@
+key "rndc-key" {
+    algorithm hmac-sha256;
+    secret "__RNDC_SECRET__";
+};
+
+controls {
+    inet 127.0.0.1 port __RNDC_PORT__ allow { 127.0.0.1; } keys { "rndc-key"; };
+};
+
+options {
+    directory "__WORKDIR__";
+    listen-on port __PORT__ { 127.0.0.1; };
+    listen-on-v6 { none; };
+    recursion no;
+    dnssec-validation no;
+    pid-file "__WORKDIR__/named.pid";
+    session-keyfile "__WORKDIR__/session.key";
+};
+
+zone "alpha.test." IN {
+    type primary;
+    file "__ZONEFILE__";
+    allow-query { 127.0.0.1; };
+    allow-transfer { 127.0.0.1; };
+    notify explicit;
+    also-notify { 127.0.0.1 port __OXIDEDNS_PORT__; };
+};
