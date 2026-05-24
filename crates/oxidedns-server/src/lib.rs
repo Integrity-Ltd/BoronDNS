@@ -4151,6 +4151,13 @@ mod tests {
                     vec![current_soa.rdata],
                 ),
                 Rrset::new(
+                    apex.clone(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![ns_rdata_for_zone("example.test.")],
+                ),
+                Rrset::new(
                     old_a.owner.clone(),
                     old_a.rr_type,
                     old_a.class,
@@ -5835,9 +5842,10 @@ mod tests {
 
     fn axfr_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
         let soa = record(zone, RecordType::Soa as u16, soa_rdata_with_serial(serial));
+        let ns = record(zone, RecordType::Ns as u16, ns_rdata_for_zone(zone));
         let owner = format!("www.{zone}");
         let a = record(&owner, RecordType::A as u16, vec![192, 0, 2, 10]);
-        let answers = vec![soa.clone(), a, soa];
+        let answers = vec![soa.clone(), ns, a, soa];
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());
         out.extend_from_slice(&0x8000u16.to_be_bytes());
@@ -6317,6 +6325,12 @@ mod tests {
 
     fn soa_rdata() -> Vec<u8> {
         soa_rdata_with_serial(1)
+    }
+
+    fn ns_rdata_for_zone(zone: &str) -> Vec<u8> {
+        DomainName::from_absolute_str(&format!("ns.{zone}"))
+            .unwrap()
+            .to_wire()
     }
 
     fn soa_rdata_with_serial(serial: u32) -> Vec<u8> {

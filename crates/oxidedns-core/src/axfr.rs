@@ -45,6 +45,9 @@ pub enum AxfrError {
 
     #[error("AXFR response contained a reserved RR type")]
     ReservedType,
+
+    #[error("AXFR response did not contain an apex NS RRset")]
+    MissingApexNs,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -253,6 +256,7 @@ pub fn parse_axfr_response(
     if !complete {
         return Err(AxfrError::MissingTerminatingSoa);
     }
+    validate_apex_ns(zone_apex, &zone_records)?;
 
     Ok(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -412,6 +416,7 @@ fn apply_ixfr_incremental(
     if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
         return Err(IxfrError::BrokenSoaChain);
     }
+    validate_apex_ns(zone_apex, &records).map_err(IxfrError::Axfr)?;
 
     Ok(IxfrResponse::Updated(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -591,6 +596,17 @@ fn validate_soa_answer_scope(
     Ok(())
 }
 
+fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Result<(), AxfrError> {
+    if records
+        .iter()
+        .any(|record| record.owner == *zone_apex && record.rr_type == RecordType::Ns as u16)
+    {
+        Ok(())
+    } else {
+        Err(AxfrError::MissingApexNs)
+    }
+}
+
 fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
     let mut rrsets = Vec::<RrsetAccumulator>::new();
 
@@ -714,6 +730,16 @@ mod tests {
         }
     }
 
+    fn apex_ns() -> ResourceRecord {
+        record(
+            "example.test.",
+            RecordType::Ns as u16,
+            DomainName::from_absolute_str("ns.example.test.")
+                .unwrap()
+                .to_wire(),
+        )
+    }
+
     fn current_zone(records: Vec<ResourceRecord>) -> ZoneSnapshot {
         ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -786,6 +812,7 @@ mod tests {
     fn parses_valid_axfr_response_into_active_zone() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
         let a = record(
             "www.example.test.",
             RecordType::A as u16,
@@ -795,7 +822,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), a, soa])],
+            &[message(0x1234, vec![soa.clone(), ns, a, soa])],
         )
         .expect("valid AXFR");
 
@@ -840,6 +867,7 @@ mod tests {
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let current_zone = current_zone(vec![current_soa]);
         let new_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
         let a = record(
             "www.example.test.",
             RecordType::A as u16,
@@ -850,7 +878,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![new_soa.clone(), a, new_soa])],
+            &[message(0x1234, vec![new_soa.clone(), ns, a, new_soa])],
         )
         .expect("mode 2 fallback");
 
@@ -983,7 +1011,7 @@ mod tests {
             RecordType::A as u16,
             vec![192, 0, 2, 2],
         );
-        let current_zone = current_zone(vec![current_soa.clone(), old_a.clone()]);
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), old_a.clone()]);
         let response = parse_ixfr_response(
             0x1234,
             &apex,
@@ -1026,6 +1054,41 @@ mod tests {
                 .answers,
             vec![new_a]
         );
+    }
+
+    #[test]
+    fn rejects_ixfr_mode1_final_zone_without_apex_ns() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), old_a.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, old_a, new_soa, new_a],
+            )],
+        )
+        .expect_err("IXFR final zone missing apex NS");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::MissingApexNs));
     }
 
     #[test]
@@ -1263,6 +1326,49 @@ mod tests {
             parse_axfr_response(0x1234, &apex, 1, &[message(0x9999, vec![soa.clone(), soa])])
                 .expect_err("mismatched qid");
         assert_eq!(error, AxfrError::MismatchedQid);
+    }
+
+    #[test]
+    fn rejects_axfr_without_apex_ns() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), a, soa])],
+        )
+        .expect_err("missing apex NS");
+
+        assert_eq!(error, AxfrError::MissingApexNs);
+    }
+
+    #[test]
+    fn rejects_ixfr_mode2_fallback_without_apex_ns() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let new_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(0x1234, vec![new_soa.clone(), a, new_soa])],
+        )
+        .expect_err("mode 2 fallback missing apex NS");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::MissingApexNs));
     }
 
     #[test]
