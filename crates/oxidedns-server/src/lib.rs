@@ -170,8 +170,11 @@ impl Runtime {
             transfer_plan.clone(),
             refresh_registry.clone(),
             ixfr_cooldowns.clone(),
-            Duration::from_secs(self.config.limits.axfr_timeout_secs),
-            Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+            RefreshWorkerSettings {
+                axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
+                ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                max_concurrent_transfers: self.config.limits.max_concurrent_transfers,
+            },
         ));
         listeners.spawn(serve_scheduled_refreshes(
             self.zones.clone(),
@@ -1600,52 +1603,90 @@ async fn serve_refresh_requests(
     transfer_plan: TransferPlan,
     refresh_registry: ZoneRefreshRegistry,
     ixfr_cooldowns: IxfrCooldownRegistry,
-    axfr_timeout: Duration,
-    ixfr_timeout: Duration,
+    settings: RefreshWorkerSettings,
 ) -> Result<(), RuntimeError> {
-    while let Some(request) = refresh_rx.recv().await {
-        let Some(plan) = transfer_plan.get(&request.zone) else {
-            let zone = &request.zone;
-            warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
-            refresh_registry.cancel_in_progress(zone);
-            continue;
-        };
+    let transfer_limit = Arc::new(Semaphore::new(settings.max_concurrent_transfers));
+    let mut transfers = JoinSet::new();
 
-        if notify_serial_is_current(&zones, &request) {
-            let zone = &request.zone;
-            if let Some(snapshot) = zones.find_exact_zone(zone) {
-                refresh_registry.record_success(&snapshot);
-            } else {
-                refresh_registry.cancel_in_progress(zone);
+    loop {
+        tokio::select! {
+            result = transfers.join_next(), if !transfers.is_empty() => {
+                if let Some(Err(error)) = result {
+                    warn!(%error, "refresh transfer task failed");
+                }
             }
-            info!(
-                zone = %zone,
-                requested_serial = ?request.requested_serial,
-                action = "refresh_skipped_current",
-                "NOTIFY serial is not newer than active zone"
-            );
-            continue;
-        }
+            request = refresh_rx.recv() => {
+                let Some(request) = request else {
+                    break;
+                };
 
-        match refresh_zone_from_primaries(
-            &zones,
-            &plan,
-            request.requested_serial,
-            &ixfr_cooldowns,
-            ixfr_timeout,
-            axfr_timeout,
-            request.reason.as_str(),
-        )
-        .await
-        {
-            Some(snapshot) => refresh_registry.record_success(&snapshot),
-            None => {
-                refresh_registry.record_failure(&request.zone, zones.find_exact_zone(&request.zone))
+                let Some(plan) = transfer_plan.get(&request.zone) else {
+                    let zone = &request.zone;
+                    warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
+                    refresh_registry.cancel_in_progress(zone);
+                    continue;
+                };
+
+                if notify_serial_is_current(&zones, &request) {
+                    let zone = &request.zone;
+                    if let Some(snapshot) = zones.find_exact_zone(zone) {
+                        refresh_registry.record_success(&snapshot);
+                    } else {
+                        refresh_registry.cancel_in_progress(zone);
+                    }
+                    info!(
+                        zone = %zone,
+                        requested_serial = ?request.requested_serial,
+                        action = "refresh_skipped_current",
+                        "NOTIFY serial is not newer than active zone"
+                    );
+                    continue;
+                }
+
+                let transfer_permit = transfer_limit
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("transfer semaphore is not closed");
+                let zones = zones.clone();
+                let refresh_registry = refresh_registry.clone();
+                let ixfr_cooldowns = ixfr_cooldowns.clone();
+                transfers.spawn(async move {
+                    let _transfer_permit = transfer_permit;
+                    match refresh_zone_from_primaries(
+                        &zones,
+                        &plan,
+                        request.requested_serial,
+                        &ixfr_cooldowns,
+                        settings.ixfr_timeout,
+                        settings.axfr_timeout,
+                        request.reason.as_str(),
+                    )
+                    .await
+                    {
+                        Some(snapshot) => refresh_registry.record_success(&snapshot),
+                        None => refresh_registry
+                            .record_failure(&request.zone, zones.find_exact_zone(&request.zone)),
+                    }
+                });
             }
         }
     }
 
+    while let Some(result) = transfers.join_next().await {
+        if let Err(error) = result {
+            warn!(%error, "refresh transfer task failed");
+        }
+    }
+
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct RefreshWorkerSettings {
+    axfr_timeout: Duration,
+    ixfr_timeout: Duration,
+    max_concurrent_transfers: usize,
 }
 
 async fn serve_scheduled_refreshes(
@@ -2100,12 +2141,13 @@ mod tests {
 
     use super::{
         IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
-        RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
-        drain_tcp_connections, handle_tcp_connection, jitter_interval, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
-        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
+        RefreshRequest, RefreshWorkerSettings, Runtime, TcpServerSettings, TransferPlan,
+        ZoneRefreshRegistry, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
+        query_id_from_random_bytes, refresh_zone_from_primaries, serial_after, serve_health,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, sign_notify_response,
+        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
+        write_tcp_message,
     };
 
     #[test]
@@ -2783,8 +2825,11 @@ mod tests {
                 std::time::Duration::ZERO,
             ),
             IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(5),
+            RefreshWorkerSettings {
+                axfr_timeout: std::time::Duration::from_secs(5),
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                max_concurrent_transfers: 4,
+            },
         )
         .await
         .unwrap();
@@ -2794,6 +2839,86 @@ mod tests {
             .expect("published refreshed snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(2));
+    }
+
+    #[tokio::test]
+    async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let alpha_primary = spawn_barrier_ixfr_mode2_primary("alpha.test.", barrier.clone()).await;
+        let beta_primary = spawn_barrier_ixfr_mode2_primary("beta.test.", barrier.clone()).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_concurrent_transfers = 2
+
+                [[zones]]
+                name = "alpha.test."
+                primaries = ["{alpha_primary}"]
+
+                [[zones]]
+                name = "beta.test."
+                primaries = ["{beta_primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let zones = ZoneStore::new();
+        for zone in ["alpha.test.", "beta.test."] {
+            let apex = DomainName::from_absolute_str(zone).unwrap();
+            zones.insert_snapshot(ZoneSnapshot::active(
+                apex.clone(),
+                Some(1),
+                vec![Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata_with_serial(1)],
+                )],
+            ));
+        }
+        let (tx, rx) = mpsc::channel(2);
+        for zone in ["alpha.test.", "beta.test."] {
+            tx.send(RefreshRequest {
+                zone: DomainName::from_absolute_str(zone).unwrap(),
+                requested_serial: Some(2),
+                reason: super::RefreshReason::Notify,
+            })
+            .await
+            .unwrap();
+        }
+        drop(tx);
+
+        let worker = tokio::spawn(serve_refresh_requests(
+            rx,
+            zones.clone(),
+            transfer_plan,
+            ZoneRefreshRegistry::without_jitter(
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            ),
+            IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+            RefreshWorkerSettings {
+                axfr_timeout: std::time::Duration::from_secs(5),
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                max_concurrent_transfers: 2,
+            },
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait())
+            .await
+            .expect("both refresh transfers should start before either completes");
+        worker.await.unwrap().unwrap();
+
+        assert_eq!(
+            zones.get("alpha.test.").expect("alpha zone").serial,
+            Some(2)
+        );
+        assert_eq!(zones.get("beta.test.").expect("beta zone").serial, Some(2));
     }
 
     #[tokio::test]
@@ -3545,6 +3670,35 @@ mod tests {
             assert_eq!(&query[26..28], &(RecordType::Ixfr as u16).to_be_bytes());
 
             let response = axfr_response(header.id, serial);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        addr
+    }
+
+    async fn spawn_barrier_ixfr_mode2_primary(
+        zone: &'static str,
+        barrier: Arc<tokio::sync::Barrier>,
+    ) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let query = read_primary_query(&mut stream).await;
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            let (_, qname_len) = DomainName::parse(&query, 12).unwrap();
+            let qtype_offset = 12 + qname_len;
+            assert_eq!(
+                u16::from_be_bytes([query[qtype_offset], query[qtype_offset + 1]]),
+                RecordType::Ixfr as u16
+            );
+
+            barrier.wait().await;
+
+            let response = axfr_response_for_zone(header.id, zone, 2);
             stream
                 .write_all(&frame_tcp_message(&response))
                 .await
