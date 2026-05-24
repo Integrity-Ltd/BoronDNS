@@ -589,6 +589,14 @@ impl ZoneStore {
             .cloned()
     }
 
+    pub fn find_exact_zone(&self, origin: &DomainName) -> Option<Arc<ZoneSnapshot>> {
+        self.zones
+            .read()
+            .expect("zone store lock poisoned")
+            .get(&origin.canonical_key())
+            .cloned()
+    }
+
     pub fn find_zone(&self, qname: &DomainName) -> Option<Arc<ZoneSnapshot>> {
         self.zones
             .read()

@@ -129,6 +129,14 @@ Slice 4 is in progress:
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds.
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
 
+Slice 6 has initial NOTIFY intake foundations:
+
+- NOTIFY response messages are discarded when QR=1 like other inbound responses;
+- NOTIFY requests require QDCOUNT=1 and QTYPE=SOA, otherwise they receive FORMERR;
+- NOTIFY requests for unconfigured zones or non-IN classes receive REFUSED;
+- accepted NOTIFY requests receive a NOTIFY response with AA set and the question copied verbatim;
+- runtime NOTIFY source authorization is derived from each zone's primaries plus `notify_sources`; unauthorized NOTIFY requests are silently discarded and logged at warning level.
+
 EDNS/query-size work is partially started:
 
 - inbound OPT pseudo-RRs are parsed from the additional section;
@@ -143,7 +151,7 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - recurring zone refresh, retry, and expire timers;
-- NOTIFY intake and refresh triggering;
+- NOTIFY embedded-SOA validation, deduplication, and refresh triggering;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

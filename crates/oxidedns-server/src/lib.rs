@@ -1,5 +1,6 @@
 use std::{
-    net::SocketAddr,
+    collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -19,7 +20,7 @@ use oxidedns_core::{
     axfr::{self, AxfrError},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Transport, answer_message,
+        DomainName, Transport, answer_message_with_notify_authority,
     },
     zone::{ZoneSnapshot, ZoneStore},
 };
@@ -103,6 +104,7 @@ impl Runtime {
         );
 
         let mut listeners = JoinSet::new();
+        let notify_authority = NotifyAuthority::from_config(&self.config);
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
                 .await
@@ -115,6 +117,7 @@ impl Runtime {
             let max_cname_chain = self.config.limits.max_cname_chain;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let any_response = self.config.query.any_response_mode();
+            let notify_authority = notify_authority.clone();
             listeners.spawn(async move {
                 serve_udp(
                     socket,
@@ -123,6 +126,7 @@ impl Runtime {
                     max_cname_chain,
                     edns_padding_block_size,
                     any_response,
+                    notify_authority,
                 )
                 .await
             });
@@ -155,6 +159,7 @@ impl Runtime {
                 max_connections: max_tcp_connections,
                 edns_padding_block_size,
                 any_response,
+                notify_authority: notify_authority.clone(),
                 active_connections: tcp_connections,
             };
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
@@ -314,6 +319,7 @@ async fn serve_udp(
     max_cname_chain: usize,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    notify_authority: NotifyAuthority,
 ) -> Result<(), RuntimeError> {
     let local_addr = socket.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, "UDP listener bound");
@@ -324,7 +330,8 @@ async fn serve_udp(
             .recv_from(&mut buffer)
             .await
             .map_err(RuntimeError::Udp)?;
-        match answer_message(
+        let peer_ip = peer.ip();
+        match answer_message_with_notify_authority(
             &buffer[..len],
             &zones,
             AnswerOptions {
@@ -334,6 +341,13 @@ async fn serve_udp(
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size,
                 any_response,
+            },
+            |qname, qclass| {
+                let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
+                if !authorized {
+                    warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
+                }
+                authorized
             },
         ) {
             DatagramAction::Discard => {
@@ -387,6 +401,8 @@ async fn serve_tcp(
                 settings.write_timeout,
                 settings.edns_padding_block_size,
                 settings.any_response,
+                settings.notify_authority,
+                peer.ip(),
             )
             .await
             {
@@ -406,11 +422,46 @@ struct TcpServerSettings {
     max_connections: usize,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    notify_authority: NotifyAuthority,
     active_connections: Arc<AtomicUsize>,
 }
 
 struct TcpConnectionPermit {
     active: Arc<AtomicUsize>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NotifyAuthority {
+    sources_by_zone: Arc<HashMap<String, HashSet<IpAddr>>>,
+}
+
+impl NotifyAuthority {
+    fn from_config(config: &ServerConfig) -> Self {
+        let mut sources_by_zone = HashMap::new();
+        for zone in &config.zones {
+            let origin = DomainName::from_absolute_str(&zone.name)
+                .expect("configuration validation rejects invalid zone names");
+            let mut sources = zone
+                .primaries
+                .iter()
+                .map(|primary| primary.ip())
+                .collect::<HashSet<_>>();
+            sources.extend(zone.notify_sources.iter().copied());
+            sources_by_zone.insert(origin.canonical_key(), sources);
+        }
+
+        Self {
+            sources_by_zone: Arc::new(sources_by_zone),
+        }
+    }
+
+    fn is_authorized(&self, qname: &DomainName, qclass: u16, source: IpAddr) -> bool {
+        qclass == 1
+            && self
+                .sources_by_zone
+                .get(&qname.canonical_key())
+                .is_some_and(|sources| sources.contains(&source))
+    }
 }
 
 impl Drop for TcpConnectionPermit {
@@ -442,9 +493,11 @@ async fn handle_tcp_connection(
     write_timeout: Duration,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    notify_authority: NotifyAuthority,
+    peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
-        match answer_message(
+        match answer_message_with_notify_authority(
             &packet,
             &zones,
             AnswerOptions {
@@ -454,6 +507,13 @@ async fn handle_tcp_connection(
                 tcp_keepalive_timeout_secs: idle_timeout.as_secs(),
                 edns_padding_block_size,
                 any_response,
+            },
+            |qname, qclass| {
+                let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
+                if !authorized {
+                    warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
+                }
+                authorized
             },
         ) {
             DatagramAction::Discard => {
@@ -541,7 +601,8 @@ mod tests {
     };
 
     use super::{
-        Runtime, TcpServerSettings, handle_tcp_connection, serve_tcp, transfer_axfr_from_primary,
+        NotifyAuthority, Runtime, TcpServerSettings, handle_tcp_connection, serve_tcp,
+        transfer_axfr_from_primary,
     };
 
     #[test]
@@ -560,6 +621,29 @@ mod tests {
 
         let runtime = Runtime::new(config);
         assert_eq!(runtime.zone_count(), 1);
+    }
+
+    #[test]
+    fn notify_authority_allows_primaries_and_notify_sources() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                notify_sources = ["198.51.100.53"]
+            "#,
+        )
+        .expect("valid config");
+        let authority = NotifyAuthority::from_config(&config);
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        assert!(authority.is_authorized(&zone, 1, "192.0.2.53".parse().unwrap()));
+        assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
+        assert!(!authority.is_authorized(&zone, 1, "203.0.113.53".parse().unwrap()));
+        assert!(!authority.is_authorized(&zone, 255, "192.0.2.53".parse().unwrap()));
     }
 
     #[tokio::test]
@@ -653,6 +737,8 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                NotifyAuthority::default(),
+                "127.0.0.1".parse().unwrap(),
             )
             .await
             .unwrap();
@@ -725,6 +811,8 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                NotifyAuthority::default(),
+                "127.0.0.1".parse().unwrap(),
             )
             .await
             .unwrap();
@@ -772,6 +860,8 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                NotifyAuthority::default(),
+                "127.0.0.1".parse().unwrap(),
             )
             .await
             .unwrap();
@@ -805,6 +895,8 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                NotifyAuthority::default(),
+                "127.0.0.1".parse().unwrap(),
             )
             .await
             .unwrap();
@@ -839,6 +931,8 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                NotifyAuthority::default(),
+                "127.0.0.1".parse().unwrap(),
             )
             .await
             .unwrap();
@@ -874,6 +968,7 @@ mod tests {
                 max_connections: 1,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                notify_authority: NotifyAuthority::default(),
                 active_connections: active.clone(),
             },
         ));

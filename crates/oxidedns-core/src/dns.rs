@@ -412,6 +412,15 @@ pub fn answer_message(
     zone_store: &ZoneStore,
     options: AnswerOptions,
 ) -> DatagramAction {
+    answer_message_with_notify_authority(packet, zone_store, options, |_, _| true)
+}
+
+pub fn answer_message_with_notify_authority(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+) -> DatagramAction {
     let header = match Header::parse(packet) {
         Ok(header) => header,
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
@@ -422,25 +431,39 @@ pub fn answer_message(
         return DatagramAction::Discard;
     }
 
-    let unsupported_opcode = header.opcode().is_none();
-    if unsupported_opcode {
-        let question = parse_echoable_question(&header, packet);
-        return DatagramAction::Respond(build_response(
-            &header,
-            Rcode::NotImp,
-            false,
-            question.as_ref(),
-            &[],
-            &[],
-            &[],
-            RequestMetadata::empty(),
-            options,
-        ));
+    match header.opcode() {
+        Some(Opcode::Query) => {}
+        Some(Opcode::Notify) => {
+            return answer_notify_message(&header, packet, zone_store, options, &notify_authorized);
+        }
+        None => {
+            let question = parse_echoable_question(&header, packet);
+            return DatagramAction::Respond(build_response(
+                &header,
+                Rcode::NotImp,
+                false,
+                question.as_ref(),
+                &[],
+                &[],
+                &[],
+                RequestMetadata::empty(),
+                options,
+            ));
+        }
     }
 
+    answer_query_message(&header, packet, zone_store, options)
+}
+
+fn answer_query_message(
+    header: &Header,
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+) -> DatagramAction {
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
-            &header,
+            header,
             Rcode::FormErr,
             false,
             None,
@@ -457,7 +480,7 @@ pub fn answer_message(
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
         Err(DnsParseError::FormErr) => {
             return DatagramAction::Respond(build_response(
-                &header,
+                header,
                 Rcode::FormErr,
                 false,
                 None,
@@ -470,11 +493,11 @@ pub fn answer_message(
         }
     };
 
-    let metadata = match RequestMetadata::parse(&header, packet, &question) {
+    let metadata = match RequestMetadata::parse(header, packet, &question) {
         Ok(metadata) => metadata,
         Err(EdnsError::FormErr) => {
             return DatagramAction::Respond(build_response(
-                &header,
+                header,
                 Rcode::FormErr,
                 false,
                 Some(&question),
@@ -487,7 +510,7 @@ pub fn answer_message(
         }
         Err(EdnsError::BadVers(metadata)) => {
             return DatagramAction::Respond(build_response(
-                &header,
+                header,
                 Rcode::NoError,
                 false,
                 Some(&question),
@@ -502,7 +525,7 @@ pub fn answer_message(
 
     if let Some(response_code) = rejected_qtype(question.qtype) {
         return DatagramAction::Respond(build_response(
-            &header,
+            header,
             response_code,
             false,
             Some(&question),
@@ -516,7 +539,7 @@ pub fn answer_message(
 
     if question.qclass != DNS_CLASS_IN && question.qclass != DNS_CLASS_ANY {
         return DatagramAction::Respond(build_response(
-            &header,
+            header,
             Rcode::Refused,
             false,
             Some(&question),
@@ -530,7 +553,7 @@ pub fn answer_message(
 
     let Some(zone) = zone_store.find_zone(&question.qname) else {
         return DatagramAction::Respond(build_response(
-            &header,
+            header,
             Rcode::Refused,
             false,
             Some(&question),
@@ -544,7 +567,7 @@ pub fn answer_message(
 
     if zone.state != ZoneState::Active {
         return DatagramAction::Respond(build_response(
-            &header,
+            header,
             Rcode::ServFail,
             false,
             Some(&question),
@@ -564,13 +587,127 @@ pub fn answer_message(
         options.any_response,
     );
     DatagramAction::Respond(build_response(
-        &header,
+        header,
         lookup.rcode,
         lookup.authoritative,
         Some(&question),
         &lookup.answers,
         &lookup.authorities,
         &lookup.additionals,
+        metadata,
+        options,
+    ))
+}
+
+fn answer_notify_message(
+    header: &Header,
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: &impl Fn(&DomainName, u16) -> bool,
+) -> DatagramAction {
+    if header.qdcount != 1 {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            None,
+            &[],
+            &[],
+            &[],
+            RequestMetadata::empty(),
+            options,
+        ));
+    }
+
+    let question = match Question::parse(packet) {
+        Ok(question) => question,
+        Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
+        Err(DnsParseError::FormErr) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                None,
+                &[],
+                &[],
+                &[],
+                RequestMetadata::empty(),
+                options,
+            ));
+        }
+    };
+
+    let metadata = match RequestMetadata::parse(header, packet, &question) {
+        Ok(metadata) => metadata,
+        Err(EdnsError::FormErr) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                Some(&question),
+                &[],
+                &[],
+                &[],
+                RequestMetadata::empty(),
+                options,
+            ));
+        }
+        Err(EdnsError::BadVers(metadata)) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::NoError,
+                false,
+                Some(&question),
+                &[],
+                &[],
+                &[],
+                metadata.with_extended_rcode(16),
+                options,
+            ));
+        }
+    };
+
+    if question.qtype != RecordType::Soa as u16 {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::FormErr,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
+
+    if question.qclass != DNS_CLASS_IN || zone_store.find_exact_zone(&question.qname).is_none() {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::Refused,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    }
+
+    if !notify_authorized(&question.qname, question.qclass) {
+        return DatagramAction::Discard;
+    }
+
+    DatagramAction::Respond(build_response(
+        header,
+        Rcode::NoError,
+        true,
+        Some(&question),
+        &[],
+        &[],
+        &[],
         metadata,
         options,
     ))
@@ -1087,6 +1224,12 @@ mod tests {
         packet
     }
 
+    fn notify(qname: &[u8], qtype: u16, qclass: u16) -> Vec<u8> {
+        let mut packet = query(qname, qtype, qclass);
+        packet[2..4].copy_from_slice(&((Opcode::Notify as u16) << 11).to_be_bytes());
+        packet
+    }
+
     fn append_opt(packet: &mut Vec<u8>, payload_size: u16, ttl: u32, rdata: &[u8]) {
         packet[11] = packet[11].checked_add(1).unwrap();
         packet.push(0);
@@ -1307,6 +1450,59 @@ mod tests {
         let response = store_response(&packet, &ZoneStore::new());
         assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
         assert_eq!(u16::from_be_bytes([response[4], response[5]]), 0);
+    }
+
+    #[test]
+    fn notify_soa_for_configured_zone_gets_notify_response() {
+        let packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(flags & 0x7800, (Opcode::Notify as u16) << 11);
+        assert_eq!(flags & 0x0400, 0x0400);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(&response[12..], &packet[12..]);
+    }
+
+    #[test]
+    fn notify_non_soa_question_gets_formerr() {
+        let packet = notify(&example_name(), RecordType::A as u16, 1);
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::FormErr as u8);
+        assert_eq!(&response[12..], &packet[12..]);
+    }
+
+    #[test]
+    fn notify_unknown_zone_gets_refused() {
+        let packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(&response[12..], &packet[12..]);
+    }
+
+    #[test]
+    fn notify_unauthorized_source_is_discarded() {
+        let packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let action = answer_message_with_notify_authority(
+            &packet,
+            &store,
+            AnswerOptions::default(),
+            |_, _| false,
+        );
+
+        assert_eq!(action, DatagramAction::Discard);
     }
 
     #[test]
