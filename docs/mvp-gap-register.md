@@ -33,6 +33,7 @@ compliance.
 | --- | --- | --- |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks; `scripts/fuzz-campaign.sh` and optional release-snapshot fuzz campaign capture | 24-hour campaigns per parser target with retained logs/artifacts |
 | Safe Rust Audit | Workspace `unsafe_code = "forbid"` lint; `scripts/audit-safe-rust.sh` first-party unsafe construct scan | Release-review transitive dependency unsafe enumeration, for example with `cargo geiger` or equivalent |
+| Maintainability Evidence | `scripts/audit-maintainability.sh` records first-party Rust source line count, module map, and the current ODS-NFR-MAINT-001 over-target status | Architecture/release-note justification or refactor plan for the line-count target, plus reproducible-build and in-code requirement-reference evidence |
 | Dependency Audit | `cargo deny` in `scripts/check.sh`; `scripts/release-evidence-snapshot.sh` captures a release-review cargo-deny log | Release snapshot review and retained advisory/license/source artifacts |
 | Performance | `scripts/perf-smoke.sh` provides a repeatable startup-to-ready, AXFR ingestion, metrics, and UDP direct-hit latency smoke harness | Release benchmark artifacts for throughput, latency, memory, transfer performance, and capacity against SRS NFR targets |
 | Soak | No accepted soak artifact yet | 30-day production-representative soak without anomaly |
@@ -44,6 +45,7 @@ compliance.
 ```sh
 ./scripts/check.sh
 scripts/audit-safe-rust.sh
+scripts/audit-maintainability.sh
 cargo check --manifest-path fuzz/Cargo.toml
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check dns_datagram
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check transfer_stream

@@ -44,9 +44,10 @@ cat >"$snapshot_dir/README.md" <<EOF
 - Commit: $(git -C "$repo_root" rev-parse HEAD)
 - Branch: $(git -C "$repo_root" branch --show-current)
 
-This directory contains command logs captured for release review. It is an
-evidence collection artifact, not a substitute for the SRS traceability matrix,
-24-hour fuzzing campaigns, soak testing, or production benchmark reports.
+This directory contains command logs captured for release review, including
+safe-Rust and maintainability audit output. It is an evidence collection
+artifact, not a substitute for the SRS traceability matrix, 24-hour fuzzing
+campaigns, soak testing, or production benchmark reports.
 EOF
 
 git -C "$repo_root" status --short >"$snapshot_dir/git-status.txt"
@@ -73,6 +74,8 @@ record_version python3 python3 --version
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
+run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"
+run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit-maintainability.sh"
 
 if [[ "${OXIDEDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
   fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
