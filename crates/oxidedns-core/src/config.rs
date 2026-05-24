@@ -95,6 +95,11 @@ impl ServerConfig {
                 "limits.max_tcp_connections must be at least 1".to_owned(),
             ));
         }
+        if self.limits.graceful_shutdown_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.graceful_shutdown_secs must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.edns_padding_block_size == 1 {
             return Err(ConfigError::Invalid(
                 "limits.edns_padding_block_size must be 0 to disable padding or at least 2"
@@ -220,6 +225,8 @@ pub struct Limits {
     pub tcp_write_timeout_secs: u64,
     #[serde(default = "default_max_tcp_connections")]
     pub max_tcp_connections: usize,
+    #[serde(default = "default_graceful_shutdown_secs")]
+    pub graceful_shutdown_secs: u64,
     #[serde(default = "default_edns_padding_block_size")]
     pub edns_padding_block_size: u16,
     #[serde(default = "default_axfr_timeout_secs")]
@@ -249,6 +256,7 @@ impl Default for Limits {
             tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
             tcp_write_timeout_secs: default_tcp_write_timeout_secs(),
             max_tcp_connections: default_max_tcp_connections(),
+            graceful_shutdown_secs: default_graceful_shutdown_secs(),
             edns_padding_block_size: default_edns_padding_block_size(),
             axfr_timeout_secs: default_axfr_timeout_secs(),
             ixfr_timeout_secs: default_ixfr_timeout_secs(),
@@ -360,6 +368,10 @@ fn default_max_tcp_connections() -> usize {
     1024
 }
 
+fn default_graceful_shutdown_secs() -> u64 {
+    30
+}
+
 fn default_edns_padding_block_size() -> u16 {
     0
 }
@@ -424,6 +436,7 @@ mod tests {
         assert_eq!(config.limits.tcp_read_timeout_secs, 30);
         assert_eq!(config.limits.tcp_write_timeout_secs, 30);
         assert_eq!(config.limits.max_tcp_connections, 1024);
+        assert_eq!(config.limits.graceful_shutdown_secs, 30);
         assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
         assert_eq!(config.limits.ixfr_disabled_cooldown_secs, 3600);
@@ -657,6 +670,46 @@ mod tests {
         .expect_err("zero TCP connection limit must fail");
 
         assert!(error.to_string().contains("max_tcp_connections"));
+    }
+
+    #[test]
+    fn parses_custom_graceful_shutdown_limit() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                graceful_shutdown_secs = 10
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.graceful_shutdown_secs, 10);
+    }
+
+    #[test]
+    fn rejects_zero_graceful_shutdown_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                graceful_shutdown_secs = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero graceful shutdown limit must fail");
+
+        assert!(error.to_string().contains("graceful_shutdown_secs"));
     }
 
     #[test]

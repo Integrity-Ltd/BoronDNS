@@ -153,6 +153,8 @@ impl Runtime {
         );
 
         let mut listeners = JoinSet::new();
+        let tcp_connections = Arc::new(AtomicUsize::new(0));
+        let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let notify_authority = NotifyAuthority::from_config(&self.config);
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
@@ -204,7 +206,6 @@ impl Runtime {
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
-        let tcp_connections = Arc::new(AtomicUsize::new(0));
         for addr in &self.config.server.listen_tcp {
             let listener =
                 TcpListener::bind(addr)
@@ -241,16 +242,34 @@ impl Runtime {
         }
 
         tokio::select! {
-            signal = tokio::signal::ctrl_c() => {
-                signal.map_err(RuntimeError::ShutdownSignal)?;
-                info!("shutdown signal received");
+            signal = wait_for_shutdown_signal() => {
+                let signal = signal.map_err(RuntimeError::ShutdownSignal)?;
+                info!(
+                    signal,
+                    grace_secs = shutdown_grace.as_secs(),
+                    active_tcp_connections = tcp_connections.load(Ordering::Acquire),
+                    "shutdown signal received; draining runtime"
+                );
+                listeners.abort_all();
+                if drain_tcp_connections(
+                    tcp_connections.clone(),
+                    shutdown_grace,
+                    Duration::from_millis(50),
+                ).await {
+                    info!("TCP connection drain completed");
+                } else {
+                    warn!(
+                        active_tcp_connections = tcp_connections.load(Ordering::Acquire),
+                        "shutdown grace period elapsed with active TCP connections"
+                    );
+                }
             }
             result = listeners.join_next(), if !listeners.is_empty() => {
                 match result {
                     Some(Ok(Ok(()))) | None => {}
                     Some(Ok(Err(error))) => return Err(error),
                     Some(Err(error)) => {
-                        warn!(%error, "UDP listener task failed");
+                        warn!(%error, "listener task failed");
                     }
                 }
             }
@@ -290,6 +309,42 @@ impl Runtime {
                 warn!(zone = %zone_apex, "zone remains in LOADING state");
             }
         }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<&'static str, std::io::Error> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            Ok("SIGINT")
+        }
+        _ = terminate.recv() => Ok("SIGTERM"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> Result<&'static str, std::io::Error> {
+    tokio::signal::ctrl_c().await?;
+    Ok("SIGINT")
+}
+
+async fn drain_tcp_connections(
+    active_connections: Arc<AtomicUsize>,
+    grace: Duration,
+    poll_interval: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + grace;
+    loop {
+        if active_connections.load(Ordering::Acquire) == 0 {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        tokio::time::sleep(poll_interval.min(remaining)).await;
     }
 }
 
@@ -2018,7 +2073,7 @@ mod tests {
     use super::{
         IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
         RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
-        handle_tcp_connection, jitter_interval, poll_soa_from_primary,
+        drain_tcp_connections, handle_tcp_connection, jitter_interval, poll_soa_from_primary,
         poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
         refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
@@ -2207,6 +2262,53 @@ mod tests {
 
         assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
         assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
+    }
+
+    #[tokio::test]
+    async fn drain_tcp_connections_returns_when_idle() {
+        let active = Arc::new(AtomicUsize::new(0));
+
+        assert!(
+            drain_tcp_connections(
+                active,
+                std::time::Duration::from_millis(25),
+                std::time::Duration::from_millis(1),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_tcp_connections_waits_for_active_connections_until_grace() {
+        let active = Arc::new(AtomicUsize::new(1));
+        let active_for_task = active.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            active_for_task.store(0, Ordering::Release);
+        });
+
+        assert!(
+            drain_tcp_connections(
+                active,
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_millis(1),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_tcp_connections_stops_after_grace_period() {
+        let active = Arc::new(AtomicUsize::new(1));
+
+        assert!(
+            !drain_tcp_connections(
+                active,
+                std::time::Duration::from_millis(5),
+                std::time::Duration::from_millis(1),
+            )
+            .await
+        );
     }
 
     fn notify_refresh_tx() -> mpsc::Sender<RefreshRequest> {

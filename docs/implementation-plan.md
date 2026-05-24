@@ -143,6 +143,7 @@ Slice 4 is in progress:
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds;
 - write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream.
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
+- SIGINT and SIGTERM initiate shutdown, abort listener tasks to stop accepting new DNS/health traffic, and wait up to `[limits].graceful_shutdown_secs`, defaulting to 30 seconds, for active TCP query connections to drain.
 
 Slice 6 has initial NOTIFY intake foundations:
 
@@ -189,7 +190,7 @@ Slice 8 has health endpoint foundations:
 
 Open near-term work:
 
-- TCP pipelining and graceful shutdown;
+- completing graceful shutdown for in-flight refresh and transfer sessions;
 - richer metrics counters and per-zone status exposition;
 - broader IXFR fault/interop coverage;
 - TSIG interop coverage;
