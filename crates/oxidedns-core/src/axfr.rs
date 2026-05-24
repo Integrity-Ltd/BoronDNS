@@ -559,7 +559,8 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
         return Err(DnsParseError::FormErr);
     }
 
-    let rdata = message[offset..offset + rdlength].to_vec();
+    let rdata_offset = offset;
+    let rdata = normalize_transfer_rdata(message, rr_type, rdata_offset, rdlength)?;
     offset += rdlength;
 
     Ok((
@@ -572,6 +573,96 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
         },
         offset - start,
     ))
+}
+
+fn normalize_transfer_rdata(
+    message: &[u8],
+    rr_type: u16,
+    rdata_offset: usize,
+    rdlength: usize,
+) -> Result<Vec<u8>, DnsParseError> {
+    let rdata_end = rdata_offset
+        .checked_add(rdlength)
+        .ok_or(DnsParseError::FormErr)?;
+    let raw_rdata = message
+        .get(rdata_offset..rdata_end)
+        .ok_or(DnsParseError::FormErr)?;
+
+    match rr_type {
+        rr_type
+            if rr_type == RecordType::Ns as u16
+                || rr_type == RecordType::Cname as u16
+                || rr_type == RecordType::Ptr as u16 =>
+        {
+            let (name, consumed) = parse_rdata_name(message, rdata_offset, rdata_end)?;
+            if rdata_offset + consumed == rdata_end {
+                Ok(name.to_wire())
+            } else {
+                Err(DnsParseError::FormErr)
+            }
+        }
+        rr_type if rr_type == RecordType::Soa as u16 => {
+            normalize_soa_rdata(message, rdata_offset, rdata_end)
+        }
+        rr_type if rr_type == RecordType::Mx as u16 => {
+            normalize_mx_rdata(message, rdata_offset, rdata_end)
+        }
+        _ => Ok(raw_rdata.to_vec()),
+    }
+}
+
+fn normalize_soa_rdata(
+    message: &[u8],
+    rdata_offset: usize,
+    rdata_end: usize,
+) -> Result<Vec<u8>, DnsParseError> {
+    let (mname, consumed_mname) = parse_rdata_name(message, rdata_offset, rdata_end)?;
+    let rname_offset = rdata_offset + consumed_mname;
+    let (rname, consumed_rname) = parse_rdata_name(message, rname_offset, rdata_end)?;
+    let timers_offset = rname_offset + consumed_rname;
+    if timers_offset + 20 != rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+
+    let mut normalized = mname.to_wire();
+    normalized.extend(rname.to_wire());
+    normalized.extend_from_slice(&message[timers_offset..rdata_end]);
+    Ok(normalized)
+}
+
+fn normalize_mx_rdata(
+    message: &[u8],
+    rdata_offset: usize,
+    rdata_end: usize,
+) -> Result<Vec<u8>, DnsParseError> {
+    let exchange_offset = rdata_offset.checked_add(2).ok_or(DnsParseError::FormErr)?;
+    if exchange_offset > rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+
+    let (exchange, consumed) = parse_rdata_name(message, exchange_offset, rdata_end)?;
+    if exchange_offset + consumed != rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+
+    let mut normalized = message[rdata_offset..exchange_offset].to_vec();
+    normalized.extend(exchange.to_wire());
+    Ok(normalized)
+}
+
+fn parse_rdata_name(
+    message: &[u8],
+    offset: usize,
+    rdata_end: usize,
+) -> Result<(DomainName, usize), DnsParseError> {
+    if offset >= rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+    let (name, consumed) = DomainName::parse(message, offset)?;
+    if offset + consumed > rdata_end {
+        return Err(DnsParseError::FormErr);
+    }
+    Ok((name, consumed))
 }
 
 fn validate_record_scope(
@@ -945,6 +1036,36 @@ mod tests {
         DomainName::from_absolute_str(name).unwrap().to_wire()
     }
 
+    fn compressed_apex_name_rdata() -> Vec<u8> {
+        vec![0xc0, 0x0c]
+    }
+
+    fn compressed_apex_suffix_name_rdata(label: &str) -> Vec<u8> {
+        let mut rdata = Vec::new();
+        rdata.push(label.len() as u8);
+        rdata.extend_from_slice(label.as_bytes());
+        rdata.extend(compressed_apex_name_rdata());
+        rdata
+    }
+
+    fn compressed_soa_rdata() -> Vec<u8> {
+        let base = soa_rdata();
+        let (_, consumed_mname) = DomainName::parse(&base, 0).unwrap();
+        let (_, consumed_rname) = DomainName::parse(&base, consumed_mname).unwrap();
+        let timers_offset = consumed_mname + consumed_rname;
+
+        let mut rdata = compressed_apex_name_rdata();
+        rdata.extend(compressed_apex_name_rdata());
+        rdata.extend_from_slice(&base[timers_offset..]);
+        rdata
+    }
+
+    fn mx_rdata(preference: u16, exchange: Vec<u8>) -> Vec<u8> {
+        let mut rdata = preference.to_be_bytes().to_vec();
+        rdata.extend(exchange);
+        rdata
+    }
+
     fn srv_rdata(target: Vec<u8>) -> Vec<u8> {
         let mut rdata = vec![0, 10, 0, 20, 1, 187];
         rdata.extend(target);
@@ -974,6 +1095,16 @@ mod tests {
         rdata.extend(target);
         rdata.extend(params);
         rdata
+    }
+
+    fn first_rdata(snapshot: &ZoneSnapshot, owner: &str, rr_type: u16) -> Vec<u8> {
+        let owner = DomainName::from_absolute_str(owner).unwrap();
+        snapshot
+            .records()
+            .into_iter()
+            .find(|record| record.owner == owner && record.rr_type == rr_type)
+            .expect("record present")
+            .rdata
     }
 
     fn current_zone(records: Vec<ResourceRecord>) -> ZoneSnapshot {
@@ -1084,6 +1215,76 @@ mod tests {
                 .answers
                 .len()
                 == 1
+        );
+    }
+
+    #[test]
+    fn parses_axfr_and_normalizes_compressed_permitted_rdata_names() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let compressed_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            compressed_soa_rdata(),
+        );
+        let compressed_ns = record(
+            "example.test.",
+            RecordType::Ns as u16,
+            compressed_apex_suffix_name_rdata("ns"),
+        );
+        let compressed_mx = record(
+            "example.test.",
+            RecordType::Mx as u16,
+            mx_rdata(10, compressed_apex_suffix_name_rdata("mx")),
+        );
+        let compressed_cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            compressed_apex_suffix_name_rdata("target"),
+        );
+        let opaque_unknown = record("opaque.example.test.", 65000, vec![0xc0, 0x0c]);
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![
+                    compressed_soa.clone(),
+                    compressed_ns,
+                    compressed_mx,
+                    compressed_cname,
+                    opaque_unknown,
+                    compressed_soa,
+                ],
+            )],
+        )
+        .expect("AXFR with permitted compressed RDATA names");
+
+        let mut expected_soa = name_rdata("example.test.");
+        expected_soa.extend(name_rdata("example.test."));
+        let base_soa = soa_rdata();
+        let (_, consumed_mname) = DomainName::parse(&base_soa, 0).unwrap();
+        let (_, consumed_rname) = DomainName::parse(&base_soa, consumed_mname).unwrap();
+        expected_soa.extend_from_slice(&base_soa[consumed_mname + consumed_rname..]);
+        assert_eq!(
+            first_rdata(&snapshot, "example.test.", RecordType::Soa as u16),
+            expected_soa
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "example.test.", RecordType::Ns as u16),
+            name_rdata("ns.example.test.")
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "example.test.", RecordType::Mx as u16),
+            mx_rdata(10, name_rdata("mx.example.test."))
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "alias.example.test.", RecordType::Cname as u16),
+            name_rdata("target.example.test.")
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "opaque.example.test.", 65000),
+            vec![0xc0, 0x0c]
         );
     }
 

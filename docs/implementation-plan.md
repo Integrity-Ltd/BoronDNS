@@ -114,7 +114,7 @@ Slice 5 is in progress:
 
 - AXFR query construction is implemented only for TCP framing;
 - runtime AXFR query IDs are drawn from the operating system CSPRNG and sample the full 16-bit QID space;
-- AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, rejects answer records after the terminating SOA, and validates class, bailiwick, reserved RR types, fixed-length A/AAAA RDATA, uncompressed post-RFC3597 embedded names for SRV/NAPTR/DNAME/RRSIG/NSEC/SVCB/HTTPS, SVCB parameter framing and ordering, presence of an apex NS RRset, CNAME coexistence restrictions with DNSSEC exceptions, and DNAME/CNAME non-coexistence;
+- AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, rejects answer records after the terminating SOA, normalizes permitted compressed RDATA names for SOA/NS/CNAME/PTR/MX while preserving unknown-type RDATA opaquely, and validates class, bailiwick, reserved RR types, fixed-length A/AAAA RDATA, uncompressed post-RFC3597 embedded names for SRV/NAPTR/DNAME/RRSIG/NSEC/SVCB/HTTPS, SVCB parameter framing and ordering, presence of an apex NS RRset, CNAME coexistence restrictions with DNSSEC exceptions, and DNAME/CNAME non-coexistence;
 - successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
 - initial LOADING-zone transfers run in the background after runtime services are bound, so health can report `starting` while first transfers are still in progress;
