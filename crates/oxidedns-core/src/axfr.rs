@@ -708,6 +708,7 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
     match record.rr_type {
         rr_type if rr_type == RecordType::A as u16 => validate_fixed_rdata(record, 4),
         rr_type if rr_type == RecordType::Aaaa as u16 => validate_fixed_rdata(record, 16),
+        rr_type if rr_type == RecordType::Ds as u16 => validate_min_rdata(&record.rdata, 4),
         rr_type if rr_type == RecordType::Hinfo as u16 => {
             validate_character_strings(&record.rdata, Some(2))
         }
@@ -724,11 +725,17 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
         rr_type if rr_type == RecordType::Rrsig as u16 => {
             validate_uncompressed_domain_name_with_trailing(&record.rdata, 18).map(|_| ())
         }
+        rr_type if rr_type == RecordType::Dnskey as u16 => validate_dnskey_rdata(&record.rdata),
         rr_type if rr_type == RecordType::Nsec as u16 => validate_nsec_rdata(&record.rdata),
         rr_type if rr_type == RecordType::Nsec3 as u16 => validate_nsec3_rdata(&record.rdata),
+        rr_type if rr_type == RecordType::Nsec3Param as u16 => {
+            validate_nsec3param_rdata(&record.rdata)
+        }
+        rr_type if rr_type == RecordType::Tlsa as u16 => validate_min_rdata(&record.rdata, 3),
         rr_type if rr_type == RecordType::Svcb as u16 || rr_type == RecordType::Https as u16 => {
             validate_svcb_like_rdata(&record.rdata)
         }
+        rr_type if rr_type == RecordType::Uri as u16 => validate_uri_rdata(&record.rdata),
         _ => Ok(()),
     }
 }
@@ -741,15 +748,30 @@ fn validate_fixed_rdata(record: &ResourceRecord, expected_len: usize) -> Result<
     }
 }
 
+fn validate_min_rdata(rdata: &[u8], min_len: usize) -> Result<(), AxfrError> {
+    if rdata.len() >= min_len {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
+}
+
 fn validate_character_strings(
     rdata: &[u8],
     expected_count: Option<usize>,
 ) -> Result<(), AxfrError> {
-    if rdata.is_empty() {
+    validate_character_strings_from(rdata, 0, expected_count)
+}
+
+fn validate_character_strings_from(
+    rdata: &[u8],
+    mut offset: usize,
+    expected_count: Option<usize>,
+) -> Result<(), AxfrError> {
+    if offset >= rdata.len() {
         return Err(AxfrError::InvalidRdata);
     }
 
-    let mut offset = 0usize;
     let mut count = 0usize;
     while offset < rdata.len() {
         offset = skip_character_string(rdata, offset)?;
@@ -831,6 +853,15 @@ fn validate_naptr_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     validate_uncompressed_domain_name_at_end(rdata, offset)
 }
 
+fn validate_dnskey_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    validate_min_rdata(rdata, 4)?;
+    if rdata[2] == 3 {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
+}
+
 fn validate_nsec_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     let next_name_len = validate_uncompressed_domain_name_with_trailing(rdata, 0)?;
     validate_type_bit_maps(&rdata[next_name_len..])
@@ -856,6 +887,19 @@ fn validate_nsec3_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     }
 
     validate_type_bit_maps(&rdata[bit_maps_offset..])
+}
+
+fn validate_nsec3param_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    if rdata.len() < 5 {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let salt_len = rdata[4] as usize;
+    if 5 + salt_len == rdata.len() {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
 }
 
 fn validate_type_bit_maps(bit_maps: &[u8]) -> Result<(), AxfrError> {
@@ -889,6 +933,13 @@ fn validate_type_bit_maps(bit_maps: &[u8]) -> Result<(), AxfrError> {
     }
 
     Ok(())
+}
+
+fn validate_uri_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    if rdata.len() < 5 {
+        return Err(AxfrError::InvalidRdata);
+    }
+    validate_character_strings_from(rdata, 4, None)
 }
 
 fn validate_svcb_like_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
@@ -2401,6 +2452,67 @@ mod tests {
             let apex = DomainName::from_absolute_str("example.test.").unwrap();
             let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
             let invalid = record("hash.example.test.", RecordType::Nsec3 as u16, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
+    }
+
+    #[test]
+    fn rejects_axfr_simple_known_types_with_invalid_rdata() {
+        let cases = [
+            (
+                RecordType::Ds as u16,
+                vec![0, 1, 8],
+                "DS missing digest type",
+            ),
+            (
+                RecordType::Dnskey as u16,
+                vec![1, 0, 3],
+                "DNSKEY missing algorithm",
+            ),
+            (
+                RecordType::Dnskey as u16,
+                vec![1, 0, 2, 8],
+                "DNSKEY protocol is not 3",
+            ),
+            (
+                RecordType::Nsec3Param as u16,
+                vec![1, 0, 0, 0],
+                "NSEC3PARAM missing salt length",
+            ),
+            (
+                RecordType::Nsec3Param as u16,
+                vec![1, 0, 0, 0, 2, 0],
+                "NSEC3PARAM truncated salt",
+            ),
+            (
+                RecordType::Tlsa as u16,
+                vec![3, 1],
+                "TLSA missing matching type",
+            ),
+            (
+                RecordType::Uri as u16,
+                vec![0, 10, 0, 20],
+                "URI missing target",
+            ),
+            (
+                RecordType::Uri as u16,
+                vec![0, 10, 0, 20, 3, b'h', b't'],
+                "URI truncated target string",
+            ),
+        ];
+
+        for (rr_type, rdata, context) in cases {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let invalid = record("www.example.test.", rr_type, rdata);
             let error = parse_axfr_response(
                 0x1234,
                 &apex,

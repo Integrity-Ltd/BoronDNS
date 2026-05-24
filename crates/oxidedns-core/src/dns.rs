@@ -54,6 +54,7 @@ pub enum RecordType {
     Tlsa = 52,
     Svcb = 64,
     Https = 65,
+    Uri = 256,
     Tkey = 249,
     Tsig = 250,
     Ixfr = 251,
