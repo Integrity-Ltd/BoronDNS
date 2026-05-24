@@ -1,0 +1,25 @@
+server:
+    rundir: "/tmp"
+    listen: 0.0.0.0@5353
+    user: root:root
+
+log:
+  - target: stderr
+    any: info
+
+database:
+    storage: "/tmp/knot-db"
+
+template:
+  - id: default
+    storage: "/work"
+    file: "%s.zone"
+
+acl:
+  - id: transfer_acl
+    address: 0.0.0.0/0
+    action: transfer
+
+zone:
+  - domain: alpha.test.
+    acl: transfer_acl
