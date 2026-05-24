@@ -48,6 +48,12 @@ pub enum AxfrError {
 
     #[error("AXFR response did not contain an apex NS RRset")]
     MissingApexNs,
+
+    #[error("AXFR response contained a CNAME owner with non-DNSSEC data")]
+    CnameCoexistsWithOtherData,
+
+    #[error("AXFR response contained a DNAME owner with CNAME data")]
+    DnameCoexistsWithCname,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -256,7 +262,7 @@ pub fn parse_axfr_response(
     if !complete {
         return Err(AxfrError::MissingTerminatingSoa);
     }
-    validate_apex_ns(zone_apex, &zone_records)?;
+    validate_zone_record_set(zone_apex, &zone_records)?;
 
     Ok(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -416,7 +422,7 @@ fn apply_ixfr_incremental(
     if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
         return Err(IxfrError::BrokenSoaChain);
     }
-    validate_apex_ns(zone_apex, &records).map_err(IxfrError::Axfr)?;
+    validate_zone_record_set(zone_apex, &records).map_err(IxfrError::Axfr)?;
 
     Ok(IxfrResponse::Updated(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -596,6 +602,15 @@ fn validate_soa_answer_scope(
     Ok(())
 }
 
+fn validate_zone_record_set(
+    zone_apex: &DomainName,
+    records: &[ResourceRecord],
+) -> Result<(), AxfrError> {
+    validate_apex_ns(zone_apex, records)?;
+    validate_cname_and_dname_coexistence(records)?;
+    Ok(())
+}
+
 fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Result<(), AxfrError> {
     if records
         .iter()
@@ -605,6 +620,38 @@ fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Resul
     } else {
         Err(AxfrError::MissingApexNs)
     }
+}
+
+fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<(), AxfrError> {
+    for record in records {
+        if record.rr_type == RecordType::Dname as u16
+            && records.iter().any(|other| {
+                other.owner == record.owner && other.rr_type == RecordType::Cname as u16
+            })
+        {
+            return Err(AxfrError::DnameCoexistsWithCname);
+        }
+    }
+
+    for record in records {
+        if record.rr_type == RecordType::Cname as u16
+            && records.iter().any(|other| {
+                other.owner == record.owner
+                    && other.rr_type != RecordType::Cname as u16
+                    && !is_dnssec_cname_exception_type(other.rr_type)
+            })
+        {
+            return Err(AxfrError::CnameCoexistsWithOtherData);
+        }
+    }
+
+    Ok(())
+}
+
+fn is_dnssec_cname_exception_type(rr_type: u16) -> bool {
+    rr_type == RecordType::Rrsig as u16
+        || rr_type == RecordType::Nsec as u16
+        || rr_type == RecordType::Nsec3 as u16
 }
 
 fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
@@ -734,10 +781,12 @@ mod tests {
         record(
             "example.test.",
             RecordType::Ns as u16,
-            DomainName::from_absolute_str("ns.example.test.")
-                .unwrap()
-                .to_wire(),
+            name_rdata("ns.example.test."),
         )
+    }
+
+    fn name_rdata(name: &str) -> Vec<u8> {
+        DomainName::from_absolute_str(name).unwrap().to_wire()
     }
 
     fn current_zone(records: Vec<ResourceRecord>) -> ZoneSnapshot {
@@ -1092,6 +1141,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_mode1_final_zone_with_cname_and_other_data() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let a = record(
+            "alias.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, new_soa, cname, a],
+            )],
+        )
+        .expect_err("IXFR final zone with CNAME and other data");
+
+        assert_eq!(
+            error,
+            IxfrError::Axfr(AxfrError::CnameCoexistsWithOtherData)
+        );
+    }
+
+    #[test]
     fn rejects_ixfr_starting_old_soa_mismatch() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -1369,6 +1456,85 @@ mod tests {
         .expect_err("mode 2 fallback missing apex NS");
 
         assert_eq!(error, IxfrError::Axfr(AxfrError::MissingApexNs));
+    }
+
+    #[test]
+    fn rejects_axfr_cname_with_non_dnssec_data() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let a = record(
+            "alias.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), cname, a, soa])],
+        )
+        .expect_err("CNAME with non-DNSSEC data");
+
+        assert_eq!(error, AxfrError::CnameCoexistsWithOtherData);
+    }
+
+    #[test]
+    fn accepts_axfr_cname_with_dnssec_records() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let cname = record(
+            "alias.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let rrsig = record("alias.example.test.", RecordType::Rrsig as u16, vec![0]);
+        let nsec = record("alias.example.test.", RecordType::Nsec as u16, vec![0]);
+        let nsec3 = record("alias.example.test.", RecordType::Nsec3 as u16, vec![0]);
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), cname, rrsig, nsec, nsec3, soa],
+            )],
+        )
+        .expect("CNAME with DNSSEC exception data");
+
+        assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
+    fn rejects_axfr_dname_with_cname_data() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let dname = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("target.example.test."),
+        );
+        let cname = record(
+            "redirect.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dname, cname, soa],
+            )],
+        )
+        .expect_err("DNAME with CNAME data");
+
+        assert_eq!(error, AxfrError::DnameCoexistsWithCname);
     }
 
     #[test]
