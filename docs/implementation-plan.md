@@ -260,6 +260,7 @@ Interop harness foundations:
 Non-functional evidence foundations:
 
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
+- `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optionally interop script output under `target/evidence/<timestamp>/`.
 
 Fuzzing foundations:
 
@@ -273,4 +274,4 @@ Open near-term work:
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - broaden real-primary XoT interop evidence;
 - split DNSSEC evidence into release traceability and broader conformance matrix entries;
-- add remaining parser fuzz targets and start collecting long-run performance and fuzz evidence for MVP verification.
+- start collecting long-run performance, fuzz, interop, and soak evidence for MVP verification.

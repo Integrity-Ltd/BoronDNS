@@ -222,7 +222,14 @@ General validation:
 
 ```sh
 ./scripts/check.sh
+./scripts/release-evidence-snapshot.sh
 ```
+
+`scripts/release-evidence-snapshot.sh` writes command logs under
+`target/evidence/<timestamp>/`. By default it captures the repo check, fuzz
+compile check, cargo-deny output, tool versions, git state, and the current
+verification command list. Set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the interop
+commands listed in the MVP gap register as part of the snapshot.
 
 Primary AXFR coverage:
 

@@ -20,11 +20,11 @@ queue for remaining release blockers.
 | Area | Current Evidence | Remaining MVP Gap |
 | --- | --- | --- |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks | 24-hour campaigns per parser target with retained logs/artifacts |
-| Dependency Audit | `cargo deny` in `scripts/check.sh` | Release snapshot of advisory/license/source results |
+| Dependency Audit | `cargo deny` in `scripts/check.sh`; `scripts/release-evidence-snapshot.sh` captures a release-review cargo-deny log | Release snapshot review and retained advisory/license/source artifacts |
 | Performance | `scripts/perf-smoke.sh` provides a repeatable startup-to-ready, AXFR ingestion, metrics, and UDP direct-hit latency smoke harness | Release benchmark artifacts for throughput, latency, memory, transfer performance, and capacity against SRS NFR targets |
 | Soak | No accepted soak artifact yet | 30-day production-representative soak without anomaly |
 | Portability | Linux CI-style local checks | Linux distribution/container evidence and documented platform boundaries |
-| Operator Docs | README, implementation plan, verification ledger, and example config | Operator Deployment Guide and full Appendix A traceability matrix |
+| Operator Docs | README, implementation plan, verification ledger, example config, Operator Deployment Guide, and release evidence snapshot helper | Full Appendix A traceability matrix |
 
 ## Current Verification Commands
 
@@ -52,4 +52,5 @@ scripts/interop-rrl-udp.sh
 scripts/interop-dnssec-serve.sh
 scripts/interop-dnssec-nsec3-serve.sh
 scripts/perf-smoke.sh
+scripts/release-evidence-snapshot.sh
 ```

@@ -32,6 +32,7 @@ cargo run -p oxidedns-cli -- check-config --config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 ./scripts/check.sh
 ./scripts/perf-smoke.sh
+./scripts/release-evidence-snapshot.sh
 ```
 
 When `--config` is omitted, `oxidedns` uses `/etc/oxidedns-secondary/config.toml`; `OXIDEDNS_CONFIG` can override that path for both commands.
