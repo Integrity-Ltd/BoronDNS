@@ -3618,6 +3618,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_does_not_open_health_listener_when_unconfigured() {
+        let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
+        let udp_addr = unused_udp_addr().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["{udp_addr}"]
+
+                [limits]
+                axfr_timeout_secs = 5
+                graceful_shutdown_secs = 1
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        assert_eq!(config.server.health, None);
+        let runtime = Runtime::new(config);
+        let server = tokio::spawn(runtime.run());
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
+            .await
+            .expect("initial transfer should start")
+            .expect("primary should observe initial transfer query");
+
+        let connection = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            TcpStream::connect(udp_addr),
+        )
+        .await
+        .expect("TCP connect attempt should finish promptly");
+        assert!(
+            connection.is_err(),
+            "health endpoint must not listen when server.health is unset"
+        );
+
+        let _ = release_primary.send(());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn runtime_reports_draining_until_initial_transfer_releases() {
         let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
         let udp_addr = unused_udp_addr().await;
