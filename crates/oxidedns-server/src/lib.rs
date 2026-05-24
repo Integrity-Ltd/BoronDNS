@@ -35,12 +35,15 @@ use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
-    config::{RrlConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
+    config::{
+        CookieConfig, CookiePolicyConfig, RrlConfig, TransferPrimaryConfig,
+        TransferTransportConfig, ZoneConfig,
+    },
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DnsCookieContext, DomainName, Header, LookupResult, LookupTermination, Opcode, Question,
-        Rcode, RecordType, Transport, answer_message_with_notify_hooks_and_query_observer,
-        request_has_valid_dns_server_cookie,
+        DnsCookieContext, DnsCookiePolicy, DomainName, Header, LookupResult, LookupTermination,
+        Opcode, Question, Rcode, RecordType, Transport,
+        answer_message_with_notify_hooks_and_query_observer, request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -227,6 +230,7 @@ impl Runtime {
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
         let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
+        let dns_cookie = dns_cookie_settings(&self.config.cookie);
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
             self.config.zones.clone(),
@@ -307,6 +311,7 @@ impl Runtime {
                 any_response,
                 nsid,
                 dns_cookie_secret,
+                dns_cookie,
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
@@ -345,6 +350,7 @@ impl Runtime {
                 any_response,
                 nsid,
                 dns_cookie_secret,
+                dns_cookie,
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
@@ -1240,6 +1246,38 @@ fn current_unix_time_secs() -> u32 {
         .unwrap_or_default()
 }
 
+#[derive(Clone, Copy)]
+struct DnsCookieRuntimeSettings {
+    policy: Option<DnsCookiePolicy>,
+    past_window_secs: u32,
+    future_window_secs: u32,
+}
+
+fn dns_cookie_settings(config: &CookieConfig) -> DnsCookieRuntimeSettings {
+    let policy = match config.policy {
+        CookiePolicyConfig::Disabled => None,
+        CookiePolicyConfig::Lenient => Some(DnsCookiePolicy::Lenient),
+        CookiePolicyConfig::Strict => Some(DnsCookiePolicy::Strict),
+    };
+    DnsCookieRuntimeSettings {
+        policy,
+        past_window_secs: config.timestamp_past_tolerance_seconds,
+        future_window_secs: config.timestamp_future_tolerance_seconds,
+    }
+}
+
+fn dns_cookie_context<'a>(
+    peer_ip: IpAddr,
+    secret: &'a [u8; 16],
+    settings: DnsCookieRuntimeSettings,
+) -> Option<DnsCookieContext<'a>> {
+    let mut context = DnsCookieContext::new(peer_ip, secret, current_unix_time_secs());
+    context.policy = settings.policy?;
+    context.past_window_secs = settings.past_window_secs;
+    context.future_window_secs = settings.future_window_secs;
+    Some(context)
+}
+
 #[derive(Clone, Debug)]
 struct RrlLimiter {
     inner: Arc<Mutex<RrlState>>,
@@ -1659,11 +1697,8 @@ async fn serve_udp(
                 .map_err(RuntimeError::Udp)?;
             continue;
         }
-        let dns_cookie = DnsCookieContext::new(
-            peer_ip,
-            &settings.dns_cookie_secret,
-            current_unix_time_secs(),
-        );
+        let dns_cookie =
+            dns_cookie_context(peer_ip, &settings.dns_cookie_secret, settings.dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -1676,7 +1711,7 @@ async fn serve_udp(
                 edns_padding_block_size: settings.edns_padding_block_size,
                 any_response: settings.any_response,
                 nsid: &settings.nsid,
-                dns_cookie: Some(dns_cookie),
+                dns_cookie,
             },
             |qname, qclass| {
                 let authorized = settings
@@ -1713,12 +1748,13 @@ async fn serve_udp(
                         continue;
                     }
                 };
-                let rrl_decision =
-                    if request_has_valid_dns_server_cookie(&prepared.packet, dns_cookie) {
-                        RrlDecision::Send(response)
-                    } else {
-                        settings.rrl.apply(peer_ip, response)
-                    };
+                let rrl_decision = if dns_cookie.is_some_and(|context| {
+                    request_has_valid_dns_server_cookie(&prepared.packet, context)
+                }) {
+                    RrlDecision::Send(response)
+                } else {
+                    settings.rrl.apply(peer_ip, response)
+                };
                 match rrl_decision {
                     RrlDecision::Send(response) => {
                         record_query_response_metric(query_metrics, &response, &settings.metrics);
@@ -1859,6 +1895,7 @@ struct UdpServerSettings {
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
+    dns_cookie: DnsCookieRuntimeSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -1906,6 +1943,7 @@ async fn serve_tcp(
                 settings.any_response,
                 settings.nsid,
                 settings.dns_cookie_secret,
+                settings.dns_cookie,
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
@@ -2611,6 +2649,7 @@ struct TcpServerSettings {
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
+    dns_cookie: DnsCookieRuntimeSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3927,6 +3966,7 @@ async fn handle_tcp_connection(
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
+    dns_cookie: DnsCookieRuntimeSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3946,8 +3986,7 @@ async fn handle_tcp_connection(
             }
             continue;
         }
-        let dns_cookie =
-            DnsCookieContext::new(peer_ip, &dns_cookie_secret, current_unix_time_secs());
+        let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -3960,7 +3999,7 @@ async fn handle_tcp_connection(
                 edns_padding_block_size,
                 any_response,
                 nsid: &nsid,
-                dns_cookie: Some(dns_cookie),
+                dns_cookie,
             },
             |qname, qclass| {
                 let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
@@ -4094,7 +4133,10 @@ mod tests {
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
         config::{RrlConfig, TransferTransportConfig},
-        dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, Rcode, RecordType},
+        dns::{
+            AnyResponseMode, DnsCookiePolicy, DomainName, Header, LookupTermination, Opcode, Rcode,
+            RecordType,
+        },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
             TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigKey,
@@ -4103,19 +4145,20 @@ mod tests {
     };
 
     use super::{
-        HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
-        NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation, RefreshAttemptContext,
-        RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime,
-        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
-        UdpServerSettings, ZoneRefreshRegistry, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        response_category, response_opt_record, response_question_end, rrl_truncated_response,
-        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, validate_runtime_config, write_tcp_message,
+        DnsCookieRuntimeSettings, HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority,
+        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation,
+        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
+        RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings,
+        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, drain_task_set,
+        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
+        load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
+        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
+        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
+        transfer_query_id, validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -5546,6 +5589,7 @@ mod tests {
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
+                dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5614,6 +5658,7 @@ mod tests {
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
+                dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5671,6 +5716,30 @@ mod tests {
         let cookie = response_cookie_option(&response).expect("COOKIE response option");
         assert_eq!(&cookie[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(cookie.len(), 24);
+    }
+
+    #[tokio::test]
+    async fn udp_strict_dns_cookie_policy_returns_badcookie_for_client_cookie_only() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let mut settings = udp_settings_for_test(metrics, RrlConfig::default());
+        settings.dns_cookie = dns_cookie_settings_for_test(DnsCookiePolicy::Strict);
+        let server = tokio::spawn(serve_udp(socket, zones, settings));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let request = cookie_query(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        client.send_to(&request, server_addr).await.unwrap();
+        let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("BADCOOKIE response");
+        server.abort();
+
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(response_rcode(&response, &header), Rcode::BadCookie as u16);
+        assert_eq!(header.ancount, 0);
+        assert!(response_cookie_option(&response).is_some());
     }
 
     #[tokio::test]
@@ -7192,6 +7261,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 [7; 16],
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7271,6 +7341,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 [7; 16],
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7325,6 +7396,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 [7; 16],
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7365,6 +7437,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 [7; 16],
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7419,6 +7492,7 @@ mod tests {
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 [7; 16],
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7461,6 +7535,7 @@ mod tests {
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
+                dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -8617,11 +8692,20 @@ mod tests {
             any_response: AnyResponseMode::Minimal,
             nsid: Vec::new(),
             dns_cookie_secret: [7; 16],
+            dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
             notify_authority: NotifyAuthority::default(),
             notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
             notify_refresh_tx: notify_refresh_tx(),
             metrics: metrics.clone(),
             rrl: RrlLimiter::from_config(&rrl_config, metrics),
+        }
+    }
+
+    fn dns_cookie_settings_for_test(policy: DnsCookiePolicy) -> DnsCookieRuntimeSettings {
+        DnsCookieRuntimeSettings {
+            policy: Some(policy),
+            past_window_secs: 3600,
+            future_window_secs: 300,
         }
     }
 

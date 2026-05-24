@@ -81,11 +81,12 @@ pub enum Rcode {
     NotImp = 4,
     Refused = 5,
     NotAuth = 9,
+    BadCookie = 23,
 }
 
 impl Rcode {
     fn bits(self) -> u16 {
-        self as u16
+        (self as u16) & 0x000f
     }
 }
 
@@ -401,6 +402,7 @@ pub struct DnsCookieContext<'a> {
     pub now_unix_secs: u32,
     pub past_window_secs: u32,
     pub future_window_secs: u32,
+    pub policy: DnsCookiePolicy,
 }
 
 impl<'a> DnsCookieContext<'a> {
@@ -411,8 +413,15 @@ impl<'a> DnsCookieContext<'a> {
             now_unix_secs,
             past_window_secs: DNS_COOKIE_DEFAULT_PAST_WINDOW_SECS,
             future_window_secs: DNS_COOKIE_DEFAULT_FUTURE_WINDOW_SECS,
+            policy: DnsCookiePolicy::Lenient,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsCookiePolicy {
+    Lenient,
+    Strict,
 }
 
 impl AnswerOptions<'_> {
@@ -604,6 +613,20 @@ fn answer_query_message(
             ));
         }
     };
+
+    if dns_cookie_requires_badcookie(metadata, options) {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::BadCookie,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata.with_extended_rcode(Rcode::BadCookie as u16),
+            options,
+        ));
+    }
 
     if let Some(response_code) = rejected_qtype(question.qtype) {
         return DatagramAction::Respond(build_response(
@@ -1185,6 +1208,19 @@ fn dns_server_cookie_is_valid(cookie: EdnsCookie, context: DnsCookieContext) -> 
     expected
         .ct_eq(&server_cookie.bytes[8..DNS_COOKIE_SERVER_V1_LEN])
         .into()
+}
+
+fn dns_cookie_requires_badcookie(metadata: RequestMetadata, options: AnswerOptions) -> bool {
+    let Some(context) = options.dns_cookie else {
+        return false;
+    };
+    if context.policy != DnsCookiePolicy::Strict {
+        return false;
+    }
+    let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
+        return false;
+    };
+    !dns_server_cookie_is_valid(cookie, context)
 }
 
 fn compute_dns_server_cookie(
@@ -1930,6 +1966,12 @@ mod tests {
         }
 
         None
+    }
+
+    fn full_response_rcode(response: &[u8]) -> u16 {
+        let base = u16::from(response[3] & 0x0f);
+        let extended = response_opt_ttl(response).map_or(0, |ttl| ((ttl >> 24) as u16) << 4);
+        base | extended
     }
 
     fn skip_response_records(response: &[u8], offset: &mut usize, count: u16) {
@@ -5020,6 +5062,108 @@ mod tests {
                 "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
             ))
         );
+    }
+
+    #[test]
+    fn strict_dns_cookie_policy_returns_badcookie_for_client_cookie_only() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let mut context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        context.policy = DnsCookiePolicy::Strict;
+        let client_cookie = hex_to_vec("2464c4abcf10c957");
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &client_cookie),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(full_response_rcode(&response), Rcode::BadCookie as u16);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+    }
+
+    #[test]
+    fn strict_dns_cookie_policy_allows_valid_server_cookie() {
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let mut context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        context.policy = DnsCookiePolicy::Strict;
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(
+                EDNS_COOKIE_OPTION,
+                &hex_to_vec("2464c4abcf10c957010000005cf79f111f8130c3eee29480"),
+            ),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(full_response_rcode(&response), Rcode::Refused as u16);
+        assert_eq!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+    }
+
+    #[test]
+    fn disabled_dns_cookie_policy_omits_cookie_response() {
+        let client_cookie = hex_to_vec("2464c4abcf10c957");
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &client_cookie),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD),
+        );
+
+        assert_eq!(full_response_rcode(&response), Rcode::Refused as u16);
+        assert_eq!(response_opt_option(&response, EDNS_COOKIE_OPTION), None);
     }
 
     #[test]

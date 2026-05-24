@@ -109,6 +109,8 @@ reference. The major sections are:
 - `[server]`: UDP/TCP listeners, optional health endpoint, log level, and log
   format.
 - `[query]`: query response policy, including QTYPE ANY behavior.
+- `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`) and
+  timestamp tolerance windows.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
   limits.
@@ -448,9 +450,9 @@ current operator-relevant limitations are:
   `--help` requirements. Several of these are not yet implemented in the
   release CLI shape.
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
-  validation, lenient refresh, and valid-cookie RRL exemption. Strict BADCOOKIE
-  mode, operator policy configuration, rotation, logs, metrics, and interop
-  artifacts remain open before MVP acceptance.
+  validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
+  valid-cookie RRL exemption. Rotation, logs, metrics, and interop artifacts
+  remain open before MVP acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.

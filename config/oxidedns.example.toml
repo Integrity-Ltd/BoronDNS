@@ -11,6 +11,14 @@ nsid = "oxidedns-example"
 [query]
 any_response = "minimal"
 
+[cookie]
+# policy = "lenient" accepts normal first responses and returns a fresh server
+# cookie. Use "strict" to require retry with a valid server cookie, or
+# "disabled" to omit DNS Cookie processing.
+policy = "lenient"
+timestamp_past_tolerance_seconds = 3600
+timestamp_future_tolerance_seconds = 300
+
 [rrl]
 enabled = true
 ipv4_prefix_len = 24

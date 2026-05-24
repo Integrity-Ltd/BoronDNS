@@ -37,6 +37,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
+    pub cookie: CookieConfig,
+    #[serde(default)]
     pub rrl: RrlConfig,
     #[serde(default)]
     pub limits: Limits,
@@ -150,6 +152,7 @@ impl ServerConfig {
                 "limits.ixfr_disabled_cooldown_secs must be at least 1".to_owned(),
             ));
         }
+        self.cookie.validate()?;
         self.rrl.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
@@ -245,6 +248,51 @@ pub enum LogFormatConfig {
     #[default]
     Json,
     Plain,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CookieConfig {
+    #[serde(default)]
+    pub policy: CookiePolicyConfig,
+    #[serde(default = "default_cookie_timestamp_past_tolerance_seconds")]
+    pub timestamp_past_tolerance_seconds: u32,
+    #[serde(default = "default_cookie_timestamp_future_tolerance_seconds")]
+    pub timestamp_future_tolerance_seconds: u32,
+}
+
+impl Default for CookieConfig {
+    fn default() -> Self {
+        Self {
+            policy: CookiePolicyConfig::Lenient,
+            timestamp_past_tolerance_seconds: default_cookie_timestamp_past_tolerance_seconds(),
+            timestamp_future_tolerance_seconds: default_cookie_timestamp_future_tolerance_seconds(),
+        }
+    }
+}
+
+impl CookieConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.timestamp_past_tolerance_seconds >= 2_147_483_648 {
+            return Err(ConfigError::Invalid(
+                "cookie.timestamp_past_tolerance_seconds must be less than 2147483648".to_owned(),
+            ));
+        }
+        if self.timestamp_future_tolerance_seconds >= 2_147_483_648 {
+            return Err(ConfigError::Invalid(
+                "cookie.timestamp_future_tolerance_seconds must be less than 2147483648".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CookiePolicyConfig {
+    Disabled,
+    #[default]
+    Lenient,
+    Strict,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -593,6 +641,14 @@ fn default_rrl_enabled() -> bool {
     true
 }
 
+fn default_cookie_timestamp_past_tolerance_seconds() -> u32 {
+    3600
+}
+
+fn default_cookie_timestamp_future_tolerance_seconds() -> u32 {
+    300
+}
+
 fn default_rrl_ipv4_prefix_len() -> u8 {
     24
 }
@@ -773,6 +829,9 @@ mod tests {
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
+        assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
+        assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
+        assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
         assert!(config.rrl.enabled);
         assert_eq!(config.rrl.ipv4_prefix_len, 24);
         assert_eq!(config.rrl.ipv6_prefix_len, 56);
@@ -1215,6 +1274,74 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.server.nsid, "dns-bud-1");
+    }
+
+    #[test]
+    fn parses_dns_cookie_policy_configuration() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                policy = "strict"
+                timestamp_past_tolerance_seconds = 1800
+                timestamp_future_tolerance_seconds = 60
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.cookie.policy, CookiePolicyConfig::Strict);
+        assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 1800);
+        assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 60);
+    }
+
+    #[test]
+    fn parses_disabled_dns_cookie_policy() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                policy = "disabled"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.cookie.policy, CookiePolicyConfig::Disabled);
+    }
+
+    #[test]
+    fn rejects_dns_cookie_tolerance_outside_serial_arithmetic_window() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                timestamp_past_tolerance_seconds = 2147483648
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("oversized tolerance must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cookie.timestamp_past_tolerance_seconds")
+        );
     }
 
     #[test]
