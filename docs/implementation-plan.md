@@ -121,8 +121,9 @@ Slice 5 is in progress:
 Slice 6 has a preliminary AXFR-backed zone state machine:
 
 - successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to a 60-second minimum interval;
-- failed initial and refresh transfers schedule retry from the transferred SOA RETRY field where available, or the 60-second initial retry default for LOADING zones;
-- `[limits].zsm_min_interval_secs` and `[limits].zsm_initial_retry_secs` configure those two 60-second ZSM defaults;
+- failed refresh transfers schedule retry from the transferred SOA RETRY field where available;
+- failed initial transfers for LOADING zones use exponential backoff starting at `[limits].zsm_initial_retry_secs`, defaulting to 60 seconds, and capped by `[limits].zsm_initial_retry_max_secs`, defaulting to 3600 seconds;
+- `[limits].zsm_min_interval_secs` configures the 60-second minimum effective SOA REFRESH/RETRY interval;
 - the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
 - due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path.
 
@@ -162,7 +163,7 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - replacing the current AXFR-only scheduled refresh with the full ZSM refresh-check flow, including SOA poll and IXFR preference;
-- exponential initial-load backoff and ±10% scheduling jitter;
+- ±10% scheduling jitter;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

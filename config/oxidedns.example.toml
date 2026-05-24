@@ -21,6 +21,7 @@ notify_dedup_secs = 1
 max_concurrent_transfers = 4
 zsm_min_interval_secs = 60
 zsm_initial_retry_secs = 60
+zsm_initial_retry_max_secs = 3600
 
 [[zones]]
 name = "example.test."

@@ -102,6 +102,7 @@ impl Runtime {
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_secs),
+            Duration::from_secs(self.config.limits.zsm_initial_retry_max_secs),
         );
         self.load_initial_zones(&refresh_registry).await;
 
@@ -536,6 +537,7 @@ impl RefreshReason {
 struct ZoneRefreshRegistry {
     min_interval: Duration,
     initial_retry: Duration,
+    initial_retry_max: Duration,
     statuses: Arc<Mutex<HashMap<String, ZoneRefreshStatus>>>,
 }
 
@@ -545,15 +547,17 @@ struct ZoneRefreshStatus {
     soa_timers: Option<SoaTimers>,
     next_refresh: Option<Instant>,
     expire_at: Option<Instant>,
+    initial_failure_count: u32,
     in_progress: bool,
     expired: bool,
 }
 
 impl ZoneRefreshRegistry {
-    fn new(min_interval: Duration, initial_retry: Duration) -> Self {
+    fn new(min_interval: Duration, initial_retry: Duration, initial_retry_max: Duration) -> Self {
         Self {
             min_interval,
             initial_retry,
+            initial_retry_max,
             statuses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -577,6 +581,7 @@ impl ZoneRefreshRegistry {
                 soa_timers: timers,
                 next_refresh,
                 expire_at,
+                initial_failure_count: 0,
                 in_progress: false,
                 expired: false,
             },
@@ -604,6 +609,7 @@ impl ZoneRefreshRegistry {
                 soa_timers: current.as_ref().and_then(|snapshot| snapshot.soa_timers),
                 next_refresh: None,
                 expire_at: None,
+                initial_failure_count: 0,
                 in_progress: false,
                 expired: false,
             });
@@ -612,10 +618,14 @@ impl ZoneRefreshRegistry {
             status.soa_timers = snapshot.soa_timers;
             status.expired = snapshot.state == oxidedns_core::zone::ZoneState::Expired;
         }
-        let retry = status
-            .soa_timers
-            .map(|timers| self.effective_interval(timers.retry))
-            .unwrap_or(self.initial_retry);
+        let retry = if let Some(timers) = status.soa_timers {
+            status.initial_failure_count = 0;
+            self.effective_interval(timers.retry)
+        } else {
+            let retry = self.initial_retry_delay(status.initial_failure_count);
+            status.initial_failure_count = status.initial_failure_count.saturating_add(1);
+            retry
+        };
         status.next_refresh = Some(now + retry);
         status.in_progress = false;
     }
@@ -667,6 +677,13 @@ impl ZoneRefreshRegistry {
 
     fn effective_interval(&self, seconds: u32) -> Duration {
         Duration::from_secs(seconds as u64).max(self.min_interval)
+    }
+
+    fn initial_retry_delay(&self, failure_count: u32) -> Duration {
+        let multiplier = 1u32.checked_shl(failure_count.min(31)).unwrap_or(u32::MAX);
+        self.initial_retry
+            .saturating_mul(multiplier)
+            .min(self.initial_retry_max)
     }
 }
 
@@ -1184,6 +1201,7 @@ mod tests {
         let registry = ZoneRefreshRegistry::new(
             std::time::Duration::from_secs(10),
             std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
         );
         let now = std::time::Instant::now();
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
@@ -1232,9 +1250,56 @@ mod tests {
     }
 
     #[test]
+    fn refresh_registry_applies_initial_load_exponential_backoff() {
+        let registry = ZoneRefreshRegistry::new(
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(180),
+        );
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+
+        registry.record_failure_at(&origin, None, now);
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(59))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.start_due_refreshes(now + std::time::Duration::from_secs(60)),
+            vec![origin.clone()]
+        );
+
+        registry.record_failure_at(&origin, None, now + std::time::Duration::from_secs(60));
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(179))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.start_due_refreshes(now + std::time::Duration::from_secs(180)),
+            vec![origin.clone()]
+        );
+
+        registry.record_failure_at(&origin, None, now + std::time::Duration::from_secs(180));
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(359))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.start_due_refreshes(now + std::time::Duration::from_secs(360)),
+            vec![origin]
+        );
+    }
+
+    #[test]
     fn refresh_registry_expires_zone_once() {
-        let registry =
-            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let registry = ZoneRefreshRegistry::new(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
         let now = std::time::Instant::now();
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let snapshot = ZoneSnapshot::active(
@@ -1308,7 +1373,11 @@ mod tests {
             rx,
             zones.clone(),
             transfer_plan,
-            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO),
+            ZoneRefreshRegistry::new(
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            ),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -1324,8 +1393,11 @@ mod tests {
     #[tokio::test]
     async fn scheduled_refresh_worker_expires_zone_and_enqueues_refresh() {
         let zones = ZoneStore::new();
-        let registry =
-            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let registry = ZoneRefreshRegistry::new(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
         let snapshot = ZoneSnapshot::active(
             origin.clone(),
@@ -1383,8 +1455,11 @@ mod tests {
         .expect("valid config");
 
         let runtime = Runtime::new(config);
-        let refresh_registry =
-            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let refresh_registry = ZoneRefreshRegistry::new(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
         runtime.load_initial_zones(&refresh_registry).await;
 
         let snapshot = runtime
