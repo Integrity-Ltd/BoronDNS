@@ -28,7 +28,7 @@ compliance.
 | XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, untrusted-cert, expired-cert, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR and XoT+TSIG interop scripts | Broader real-primary XoT evidence beyond Knot |
 | DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve scripts for DO-sensitive RRSIG/NSEC/NSEC3/DNSKEY/NSEC3PARAM and truncation behavior; Knot signed-primary NSEC3 interop script | Release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
-| EDNS v0.7 Additions | EDNS parsing, OPT response foundations, and payload-limit tests exist | Confirm/retain non-EDNS 512-octet ceiling evidence (`ODS-FR-EDNS-015`); implement configured NSID (`ODS-FR-EDNS-016..017`) and add Alpha evidence |
+| EDNS v0.7 Additions | EDNS parsing, OPT response foundations, payload-limit tests, and configured NSID response tests for `ODS-FR-EDNS-016..017` exist | Confirm/retain non-EDNS 512-octet ceiling evidence (`ODS-FR-EDNS-015`) and add runtime/interoperability NSID evidence before Alpha signoff |
 | DNS Cookies | No accepted implementation evidence yet | Implement RFC 7873/9018 COOKIE option, lenient/strict policy, secret handling, BADCOOKIE responses, RRL exemption, logs, metrics, and retained MVP evidence |
 
 ## Non-Functional Evidence

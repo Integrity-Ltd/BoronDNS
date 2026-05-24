@@ -10,6 +10,7 @@ pub const DEFAULT_MAX_CNAME_CHAIN: usize = 8;
 pub const DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS: u64 = 30;
 const DNS_CLASS_IN: u16 = 1;
 const DNS_CLASS_ANY: u16 = 255;
+const EDNS_NSID_OPTION: u16 = 3;
 const EDNS_TCP_KEEPALIVE_OPTION: u16 = 11;
 const EDNS_PADDING_OPTION: u16 = 12;
 
@@ -374,16 +375,17 @@ pub enum Transport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AnswerOptions {
+pub struct AnswerOptions<'a> {
     pub transport: Transport,
     pub max_udp_payload: u16,
     pub max_cname_chain: usize,
     pub tcp_keepalive_timeout_secs: u64,
     pub edns_padding_block_size: u16,
     pub any_response: AnyResponseMode,
+    pub nsid: &'a [u8],
 }
 
-impl AnswerOptions {
+impl AnswerOptions<'_> {
     pub fn udp(max_udp_payload: u16) -> Self {
         Self {
             transport: Transport::Udp,
@@ -392,6 +394,7 @@ impl AnswerOptions {
             tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
             edns_padding_block_size: 0,
             any_response: AnyResponseMode::Minimal,
+            nsid: &[],
         }
     }
 
@@ -403,11 +406,12 @@ impl AnswerOptions {
             tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
             edns_padding_block_size: 0,
             any_response: AnyResponseMode::Minimal,
+            nsid: &[],
         }
     }
 }
 
-impl Default for AnswerOptions {
+impl Default for AnswerOptions<'_> {
     fn default() -> Self {
         Self::udp(DEFAULT_MAX_UDP_PAYLOAD)
     }
@@ -1058,6 +1062,12 @@ fn encode_edns_response_options(
         rdata.extend_from_slice(&timeout_units.to_be_bytes());
     }
 
+    if edns.nsid_requested && !options.nsid.is_empty() {
+        rdata.extend_from_slice(&EDNS_NSID_OPTION.to_be_bytes());
+        rdata.extend_from_slice(&(options.nsid.len() as u16).to_be_bytes());
+        rdata.extend_from_slice(options.nsid);
+    }
+
     if edns.padding_requested && options.edns_padding_block_size > 0 {
         append_edns_padding_if_it_fits(&mut rdata, options, response_len_before_opt, udp_ceiling);
     }
@@ -1142,6 +1152,7 @@ impl RequestMetadata {
                     version: ((record.ttl >> 16) & 0xff) as u8,
                     do_bit: record.ttl & 0x8000 != 0,
                     tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
+                    nsid_requested: parsed_options.nsid_requested,
                     padding_requested: parsed_options.padding_requested,
                 };
                 if metadata.version > 0 {
@@ -1192,12 +1203,14 @@ struct EdnsMetadata {
     version: u8,
     do_bit: bool,
     tcp_keepalive_requested: bool,
+    nsid_requested: bool,
     padding_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct EdnsOptions {
     tcp_keepalive_requested: bool,
+    nsid_requested: bool,
     padding_requested: bool,
 }
 
@@ -1286,10 +1299,11 @@ fn parse_edns_options(rdata: &[u8]) -> Result<EdnsOptions, EdnsError> {
         if offset + option_len > rdata.len() {
             return Err(EdnsError::FormErr);
         }
-        if option_code == EDNS_TCP_KEEPALIVE_OPTION {
-            options.tcp_keepalive_requested = true;
-        } else if option_code == EDNS_PADDING_OPTION {
-            options.padding_requested = true;
+        match option_code {
+            EDNS_NSID_OPTION => options.nsid_requested = true,
+            EDNS_TCP_KEEPALIVE_OPTION => options.tcp_keepalive_requested = true,
+            EDNS_PADDING_OPTION => options.padding_requested = true,
+            _ => {}
         }
         offset += option_len;
     }
@@ -2397,6 +2411,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Full,
+                nsid: &[],
             },
         );
 
@@ -2463,6 +2478,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Full,
+                nsid: &[],
             },
         );
 
@@ -3081,6 +3097,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                nsid: &[],
             },
         );
 
@@ -4517,6 +4534,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: 5,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                nsid: &[],
             },
         );
 
@@ -4545,6 +4563,78 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
         assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn edns_nsid_request_returns_configured_identifier() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[0, EDNS_NSID_OPTION as u8, 0, 0]);
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: b"dns-bud-1",
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(
+            response_opt_rdata(&response),
+            Some(b"\x00\x03\x00\tdns-bud-1".to_vec())
+        );
+    }
+
+    #[test]
+    fn edns_nsid_request_is_ignored_without_configured_identifier() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[0, EDNS_NSID_OPTION as u8, 0, 0]);
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD),
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn edns_nsid_nonzero_query_data_is_treated_as_request() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &[0, EDNS_NSID_OPTION as u8, 0, 3, b'b', b'a', b'd'],
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: b"dns-bud-1",
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(
+            response_opt_rdata(&response),
+            Some(b"\x00\x03\x00\tdns-bud-1".to_vec())
+        );
     }
 
     #[test]
@@ -4829,6 +4919,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 32,
                 any_response: AnyResponseMode::Minimal,
+                nsid: &[],
             },
         );
 
@@ -4859,6 +4950,7 @@ mod tests {
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 600,
                 any_response: AnyResponseMode::Minimal,
+                nsid: &[],
             },
         );
 

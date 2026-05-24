@@ -6,6 +6,7 @@ listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
 health = "127.0.0.1:8080"
 log_level = "info"
 log_format = "json"
+nsid = "oxidedns-example"
 
 [query]
 any_response = "minimal"

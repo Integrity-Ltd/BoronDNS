@@ -189,6 +189,8 @@ pub struct ServerSettings {
     #[serde(default = "default_dns_listeners")]
     pub listen_tcp: Vec<SocketAddr>,
     pub health: Option<SocketAddr>,
+    #[serde(default)]
+    pub nsid: String,
     #[serde(default = "default_log_level")]
     pub log_level: String,
     #[serde(default)]
@@ -759,6 +761,7 @@ mod tests {
         );
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
+        assert_eq!(config.server.nsid, "");
         assert!(config.rrl.enabled);
         assert_eq!(config.rrl.ipv4_prefix_len, 24);
         assert_eq!(config.rrl.ipv6_prefix_len, 56);
@@ -1183,6 +1186,24 @@ mod tests {
 
         assert_eq!(config.server.log_level, "debug");
         assert_eq!(config.server.log_format, LogFormatConfig::Plain);
+    }
+
+    #[test]
+    fn parses_configured_nsid() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                nsid = "dns-bud-1"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.server.nsid, "dns-bud-1");
     }
 
     #[test]

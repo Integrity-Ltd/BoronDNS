@@ -106,6 +106,10 @@ reference. The major sections are:
 - `[[zones]]`: served secondary zones and their primary transfer sources.
 - `[[tsig_keys]]`: static TSIG keys referenced by zones.
 
+Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
+NSID diagnostics for anycast or load-balanced deployments. The default is empty,
+which suppresses NSID responses even when clients request the option.
+
 Minimal local test shape:
 
 ```toml
@@ -115,6 +119,7 @@ listen_tcp = ["127.0.0.1:5300"]
 health = "127.0.0.1:8080"
 log_level = "info"
 log_format = "json"
+nsid = "dns-bud-1"
 
 [[zones]]
 name = "example.test."

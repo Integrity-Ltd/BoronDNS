@@ -289,6 +289,7 @@ impl Runtime {
             let max_cname_chain = self.config.limits.max_cname_chain;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let any_response = self.config.query.any_response_mode();
+            let nsid = self.config.server.nsid.as_bytes().to_vec();
             let notify_authority = notify_authority.clone();
             let notify_refresh = notify_refresh.clone();
             let notify_refresh_tx = notify_refresh_tx.clone();
@@ -299,6 +300,7 @@ impl Runtime {
                 max_cname_chain,
                 edns_padding_block_size,
                 any_response,
+                nsid,
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
@@ -324,6 +326,7 @@ impl Runtime {
             let max_tcp_connections = self.config.limits.max_tcp_connections;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let any_response = self.config.query.any_response_mode();
+            let nsid = self.config.server.nsid.as_bytes().to_vec();
             let tcp_connections = tcp_connections.clone();
             let tcp_settings = TcpServerSettings {
                 max_udp_payload,
@@ -334,6 +337,7 @@ impl Runtime {
                 max_connections: max_tcp_connections,
                 edns_padding_block_size,
                 any_response,
+                nsid,
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
@@ -1646,6 +1650,7 @@ async fn serve_udp(
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: settings.edns_padding_block_size,
                 any_response: settings.any_response,
+                nsid: &settings.nsid,
             },
             |qname, qclass| {
                 let authorized = settings
@@ -1820,6 +1825,7 @@ struct UdpServerSettings {
     max_cname_chain: usize,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    nsid: Vec<u8>,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -1865,6 +1871,7 @@ async fn serve_tcp(
                 settings.write_timeout,
                 settings.edns_padding_block_size,
                 settings.any_response,
+                settings.nsid,
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
@@ -2568,6 +2575,7 @@ struct TcpServerSettings {
     max_connections: usize,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    nsid: Vec<u8>,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3882,6 +3890,7 @@ async fn handle_tcp_connection(
     write_timeout: Duration,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
+    nsid: Vec<u8>,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -3912,6 +3921,7 @@ async fn handle_tcp_connection(
                 tcp_keepalive_timeout_secs: idle_timeout.as_secs(),
                 edns_padding_block_size,
                 any_response,
+                nsid: &nsid,
             },
             |qname, qclass| {
                 let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
@@ -5495,6 +5505,7 @@ mod tests {
                 max_cname_chain: 1,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                nsid: Vec::new(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5561,6 +5572,7 @@ mod tests {
                 max_cname_chain: 8,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                nsid: Vec::new(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -7035,6 +7047,7 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                Vec::new(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7112,6 +7125,7 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                Vec::new(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7164,6 +7178,7 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                Vec::new(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7202,6 +7217,7 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                Vec::new(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7254,6 +7270,7 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
+                Vec::new(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7294,6 +7311,7 @@ mod tests {
                 max_connections: 1,
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
+                nsid: Vec::new(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
