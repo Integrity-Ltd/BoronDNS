@@ -1,0 +1,30 @@
+server:
+    rundir: "/tmp"
+    listen: 0.0.0.0@5353
+    user: root:root
+
+log:
+  - target: stderr
+    any: info
+
+database:
+    storage: "/tmp/knot-db"
+
+template:
+  - id: default
+    storage: "/work"
+    file: "%s.zone"
+
+key:
+  - id: transfer-key.
+    algorithm: hmac-sha256
+    secret: dG9wc2VjcmV0
+
+acl:
+  - id: transfer_acl
+    key: transfer-key.
+    action: transfer
+
+zone:
+  - domain: alpha.test.
+    acl: transfer_acl
