@@ -2270,16 +2270,18 @@ fn tsig_error_response(
             &[],
         )
         .ok(),
-        TsigError::KeyMismatch | TsigError::AlgorithmMismatch => append_unsigned_tsig_error(
-            &response,
-            key,
-            now,
-            DEFAULT_TSIG_FUDGE_SECS,
-            header.id,
-            TSIG_ERROR_BADKEY,
-            &[],
-        )
-        .ok(),
+        TsigError::MissingTsig | TsigError::KeyMismatch | TsigError::AlgorithmMismatch => {
+            append_unsigned_tsig_error(
+                &response,
+                key,
+                now,
+                DEFAULT_TSIG_FUDGE_SECS,
+                header.id,
+                TSIG_ERROR_BADKEY,
+                &[],
+            )
+            .ok()
+        }
         TsigError::TimeOutsideFudge => {
             let request_mac = extract_tsig_mac(packet).ok()?;
             sign_tsig_error_response(
@@ -3119,7 +3121,7 @@ mod tests {
     }
 
     #[test]
-    fn notify_authority_requires_tsig_for_configured_zone() {
+    fn notify_authority_rejects_missing_required_tsig_with_badkey_response() {
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -3142,7 +3144,16 @@ mod tests {
 
         let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.53".parse().unwrap());
 
-        assert!(prepared.is_none());
+        let response = prepared
+            .expect("TSIG error response")
+            .immediate_response
+            .expect("immediate TSIG error response");
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+        assert!(tsig.other_data.is_empty());
     }
 
     #[tokio::test]
