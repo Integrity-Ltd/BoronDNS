@@ -34,8 +34,8 @@ use oxidedns_core::{
         Transport, answer_message_with_notify_hooks_and_query_observer,
     },
     tsig::{
-        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME,
-        TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
+        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
+        TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
         append_unsigned_tsig_error, extract_tsig_mac, sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
@@ -2270,6 +2270,16 @@ fn tsig_error_response(
             &[],
         )
         .ok(),
+        TsigError::KeyMismatch | TsigError::AlgorithmMismatch => append_unsigned_tsig_error(
+            &response,
+            key,
+            now,
+            DEFAULT_TSIG_FUDGE_SECS,
+            header.id,
+            TSIG_ERROR_BADKEY,
+            &[],
+        )
+        .ok(),
         TsigError::TimeOutsideFudge => {
             let request_mac = extract_tsig_mac(packet).ok()?;
             sign_tsig_error_response(
@@ -3047,8 +3057,8 @@ mod tests {
         axfr::{IxfrResponse, frame_tcp_message},
         dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, Rcode, RecordType},
         tsig::{
-            DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME,
-            TSIG_ERROR_BADTRUNC, TsigKey,
+            DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
+            TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigKey,
         },
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
@@ -3572,6 +3582,58 @@ mod tests {
         assert_eq!(tsig.mac_len, 0);
         assert_eq!(tsig.original_id, 0x1234);
         assert_eq!(tsig.error, TSIG_ERROR_BADALG);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn authorized_notify_with_unknown_tsig_key_gets_badkey_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+        let bad_key_notify = replace_final_tsig_owner(&signed_notify.message, "unknown-key.");
+
+        let prepared =
+            prepare_notify_packet(&bad_key_notify, &authority, "192.0.2.53".parse().unwrap())
+                .expect("TSIG error response");
+        let response = prepared
+            .immediate_response
+            .expect("immediate TSIG error response");
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn authorized_notify_with_algorithm_mismatch_gets_badkey_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+        let mismatched_algorithm_notify =
+            replace_final_tsig_algorithm(&signed_notify.message, "hmac-sha1.");
+
+        let prepared = prepare_notify_packet(
+            &mismatched_algorithm_notify,
+            &authority,
+            "192.0.2.53".parse().unwrap(),
+        )
+        .expect("TSIG error response");
+        let response = prepared
+            .immediate_response
+            .expect("immediate TSIG error response");
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
         assert!(tsig.other_data.is_empty());
     }
 
@@ -5733,6 +5795,22 @@ mod tests {
             .copy_from_slice(&(replacement_mac.len() as u16).to_be_bytes());
         let new_rdlen = old_rdlen - old_mac_len + replacement_mac.len();
         out[rdlen_offset..rdlen_offset + 2].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
+        out
+    }
+
+    fn replace_final_tsig_owner(message: &[u8], replacement_owner: &str) -> Vec<u8> {
+        let mut out = message.to_vec();
+        let mut offset = 12;
+        let (_, qname_len) = DomainName::parse(&out, offset).unwrap();
+        offset += qname_len + 4;
+        let (_, old_owner_len) = DomainName::parse(&out, offset).unwrap();
+        let replacement_wire = DomainName::from_absolute_str(replacement_owner)
+            .unwrap()
+            .to_wire();
+        out.splice(
+            offset..offset + old_owner_len,
+            replacement_wire.iter().copied(),
+        );
         out
     }
 
