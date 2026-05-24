@@ -19,6 +19,8 @@ axfr_timeout_secs = 300
 ixfr_timeout_secs = 60
 notify_dedup_secs = 1
 max_concurrent_transfers = 4
+zsm_min_interval_secs = 60
+zsm_initial_retry_secs = 60
 
 [[zones]]
 name = "example.test."

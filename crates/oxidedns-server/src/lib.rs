@@ -78,7 +78,6 @@ pub struct Runtime {
 }
 
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
-const ZSM_MIN_INTERVAL: Duration = Duration::from_secs(60);
 const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
 
 impl Runtime {
@@ -100,7 +99,10 @@ impl Runtime {
 
     pub async fn run(self) -> Result<(), RuntimeError> {
         let transfer_plan = TransferPlan::from_config(&self.config);
-        let refresh_registry = ZoneRefreshRegistry::new(ZSM_MIN_INTERVAL, ZSM_MIN_INTERVAL);
+        let refresh_registry = ZoneRefreshRegistry::new(
+            Duration::from_secs(self.config.limits.zsm_min_interval_secs),
+            Duration::from_secs(self.config.limits.zsm_initial_retry_secs),
+        );
         self.load_initial_zones(&refresh_registry).await;
 
         info!(

@@ -98,6 +98,16 @@ impl ServerConfig {
                     .to_owned(),
             ));
         }
+        if self.limits.zsm_min_interval_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.zsm_min_interval_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.zsm_initial_retry_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.zsm_initial_retry_secs must be at least 1".to_owned(),
+            ));
+        }
 
         for zone in &self.zones {
             zone.validate()?;
@@ -173,6 +183,10 @@ pub struct Limits {
     pub notify_dedup_secs: u64,
     #[serde(default = "default_max_concurrent_transfers")]
     pub max_concurrent_transfers: usize,
+    #[serde(default = "default_zsm_min_interval_secs")]
+    pub zsm_min_interval_secs: u64,
+    #[serde(default = "default_zsm_initial_retry_secs")]
+    pub zsm_initial_retry_secs: u64,
 }
 
 impl Default for Limits {
@@ -189,6 +203,8 @@ impl Default for Limits {
             ixfr_timeout_secs: default_ixfr_timeout_secs(),
             notify_dedup_secs: default_notify_dedup_secs(),
             max_concurrent_transfers: default_max_concurrent_transfers(),
+            zsm_min_interval_secs: default_zsm_min_interval_secs(),
+            zsm_initial_retry_secs: default_zsm_initial_retry_secs(),
         }
     }
 }
@@ -300,6 +316,14 @@ fn default_max_concurrent_transfers() -> usize {
     4
 }
 
+fn default_zsm_min_interval_secs() -> u64 {
+    60
+}
+
+fn default_zsm_initial_retry_secs() -> u64 {
+    60
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +354,8 @@ mod tests {
         assert_eq!(config.limits.max_tcp_connections, 1024);
         assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
+        assert_eq!(config.limits.zsm_min_interval_secs, 60);
+        assert_eq!(config.limits.zsm_initial_retry_secs, 60);
     }
 
     #[test]
@@ -597,5 +623,52 @@ mod tests {
         .expect_err("one-octet padding block is not useful");
 
         assert!(error.to_string().contains("edns_padding_block_size"));
+    }
+
+    #[test]
+    fn parses_custom_zsm_intervals() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                zsm_min_interval_secs = 120
+                zsm_initial_retry_secs = 30
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.zsm_min_interval_secs, 120);
+        assert_eq!(config.limits.zsm_initial_retry_secs, 30);
+    }
+
+    #[test]
+    fn rejects_zero_zsm_intervals() {
+        for (key, expected) in [
+            ("zsm_min_interval_secs", "zsm_min_interval_secs"),
+            ("zsm_initial_retry_secs", "zsm_initial_retry_secs"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [limits]
+                    {key} = 0
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("zero ZSM interval must fail");
+
+            assert!(error.to_string().contains(expected));
+        }
     }
 }
