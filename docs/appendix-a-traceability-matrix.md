@@ -1,0 +1,84 @@
+# Appendix A - Requirements Traceability Matrix
+
+Status: first-pass MVP evidence artifact
+
+This matrix is the working Appendix A traceability record for SRS requirements
+in `docs/OxideDNS-Secondary-SRS-v0.1.md` sections 3 through 6. It is derived
+from the SRS, `docs/verification-ledger.md`, `docs/mvp-gap-register.md`, and
+the evidence pointers they already cite.
+
+This is not a final release conformance claim. The status column records the
+current evidence state for each requirement family, not implementation
+completion. Requirement IDs are kept as exact SRS IDs or same-prefix ranges so
+the table can be checked mechanically for identifier drift.
+
+## Status Values
+
+- **Not Verified**: no accepted evidence is recorded for this family.
+- **Partial**: evidence exists, but does not cover the full listed scope.
+- **Verified**: evidence covers the listed scope and is suitable for release
+  review.
+- **Deferred**: verification is intentionally targeted at a later milestone.
+
+## Architectural Invariants
+
+| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| --- | --- | --- | --- |
+| ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; `docs/verification-ledger.md` | Add explicit inspection artifacts for secondary-only state flow, memory-resident serving, atomic publication, no persistent state, static configuration, and safe-Rust discipline. |
+
+## Functional Requirements
+
+| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| --- | --- | --- | --- |
+| ODS-FR-CORE-001..ODS-FR-CORE-028 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; `scripts/interop-bind-axfr.sh`; `scripts/interop-nsd-axfr-docker.sh`; `scripts/interop-knot-axfr-docker.sh` | Split broad query and interop evidence into per-requirement release artifacts for parser, header, lookup, referral, wildcard, RRset, TTL, and name-octet behavior. |
+| ODS-FR-QRY-001..ODS-FR-QRY-024 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; AXFR interop scripts listed above | Minimal-ANY behavior, CNAME/DNAME edge cases, additional-section composition, compression policy, and query counter evidence still need per-requirement release traceability. |
+| ODS-FR-NRESP-001..ODS-FR-NRESP-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; primary interop scripts listed in `docs/verification-ledger.md` | Release artifacts must isolate NXDOMAIN, NODATA, empty non-terminal, CNAME/DNAME terminal, SOA TTL, and out-of-zone chain behavior. |
+| ODS-FR-URR-001..ODS-FR-URR-009 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh` | Preserve bit-for-bit unknown-type transfer and response evidence as retained release output, including zero-length RDATA and reserved-type rejection. |
+| ODS-FR-SPOOF-001..ODS-FR-SPOOF-007 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; AXFR/IXFR interop scripts | Add focused evidence for outbound QID/source validation, discard paths, and warning logs. |
+| ODS-FR-AXFR-001..ODS-FR-AXFR-023 | Alpha / Partial | `scripts/interop-bind-axfr.sh`; `scripts/interop-nsd-axfr-docker.sh`; `scripts/interop-knot-axfr-docker.sh`; `docs/implementation-plan.md` | Expand retained release evidence from script-level success into per-requirement AXFR construction, stream validation, error, timeout, concurrency, and publication artifacts. |
+| ODS-FR-IXFR-001..ODS-FR-IXFR-018 | MVP / Partial | `scripts/interop-bind-ixfr-refresh.sh`; `scripts/interop-ixfr-notimp-fallback.sh`; `docs/implementation-plan.md`; `docs/mvp-gap-register.md` | Add broader real-primary IXFR behavior matrix where primary support permits it, including fallback and fault evidence mapped by requirement. |
+| ODS-FR-NOTIFY-001..ODS-FR-NOTIFY-010 | Alpha / Partial | `scripts/interop-bind-notify-refresh.sh`; `scripts/interop-nsd-notify-refresh-docker.sh`; `scripts/interop-knot-notify-refresh-docker.sh`; `docs/implementation-plan.md` | Release traceability still needs negative NOTIFY cases, authorization/TSIG failure branches, deduplication, and refresh-trigger artifacts separated by requirement. |
+| ODS-FR-TSIG-001..ODS-FR-TSIG-017 | Alpha subset; MVP full / Partial | `scripts/interop-bind-tsig-axfr.sh`; `scripts/interop-nsd-tsig-axfr-docker.sh`; `scripts/interop-knot-tsig-axfr-docker.sh`; `docs/implementation-plan.md` | Alpha HMAC-SHA256 AXFR evidence exists; MVP still needs full TSIG verification/error, truncation, algorithm, NOTIFY, and transfer-stream evidence mapped to every TSIG requirement. |
+| ODS-FR-XOT-001..ODS-FR-XOT-011 | MVP / Partial | `scripts/interop-knot-xot-docker.sh`; `config/oxidedns.example.toml`; `docs/implementation-plan.md`; `docs/mvp-gap-register.md` | Add broader real-primary XoT evidence beyond Knot and map TLS, ALPN, trust-anchor, mTLS, failure, and no-cleartext-fallback cases by requirement. |
+| ODS-FR-EDNS-001..ODS-FR-EDNS-014 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; DNSSEC/RRL interop scripts where EDNS affects UDP sizing | Add retained release evidence for OPT placement, BADVERS, payload limits, DO handling, keepalive, padding, and truncation behavior. |
+| ODS-FR-TCP-001..ODS-FR-TCP-010 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; AXFR and query interop scripts | Add release artifacts for TCP framing, idle/read/write timeouts, connection limits, pipelining, truncation retry behavior, and graceful drain. |
+| ODS-FR-DNSSEC-001..ODS-FR-DNSSEC-013 | MVP / Partial | `scripts/interop-dnssec-serve.sh`; `scripts/interop-dnssec-nsec3-serve.sh`; `scripts/interop-knot-dnssec-docker.sh`; `docs/implementation-plan.md` | Build a release-level DNSSEC conformance matrix covering DO-sensitive augmentation, direct DNSSEC RR queries, NSEC/NSEC3 negative proofs, AD/CD clearing, and no signing/validation. |
+| ODS-FR-RR-001..ODS-FR-RR-007 | Alpha base; MVP expanded catalogue / Partial | `docs/OxideDNS-Secondary-SRS-v0.1.md` Appendix B; `docs/implementation-plan.md`; `scripts/check.sh` | Retain per-type parsing and serving evidence for the full RR catalogue, including compression policy and fixed-length/structured RDATA validation. |
+| ODS-FR-ZONE-001..ODS-FR-ZONE-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; transfer interop scripts | Add explicit artifacts for in-memory indexing, atomic snapshot replacement, SOA serial/state handling, LOADING/ACTIVE/EXPIRED transitions, and query behavior by state. |
+| ODS-FR-ZSM-001..ODS-FR-ZSM-012 | Alpha / Partial | `docs/implementation-plan.md`; NOTIFY and IXFR interop scripts | Add retained release evidence for refresh scheduling, retry/expire timing, jitter, cooldown, deduplication, and concurrent transfer limits. |
+| ODS-FR-RRL-001..ODS-FR-RRL-012 | MVP / Partial | `scripts/interop-rrl-udp.sh`; `docs/implementation-plan.md`; `docs/mvp-gap-register.md` | Finalize release threshold decisions and collect longer-running RRL evidence with counters, drops, slips, category buckets, and allowlist behavior mapped by requirement. |
+| ODS-NEG-001..ODS-NEG-017 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; protocol interop scripts where applicable | Separate implemented prohibitions from deferred/not-yet-applicable protocol paths before release review. |
+
+## Non-Functional Requirements
+
+| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| --- | --- | --- | --- |
+| ODS-NFR-PERF-001..ODS-NFR-PERF-005 | MVP / Partial | `scripts/perf-smoke.sh`; `scripts/release-evidence-snapshot.sh`; `docs/mvp-gap-register.md` | Collect release benchmark artifacts for throughput, direct-hit latency, p99 latency, AXFR ingestion rate, and startup timing against SRS targets. |
+| ODS-NFR-REL-001..ODS-NFR-REL-005 | Alpha subset; MVP full / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/check.sh` | Retain shutdown/drain evidence, network-error resilience evidence, rolling-restart evidence, and a 30-day production-representative soak artifact for memory stability. |
+| ODS-NFR-SEC-001..ODS-NFR-SEC-006 | MVP / Partial | `fuzz/README.md`; `scripts/release-evidence-snapshot.sh`; `scripts/check.sh`; TSIG/XoT evidence scripts | Run and retain 24-hour fuzz campaigns per parser, dependency advisory/license/source review, secret redaction/zeroing evidence, and unsafe-code inspection. |
+| ODS-NFR-MAINT-001..ODS-NFR-MAINT-005 | MVP / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; this matrix | Add source line-count/module mapping, requirement-to-module mapping, unsafe block review, in-code requirement reference review, and reproducible-build artifact. |
+| ODS-NFR-PORT-001..ODS-NFR-PORT-005 | MVP / Partial | `docs/operator-deployment-guide.md`; `scripts/release-evidence-snapshot.sh`; `docs/mvp-gap-register.md` | Add Linux distribution/container evidence, architecture evidence, Kubernetes/container capability evidence, IPv4/IPv6 runtime evidence, and init-system independence evidence. |
+| ODS-NFR-OBS-001..ODS-NFR-OBS-005 | Alpha subset; MVP full / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/perf-smoke.sh`; interop scripts checking metrics | Add retained artifacts for structured log fields, log-level behavior, OpenMetrics compatibility, health state transitions, and per-zone status metrics. |
+| ODS-NFR-RES-001..ODS-NFR-RES-005 | MVP / Not Verified | `docs/mvp-gap-register.md`; `docs/implementation-plan.md` | Collect image size, per-record memory overhead, 10,000-zone/10-million-record capacity, file-descriptor rlimit, and concurrent-transfer bound evidence. |
+
+## External Interface Requirements
+
+| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| --- | --- | --- | --- |
+| ODS-IF-NET-001..ODS-IF-NET-004 | Alpha / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/check.sh`; interop scripts | Add retained artifacts for multi-address bind behavior, bind failure exits, outbound source behavior, and IPv4/IPv6 interface coverage. |
+| ODS-IF-CONF-001..ODS-IF-CONF-007 | Alpha / Partial | `config/oxidedns.example.toml`; `docs/operator-deployment-guide.md`; `docs/implementation-plan.md`; `scripts/check.sh` | Add schema/backward-compatibility evidence, environment override evidence, whole-config validation evidence, secret/TLS file-mode evidence, and no-SIGHUP reload evidence. |
+| ODS-IF-LOG-001..ODS-IF-LOG-004 | Alpha / Partial | `docs/operator-deployment-guide.md`; `docs/implementation-plan.md`; `scripts/check.sh` | Add retained stdout/stderr split, JSON/logfmt, log-level, and no-host-specific-log-integration artifacts. |
+| ODS-IF-HEALTH-001..ODS-IF-HEALTH-004 | Alpha / Partial | `docs/operator-deployment-guide.md`; `docs/implementation-plan.md`; `scripts/perf-smoke.sh`; interop scripts waiting on `/readyz` and checking `/metrics` | Add retained artifacts for disabled endpoint behavior, all HTTP paths, unauthenticated access boundary, isolation from DNS query latency, and state-transition timing. |
+| ODS-IF-SIG-001..ODS-IF-SIG-004 | Alpha / Partial | `docs/implementation-plan.md`; `docs/operator-deployment-guide.md`; `scripts/check.sh` | Add release evidence for SIGTERM/SIGINT graceful shutdown and absence/default handling for SIGHUP, SIGUSR1, SIGUSR2, and SIGQUIT. |
+
+## Verification Requirements
+
+| Requirement ID | Phase / status | Evidence pointer | Remaining MVP gap |
+| --- | --- | --- | --- |
+| ODS-VER-001 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Map every SRS section 3 through 6 requirement to accepted verification method evidence, not only family-level evidence. |
+| ODS-VER-002 | MVP / Partial | `scripts/release-evidence-snapshot.sh`; `docs/verification-ledger.md` | Ensure CI/release retention captures logs, benchmark results, code-review records, fuzz summaries, and interop outputs for each release. |
+| ODS-VER-003..ODS-VER-004 | Alpha / Partial | BIND, NSD, and Knot interop scripts listed in `docs/verification-ledger.md` | Retain release-review outputs and expand representative-zone matrix where gaps remain. |
+| ODS-VER-005..ODS-VER-006 | MVP / Partial | `docs/OxideDNS-Secondary-SRS-v0.1.md` Appendix A | Keep RFC clause mapping synchronized with requirement verification status and out-of-scope rationale. |
+| ODS-VER-007 | Alpha / Partial | `docs/verification-ledger.md`; interop scripts listed there | Alpha evidence exists as a working scaffold; release review must decide which partial rows are acceptable for Alpha signoff. |
+| ODS-VER-008 | MVP / Deferred | `docs/mvp-gap-register.md`; `docs/verification-ledger.md` | Complete all MVP protocol, non-functional, interop, operator-doc, and retained-evidence gaps before asserting MVP. |
+| ODS-VER-009 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Expand this first-pass family matrix into the canonical per-requirement status table with date and evidence reference for every SRS section 3 through 6 requirement. |

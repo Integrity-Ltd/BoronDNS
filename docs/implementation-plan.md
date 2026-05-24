@@ -268,6 +268,7 @@ Fuzzing foundations:
 - `fuzz/fuzz_targets/transfer_stream.rs` covers AXFR and IXFR response-stream parsing from TCP-style length-prefixed chunks.
 - `fuzz/fuzz_targets/tsig_message.rs` covers TSIG detection, MAC extraction, request/response verification, TSIG error responses, and TCP response-stream TSIG chaining.
 - `fuzz/fuzz_targets/notify_edns_datagram.rs` covers NOTIFY request handling and EDNS OPT parsing against a populated `alpha.test.` zone.
+- `scripts/fuzz-campaign.sh` runs configurable short or long cargo-fuzz campaigns and retains target logs, artifacts, command lines, tool versions, and run configuration under `target/fuzz-evidence/<timestamp>/`.
 
 Open near-term work:
 

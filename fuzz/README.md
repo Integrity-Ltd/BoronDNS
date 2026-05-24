@@ -29,6 +29,28 @@ Or, without a nightly toolchain or `cargo-fuzz` installed:
 cargo check --manifest-path fuzz/Cargo.toml
 ```
 
+For retained local evidence, use the short campaign runner from the repository
+root. It defaults to all known fuzz targets for 10 seconds per target and writes
+logs, artifacts, command lines, and tool-version/config records under
+`target/fuzz-evidence/<timestamp>/`:
+
+```sh
+scripts/fuzz-campaign.sh
+```
+
+Select targets and duration explicitly when needed:
+
+```sh
+scripts/fuzz-campaign.sh --duration 60 dns_datagram tsig_message
+scripts/fuzz-campaign.sh --target transfer_stream --target notify_edns_datagram
+```
+
+Check the planned commands without starting a fuzzing run:
+
+```sh
+scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
+```
+
 The target exercises public `oxidedns-core` DNS parser and datagram handling APIs:
 `Header::parse`, `Question::parse`, and `answer_datagram` against an empty
 `ZoneStore`.

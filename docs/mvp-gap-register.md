@@ -24,7 +24,7 @@ queue for remaining release blockers.
 | Performance | `scripts/perf-smoke.sh` provides a repeatable startup-to-ready, AXFR ingestion, metrics, and UDP direct-hit latency smoke harness | Release benchmark artifacts for throughput, latency, memory, transfer performance, and capacity against SRS NFR targets |
 | Soak | No accepted soak artifact yet | 30-day production-representative soak without anomaly |
 | Portability | Linux CI-style local checks | Linux distribution/container evidence and documented platform boundaries |
-| Operator Docs | README, implementation plan, verification ledger, example config, Operator Deployment Guide, and release evidence snapshot helper | Full Appendix A traceability matrix |
+| Operator Docs | README, implementation plan, verification ledger, first-pass Appendix A traceability matrix, example config, Operator Deployment Guide, and release evidence snapshot helper | Expand Appendix A from family-level rows to the full per-requirement traceability matrix required by ODS-VER-009 |
 
 ## Current Verification Commands
 
@@ -35,6 +35,7 @@ RUSTUP_TOOLCHAIN=nightly cargo fuzz check dns_datagram
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check transfer_stream
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check tsig_message
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check notify_edns_datagram
+scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
 scripts/interop-bind-axfr.sh
 scripts/interop-bind-tsig-axfr.sh
 scripts/interop-bind-notify-refresh.sh
