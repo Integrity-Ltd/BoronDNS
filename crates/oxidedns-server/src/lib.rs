@@ -2,10 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use thiserror::Error;
@@ -20,7 +20,7 @@ use oxidedns_core::{
     axfr::{self, AxfrError},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Transport, answer_message_with_notify_authority,
+        DomainName, Transport, answer_message_with_notify_hooks,
     },
     zone::{ZoneSnapshot, ZoneStore},
 };
@@ -105,6 +105,8 @@ impl Runtime {
 
         let mut listeners = JoinSet::new();
         let notify_authority = NotifyAuthority::from_config(&self.config);
+        let notify_refresh =
+            NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
                 .await
@@ -118,18 +120,16 @@ impl Runtime {
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let any_response = self.config.query.any_response_mode();
             let notify_authority = notify_authority.clone();
-            listeners.spawn(async move {
-                serve_udp(
-                    socket,
-                    zones,
-                    max_udp_payload,
-                    max_cname_chain,
-                    edns_padding_block_size,
-                    any_response,
-                    notify_authority,
-                )
-                .await
-            });
+            let notify_refresh = notify_refresh.clone();
+            let udp_settings = UdpServerSettings {
+                max_udp_payload,
+                max_cname_chain,
+                edns_padding_block_size,
+                any_response,
+                notify_authority,
+                notify_refresh,
+            };
+            listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         for addr in &self.config.server.listen_tcp {
@@ -160,6 +160,7 @@ impl Runtime {
                 edns_padding_block_size,
                 any_response,
                 notify_authority: notify_authority.clone(),
+                notify_refresh: notify_refresh.clone(),
                 active_connections: tcp_connections,
             };
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
@@ -315,11 +316,7 @@ fn transfer_query_id(zone_apex: &DomainName, primary: SocketAddr) -> u16 {
 async fn serve_udp(
     socket: UdpSocket,
     zones: ZoneStore,
-    max_udp_payload: u16,
-    max_cname_chain: usize,
-    edns_padding_block_size: u16,
-    any_response: AnyResponseMode,
-    notify_authority: NotifyAuthority,
+    settings: UdpServerSettings,
 ) -> Result<(), RuntimeError> {
     let local_addr = socket.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, "UDP listener bound");
@@ -331,23 +328,28 @@ async fn serve_udp(
             .await
             .map_err(RuntimeError::Udp)?;
         let peer_ip = peer.ip();
-        match answer_message_with_notify_authority(
+        match answer_message_with_notify_hooks(
             &buffer[..len],
             &zones,
             AnswerOptions {
                 transport: Transport::Udp,
-                max_udp_payload,
-                max_cname_chain,
+                max_udp_payload: settings.max_udp_payload,
+                max_cname_chain: settings.max_cname_chain,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
-                edns_padding_block_size,
-                any_response,
+                edns_padding_block_size: settings.edns_padding_block_size,
+                any_response: settings.any_response,
             },
             |qname, qclass| {
-                let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
+                let authorized = settings
+                    .notify_authority
+                    .is_authorized(qname, qclass, peer_ip);
                 if !authorized {
                     warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
                 }
                 authorized
+            },
+            |qname, _qclass, serial| {
+                log_notify_refresh(&settings.notify_refresh, qname, peer_ip, serial)
             },
         ) {
             DatagramAction::Discard => {
@@ -361,6 +363,16 @@ async fn serve_udp(
             }
         }
     }
+}
+
+#[derive(Clone)]
+struct UdpServerSettings {
+    max_udp_payload: u16,
+    max_cname_chain: usize,
+    edns_padding_block_size: u16,
+    any_response: AnyResponseMode,
+    notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
 }
 
 async fn serve_tcp(
@@ -402,6 +414,7 @@ async fn serve_tcp(
                 settings.edns_padding_block_size,
                 settings.any_response,
                 settings.notify_authority,
+                settings.notify_refresh,
                 peer.ip(),
             )
             .await
@@ -423,6 +436,7 @@ struct TcpServerSettings {
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
     active_connections: Arc<AtomicUsize>,
 }
 
@@ -464,6 +478,72 @@ impl NotifyAuthority {
     }
 }
 
+#[derive(Debug, Clone)]
+struct NotifyRefreshTracker {
+    dedup_interval: Duration,
+    last_signal_by_zone: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotifyRefreshAction {
+    Signalled,
+    Deduplicated,
+}
+
+impl NotifyRefreshTracker {
+    fn new(dedup_interval: Duration) -> Self {
+        Self {
+            dedup_interval,
+            last_signal_by_zone: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn record(&self, qname: &DomainName) -> NotifyRefreshAction {
+        let now = Instant::now();
+        let mut last_signal_by_zone = self
+            .last_signal_by_zone
+            .lock()
+            .expect("NOTIFY refresh tracker lock poisoned");
+        let zone = qname.canonical_key();
+        if let Some(last_signal) = last_signal_by_zone.get(&zone)
+            && now.duration_since(*last_signal) < self.dedup_interval
+        {
+            return NotifyRefreshAction::Deduplicated;
+        }
+
+        last_signal_by_zone.insert(zone, now);
+        NotifyRefreshAction::Signalled
+    }
+}
+
+fn log_notify_refresh(
+    notify_refresh: &NotifyRefreshTracker,
+    qname: &DomainName,
+    source: IpAddr,
+    soa_serial: Option<u32>,
+) {
+    match notify_refresh.record(qname) {
+        NotifyRefreshAction::Signalled => {
+            info!(
+                %source,
+                zone = %qname,
+                ?soa_serial,
+                action = "refresh_signalled",
+                "accepted NOTIFY"
+            );
+        }
+        NotifyRefreshAction::Deduplicated => {
+            info!(
+                %source,
+                zone = %qname,
+                ?soa_serial,
+                action = "deduplicated",
+                "accepted NOTIFY"
+            );
+        }
+    }
+}
+
 impl Drop for TcpConnectionPermit {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::Release);
@@ -494,10 +574,11 @@ async fn handle_tcp_connection(
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
-        match answer_message_with_notify_authority(
+        match answer_message_with_notify_hooks(
             &packet,
             &zones,
             AnswerOptions {
@@ -515,6 +596,7 @@ async fn handle_tcp_connection(
                 }
                 authorized
             },
+            |qname, _qclass, serial| log_notify_refresh(&notify_refresh, qname, peer_ip, serial),
         ) {
             DatagramAction::Discard => {
                 debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
@@ -601,8 +683,8 @@ mod tests {
     };
 
     use super::{
-        NotifyAuthority, Runtime, TcpServerSettings, handle_tcp_connection, serve_tcp,
-        transfer_axfr_from_primary,
+        NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, Runtime, TcpServerSettings,
+        handle_tcp_connection, serve_tcp, transfer_axfr_from_primary,
     };
 
     #[test]
@@ -644,6 +726,24 @@ mod tests {
         assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 1, "203.0.113.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 255, "192.0.2.53".parse().unwrap()));
+    }
+
+    #[test]
+    fn notify_refresh_tracker_deduplicates_within_interval() {
+        let tracker = NotifyRefreshTracker::new(std::time::Duration::from_secs(60));
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
+        assert_eq!(tracker.record(&zone), NotifyRefreshAction::Deduplicated);
+    }
+
+    #[test]
+    fn notify_refresh_tracker_allows_after_zero_interval() {
+        let tracker = NotifyRefreshTracker::new(std::time::Duration::ZERO);
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
+        assert_eq!(tracker.record(&zone), NotifyRefreshAction::Signalled);
     }
 
     #[tokio::test]
@@ -738,6 +838,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -812,6 +913,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -861,6 +963,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -896,6 +999,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -932,6 +1036,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -969,6 +1074,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 notify_authority: NotifyAuthority::default(),
+                notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 active_connections: active.clone(),
             },
         ));

@@ -421,6 +421,16 @@ pub fn answer_message_with_notify_authority(
     options: AnswerOptions,
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
 ) -> DatagramAction {
+    answer_message_with_notify_hooks(packet, zone_store, options, notify_authorized, |_, _, _| {})
+}
+
+pub fn answer_message_with_notify_hooks(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+) -> DatagramAction {
     let header = match Header::parse(packet) {
         Ok(header) => header,
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
@@ -434,7 +444,14 @@ pub fn answer_message_with_notify_authority(
     match header.opcode() {
         Some(Opcode::Query) => {}
         Some(Opcode::Notify) => {
-            return answer_notify_message(&header, packet, zone_store, options, &notify_authorized);
+            return answer_notify_message(
+                &header,
+                packet,
+                zone_store,
+                options,
+                &notify_authorized,
+                &notify_accepted,
+            );
         }
         None => {
             let question = parse_echoable_question(&header, packet);
@@ -605,6 +622,7 @@ fn answer_notify_message(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     notify_authorized: &impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: &impl Fn(&DomainName, u16, Option<u32>),
 ) -> DatagramAction {
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -682,19 +700,22 @@ fn answer_notify_message(
         ));
     }
 
-    if validate_notify_answer_soa(header, packet, &question).is_err() {
-        return DatagramAction::Respond(build_response(
-            header,
-            Rcode::FormErr,
-            false,
-            Some(&question),
-            &[],
-            &[],
-            &[],
-            metadata,
-            options,
-        ));
-    }
+    let notify_soa_serial = match validate_notify_answer_soa(header, packet, &question) {
+        Ok(serial) => serial,
+        Err(_) => {
+            return DatagramAction::Respond(build_response(
+                header,
+                Rcode::FormErr,
+                false,
+                Some(&question),
+                &[],
+                &[],
+                &[],
+                metadata,
+                options,
+            ));
+        }
+    };
 
     if question.qclass != DNS_CLASS_IN || zone_store.find_exact_zone(&question.qname).is_none() {
         return DatagramAction::Respond(build_response(
@@ -713,6 +734,8 @@ fn answer_notify_message(
     if !notify_authorized(&question.qname, question.qclass) {
         return DatagramAction::Discard;
     }
+
+    notify_accepted(&question.qname, question.qclass, notify_soa_serial);
 
     DatagramAction::Respond(build_response(
         header,
@@ -1621,6 +1644,35 @@ mod tests {
         );
 
         assert_eq!(action, DatagramAction::Discard);
+    }
+
+    #[test]
+    fn notify_acceptance_hook_receives_embedded_soa_serial() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        append_answer(
+            &mut packet,
+            "example.test.",
+            RecordType::Soa as u16,
+            1,
+            soa_rdata(),
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+        let observed = std::cell::Cell::new(None);
+
+        let response = match answer_message_with_notify_hooks(
+            &packet,
+            &store,
+            AnswerOptions::default(),
+            |_, _| true,
+            |_, _, serial| observed.set(serial),
+        ) {
+            DatagramAction::Respond(response) => response,
+            DatagramAction::Discard => panic!("expected NOTIFY response"),
+        };
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(observed.get(), Some(1));
     }
 
     #[test]
