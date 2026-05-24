@@ -4,7 +4,7 @@ Status: Engineering MVP operator guide and SRS acceptance evidence artifact
 
 This guide describes how to deploy and operate OxideDNS as a secondary-only
 authoritative DNS server for Engineering MVP validation and later SRS
-acceptance review. It is derived from the SRS, implementation plan, gap
+acceptance review. It is derived from SRS v0.7, the implementation plan, gap
 register, repository README, example configuration, and interoperability
 scripts.
 
@@ -78,7 +78,9 @@ sudo install -d -m 0755 /etc/oxidedns-secondary
 sudo install -m 0640 config/oxidedns.example.toml /etc/oxidedns-secondary/config.toml
 ```
 
-Validate the config before starting service:
+Validate the config before starting service. The current binary uses the
+repo-native `check-config` subcommand; SRS v0.7 requires the release CLI to
+provide equivalent `--validate-config` behavior before Alpha signoff:
 
 ```sh
 oxidedns check-config --config /etc/oxidedns-secondary/config.toml
@@ -86,7 +88,9 @@ oxidedns check-config --config /etc/oxidedns-secondary/config.toml
 
 When `--config` is omitted, OxideDNS reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
-both `check-config` and `serve`.
+both `check-config` and `serve`. SRS v0.7 standardizes broader environment
+overrides under the `ODS_<SECTION>_<KEY>` naming convention; full schema support
+for that convention is tracked in the gap register.
 
 ## Configuration
 
@@ -204,6 +208,11 @@ Metrics currently include configured and active zone gauges, per-zone state,
 SOA serials, refresh timestamps, transfer counters, query counters, RCODE
 counters, truncation counters, CNAME limit/loop counters, NOTIFY counters, TSIG
 verification outcomes for authorized NOTIFY, and RRL counters.
+
+SRS v0.7 also requires release evidence for build-info metrics, latency
+histograms, `/livez`+`/readyz` split conformance, health response-time bounds,
+gzip-capable metrics responses, and a per-source `/metrics` rate limit. Treat
+those as pending until the gap register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 
@@ -418,8 +427,13 @@ configuration rollback followed by zone reacquisition from the primary.
 The gap register is the live source for remaining acceptance gaps. The
 current operator-relevant limitations are:
 
-- The implementation is still moving toward Engineering MVP. Some protocol
+- The implementation is now aligned to SRS v0.7. Some protocol
   areas have partial evidence rather than full release traceability.
+- SRS v0.7 Alpha adds NSID, configuration warning/dump/validate modes,
+  canonical log fields, sysexits-style CLI behavior, and process `--version` /
+  `--help` requirements. Several of these are not yet implemented in the
+  release CLI shape.
+- DNS Cookies are now MVP scope and are not yet implemented.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.

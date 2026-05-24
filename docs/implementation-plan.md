@@ -1,7 +1,8 @@
 # OxideDNS Implementation Plan
 
 This plan tracks the path from the current Rust project to a working
-secondary-authoritative DNS server while preserving traceability to Tibor's SRS.
+secondary-authoritative DNS server while preserving traceability to Tibor's SRS
+v0.7.
 
 The SRS-defined "MVP" in ODS-VER-008 is not the first useful engineering
 milestone. It is a full acceptance/compliance gate: all SRS requirements,
@@ -15,7 +16,8 @@ acceptance. This plan therefore uses two targets:
 
 ## Engineering MVP Target
 
-The near-term implementation target is:
+The near-term implementation target is now aligned to the SRS v0.7 Alpha gate
+plus already-started MVP protocol work:
 
 - static TOML configuration with no runtime reload;
 - secondary-only operation from configured primaries;
@@ -25,6 +27,13 @@ The near-term implementation target is:
   permits it and AXFR fallback retained;
 - authorized NOTIFY-triggered refresh;
 - TSIG HMAC-SHA256 for transfer and NOTIFY paths;
+- EDNS support including NSID request/response behavior;
+- SRS v0.7 architectural invariants INV-001 through INV-009, including
+  authoritative-only response composition, single-process operation, and no
+  runtime code loading;
+- SRS v0.7 Alpha interface surface: static configuration including validation
+  and dump modes, canonical structured logging, process exit/help/version
+  behavior, health/metrics, and graceful shutdown;
 - health, readiness, metrics, structured logs, and graceful shutdown;
 - safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
   evidence commands retained in the repo;
@@ -46,6 +55,11 @@ The ODS-VER-008 acceptance target remains:
 - 30-day soak test completed without anomaly;
 - parser fuzzing run for at least 24 hours per parser without findings;
 - dependency security audit clean;
+- vulnerability disclosure policy published;
+- DNS Cookies, IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue,
+  and all v0.7 interface/NFR additions implemented and verified;
+- test coverage targets met;
+- signed release artifacts produced;
 - SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
 - at least one production-representative external operator has independently deployed and validated the server.
 
@@ -53,14 +67,21 @@ The ODS-VER-008 acceptance target remains:
 
 The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 
-- all architectural invariants;
-- DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
+- all architectural invariants, including INV-007 through INV-009;
+- DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS including NSID, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
 - a TSIG HMAC-SHA256 interop subset;
-- network, configuration, logging, health, and signal interfaces;
-- selected reliability, maintainability, portability, observability, and resource NFRs;
+- network, configuration, logging, health, signal, and process/CLI interfaces,
+  including `--version`, `--help`, `--dump-config`, and `--validate-config`;
+- selected reliability, maintainability, portability, observability, and
+  resource NFRs, including per-zone status metrics;
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
 
-Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue, performance NFR conformance, full security/maintainability verification, second and third primary interop.
+Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG,
+XoT, DNSSEC serving, RRL, DNS Cookies, expanded RR catalogue, `/livez` and
+`/readyz` split conformance, health response-time and metrics rate-limit
+requirements, performance NFR conformance, full security/maintainability
+verification, reliability/resource/observability extensions, second and third
+primary interop, and optional `--example-config`.
 
 ## Implementation Slices
 
@@ -301,7 +322,8 @@ Interop harness foundations:
 Non-functional evidence foundations:
 
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
-- `scripts/audit-invariants.sh` records repeatable static inspection evidence for the architectural invariants: secondary-only scope, memory-resident query path, atomic zone snapshot publication, no persistent operational writes, static configuration/control surface, and first-party safe-Rust discipline.
+- `scripts/audit-invariants.sh` records repeatable static inspection evidence for the SRS v0.7 architectural invariants: secondary-only scope, memory-resident query path, atomic zone snapshot publication, no persistent operational writes, static configuration/control surface, first-party safe-Rust discipline, authoritative-only response composition, single-process operation, and static composition with no runtime code loading.
+- `crates/oxidedns-core/src/dns.rs` test `concurrent_snapshot_replacement_answers_from_one_zone_version` stress-checks CNAME-chain query responses while `ZoneStore` swaps complete snapshots, proving observed answers come from one published zone version.
 - `scripts/engineering-mvp-evidence.sh` captures the narrow Engineering MVP gate: repository checks, parser fuzz compile, invariant audit, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh interop logs under `target/evidence/engineering-mvp/<timestamp>/`.
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.

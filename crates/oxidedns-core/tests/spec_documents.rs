@@ -7,9 +7,10 @@ fn expected_spec_documents_are_checked_in() {
         .join("..");
 
     for path in [
-        "docs/OxideDNS-Secondary-SRS-v0.1.md",
+        "docs/OxideDNS-Secondary-SRS-v0.7.md",
         "docs/OxideDNS-Secondary-SBVR-v0.1.md",
         "docs/OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md",
+
 
     ] {
         assert!(repo_root.join(path).exists(), "missing {path}");

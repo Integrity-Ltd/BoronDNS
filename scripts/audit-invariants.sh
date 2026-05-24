@@ -84,6 +84,46 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         ],
         list(runtime_sources),
     ),
+    (
+        "ODS-INV-007 authoritative-only response composition",
+        "No resolver, forwarding, or external lookup surface found in runtime Rust source.",
+        [
+            re.compile(r"\bresolv\.conf\b", re.IGNORECASE),
+            re.compile(r"\btrust[-_]dns[-_]resolver\b", re.IGNORECASE),
+            re.compile(r"\bhickory[-_]resolver\b", re.IGNORECASE),
+            re.compile(r"\bforward(?:er|ing)?\b", re.IGNORECASE),
+            re.compile(r"\brecursive\b", re.IGNORECASE),
+            re.compile(r"\bstub[_ -]?resolver\b", re.IGNORECASE),
+        ],
+        list(runtime_sources),
+    ),
+    (
+        "ODS-INV-008 single-process architecture",
+        "No runtime subprocess, fork, or exec invocation surface found in runtime Rust source.",
+        [
+            re.compile(r"\bstd::process::Command\b"),
+            re.compile(r"\btokio::process::Command\b"),
+            re.compile(r"\bCommand::new\b"),
+            re.compile(r"\bfork\b"),
+            re.compile(r"\bexec[lvpe]*\b"),
+        ],
+        list(runtime_sources),
+    ),
+    (
+        "ODS-INV-009 static composition and no runtime code loading",
+        "No plugin, embedded interpreter, or dynamic-library loading surface found in runtime Rust source.",
+        [
+            re.compile(r"\blibloading\b", re.IGNORECASE),
+            re.compile(r"\bdlopen\b", re.IGNORECASE),
+            re.compile(r"\bplugin\b", re.IGNORECASE),
+            re.compile(r"\bwasmtime\b", re.IGNORECASE),
+            re.compile(r"\bdeno_core\b", re.IGNORECASE),
+            re.compile(r"\brhai\b", re.IGNORECASE),
+            re.compile(r"\bmlua\b", re.IGNORECASE),
+            re.compile(r"\bpython\b", re.IGNORECASE),
+        ],
+        list(runtime_sources),
+    ),
 ]
 
 failures: list[str] = []

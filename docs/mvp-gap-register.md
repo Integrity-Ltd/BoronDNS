@@ -10,7 +10,9 @@ Terminology:
   operational path and retained verification evidence.
 - **SRS acceptance** is the later ODS-VER-008 gate. It requires full SRS
   conformance, the complete interop matrix, performance targets, 30-day soak,
-  long-run fuzzing, documentation completion, and external operator acceptance.
+  long-run fuzzing, dependency/CVE/release-signing evidence, documentation
+  completion, and external operator acceptance.
+- **Current normative SRS** is `docs/OxideDNS-Secondary-SRS-v0.7.md`.
 
 Rows below deliberately separate current evidence from remaining acceptance
 gaps. A row with substantial implementation evidence is not a claim of full SRS
@@ -26,12 +28,14 @@ compliance.
 | XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, untrusted-cert, expired-cert, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR and XoT+TSIG interop scripts | Broader real-primary XoT evidence beyond Knot |
 | DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve scripts for DO-sensitive RRSIG/NSEC/NSEC3/DNSKEY/NSEC3PARAM and truncation behavior; Knot signed-primary NSEC3 interop script | Release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
+| EDNS v0.7 Additions | EDNS parsing, OPT response foundations, and payload-limit tests exist | Confirm/retain non-EDNS 512-octet ceiling evidence (`ODS-FR-EDNS-015`); implement configured NSID (`ODS-FR-EDNS-016..017`) and add Alpha evidence |
+| DNS Cookies | No accepted implementation evidence yet | Implement RFC 7873/9018 COOKIE option, lenient/strict policy, secret handling, BADCOOKIE responses, RRL exemption, logs, metrics, and retained MVP evidence |
 
 ## Non-Functional Evidence
 
 | Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
-| Architectural Invariants | `scripts/audit-invariants.sh` records static inspection evidence for secondary-only scope, memory-resident query path, atomic snapshot publication, no persistent operational writes, static configuration/control surface, and first-party safe Rust; `dns_update_opcode_gets_notimp_without_zone_mutation` covers DNS UPDATE rejection without zone mutation | Add concurrent refresh/query atomicity stress evidence and read-only root filesystem runtime evidence |
+| Architectural Invariants | `scripts/audit-invariants.sh` records static inspection evidence for SRS v0.7 INV-001 through INV-009, including authoritative-only response composition, single-process operation, and no runtime code loading; `dns_update_opcode_gets_notimp_without_zone_mutation` covers DNS UPDATE rejection without zone mutation; `concurrent_snapshot_replacement_answers_from_one_zone_version` stress-checks CNAME-chain query responses during atomic snapshot replacement | Add read-only root filesystem runtime evidence and stronger panic-free query-path evidence |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks; `scripts/fuzz-campaign.sh` and optional release-snapshot fuzz campaign capture | 24-hour campaigns per parser target with retained logs/artifacts |
 | Safe Rust Audit | Workspace `unsafe_code = "forbid"` lint; `scripts/audit-safe-rust.sh` first-party unsafe construct scan | Release-review transitive dependency unsafe enumeration, for example with `cargo geiger` or equivalent |
 | Maintainability Evidence | `scripts/audit-maintainability.sh` records first-party Rust source line count, module map, and the current ODS-NFR-MAINT-001 over-target status | Architecture/release-note justification or refactor plan for the line-count target, plus reproducible-build and in-code requirement-reference evidence |
@@ -39,7 +43,9 @@ compliance.
 | Performance | `scripts/perf-smoke.sh` provides a repeatable startup-to-ready, AXFR ingestion, metrics, and UDP direct-hit latency smoke harness | Release benchmark artifacts for throughput, latency, memory, transfer performance, and capacity against SRS NFR targets |
 | Soak | No accepted soak artifact yet | 30-day production-representative soak without anomaly |
 | Portability | Linux CI-style local checks | Linux distribution/container evidence and documented platform boundaries |
-| Operator Docs | README, implementation plan, verification ledger, first-pass Appendix A traceability matrix, example config, Operator Deployment Guide, and release evidence snapshot helper | Expand Appendix A from family-level rows to the full per-requirement traceability matrix required by ODS-VER-009 |
+| Interface/CLI | Basic `serve` and `check-config` CLI, config parsing, JSON/logfmt logging, `/healthz`, `/readyz`, `/metrics`, SIGTERM/SIGINT handling | Align with SRS v0.7 Alpha: `--dump-config`, `--validate-config`, sysexits-style exit mapping, canonical log fields, config warning catalogue, `ODS_<SECTION>_<KEY>` env naming, `--version`/`--help` evidence, optional `interface.notify`, and per-zone status metrics |
+| Verification Governance | `scripts/release-evidence-snapshot.sh` captures command logs and git/tool state | Add SRS v0.7 release notes gate (`ODS-VER-010`), method cadence/Test Plan mapping (`ODS-VER-011`), regression triage policy (`ODS-VER-012`), primary version recording (`ODS-VER-013`), RFC compliance assertion publication (`ODS-VER-014`), and responsibility allocation (`ODS-VER-015`) |
+| Operator Docs | README, implementation plan, verification ledger, first-pass Appendix A traceability matrix, example config, Operator Deployment Guide, and release evidence snapshot helper | Expand Appendix A from family-level rows to the full per-requirement traceability matrix required by ODS-VER-009; add Architecture Document, Test Plan, SLO/operator guide sections, vulnerability disclosure policy, and signed-release process before MVP acceptance |
 
 ## Current Verification Commands
 

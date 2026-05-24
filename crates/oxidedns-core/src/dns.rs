@@ -1717,6 +1717,51 @@ mod tests {
         DomainName::from_absolute_str(target).unwrap().to_wire()
     }
 
+    fn alias_snapshot(serial: u32, target: &str, address: [u8; 4]) -> ZoneSnapshot {
+        ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(serial),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata(target)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str(target).unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![address.to_vec()],
+                ),
+            ],
+        )
+    }
+
+    fn assert_atomic_alias_response(response: &[u8]) {
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(response),
+            vec![RecordType::Cname as u16, RecordType::A as u16]
+        );
+
+        let cnames = response_answer_rdatas(response, RecordType::Cname as u16);
+        let addrs = response_answer_rdatas(response, RecordType::A as u16);
+        let old_cnames = vec![cname_rdata("old-target.example.test.")];
+        let old_addrs = vec![[192, 0, 2, 10].to_vec()];
+        let new_cnames = vec![cname_rdata("new-target.example.test.")];
+        let new_addrs = vec![[198, 51, 100, 20].to_vec()];
+
+        let old_version = cnames == old_cnames && addrs == old_addrs;
+        let new_version = cnames == new_cnames && addrs == new_addrs;
+        assert!(
+            old_version || new_version,
+            "response mixed zone versions: cnames={cnames:?} addrs={addrs:?}"
+        );
+    }
+
     fn mx_rdata(preference: u16, exchange: &str) -> Vec<u8> {
         let mut rdata = preference.to_be_bytes().to_vec();
         rdata.extend(cname_rdata(exchange));
@@ -2827,6 +2872,57 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Cname as u16, RecordType::A as u16]
         );
+    }
+
+    #[test]
+    fn concurrent_snapshot_replacement_answers_from_one_zone_version() {
+        let store = ZoneStore::new();
+        let old_snapshot = alias_snapshot(1, "old-target.example.test.", [192, 0, 2, 10]);
+        let new_snapshot = alias_snapshot(2, "new-target.example.test.", [198, 51, 100, 20]);
+        store.insert_snapshot(old_snapshot.clone());
+
+        let packet = query(b"\x05alias\x07example\x04test\x00", RecordType::A as u16, 1);
+        let reader_count = 4;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(reader_count + 1));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut readers = Vec::new();
+
+        for _ in 0..reader_count {
+            let reader_store = store.clone();
+            let reader_packet = packet.clone();
+            let reader_start = std::sync::Arc::clone(&start);
+            let reader_stop = std::sync::Arc::clone(&stop);
+
+            readers.push(std::thread::spawn(move || {
+                reader_start.wait();
+                let mut observations = 0usize;
+                while !reader_stop.load(std::sync::atomic::Ordering::Acquire) || observations == 0 {
+                    let response = store_response(&reader_packet, &reader_store);
+                    assert_atomic_alias_response(&response);
+                    observations += 1;
+                }
+                observations
+            }));
+        }
+
+        start.wait();
+        for iteration in 0..5_000 {
+            if iteration % 2 == 0 {
+                store.insert_snapshot(new_snapshot.clone());
+            } else {
+                store.insert_snapshot(old_snapshot.clone());
+            }
+            if iteration % 128 == 0 {
+                std::thread::yield_now();
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Release);
+
+        let observations = readers
+            .into_iter()
+            .map(|reader| reader.join().expect("reader thread panicked"))
+            .sum::<usize>();
+        assert!(observations >= reader_count);
     }
 
     #[test]
