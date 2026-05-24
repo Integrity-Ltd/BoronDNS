@@ -80,6 +80,9 @@ pub enum RuntimeError {
 
     #[error("shutdown signal failed: {0}")]
     ShutdownSignal(std::io::Error),
+
+    #[error("invalid runtime configuration: {0}")]
+    InvalidRuntimeConfig(String),
 }
 
 #[derive(Debug, Error)]
@@ -177,6 +180,8 @@ impl Runtime {
         self,
         shutdown_signal: impl Future<Output = Result<&'static str, std::io::Error>>,
     ) -> Result<(), RuntimeError> {
+        validate_runtime_config(&self.config)
+            .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
@@ -417,6 +422,32 @@ impl Runtime {
         .await
         .expect("initial zone load worker does not return runtime errors");
     }
+}
+
+pub fn validate_runtime_config(config: &ServerConfig) -> Result<(), TransferError> {
+    for zone in &config.zones {
+        for primary in zone.transfer_targets() {
+            if primary.transport == TransferTransportConfig::Xot {
+                validate_xot_transfer_target(&primary)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_xot_transfer_target(primary: &TransferPrimaryConfig) -> Result<(), TransferError> {
+    let server_name = primary
+        .server_name
+        .as_deref()
+        .ok_or_else(|| TransferError::XotConfig {
+            addr: primary.addr,
+            message: "server_name is required".to_owned(),
+        })?;
+    ServerName::try_from(server_name.to_owned()).map_err(|error| TransferError::XotConfig {
+        addr: primary.addr,
+        message: format!("invalid XoT server_name {server_name:?}: {error}"),
+    })?;
+    build_xot_client_config(primary).map(|_| ())
 }
 
 #[cfg(unix)]
@@ -4020,7 +4051,7 @@ mod tests {
         response_category, response_opt_record, response_question_end, rrl_truncated_response,
         serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
         serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
+        transfer_ixfr_from_primary, transfer_query_id, validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -6126,6 +6157,116 @@ mod tests {
             "XoT failure must not be retried as cleartext TCP"
         );
         accept_task.abort();
+    }
+
+    #[test]
+    fn runtime_config_validation_accepts_valid_xot_files() {
+        let (trust_anchor, _key_path) = write_self_signed_xot_cert_files();
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            trust_anchor.display()
+        ))
+        .expect("valid config");
+
+        validate_runtime_config(&config).expect("xot tls files should validate");
+    }
+
+    #[test]
+    fn runtime_config_validation_rejects_missing_xot_trust_anchor_file() {
+        let missing_trust_anchor = unique_test_path("missing-xot-ca", "pem");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            missing_trust_anchor.display()
+        ))
+        .expect("schema-valid config");
+
+        let error = validate_runtime_config(&config).expect_err("missing trust anchor must fail");
+
+        assert!(error.to_string().contains("failed to read XoT TLS file"));
+    }
+
+    #[test]
+    fn runtime_config_validation_rejects_malformed_xot_trust_anchor_file() {
+        let trust_anchor = unique_test_path("malformed-xot-ca", "pem");
+        std::fs::write(&trust_anchor, b"not a certificate").expect("write malformed trust anchor");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            trust_anchor.display()
+        ))
+        .expect("schema-valid config");
+
+        let error = validate_runtime_config(&config).expect_err("malformed trust anchor must fail");
+
+        assert!(error.to_string().contains("did not contain certificates"));
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_invalid_xot_config_before_startup() {
+        let missing_trust_anchor = unique_test_path("missing-runtime-xot-ca", "pem");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:0"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            missing_trust_anchor.display()
+        ))
+        .expect("schema-valid config");
+
+        let error = Runtime::new(config)
+            .run_with_shutdown_signal(async { Ok("test") })
+            .await
+            .expect_err("runtime must reject invalid XoT TLS files before startup");
+
+        assert!(matches!(error, RuntimeError::InvalidRuntimeConfig(_)));
     }
 
     #[tokio::test]

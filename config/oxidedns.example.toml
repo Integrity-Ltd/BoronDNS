@@ -54,8 +54,8 @@ notify_sources = ["192.0.2.53"]
 #addr = "192.0.2.53:53"
 #transport = "tcp"
 
-# XoT transfer targets are validated and preserved by configuration/runtime
-# planning. TLS transport implementation is still tracked toward MVP.
+# XoT transfer targets are schema-validated during config parsing and their TLS
+# file references are validated before runtime listeners bind.
 #[[zones.transfer_primaries]]
 #addr = "192.0.2.53:853"
 #transport = "xot"

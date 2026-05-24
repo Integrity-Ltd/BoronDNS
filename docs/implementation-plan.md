@@ -231,6 +231,7 @@ XoT foundations are started:
 - legacy `primaries = ["addr"]` remains the plain TCP transfer shorthand for existing deployments and test harnesses;
 - explicit `[[zones.transfer_primaries]]` entries can select `transport = "tcp"` or `transport = "xot"` per primary, and cannot be mixed with the legacy shorthand inside one zone;
 - XoT transfer targets require SNI-style `server_name`, at least one configured trust anchor, and paired optional client certificate/key references;
+- `oxidedns check-config` and runtime startup validate XoT TLS file readability, trust-anchor parseability, client certificate/key parseability, and client private-key file mode before listeners bind;
 - runtime transfer planning preserves each target's transport mode and uses Rustls/Tokio-Rustls for XoT AXFR and IXFR TCP framing;
 - XoT client connections load configured PEM trust anchors, send the configured server name as SNI, require ALPN `dot`, support optional client certificate/key material, and do not fall back to cleartext TCP after TLS failure;
 - focused in-process tests cover successful XoT AXFR and TLS-handshake failure without cleartext retry. Real-primary XoT interop and the full TLS fault matrix remain pending.

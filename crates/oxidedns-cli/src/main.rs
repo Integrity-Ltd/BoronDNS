@@ -55,7 +55,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
-    ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))
+    let config =
+        ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
+    oxidedns_server::validate_runtime_config(&config).context("validating runtime configuration")?;
+    Ok(config)
 }
 
 fn init_logging(config: &ServerConfig) -> anyhow::Result<()> {
