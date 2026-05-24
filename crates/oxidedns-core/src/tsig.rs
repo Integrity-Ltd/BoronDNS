@@ -2,6 +2,7 @@ use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
+use sha1::Sha1;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -74,12 +75,14 @@ pub enum TsigError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TsigAlgorithm {
+    HmacSha1,
     HmacSha256,
 }
 
 impl TsigAlgorithm {
     pub fn parse(name: &str) -> Result<Self, TsigError> {
         match canonical_algorithm_name(name).as_str() {
+            "hmac-sha1" => Ok(Self::HmacSha1),
             "hmac-sha256" => Ok(Self::HmacSha256),
             other => Err(TsigError::UnsupportedAlgorithm(other.to_owned())),
         }
@@ -87,12 +90,14 @@ impl TsigAlgorithm {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::HmacSha1 => "hmac-sha1",
             Self::HmacSha256 => "hmac-sha256",
         }
     }
 
     pub fn mac_len(self) -> usize {
         match self {
+            Self::HmacSha1 => 20,
             Self::HmacSha256 => 32,
         }
     }
@@ -536,6 +541,12 @@ pub fn message_has_tsig(message: &[u8]) -> Result<bool, TsigError> {
 impl TsigAlgorithm {
     fn sign(self, secret: &[u8], message: &[u8]) -> Result<Vec<u8>, TsigError> {
         match self {
+            Self::HmacSha1 => {
+                let mut mac =
+                    Hmac::<Sha1>::new_from_slice(secret).map_err(|_| TsigError::InvalidHmacKey)?;
+                mac.update(message);
+                Ok(mac.finalize().into_bytes().to_vec())
+            }
             Self::HmacSha256 => {
                 let mut mac = Hmac::<Sha256>::new_from_slice(secret)
                     .map_err(|_| TsigError::InvalidHmacKey)?;
@@ -861,6 +872,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_hmac_sha1_algorithm_name_case_insensitively() {
+        assert_eq!(
+            TsigAlgorithm::parse("HMAC-SHA1.").unwrap(),
+            TsigAlgorithm::HmacSha1
+        );
+        assert_eq!(TsigAlgorithm::HmacSha1.name(), "hmac-sha1");
+        assert_eq!(TsigAlgorithm::HmacSha1.mac_len(), 20);
+    }
+
+    #[test]
     fn rejects_hmac_md5_algorithm() {
         let error =
             TsigAlgorithm::parse("hmac-md5.sig-alg.reg.int.").expect_err("MD5 is prohibited");
@@ -883,6 +904,17 @@ mod tests {
              881dc200c9833da726e9376c2e32cff7"
                 .replace(char::is_whitespace, "")
         );
+        assert!(key.verify(b"Hi There", &mac).unwrap());
+        assert!(!key.verify(b"Hi there", &mac).unwrap());
+    }
+
+    #[test]
+    fn signs_hmac_sha1_rfc2202_case_1() {
+        let secret = STANDARD.encode([0x0b; 20]);
+        let key = TsigKey::from_base64("transfer.example.", "hmac-sha1", &secret).unwrap();
+        let mac = key.sign(b"Hi There").unwrap();
+
+        assert_eq!(hex(&mac), "b617318655057264e28bc0b6fb378c8ef146be00");
         assert!(key.verify(b"Hi There", &mac).unwrap());
         assert!(!key.verify(b"Hi there", &mac).unwrap());
     }

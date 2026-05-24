@@ -33,5 +33,5 @@ notify_sources = ["192.0.2.53"]
 
 #[[tsig_keys]]
 #name = "transfer-key."
-#algorithm = "hmac-sha256"
+#algorithm = "hmac-sha256" # also supports "hmac-sha1"
 #secret = "c2VjcmV0LWtleQ=="
