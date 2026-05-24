@@ -217,6 +217,13 @@ Slice 8 has health endpoint foundations:
 - `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
 
+RRL foundations are started:
+
+- RRL is enabled by default under process-wide `[rrl]` configuration, with configurable IPv4/IPv6 source prefix lengths, per-category rates, slip value, maximum tracked accounting keys, and allowlist entries;
+- UDP query responses are accounted by `(source IP prefix, response category)` for positive, NXDOMAIN, NODATA, referral, and error buckets; TCP responses and non-query responses are not subject to this UDP RRL path;
+- each accounting key uses a token bucket with capacity/refill equal to the configured per-second rate, applies the configured slip policy by dropping or emitting TC=1 empty-section responses that retain the question and OPT pseudo-RR, and evicts least-recently-used keys at the configured cap;
+- `/metrics` exposes RRL subject, dropped, truncated, currently tracked key, and key-eviction counters.
+
 Interop harness foundations:
 
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.

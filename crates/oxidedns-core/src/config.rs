@@ -1,4 +1,9 @@
-use std::{collections::HashSet, fmt, fs, net::SocketAddr, path::Path};
+use std::{
+    collections::HashSet,
+    fmt, fs,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+};
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -28,6 +33,8 @@ pub struct ServerConfig {
     pub server: ServerSettings,
     #[serde(default)]
     pub query: QuerySettings,
+    #[serde(default)]
+    pub rrl: RrlConfig,
     #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
@@ -132,6 +139,7 @@ impl ServerConfig {
                 "limits.ixfr_disabled_cooldown_secs must be at least 1".to_owned(),
             ));
         }
+        self.rrl.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
 
@@ -224,6 +232,76 @@ pub enum LogFormatConfig {
     #[default]
     Json,
     Plain,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RrlConfig {
+    #[serde(default = "default_rrl_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_rrl_ipv4_prefix_len")]
+    pub ipv4_prefix_len: u8,
+    #[serde(default = "default_rrl_ipv6_prefix_len")]
+    pub ipv6_prefix_len: u8,
+    #[serde(default = "default_rrl_positive_per_second")]
+    pub positive_per_second: u32,
+    #[serde(default = "default_rrl_nxdomain_per_second")]
+    pub nxdomain_per_second: u32,
+    #[serde(default = "default_rrl_nodata_per_second")]
+    pub nodata_per_second: u32,
+    #[serde(default = "default_rrl_referral_per_second")]
+    pub referral_per_second: u32,
+    #[serde(default = "default_rrl_error_per_second")]
+    pub error_per_second: u32,
+    #[serde(default = "default_rrl_slip")]
+    pub slip: u32,
+    #[serde(default = "default_rrl_max_keys")]
+    pub max_keys: usize,
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+}
+
+impl Default for RrlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rrl_enabled(),
+            ipv4_prefix_len: default_rrl_ipv4_prefix_len(),
+            ipv6_prefix_len: default_rrl_ipv6_prefix_len(),
+            positive_per_second: default_rrl_positive_per_second(),
+            nxdomain_per_second: default_rrl_nxdomain_per_second(),
+            nodata_per_second: default_rrl_nodata_per_second(),
+            referral_per_second: default_rrl_referral_per_second(),
+            error_per_second: default_rrl_error_per_second(),
+            slip: default_rrl_slip(),
+            max_keys: default_rrl_max_keys(),
+            allowlist: Vec::new(),
+        }
+    }
+}
+
+impl RrlConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.ipv4_prefix_len > 32 {
+            return Err(ConfigError::Invalid(
+                "rrl.ipv4_prefix_len must be at most 32".to_owned(),
+            ));
+        }
+        if self.ipv6_prefix_len > 128 {
+            return Err(ConfigError::Invalid(
+                "rrl.ipv6_prefix_len must be at most 128".to_owned(),
+            ));
+        }
+        if self.max_keys == 0 {
+            return Err(ConfigError::Invalid(
+                "rrl.max_keys must be at least 1".to_owned(),
+            ));
+        }
+        for prefix in &self.allowlist {
+            validate_ip_prefix(prefix).map_err(|error| {
+                ConfigError::Invalid(format!("invalid rrl.allowlist entry {prefix:?}: {error}"))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -355,6 +433,68 @@ fn default_log_level() -> String {
     "info".to_owned()
 }
 
+fn default_rrl_enabled() -> bool {
+    true
+}
+
+fn default_rrl_ipv4_prefix_len() -> u8 {
+    24
+}
+
+fn default_rrl_ipv6_prefix_len() -> u8 {
+    56
+}
+
+fn default_rrl_positive_per_second() -> u32 {
+    20
+}
+
+fn default_rrl_nxdomain_per_second() -> u32 {
+    5
+}
+
+fn default_rrl_nodata_per_second() -> u32 {
+    10
+}
+
+fn default_rrl_referral_per_second() -> u32 {
+    10
+}
+
+fn default_rrl_error_per_second() -> u32 {
+    5
+}
+
+fn default_rrl_slip() -> u32 {
+    2
+}
+
+fn default_rrl_max_keys() -> usize {
+    100_000
+}
+
+fn validate_ip_prefix(prefix: &str) -> Result<(), &'static str> {
+    let Some((addr, len)) = prefix.split_once('/') else {
+        prefix
+            .parse::<IpAddr>()
+            .map(|_| ())
+            .map_err(|_| "expected IP address or CIDR prefix")?;
+        return Ok(());
+    };
+    let addr = addr
+        .parse::<IpAddr>()
+        .map_err(|_| "expected IP address before '/'")?;
+    let len = len
+        .parse::<u8>()
+        .map_err(|_| "expected numeric prefix length after '/'")?;
+    match addr {
+        IpAddr::V4(_) if len <= 32 => Ok(()),
+        IpAddr::V6(_) if len <= 128 => Ok(()),
+        IpAddr::V4(_) => Err("IPv4 prefix length must be at most 32"),
+        IpAddr::V6(_) => Err("IPv6 prefix length must be at most 128"),
+    }
+}
+
 fn default_dns_class() -> String {
     "IN".to_owned()
 }
@@ -444,6 +584,16 @@ mod tests {
         assert_eq!(config.server.listen_udp.len(), 1);
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
+        assert!(config.rrl.enabled);
+        assert_eq!(config.rrl.ipv4_prefix_len, 24);
+        assert_eq!(config.rrl.ipv6_prefix_len, 56);
+        assert_eq!(config.rrl.positive_per_second, 20);
+        assert_eq!(config.rrl.nxdomain_per_second, 5);
+        assert_eq!(config.rrl.nodata_per_second, 10);
+        assert_eq!(config.rrl.referral_per_second, 10);
+        assert_eq!(config.rrl.error_per_second, 5);
+        assert_eq!(config.rrl.slip, 2);
+        assert_eq!(config.rrl.max_keys, 100_000);
         assert_eq!(config.query.any_response, AnyResponseConfig::Minimal);
         assert_eq!(config.query.any_response_mode(), AnyResponseMode::Minimal);
         assert_eq!(config.zones[0].class, "IN");
@@ -461,6 +611,92 @@ mod tests {
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
+    }
+
+    #[test]
+    fn parses_rrl_configuration() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [rrl]
+                enabled = false
+                ipv4_prefix_len = 28
+                ipv6_prefix_len = 64
+                positive_per_second = 3
+                nxdomain_per_second = 4
+                nodata_per_second = 5
+                referral_per_second = 6
+                error_per_second = 7
+                slip = 1
+                max_keys = 9
+                allowlist = ["127.0.0.1", "192.0.2.0/24", "2001:db8::/48"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert!(!config.rrl.enabled);
+        assert_eq!(config.rrl.ipv4_prefix_len, 28);
+        assert_eq!(config.rrl.ipv6_prefix_len, 64);
+        assert_eq!(config.rrl.positive_per_second, 3);
+        assert_eq!(config.rrl.nxdomain_per_second, 4);
+        assert_eq!(config.rrl.nodata_per_second, 5);
+        assert_eq!(config.rrl.referral_per_second, 6);
+        assert_eq!(config.rrl.error_per_second, 7);
+        assert_eq!(config.rrl.slip, 1);
+        assert_eq!(config.rrl.max_keys, 9);
+        assert_eq!(config.rrl.allowlist.len(), 3);
+    }
+
+    #[test]
+    fn rejects_invalid_rrl_configuration() {
+        for (key, value, expected) in [
+            ("ipv4_prefix_len", "33", "ipv4_prefix_len"),
+            ("ipv6_prefix_len", "129", "ipv6_prefix_len"),
+            ("max_keys", "0", "max_keys"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [rrl]
+                    {key} = {value}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("invalid RRL setting must fail");
+
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_rrl_allowlist_prefix() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [rrl]
+                allowlist = ["192.0.2.0/33"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("invalid allowlist prefix must fail");
+
+        assert!(error.to_string().contains("rrl.allowlist"));
     }
 
     #[test]

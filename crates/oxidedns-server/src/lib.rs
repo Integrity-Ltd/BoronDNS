@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     net::{IpAddr, SocketAddr},
     sync::{
@@ -27,7 +27,7 @@ use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
-    config::ZoneConfig,
+    config::{RrlConfig, ZoneConfig},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Header, LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType,
@@ -181,6 +181,7 @@ impl Runtime {
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
+        let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
             self.config.zones.clone(),
@@ -243,6 +244,7 @@ impl Runtime {
             let notify_refresh = notify_refresh.clone();
             let notify_refresh_tx = notify_refresh_tx.clone();
             let metrics = metrics.clone();
+            let rrl = rrl.clone();
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
@@ -252,6 +254,7 @@ impl Runtime {
                 notify_refresh,
                 notify_refresh_tx,
                 metrics,
+                rrl,
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
@@ -915,6 +918,394 @@ fn query_id_from_random_bytes(bytes: [u8; 2]) -> u16 {
     u16::from_be_bytes(bytes)
 }
 
+#[derive(Clone, Debug)]
+struct RrlLimiter {
+    inner: Arc<Mutex<RrlState>>,
+    metrics: RuntimeMetrics,
+}
+
+impl RrlLimiter {
+    fn from_config(config: &RrlConfig, metrics: RuntimeMetrics) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RrlState::from_config(config))),
+            metrics,
+        }
+    }
+
+    fn apply(&self, source: IpAddr, response: Vec<u8>) -> RrlDecision {
+        let Some(category) = response_category(&response) else {
+            return RrlDecision::Send(response);
+        };
+        let mut state = self.inner.lock().expect("RRL state lock poisoned");
+        state.apply(source, category, response, &self.metrics)
+    }
+}
+
+#[derive(Debug)]
+enum RrlDecision {
+    Send(Vec<u8>),
+    Drop,
+}
+
+#[derive(Debug)]
+struct RrlState {
+    enabled: bool,
+    ipv4_prefix_len: u8,
+    ipv6_prefix_len: u8,
+    rates: RrlRates,
+    slip: u32,
+    max_keys: usize,
+    allowlist: Vec<IpPrefix>,
+    buckets: HashMap<RrlKey, RrlBucket>,
+    lru: VecDeque<RrlKey>,
+}
+
+impl RrlState {
+    fn from_config(config: &RrlConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            ipv4_prefix_len: config.ipv4_prefix_len,
+            ipv6_prefix_len: config.ipv6_prefix_len,
+            rates: RrlRates {
+                positive: config.positive_per_second,
+                nxdomain: config.nxdomain_per_second,
+                nodata: config.nodata_per_second,
+                referral: config.referral_per_second,
+                error: config.error_per_second,
+            },
+            slip: config.slip,
+            max_keys: config.max_keys,
+            allowlist: config
+                .allowlist
+                .iter()
+                .map(|prefix| IpPrefix::parse(prefix).expect("validated RRL allowlist prefix"))
+                .collect(),
+            buckets: HashMap::new(),
+            lru: VecDeque::new(),
+        }
+    }
+
+    fn apply(
+        &mut self,
+        source: IpAddr,
+        category: RrlCategory,
+        response: Vec<u8>,
+        metrics: &RuntimeMetrics,
+    ) -> RrlDecision {
+        if !self.enabled || self.allowlist.iter().any(|prefix| prefix.contains(source)) {
+            return RrlDecision::Send(response);
+        }
+
+        metrics.record_rrl_subject();
+        let key = RrlKey::new(source, self.prefix_len(source), category);
+        let rate = self.rates.for_category(category);
+        if !self.buckets.contains_key(&key) {
+            self.evict_one_if_needed(metrics);
+            self.buckets.insert(key, RrlBucket::new(rate));
+            metrics.set_rrl_tracked_keys(self.tracked_keys());
+        }
+        self.touch_lru(key);
+
+        let Some(bucket) = self.buckets.get_mut(&key) else {
+            return RrlDecision::Send(response);
+        };
+        if bucket.take_token(rate) {
+            return RrlDecision::Send(response);
+        }
+
+        if bucket.limited_count == 0 {
+            warn!(
+                ?key,
+                rate,
+                slip = self.slip,
+                "RRL accounting key entered rate-limited state"
+            );
+        }
+        bucket.limited_count = bucket.limited_count.saturating_add(1);
+        if self.slip > 0 && bucket.limited_count.is_multiple_of(u64::from(self.slip)) {
+            metrics.record_rrl_truncated();
+            RrlDecision::Send(rrl_truncated_response(&response))
+        } else {
+            metrics.record_rrl_dropped();
+            RrlDecision::Drop
+        }
+    }
+
+    fn prefix_len(&self, source: IpAddr) -> u8 {
+        match source {
+            IpAddr::V4(_) => self.ipv4_prefix_len,
+            IpAddr::V6(_) => self.ipv6_prefix_len,
+        }
+    }
+
+    fn evict_one_if_needed(&mut self, metrics: &RuntimeMetrics) {
+        if self.buckets.len() < self.max_keys {
+            return;
+        }
+        while let Some(key) = self.lru.pop_front() {
+            if self.buckets.remove(&key).is_some() {
+                metrics.record_rrl_key_evicted();
+                metrics.set_rrl_tracked_keys(self.tracked_keys());
+                return;
+            }
+        }
+    }
+
+    fn touch_lru(&mut self, key: RrlKey) {
+        self.lru.retain(|candidate| *candidate != key);
+        self.lru.push_back(key);
+    }
+
+    fn tracked_keys(&self) -> u64 {
+        self.buckets.len() as u64
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RrlRates {
+    positive: u32,
+    nxdomain: u32,
+    nodata: u32,
+    referral: u32,
+    error: u32,
+}
+
+impl RrlRates {
+    fn for_category(self, category: RrlCategory) -> u32 {
+        match category {
+            RrlCategory::Positive => self.positive,
+            RrlCategory::NxDomain => self.nxdomain,
+            RrlCategory::NoData => self.nodata,
+            RrlCategory::Referral => self.referral,
+            RrlCategory::Error => self.error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RrlBucket {
+    tokens: f64,
+    last_refill: Instant,
+    limited_count: u64,
+}
+
+impl RrlBucket {
+    fn new(rate: u32) -> Self {
+        Self {
+            tokens: f64::from(rate),
+            last_refill: Instant::now(),
+            limited_count: 0,
+        }
+    }
+
+    fn take_token(&mut self, rate: u32) -> bool {
+        if rate > 0 {
+            let now = Instant::now();
+            let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+            self.tokens = (self.tokens + elapsed * f64::from(rate)).min(f64::from(rate));
+            self.last_refill = now;
+        }
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RrlKey {
+    prefix: IpPrefix,
+    category: RrlCategory,
+}
+
+impl RrlKey {
+    fn new(source: IpAddr, prefix_len: u8, category: RrlCategory) -> Self {
+        Self {
+            prefix: IpPrefix::new(source, prefix_len),
+            category,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RrlCategory {
+    Positive,
+    NxDomain,
+    NoData,
+    Referral,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum IpPrefix {
+    V4 { network: u32, len: u8 },
+    V6 { network: u128, len: u8 },
+}
+
+impl IpPrefix {
+    fn parse(value: &str) -> Option<Self> {
+        let (addr, len) = match value.split_once('/') {
+            Some((addr, len)) => {
+                let addr = addr.parse::<IpAddr>().ok()?;
+                let len = len.parse::<u8>().ok()?;
+                (addr, len)
+            }
+            None => {
+                let addr = value.parse::<IpAddr>().ok()?;
+                let len = match addr {
+                    IpAddr::V4(_) => 32,
+                    IpAddr::V6(_) => 128,
+                };
+                (addr, len)
+            }
+        };
+        Some(Self::new(addr, len))
+    }
+
+    fn new(addr: IpAddr, len: u8) -> Self {
+        match addr {
+            IpAddr::V4(addr) => {
+                let len = len.min(32);
+                let network = u32::from(addr) & prefix_mask_v4(len);
+                Self::V4 { network, len }
+            }
+            IpAddr::V6(addr) => {
+                let len = len.min(128);
+                let network = u128::from(addr) & prefix_mask_v6(len);
+                Self::V6 { network, len }
+            }
+        }
+    }
+
+    fn contains(self, addr: IpAddr) -> bool {
+        match (self, addr) {
+            (Self::V4 { network, len }, IpAddr::V4(addr)) => {
+                u32::from(addr) & prefix_mask_v4(len) == network
+            }
+            (Self::V6 { network, len }, IpAddr::V6(addr)) => {
+                u128::from(addr) & prefix_mask_v6(len) == network
+            }
+            _ => false,
+        }
+    }
+}
+
+fn prefix_mask_v4(len: u8) -> u32 {
+    if len == 0 { 0 } else { u32::MAX << (32 - len) }
+}
+
+fn prefix_mask_v6(len: u8) -> u128 {
+    if len == 0 {
+        0
+    } else {
+        u128::MAX << (128 - len)
+    }
+}
+
+fn response_category(response: &[u8]) -> Option<RrlCategory> {
+    let header = Header::parse(response).ok()?;
+    if !header.is_response() || header.opcode() != Some(Opcode::Query) {
+        return None;
+    }
+    let rcode = response_rcode(response, &header);
+    match rcode {
+        0 if header.ancount > 0 => Some(RrlCategory::Positive),
+        0 if response_has_authority_ns(response, &header) => Some(RrlCategory::Referral),
+        0 => Some(RrlCategory::NoData),
+        3 => Some(RrlCategory::NxDomain),
+        _ => Some(RrlCategory::Error),
+    }
+}
+
+fn response_has_authority_ns(response: &[u8], header: &Header) -> bool {
+    let Some(mut offset) = response_question_end(response, header) else {
+        return false;
+    };
+    for _ in 0..header.ancount {
+        let Some(next) = skip_response_record(response, offset) else {
+            return false;
+        };
+        offset = next;
+    }
+    for _ in 0..header.nscount {
+        let Some((rr_type, next)) = response_record_type(response, offset) else {
+            return false;
+        };
+        if rr_type == RecordType::Ns as u16 {
+            return true;
+        }
+        offset = next;
+    }
+    false
+}
+
+fn response_question_end(response: &[u8], header: &Header) -> Option<usize> {
+    let mut offset = 12;
+    for _ in 0..header.qdcount {
+        let (_, consumed) = DomainName::parse(response, offset).ok()?;
+        offset = offset.checked_add(consumed)?.checked_add(4)?;
+        if offset > response.len() {
+            return None;
+        }
+    }
+    Some(offset)
+}
+
+fn response_record_type(response: &[u8], offset: usize) -> Option<(u16, usize)> {
+    let (_, consumed) = DomainName::parse(response, offset).ok()?;
+    let header_offset = offset.checked_add(consumed)?;
+    if header_offset + 10 > response.len() {
+        return None;
+    }
+    let rr_type = u16::from_be_bytes([response[header_offset], response[header_offset + 1]]);
+    let rdlength =
+        u16::from_be_bytes([response[header_offset + 8], response[header_offset + 9]]) as usize;
+    let next = header_offset.checked_add(10)?.checked_add(rdlength)?;
+    (next <= response.len()).then_some((rr_type, next))
+}
+
+fn rrl_truncated_response(response: &[u8]) -> Vec<u8> {
+    let Ok(header) = Header::parse(response) else {
+        return response.to_vec();
+    };
+    let question_end = response_question_end(response, &header).unwrap_or(12);
+    let opt = response_opt_record(response, &header);
+    let mut out = Vec::with_capacity(question_end + opt.map_or(0, |opt| opt.len()));
+    out.extend_from_slice(&response[..2]);
+    out.extend_from_slice(&(header.flags | 0x0200).to_be_bytes());
+    out.extend_from_slice(&header.qdcount.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&(u16::from(opt.is_some())).to_be_bytes());
+    if question_end > 12 && question_end <= response.len() {
+        out.extend_from_slice(&response[12..question_end]);
+    }
+    if let Some(opt) = opt {
+        out.extend_from_slice(opt);
+    }
+    out
+}
+
+fn response_opt_record<'a>(response: &'a [u8], header: &Header) -> Option<&'a [u8]> {
+    let mut offset = response_question_end(response, header)?;
+    for count in [header.ancount, header.nscount] {
+        for _ in 0..count {
+            offset = skip_response_record(response, offset)?;
+        }
+    }
+    for _ in 0..header.arcount {
+        let start = offset;
+        let (rr_type, next) = response_record_type(response, offset)?;
+        if rr_type == RecordType::Opt as u16 {
+            return Some(&response[start..next]);
+        }
+        offset = next;
+    }
+    None
+}
+
 async fn serve_udp(
     socket: UdpSocket,
     zones: ZoneStore,
@@ -986,7 +1377,6 @@ async fn serve_udp(
                 debug!(%peer, bytes = len, "discarded DNS datagram");
             }
             DatagramAction::Respond(response) => {
-                record_query_response_metric(query_metrics, &response, &settings.metrics);
                 let response = match sign_notify_response(response, prepared.response_tsig) {
                     Ok(response) => response,
                     Err(error) => {
@@ -994,10 +1384,16 @@ async fn serve_udp(
                         continue;
                     }
                 };
-                socket
-                    .send_to(&response, peer)
-                    .await
-                    .map_err(RuntimeError::Udp)?;
+                match settings.rrl.apply(peer_ip, response) {
+                    RrlDecision::Send(response) => {
+                        record_query_response_metric(query_metrics, &response, &settings.metrics);
+                        socket
+                            .send_to(&response, peer)
+                            .await
+                            .map_err(RuntimeError::Udp)?;
+                    }
+                    RrlDecision::Drop => {}
+                }
             }
         }
     }
@@ -1130,6 +1526,7 @@ struct UdpServerSettings {
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     metrics: RuntimeMetrics,
+    rrl: RrlLimiter,
 }
 
 async fn serve_tcp(
@@ -1264,6 +1661,21 @@ fn metrics_body(
          # HELP oxidedns_queries_cname_loop_total Query responses terminated by CNAME loop detection.\n\
          # TYPE oxidedns_queries_cname_loop_total counter\n\
          oxidedns_queries_cname_loop_total {}\n\
+         # HELP oxidedns_rrl_responses_subject_total UDP query responses subject to RRL accounting.\n\
+         # TYPE oxidedns_rrl_responses_subject_total counter\n\
+         oxidedns_rrl_responses_subject_total {}\n\
+         # HELP oxidedns_rrl_responses_dropped_total UDP query responses dropped by RRL.\n\
+         # TYPE oxidedns_rrl_responses_dropped_total counter\n\
+         oxidedns_rrl_responses_dropped_total {}\n\
+         # HELP oxidedns_rrl_responses_truncated_total UDP query responses emitted as truncated by RRL.\n\
+         # TYPE oxidedns_rrl_responses_truncated_total counter\n\
+         oxidedns_rrl_responses_truncated_total {}\n\
+         # HELP oxidedns_rrl_keys_tracked RRL accounting keys currently tracked.\n\
+         # TYPE oxidedns_rrl_keys_tracked gauge\n\
+         oxidedns_rrl_keys_tracked {}\n\
+         # HELP oxidedns_rrl_key_evictions_total RRL accounting keys evicted due to the configured cap.\n\
+         # TYPE oxidedns_rrl_key_evictions_total counter\n\
+         oxidedns_rrl_key_evictions_total {}\n\
          # HELP oxidedns_transfer_sessions_started_total Transfer sessions started.\n\
          # TYPE oxidedns_transfer_sessions_started_total counter\n\
          oxidedns_transfer_sessions_started_total{{protocol=\"axfr\"}} {}\n\
@@ -1282,6 +1694,11 @@ fn metrics_body(
         snapshot.queries_truncated,
         snapshot.queries_cname_chain_limit,
         snapshot.queries_cname_loop,
+        snapshot.rrl_subject,
+        snapshot.rrl_dropped,
+        snapshot.rrl_truncated,
+        snapshot.rrl_tracked_keys,
+        snapshot.rrl_key_evictions,
         snapshot.axfr_started,
         snapshot.ixfr_started,
         snapshot.axfr_succeeded,
@@ -1603,6 +2020,11 @@ struct RuntimeMetricsInner {
     notify_tsig_badtime: AtomicU64,
     notify_tsig_badalg: AtomicU64,
     notify_tsig_badtrunc: AtomicU64,
+    rrl_subject: AtomicU64,
+    rrl_dropped: AtomicU64,
+    rrl_truncated: AtomicU64,
+    rrl_tracked_keys: AtomicU64,
+    rrl_key_evictions: AtomicU64,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
 }
@@ -1629,6 +2051,11 @@ struct RuntimeMetricsSnapshot {
     notify_tsig_badtime: u64,
     notify_tsig_badalg: u64,
     notify_tsig_badtrunc: u64,
+    rrl_subject: u64,
+    rrl_dropped: u64,
+    rrl_truncated: u64,
+    rrl_tracked_keys: u64,
+    rrl_key_evictions: u64,
 }
 
 impl RuntimeMetrics {
@@ -1731,6 +2158,26 @@ impl RuntimeMetrics {
         };
     }
 
+    fn record_rrl_subject(&self) {
+        self.inner.rrl_subject.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_rrl_dropped(&self) {
+        self.inner.rrl_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_rrl_truncated(&self) {
+        self.inner.rrl_truncated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn set_rrl_tracked_keys(&self, count: u64) {
+        self.inner.rrl_tracked_keys.store(count, Ordering::Relaxed);
+    }
+
+    fn record_rrl_key_evicted(&self) {
+        self.inner.rrl_key_evictions.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_query_response_rcode(&self, rcode: u16) {
         let mut rcodes = self
             .inner
@@ -1792,6 +2239,11 @@ impl RuntimeMetrics {
             notify_tsig_badtime: self.inner.notify_tsig_badtime.load(Ordering::Relaxed),
             notify_tsig_badalg: self.inner.notify_tsig_badalg.load(Ordering::Relaxed),
             notify_tsig_badtrunc: self.inner.notify_tsig_badtrunc.load(Ordering::Relaxed),
+            rrl_subject: self.inner.rrl_subject.load(Ordering::Relaxed),
+            rrl_dropped: self.inner.rrl_dropped.load(Ordering::Relaxed),
+            rrl_truncated: self.inner.rrl_truncated.load(Ordering::Relaxed),
+            rrl_tracked_keys: self.inner.rrl_tracked_keys.load(Ordering::Relaxed),
+            rrl_key_evictions: self.inner.rrl_key_evictions.load(Ordering::Relaxed),
         }
     }
 }
@@ -3286,6 +3738,7 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
+        config::RrlConfig,
         dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, Rcode, RecordType},
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -3297,15 +3750,17 @@ mod tests {
     use super::{
         HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
         NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation, RefreshAttemptContext,
-        RefreshRequest, RefreshWorkerSettings, Runtime, RuntimeError, RuntimeMetrics,
-        RuntimeStatus, TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry,
-        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
+        RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime,
+        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
+        UdpServerSettings, ZoneRefreshRegistry, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
+        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
+        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
+        transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -4479,6 +4934,144 @@ mod tests {
         assert_eq!(snapshot.queries_cname_loop, 1);
     }
 
+    #[test]
+    fn rrl_limiter_slips_udp_query_responses() {
+        let config = RrlConfig {
+            positive_per_second: 1,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let metrics = RuntimeMetrics::new();
+        let limiter = RrlLimiter::from_config(&config, metrics.clone());
+        let source = "192.0.2.1".parse().unwrap();
+        let response = positive_query_response();
+
+        assert!(matches!(
+            limiter.apply(source, response.clone()),
+            RrlDecision::Send(_)
+        ));
+        assert!(matches!(
+            limiter.apply(source, response.clone()),
+            RrlDecision::Drop
+        ));
+        let RrlDecision::Send(truncated) = limiter.apply(source, response) else {
+            panic!("third limited response should slip as TC=1");
+        };
+
+        let header = Header::parse(&truncated).unwrap();
+        assert_ne!(header.flags & 0x0200, 0);
+        assert_eq!(header.qdcount, 1);
+        assert_eq!(header.ancount, 0);
+        assert_eq!(header.nscount, 0);
+        assert_eq!(header.arcount, 0);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 3);
+        assert_eq!(snapshot.rrl_dropped, 1);
+        assert_eq!(snapshot.rrl_truncated, 1);
+        assert_eq!(snapshot.rrl_tracked_keys, 1);
+    }
+
+    #[test]
+    fn rrl_allowlist_exempts_sources_from_accounting() {
+        let config = RrlConfig {
+            positive_per_second: 0,
+            allowlist: vec!["192.0.2.0/24".to_owned()],
+            ..RrlConfig::default()
+        };
+        let metrics = RuntimeMetrics::new();
+        let limiter = RrlLimiter::from_config(&config, metrics.clone());
+        let source = "192.0.2.99".parse().unwrap();
+
+        assert!(matches!(
+            limiter.apply(source, positive_query_response()),
+            RrlDecision::Send(_)
+        ));
+        assert!(matches!(
+            limiter.apply(source, positive_query_response()),
+            RrlDecision::Send(_)
+        ));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 0);
+        assert_eq!(snapshot.rrl_dropped, 0);
+        assert_eq!(snapshot.rrl_tracked_keys, 0);
+    }
+
+    #[test]
+    fn rrl_limiter_evicts_least_recent_key_at_capacity() {
+        let config = RrlConfig {
+            positive_per_second: 0,
+            slip: 0,
+            max_keys: 1,
+            ipv4_prefix_len: 32,
+            ..RrlConfig::default()
+        };
+        let metrics = RuntimeMetrics::new();
+        let limiter = RrlLimiter::from_config(&config, metrics.clone());
+
+        assert!(matches!(
+            limiter.apply("192.0.2.1".parse().unwrap(), positive_query_response()),
+            RrlDecision::Drop
+        ));
+        assert!(matches!(
+            limiter.apply("192.0.2.2".parse().unwrap(), positive_query_response()),
+            RrlDecision::Drop
+        ));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 2);
+        assert_eq!(snapshot.rrl_dropped, 2);
+        assert_eq!(snapshot.rrl_key_evictions, 1);
+        assert_eq!(snapshot.rrl_tracked_keys, 1);
+    }
+
+    #[test]
+    fn rrl_response_categories_follow_srs_buckets() {
+        assert_eq!(
+            response_category(&positive_query_response()),
+            Some(RrlCategory::Positive)
+        );
+        assert_eq!(
+            response_category(&rcode_query_response(3)),
+            Some(RrlCategory::NxDomain)
+        );
+        assert_eq!(
+            response_category(&rcode_query_response(0)),
+            Some(RrlCategory::NoData)
+        );
+        assert_eq!(
+            response_category(&referral_query_response()),
+            Some(RrlCategory::Referral)
+        );
+        assert_eq!(
+            response_category(&rcode_query_response(2)),
+            Some(RrlCategory::Error)
+        );
+        assert_eq!(response_category(&notify_response(0x1234)), None);
+    }
+
+    #[test]
+    fn rrl_truncated_response_preserves_question_and_opt() {
+        let response = query_response_with_opt();
+        let truncated = rrl_truncated_response(&response);
+
+        let original_header = Header::parse(&response).unwrap();
+        let original_question_end = response_question_end(&response, &original_header).unwrap();
+        assert_eq!(
+            &truncated[12..original_question_end],
+            &response[12..original_question_end]
+        );
+        let header = Header::parse(&truncated).unwrap();
+        assert_ne!(header.flags & 0x0200, 0);
+        assert_eq!(header.ancount, 0);
+        assert_eq!(header.nscount, 0);
+        assert_eq!(header.arcount, 1);
+        assert_eq!(
+            response_opt_record(&truncated, &header),
+            response_opt_record(&response, &original_header)
+        );
+    }
+
     #[tokio::test]
     async fn udp_query_records_cname_chain_limit_metric() {
         let zones = ZoneStore::new();
@@ -4526,6 +5119,7 @@ mod tests {
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
                 metrics: server_metrics,
+                rrl: RrlLimiter::from_config(&RrlConfig::default(), metrics.clone()),
             },
         ));
 
@@ -4554,6 +5148,71 @@ mod tests {
         assert_eq!(snapshot.queries_received, 1);
         assert_eq!(snapshot.queries_cname_chain_limit, 1);
         assert_eq!(snapshot.queries_cname_loop, 0);
+    }
+
+    #[tokio::test]
+    async fn udp_rrl_slips_and_drops_limited_query_responses() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let rrl_config = RrlConfig {
+            positive_per_second: 1,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let server_metrics = metrics.clone();
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            UdpServerSettings {
+                max_udp_payload: 1232,
+                max_cname_chain: 8,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                notify_authority: NotifyAuthority::default(),
+                notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx: notify_refresh_tx(),
+                metrics: server_metrics,
+                rrl: RrlLimiter::from_config(&rrl_config, metrics.clone()),
+            },
+        ));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let query = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+
+        client.send_to(&query, server_addr).await.unwrap();
+        let first = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("first response");
+        client.send_to(&query, server_addr).await.unwrap();
+        let dropped = recv_udp_with_timeout(&client, std::time::Duration::from_millis(50)).await;
+        client.send_to(&query, server_addr).await.unwrap();
+        let slipped = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("slipped truncated response");
+        server.abort();
+
+        assert_eq!(Header::parse(&first).unwrap().ancount, 1);
+        assert!(dropped.is_none());
+        let slipped_header = Header::parse(&slipped).unwrap();
+        assert_ne!(slipped_header.flags & 0x0200, 0);
+        assert_eq!(slipped_header.ancount, 0);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.rrl_subject, 3);
+        assert_eq!(snapshot.rrl_dropped, 1);
+        assert_eq!(snapshot.rrl_truncated, 1);
+        assert_eq!(snapshot.queries_truncated, 1);
     }
 
     #[test]
@@ -6416,6 +7075,43 @@ mod tests {
         response
     }
 
+    fn positive_query_response() -> Vec<u8> {
+        let mut response = rcode_query_response(0);
+        response[6..8].copy_from_slice(&1u16.to_be_bytes());
+        response
+    }
+
+    fn query_response_with_opt() -> Vec<u8> {
+        let mut response = rcode_query_response(0);
+        response[10..12].copy_from_slice(&1u16.to_be_bytes());
+        response.push(0);
+        response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
+        response.extend_from_slice(&1232u16.to_be_bytes());
+        response.extend_from_slice(&0u32.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response
+    }
+
+    fn referral_query_response() -> Vec<u8> {
+        let mut response = rcode_query_response(0);
+        response[8..10].copy_from_slice(&1u16.to_be_bytes());
+        let owner = DomainName::from_absolute_str("example.test.").unwrap();
+        let target = DomainName::from_absolute_str("ns.example.test.").unwrap();
+        response.extend_from_slice(&owner.to_wire());
+        response.extend_from_slice(&(RecordType::Ns as u16).to_be_bytes());
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&300u32.to_be_bytes());
+        response.extend_from_slice(&(target.to_wire().len() as u16).to_be_bytes());
+        response.extend_from_slice(&target.to_wire());
+        response
+    }
+
+    fn rcode_query_response(rcode: u8) -> Vec<u8> {
+        let mut response = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        response[2..4].copy_from_slice(&(0x8400u16 | u16::from(rcode & 0x0f)).to_be_bytes());
+        response
+    }
+
     fn query(qname: &[u8], qtype: u16, qclass: u16) -> Vec<u8> {
         let mut packet = Vec::new();
         packet.extend_from_slice(&0x1234u16.to_be_bytes());
@@ -6428,6 +7124,19 @@ mod tests {
         packet.extend_from_slice(&qtype.to_be_bytes());
         packet.extend_from_slice(&qclass.to_be_bytes());
         packet
+    }
+
+    async fn recv_udp_with_timeout(
+        socket: &UdpSocket,
+        timeout_duration: std::time::Duration,
+    ) -> Option<Vec<u8>> {
+        let mut response = vec![0u8; 512];
+        let len = tokio::time::timeout(timeout_duration, socket.recv(&mut response))
+            .await
+            .ok()?
+            .ok()?;
+        response.truncate(len);
+        Some(response)
     }
 
     async fn read_framed_tcp_response(stream: &mut TcpStream) -> Vec<u8> {

@@ -8,6 +8,19 @@ log_format = "json"
 [query]
 any_response = "minimal"
 
+[rrl]
+enabled = true
+ipv4_prefix_len = 24
+ipv6_prefix_len = 56
+positive_per_second = 20
+nxdomain_per_second = 5
+nodata_per_second = 10
+referral_per_second = 10
+error_per_second = 5
+slip = 2
+max_keys = 100000
+allowlist = []
+
 [limits]
 max_udp_payload = 1232
 max_cname_chain = 8
