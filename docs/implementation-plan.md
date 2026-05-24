@@ -135,6 +135,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path;
 - refresh transfers are bounded by `[limits].max_concurrent_transfers`, and AXFR/IXFR attempts share the same transfer pool;
 - refresh attempts for zones with an existing serial perform a UDP SOA poll with strict QID, opcode, echoed-question, RCODE, class, owner, and serial parsing before transfer; if the primary serial is equal to or older than the held serial, the attempt is recorded as successful without transfer;
+- outbound UDP SOA polls use a connected primary socket, ignore packets from unconnected peers, and warn on malformed or unexpected primary responses with zone, primary, QID, and validation-error evidence;
 - when a refresh has existing zone data and a newer primary serial, the runtime constructs a TCP IXFR query with the currently held apex SOA in the authority section, applies IXFR Mode 1 incremental diffs with strict delete/add consistency checks, accepts IXFR Mode 2 AXFR-style fallback and Mode 3 current responses, and falls back to AXFR if IXFR is unsupported or incomplete.
 - IXFR fault coverage rejects non-response messages, mismatched QIDs, unexpected opcodes, error RCODEs, missing initial SOAs, incomplete newer single-SOA responses, mismatched starting old-SOA serials, final SOA chain mismatches, absent-record deletions, already-present record additions, class mismatches, out-of-zone owners, reserved record types, prohibited pseudo-RR and transfer meta-types, invalid fixed-length A/AAAA RDATA, invalid DS/DNSKEY/NSEC3PARAM/TLSA fixed-prefix RDATA, invalid HINFO/TXT/URI character-string RDATA, invalid post-RFC3597 embedded-name RDATA, invalid NSEC/NSEC3 type bit-map RDATA, and final updated zones that violate apex SOA, apex NS, CNAME coexistence, or DNAME/CNAME coexistence requirements.
 - primaries that return FORMERR or NOTIMP to IXFR are placed in a per-zone IXFR-disabled cooldown, configured by `[limits].ixfr_disabled_cooldown_secs` and defaulting to 3600 seconds, during which refresh attempts use AXFR for that primary.
@@ -212,6 +213,13 @@ Slice 8 has health endpoint foundations:
 - `GET /readyz` reports HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503;
 - `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, AXFR/IXFR transfer-session started/completed/failed counters, NOTIFY receive/unauthorized/refresh-action counters, and authorized NOTIFY TSIG verification outcome counters;
 - unknown paths return HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405.
+- CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
+- `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
+- JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
+
+Interop harness foundations:
+
+- `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 
 Open near-term work:
 
