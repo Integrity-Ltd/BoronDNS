@@ -208,6 +208,7 @@ impl Runtime {
                     zones: self.zones.clone(),
                     runtime_status: runtime_status.clone(),
                     metrics: metrics.clone(),
+                    refresh_registry: refresh_registry.clone(),
                 },
             ));
         }
@@ -776,6 +777,10 @@ fn maybe_verify_tcp_transfer_messages(
 }
 
 fn tsig_time_signed() -> u64 {
+    unix_timestamp_seconds()
+}
+
+fn unix_timestamp_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1059,12 +1064,16 @@ async fn metrics(State(state): State<HealthEndpointState>) -> Response {
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        metrics_body(&state.zones, &state.metrics),
+        metrics_body(&state.zones, &state.metrics, &state.refresh_registry),
     )
         .into_response()
 }
 
-fn metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
+fn metrics_body(
+    zones: &ZoneStore,
+    metrics: &RuntimeMetrics,
+    refresh_registry: &ZoneRefreshRegistry,
+) -> String {
     let snapshot = metrics.snapshot();
     let mut body = format!(
         "# HELP oxidedns_zones_total Configured zones.\n\
@@ -1095,6 +1104,7 @@ fn metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
         snapshot.ixfr_failed,
     );
     append_zone_status_metrics(&mut body, zones);
+    append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     body
 }
 
@@ -1123,6 +1133,62 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
                 "oxidedns_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
             ));
         }
+    }
+}
+
+fn append_zone_scheduler_metrics(
+    body: &mut String,
+    zones: &ZoneStore,
+    refresh_registry: &ZoneRefreshRegistry,
+) {
+    let statuses = refresh_registry.snapshots_by_zone();
+
+    body.push_str(
+        "# HELP oxidedns_zone_last_success_timestamp_seconds Unix timestamp of the most recent successful refresh or transfer.\n\
+         # TYPE oxidedns_zone_last_success_timestamp_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+            continue;
+        };
+        let Some(last_success) = status.last_success_unix_secs else {
+            continue;
+        };
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        body.push_str(&format!(
+            "oxidedns_zone_last_success_timestamp_seconds{{zone=\"{zone}\"}} {last_success}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_zone_next_refresh_timestamp_seconds Unix timestamp of the next scheduled refresh attempt.\n\
+         # TYPE oxidedns_zone_next_refresh_timestamp_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+            continue;
+        };
+        let Some(next_refresh) = status.next_refresh_unix_secs else {
+            continue;
+        };
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        body.push_str(&format!(
+            "oxidedns_zone_next_refresh_timestamp_seconds{{zone=\"{zone}\"}} {next_refresh}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_zone_refresh_failures_since_success Refresh failures since the most recent successful refresh or transfer.\n\
+         # TYPE oxidedns_zone_refresh_failures_since_success gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let failures = statuses
+            .get(&snapshot.origin.canonical_key())
+            .map_or(0, |status| status.failures_since_success);
+        body.push_str(&format!(
+            "oxidedns_zone_refresh_failures_since_success{{zone=\"{zone}\"}} {failures}\n"
+        ));
     }
 }
 
@@ -1161,6 +1227,7 @@ struct HealthEndpointState {
     zones: ZoneStore,
     runtime_status: RuntimeStatus,
     metrics: RuntimeMetrics,
+    refresh_registry: ZoneRefreshRegistry,
 }
 
 #[derive(Clone, Debug)]
@@ -1440,11 +1507,21 @@ impl Jitter {
 struct ZoneRefreshStatus {
     origin: DomainName,
     soa_timers: Option<SoaTimers>,
+    last_success_unix_secs: Option<u64>,
     next_refresh: Option<Instant>,
+    next_refresh_unix_secs: Option<u64>,
     expire_at: Option<Instant>,
     initial_failure_count: u32,
+    failures_since_success: u64,
     in_progress: bool,
     expired: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ZoneRefreshStatusSnapshot {
+    last_success_unix_secs: Option<u64>,
+    next_refresh_unix_secs: Option<u64>,
+    failures_since_success: u64,
 }
 
 impl IxfrCooldownRegistry {
@@ -1519,8 +1596,20 @@ impl ZoneRefreshRegistry {
     }
 
     fn record_success_at(&self, snapshot: &ZoneSnapshot, now: Instant) {
+        self.record_success_at_with_timestamp(snapshot, now, unix_timestamp_seconds());
+    }
+
+    fn record_success_at_with_timestamp(
+        &self,
+        snapshot: &ZoneSnapshot,
+        now: Instant,
+        unix_secs: u64,
+    ) {
         let timers = snapshot.soa_timers;
-        let next_refresh = timers.map(|timers| now + self.effective_interval(timers.refresh));
+        let refresh_interval = timers.map(|timers| self.effective_interval(timers.refresh));
+        let next_refresh = refresh_interval.map(|interval| now + interval);
+        let next_refresh_unix_secs =
+            refresh_interval.map(|interval| unix_secs.saturating_add(interval.as_secs()));
         let expire_at = timers.map(|timers| now + Duration::from_secs(timers.expire as u64));
         let mut statuses = self
             .statuses
@@ -1531,9 +1620,12 @@ impl ZoneRefreshRegistry {
             ZoneRefreshStatus {
                 origin: snapshot.origin.clone(),
                 soa_timers: timers,
+                last_success_unix_secs: Some(unix_secs),
                 next_refresh,
+                next_refresh_unix_secs,
                 expire_at,
                 initial_failure_count: 0,
+                failures_since_success: 0,
                 in_progress: false,
                 expired: false,
             },
@@ -1550,6 +1642,16 @@ impl ZoneRefreshRegistry {
         current: Option<Arc<ZoneSnapshot>>,
         now: Instant,
     ) {
+        self.record_failure_at_with_timestamp(origin, current, now, unix_timestamp_seconds());
+    }
+
+    fn record_failure_at_with_timestamp(
+        &self,
+        origin: &DomainName,
+        current: Option<Arc<ZoneSnapshot>>,
+        now: Instant,
+        unix_secs: u64,
+    ) {
         let mut statuses = self
             .statuses
             .lock()
@@ -1559,9 +1661,12 @@ impl ZoneRefreshRegistry {
             .or_insert_with(|| ZoneRefreshStatus {
                 origin: origin.clone(),
                 soa_timers: current.as_ref().and_then(|snapshot| snapshot.soa_timers),
+                last_success_unix_secs: None,
                 next_refresh: None,
+                next_refresh_unix_secs: None,
                 expire_at: None,
                 initial_failure_count: 0,
+                failures_since_success: 0,
                 in_progress: false,
                 expired: false,
             });
@@ -1579,6 +1684,8 @@ impl ZoneRefreshRegistry {
             retry
         };
         status.next_refresh = Some(now + retry);
+        status.next_refresh_unix_secs = Some(unix_secs.saturating_add(retry.as_secs()));
+        status.failures_since_success = status.failures_since_success.saturating_add(1);
         status.in_progress = false;
     }
 
@@ -1639,6 +1746,24 @@ impl ZoneRefreshRegistry {
             .saturating_mul(multiplier)
             .min(self.initial_retry_max);
         self.jitter.apply(interval)
+    }
+
+    fn snapshots_by_zone(&self) -> HashMap<String, ZoneRefreshStatusSnapshot> {
+        self.statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned")
+            .iter()
+            .map(|(zone, status)| {
+                (
+                    zone.clone(),
+                    ZoneRefreshStatusSnapshot {
+                        last_success_unix_secs: status.last_success_unix_secs,
+                        next_refresh_unix_secs: status.next_refresh_unix_secs,
+                        failures_since_success: status.failures_since_success,
+                    },
+                )
+            })
+            .collect()
     }
 }
 
@@ -2627,15 +2752,43 @@ mod tests {
     #[tokio::test]
     async fn health_endpoint_handles_readyz_metrics_404_and_405() {
         let zones = ZoneStore::new();
+        let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
         zones.insert_snapshot(ZoneSnapshot::active(
-            DomainName::from_absolute_str("example.test.").unwrap(),
+            active_origin.clone(),
             Some(1),
-            Vec::new(),
+            vec![Rrset::new(
+                active_origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
         ));
         zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
         let metrics_state = RuntimeMetrics::new();
         metrics_state.record_axfr_started();
         metrics_state.record_axfr_succeeded();
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+        let refresh_now = std::time::Instant::now();
+        let refresh_unix = 1_700_000_000;
+        refresh_registry.record_success_at_with_timestamp(
+            zones
+                .find_exact_zone(&active_origin)
+                .as_ref()
+                .expect("active snapshot"),
+            refresh_now,
+            refresh_unix,
+        );
+        refresh_registry.record_failure_at_with_timestamp(
+            &DomainName::from_absolute_str("loading.test.").unwrap(),
+            None,
+            refresh_now,
+            refresh_unix,
+        );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(serve_health(
@@ -2644,6 +2797,7 @@ mod tests {
                 zones,
                 runtime_status: RuntimeStatus::new(),
                 metrics: metrics_state,
+                refresh_registry,
             },
         ));
 
@@ -2665,6 +2819,24 @@ mod tests {
         assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
         assert!(!metrics.contains("oxidedns_zone_soa_serial{zone=\"loading.test.\"}"));
         assert!(metrics.contains("oxidedns_zone_soa_serial{zone=\"example.test.\"} 1"));
+        assert!(metrics.contains(
+            "oxidedns_zone_last_success_timestamp_seconds{zone=\"example.test.\"} 1700000000"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_next_refresh_timestamp_seconds{zone=\"example.test.\"} 1700003600"
+        ));
+        assert!(
+            !metrics.contains("oxidedns_zone_last_success_timestamp_seconds{zone=\"loading.test.\"}")
+        );
+        assert!(metrics.contains(
+            "oxidedns_zone_next_refresh_timestamp_seconds{zone=\"loading.test.\"} 1700000060"
+        ));
+        assert!(
+            metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"loading.test.\"} 1")
+        );
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
@@ -2692,6 +2864,11 @@ mod tests {
                 zones,
                 runtime_status: runtime_status.clone(),
                 metrics: RuntimeMetrics::new(),
+                refresh_registry: ZoneRefreshRegistry::without_jitter(
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(3600),
+                ),
             },
         ));
 
@@ -3227,6 +3404,64 @@ mod tests {
             registry.start_due_refreshes(now + std::time::Duration::from_secs(4200)),
             vec![origin]
         );
+    }
+
+    #[test]
+    fn refresh_registry_snapshots_scheduler_metrics() {
+        let registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(180),
+        );
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+
+        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+        let status = registry
+            .snapshots_by_zone()
+            .remove(&origin.canonical_key())
+            .expect("zone refresh status");
+        assert_eq!(status.last_success_unix_secs, Some(1_700_000_000));
+        assert_eq!(status.next_refresh_unix_secs, Some(1_700_003_600));
+        assert_eq!(status.failures_since_success, 0);
+
+        registry.record_failure_at_with_timestamp(
+            &origin,
+            Some(Arc::new(snapshot.clone())),
+            now + std::time::Duration::from_secs(3600),
+            1_700_003_600,
+        );
+        let status = registry
+            .snapshots_by_zone()
+            .remove(&origin.canonical_key())
+            .expect("zone refresh status");
+        assert_eq!(status.last_success_unix_secs, Some(1_700_000_000));
+        assert_eq!(status.next_refresh_unix_secs, Some(1_700_004_200));
+        assert_eq!(status.failures_since_success, 1);
+
+        registry.record_success_at_with_timestamp(
+            &snapshot,
+            now + std::time::Duration::from_secs(4200),
+            1_700_004_200,
+        );
+        let status = registry
+            .snapshots_by_zone()
+            .remove(&origin.canonical_key())
+            .expect("zone refresh status");
+        assert_eq!(status.last_success_unix_secs, Some(1_700_004_200));
+        assert_eq!(status.next_refresh_unix_secs, Some(1_700_007_800));
+        assert_eq!(status.failures_since_success, 0);
     }
 
     #[test]
@@ -4805,6 +5040,11 @@ mod tests {
             zones,
             runtime_status: RuntimeStatus::new(),
             metrics: RuntimeMetrics::new(),
+            refresh_registry: ZoneRefreshRegistry::without_jitter(
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(3600),
+            ),
         }
     }
 
