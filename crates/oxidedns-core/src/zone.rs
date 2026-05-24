@@ -743,7 +743,11 @@ impl ZoneSnapshot {
         qclass: u16,
         any_response: AnyResponseMode,
     ) -> Vec<&Rrset> {
-        let mut rrsets = self.rrsets_at_name(owner, qclass);
+        let mut rrsets = self
+            .rrsets_at_name(owner, qclass)
+            .into_iter()
+            .filter(|rrset| !is_dnssec_proof_or_signature_type(rrset.rr_type))
+            .collect::<Vec<_>>();
         rrsets.sort_by_key(|rrset| (rrset.class, rrset.rr_type));
         if any_response == AnyResponseMode::Minimal {
             rrsets.truncate(1);
@@ -859,6 +863,12 @@ fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {
         record.class,
         record.rdata.clone(),
     )
+}
+
+fn is_dnssec_proof_or_signature_type(rr_type: u16) -> bool {
+    rr_type == RecordType::Rrsig as u16
+        || rr_type == RecordType::Nsec as u16
+        || rr_type == RecordType::Nsec3 as u16
 }
 
 fn cname_target(record: &ResourceRecord) -> Option<DomainName> {

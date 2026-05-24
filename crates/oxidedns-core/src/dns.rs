@@ -2073,6 +2073,69 @@ mod tests {
     }
 
     #[test]
+    fn qtype_any_full_mode_omits_dnssec_proofs_and_signatures_without_do() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("zzz.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata(1)],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x03www\x07example\x04test\x00", 255, 1);
+        let response = store_response_with_options(
+            &packet,
+            &store,
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Full,
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+    }
+
+    #[test]
     fn answers_nodata_with_soa_for_existing_name() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(

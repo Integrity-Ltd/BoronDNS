@@ -196,6 +196,7 @@ DNSSEC work is partially started:
 - DO=1 exact-name NODATA responses include an existing NSEC RRset at the queried owner name, plus its stored covering RRSIG, and set the response OPT DO bit when those augmentation records are included.
 - DO=1 wildcard-synthesized positive responses include an existing NSEC RRset covering the queried owner name, plus its stored covering RRSIG, to prove the exact queried owner did not exist.
 - explicit RRSIG, NSEC, and NSEC3 queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
+- QTYPE ANY responses do not return RRSIG, NSEC, or NSEC3 RRsets as ordinary data when those types were not explicitly queried, preserving the non-DO DNSSEC augmentation boundary.
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
 - response header construction unconditionally clears AD and CD bits.
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
