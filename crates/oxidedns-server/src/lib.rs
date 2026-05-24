@@ -119,7 +119,11 @@ impl Runtime {
             Duration::from_secs(self.config.limits.zsm_initial_retry_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_max_secs),
         );
-        self.load_initial_zones(&refresh_registry).await;
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
+            self.config.limits.ixfr_disabled_cooldown_secs,
+        ));
+        self.load_initial_zones(&refresh_registry, &ixfr_cooldowns)
+            .await;
 
         info!(
             udp_listeners = self.config.server.listen_udp.len(),
@@ -138,6 +142,7 @@ impl Runtime {
             self.zones.clone(),
             transfer_plan.clone(),
             refresh_registry.clone(),
+            ixfr_cooldowns.clone(),
             Duration::from_secs(self.config.limits.axfr_timeout_secs),
             Duration::from_secs(self.config.limits.ixfr_timeout_secs),
         ));
@@ -228,7 +233,11 @@ impl Runtime {
         Ok(())
     }
 
-    async fn load_initial_zones(&self, refresh_registry: &ZoneRefreshRegistry) {
+    async fn load_initial_zones(
+        &self,
+        refresh_registry: &ZoneRefreshRegistry,
+        ixfr_cooldowns: &IxfrCooldownRegistry,
+    ) {
         for zone in &self.config.zones {
             let zone_apex = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
@@ -242,6 +251,7 @@ impl Runtime {
                 &self.zones,
                 &plan,
                 None,
+                ixfr_cooldowns,
                 Duration::from_secs(self.config.limits.ixfr_timeout_secs),
                 Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 "initial",
@@ -716,6 +726,18 @@ struct ZoneRefreshRegistry {
 }
 
 #[derive(Debug, Clone)]
+struct IxfrCooldownRegistry {
+    cooldown: Duration,
+    disabled_until: Arc<Mutex<HashMap<IxfrCooldownKey, Instant>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IxfrCooldownKey {
+    zone: String,
+    primary: SocketAddr,
+}
+
+#[derive(Debug, Clone)]
 struct Jitter {
     state: Arc<Mutex<u64>>,
     enabled: bool,
@@ -763,6 +785,47 @@ struct ZoneRefreshStatus {
     initial_failure_count: u32,
     in_progress: bool,
     expired: bool,
+}
+
+impl IxfrCooldownRegistry {
+    fn new(cooldown: Duration) -> Self {
+        Self {
+            cooldown,
+            disabled_until: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn is_disabled(&self, zone: &DomainName, primary: SocketAddr) -> bool {
+        self.is_disabled_at(zone, primary, Instant::now())
+    }
+
+    fn is_disabled_at(&self, zone: &DomainName, primary: SocketAddr, now: Instant) -> bool {
+        self.disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .get(&IxfrCooldownKey::new(zone, primary))
+            .is_some_and(|disabled_until| *disabled_until > now)
+    }
+
+    fn record_unsupported(&self, zone: &DomainName, primary: SocketAddr) {
+        self.record_unsupported_at(zone, primary, Instant::now());
+    }
+
+    fn record_unsupported_at(&self, zone: &DomainName, primary: SocketAddr, now: Instant) {
+        self.disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .insert(IxfrCooldownKey::new(zone, primary), now + self.cooldown);
+    }
+}
+
+impl IxfrCooldownKey {
+    fn new(zone: &DomainName, primary: SocketAddr) -> Self {
+        Self {
+            zone: zone.canonical_key(),
+            primary,
+        }
+    }
 }
 
 impl ZoneRefreshRegistry {
@@ -1070,6 +1133,7 @@ async fn serve_refresh_requests(
     zones: ZoneStore,
     transfer_plan: TransferPlan,
     refresh_registry: ZoneRefreshRegistry,
+    ixfr_cooldowns: IxfrCooldownRegistry,
     axfr_timeout: Duration,
     ixfr_timeout: Duration,
 ) -> Result<(), RuntimeError> {
@@ -1101,6 +1165,7 @@ async fn serve_refresh_requests(
             &zones,
             &plan,
             request.requested_serial,
+            &ixfr_cooldowns,
             ixfr_timeout,
             axfr_timeout,
             request.reason.as_str(),
@@ -1172,10 +1237,18 @@ fn serial_after(candidate: u32, current: u32) -> bool {
     candidate != current && candidate.wrapping_sub(current) < 0x8000_0000
 }
 
+fn ixfr_error_disables_ixfr(error: &TransferError) -> bool {
+    matches!(
+        error,
+        TransferError::Ixfr(axfr::IxfrError::ErrorRcode(1 | 4))
+    )
+}
+
 async fn refresh_zone_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
+    ixfr_cooldowns: &IxfrCooldownRegistry,
     ixfr_timeout: Duration,
     axfr_timeout: Duration,
     reason: &str,
@@ -1265,59 +1338,71 @@ async fn refresh_zone_from_primaries(
         }
 
         if let Some(current_snapshot) = &current_snapshot {
-            let qid = match transfer_query_id() {
-                Ok(qid) => qid,
-                Err(error) => {
-                    warn!(
-                        zone = %plan.origin,
-                        %primary,
-                        %error,
-                        %reason,
-                        "IXFR failed"
-                    );
-                    continue;
-                }
-            };
-            match transfer_ixfr_from_primary(
-                *primary,
-                &plan.origin,
-                plan.qclass,
-                qid,
-                current_snapshot,
-                ixfr_timeout,
-            )
-            .await
-            {
-                Ok(IxfrResponse::Updated(snapshot)) => {
-                    let serial = snapshot.serial;
-                    zones.insert_snapshot(snapshot.clone());
-                    info!(
-                        zone = %plan.origin,
-                        %primary,
-                        ?serial,
-                        %reason,
-                        "IXFR completed"
-                    );
-                    return Some(snapshot);
-                }
-                Ok(IxfrResponse::Current) => {
-                    info!(
-                        zone = %plan.origin,
-                        %primary,
-                        current_serial,
-                        %reason,
-                        "IXFR confirmed zone current"
-                    );
-                    return Some((**current_snapshot).clone());
-                }
-                Err(error) => {
-                    warn!(
-                        zone = %plan.origin,
-                        %primary,
-                        %error,
-                        %reason,
-                        "IXFR failed; falling back to AXFR"
-                    );
+            if ixfr_cooldowns.is_disabled(&plan.origin, *primary) {
+                info!(
+                    zone = %plan.origin,
+                    %primary,
+                    %reason,
+                    "IXFR disabled cooldown active; using AXFR"
+                );
+            } else {
+                let qid = match transfer_query_id() {
+                    Ok(qid) => qid,
+                    Err(error) => {
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            %error,
+                            %reason,
+                            "IXFR failed"
+                        );
+                        continue;
+                    }
+                };
+                match transfer_ixfr_from_primary(
+                    *primary,
+                    &plan.origin,
+                    plan.qclass,
+                    qid,
+                    current_snapshot,
+                    ixfr_timeout,
+                )
+                .await
+                {
+                    Ok(IxfrResponse::Updated(snapshot)) => {
+                        let serial = snapshot.serial;
+                        zones.insert_snapshot(snapshot.clone());
+                        info!(
+                            zone = %plan.origin,
+                            %primary,
+                            ?serial,
+                            %reason,
+                            "IXFR completed"
+                        );
+                        return Some(snapshot);
+                    }
+                    Ok(IxfrResponse::Current) => {
+                        info!(
+                            zone = %plan.origin,
+                            %primary,
+                            current_serial,
+                            %reason,
+                            "IXFR confirmed zone current"
+                        );
+                        return Some((**current_snapshot).clone());
+                    }
+                    Err(error) => {
+                        if ixfr_error_disables_ixfr(&error) {
+                            ixfr_cooldowns.record_unsupported(&plan.origin, *primary);
+                        }
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            %error,
+                            %reason,
+                            "IXFR failed; falling back to AXFR"
+                        );
+                    }
                 }
             }
         }
@@ -1491,7 +1576,7 @@ fn frame_dns_tcp_message(message: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
 
@@ -1508,9 +1593,9 @@ mod tests {
     };
 
     use super::{
-        NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
-        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection,
-        jitter_interval, poll_soa_from_primary, query_id_from_random_bytes,
+        IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
+        RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
+        handle_tcp_connection, jitter_interval, poll_soa_from_primary, query_id_from_random_bytes,
         refresh_zone_from_primaries, serial_after, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary,
         transfer_ixfr_from_primary, transfer_query_id,
@@ -1915,6 +2000,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ixfr_cooldown_registry_disables_until_cooldown_expires() {
+        let registry = IxfrCooldownRegistry::new(std::time::Duration::from_secs(60));
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+        let primary = "192.0.2.53:53".parse().unwrap();
+        let now = std::time::Instant::now();
+
+        assert!(!registry.is_disabled_at(&zone, primary, now));
+        registry.record_unsupported_at(&zone, primary, now);
+        assert!(registry.is_disabled_at(&zone, primary, now + std::time::Duration::from_secs(59)));
+        assert!(!registry.is_disabled_at(&zone, primary, now + std::time::Duration::from_secs(60)));
+    }
+
     #[tokio::test]
     async fn notify_refresh_worker_publishes_requested_refresh() {
         let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
@@ -1962,6 +2060,7 @@ mod tests {
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
             ),
+            IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
         )
@@ -2011,6 +2110,7 @@ mod tests {
             &zones,
             &plan,
             None,
+            &IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
             std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
             "test",
@@ -2030,6 +2130,75 @@ mod tests {
                 )
                 .answers
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
+        let (primary, qtypes) = spawn_ixfr_notimp_then_axfr_primary().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let plan = transfer_plan
+            .get(&DomainName::from_absolute_str("example.test.").unwrap())
+            .expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(1)],
+            )],
+        ));
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let first = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            Some(2),
+            &ixfr_cooldowns,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(5),
+            "test",
+        )
+        .await
+        .expect("first refresh succeeds via AXFR fallback");
+        assert_eq!(first.serial, Some(2));
+
+        let second = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            Some(3),
+            &ixfr_cooldowns,
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(5),
+            "test",
+        )
+        .await
+        .expect("second refresh skips IXFR and succeeds via AXFR");
+        assert_eq!(second.serial, Some(3));
+
+        assert_eq!(
+            *qtypes.lock().expect("qtype log lock poisoned"),
+            vec![
+                RecordType::Ixfr as u16,
+                RecordType::Axfr as u16,
+                RecordType::Axfr as u16
+            ]
         );
     }
 
@@ -2103,7 +2272,10 @@ mod tests {
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
         );
-        runtime.load_initial_zones(&refresh_registry).await;
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        runtime
+            .load_initial_zones(&refresh_registry, &ixfr_cooldowns)
+            .await;
 
         let snapshot = runtime
             .zones
@@ -2502,6 +2674,55 @@ mod tests {
         addr
     }
 
+    async fn spawn_ixfr_notimp_then_axfr_primary() -> (std::net::SocketAddr, Arc<Mutex<Vec<u16>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let qtypes = Arc::new(Mutex::new(Vec::new()));
+        let qtypes_for_task = qtypes.clone();
+        tokio::spawn(async move {
+            for serial in [2, 3] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let query = read_primary_query(&mut stream).await;
+                let header = Header::parse(&query).unwrap();
+                let qtype = query_qtype(&query);
+                qtypes_for_task
+                    .lock()
+                    .expect("qtype log lock poisoned")
+                    .push(qtype);
+                if qtype == RecordType::Ixfr as u16 {
+                    let response = error_response(header.id, 4);
+                    stream
+                        .write_all(&frame_tcp_message(&response))
+                        .await
+                        .unwrap();
+
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let query = read_primary_query(&mut stream).await;
+                    let header = Header::parse(&query).unwrap();
+                    let qtype = query_qtype(&query);
+                    qtypes_for_task
+                        .lock()
+                        .expect("qtype log lock poisoned")
+                        .push(qtype);
+                    assert_eq!(qtype, RecordType::Axfr as u16);
+                    let response = axfr_response(header.id, serial);
+                    stream
+                        .write_all(&frame_tcp_message(&response))
+                        .await
+                        .unwrap();
+                } else {
+                    assert_eq!(qtype, RecordType::Axfr as u16);
+                    let response = axfr_response(header.id, serial);
+                    stream
+                        .write_all(&frame_tcp_message(&response))
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        (addr, qtypes)
+    }
+
     async fn spawn_soa_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = socket.local_addr().unwrap();
@@ -2550,6 +2771,31 @@ mod tests {
             out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
             out.extend_from_slice(&answer.rdata);
         }
+        out
+    }
+
+    async fn read_primary_query(stream: &mut TcpStream) -> Vec<u8> {
+        let mut length_prefix = [0u8; 2];
+        stream.read_exact(&mut length_prefix).await.unwrap();
+        let query_len = u16::from_be_bytes(length_prefix) as usize;
+        let mut query = vec![0u8; query_len];
+        stream.read_exact(&mut query).await.unwrap();
+        query
+    }
+
+    fn query_qtype(query: &[u8]) -> u16 {
+        assert!(query.len() >= 28);
+        u16::from_be_bytes([query[26], query[27]])
+    }
+
+    fn error_response(qid: u16, rcode: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&qid.to_be_bytes());
+        out.extend_from_slice(&(0x8000u16 | u16::from(rcode & 0x0f)).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
         out
     }
 
