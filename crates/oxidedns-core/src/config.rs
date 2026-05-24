@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fmt, fs,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
 };
 
@@ -184,9 +184,9 @@ impl ServerConfig {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ServerSettings {
-    #[serde(default)]
+    #[serde(default = "default_dns_listeners")]
     pub listen_udp: Vec<SocketAddr>,
-    #[serde(default)]
+    #[serde(default = "default_dns_listeners")]
     pub listen_tcp: Vec<SocketAddr>,
     pub health: Option<SocketAddr>,
     #[serde(default = "default_log_level")]
@@ -433,6 +433,13 @@ fn default_log_level() -> String {
     "info".to_owned()
 }
 
+fn default_dns_listeners() -> Vec<SocketAddr> {
+    vec![
+        SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53)),
+        SocketAddr::from((IpAddr::V6(Ipv6Addr::UNSPECIFIED), 53)),
+    ]
+}
+
 fn default_rrl_enabled() -> bool {
     true
 }
@@ -582,6 +589,13 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.server.listen_udp.len(), 1);
+        assert_eq!(
+            config.server.listen_tcp,
+            vec![
+                SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53)),
+                SocketAddr::from((IpAddr::V6(Ipv6Addr::UNSPECIFIED), 53)),
+            ]
+        );
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert!(config.rrl.enabled);
@@ -611,6 +625,77 @@ mod tests {
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
+    }
+
+    #[test]
+    fn defaults_dns_listeners_when_omitted() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        let expected = vec![
+            SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53)),
+            SocketAddr::from((IpAddr::V6(Ipv6Addr::UNSPECIFIED), 53)),
+        ];
+        assert_eq!(config.server.listen_udp, expected);
+        assert_eq!(config.server.listen_tcp, expected);
+    }
+
+    #[test]
+    fn preserves_explicit_high_port_listeners() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = ["127.0.0.1:5301", "[::1]:5301"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(
+            config.server.listen_udp,
+            vec![SocketAddr::from(([127, 0, 0, 1], 5300))]
+        );
+        assert_eq!(
+            config.server.listen_tcp,
+            vec![
+                SocketAddr::from(([127, 0, 0, 1], 5301)),
+                SocketAddr::from((Ipv6Addr::LOCALHOST, 5301)),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_explicitly_empty_dns_listeners() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = []
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("explicitly empty listeners must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("at least one UDP or TCP listener")
+        );
     }
 
     #[test]

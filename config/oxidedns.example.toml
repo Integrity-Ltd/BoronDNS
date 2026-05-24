@@ -1,4 +1,6 @@
 [server]
+# Omit listen_udp/listen_tcp to use the SRS defaults:
+# ["0.0.0.0:53", "[::]:53"] for UDP and TCP.
 listen_udp = ["0.0.0.0:5300", "[::]:5300"]
 listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
 health = "127.0.0.1:8080"
