@@ -3,7 +3,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -145,11 +145,13 @@ impl Runtime {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
+        let metrics = RuntimeMetrics::new();
         self.load_initial_zones(
             &transfer_plan,
             &refresh_registry,
             &ixfr_cooldowns,
             self.config.limits.max_concurrent_transfers,
+            &metrics,
         )
         .await;
 
@@ -175,6 +177,7 @@ impl Runtime {
             transfer_plan.clone(),
             refresh_registry.clone(),
             ixfr_cooldowns.clone(),
+            metrics.clone(),
             RefreshWorkerSettings {
                 axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
@@ -196,6 +199,7 @@ impl Runtime {
                 HealthEndpointState {
                     zones: self.zones.clone(),
                     runtime_status: runtime_status.clone(),
+                    metrics: metrics.clone(),
                 },
             ));
         }
@@ -314,6 +318,7 @@ impl Runtime {
         refresh_registry: &ZoneRefreshRegistry,
         ixfr_cooldowns: &IxfrCooldownRegistry,
         max_concurrent_transfers: usize,
+        metrics: &RuntimeMetrics,
     ) {
         let transfer_limit = Arc::new(Semaphore::new(max_concurrent_transfers));
         let mut transfers = JoinSet::new();
@@ -329,6 +334,7 @@ impl Runtime {
             let zones = self.zones.clone();
             let refresh_registry = refresh_registry.clone();
             let ixfr_cooldowns = ixfr_cooldowns.clone();
+            let metrics = metrics.clone();
             let transfer_permit = transfer_limit
                 .clone()
                 .acquire_owned()
@@ -341,10 +347,13 @@ impl Runtime {
                     &zones,
                     &plan,
                     None,
-                    &ixfr_cooldowns,
-                    ixfr_timeout,
-                    axfr_timeout,
-                    "initial",
+                    RefreshAttemptContext {
+                        ixfr_cooldowns: &ixfr_cooldowns,
+                        metrics: &metrics,
+                        ixfr_timeout,
+                        axfr_timeout,
+                        reason: "initial",
+                    },
                 )
                 .await
                 {
@@ -986,21 +995,40 @@ async fn metrics(State(state): State<HealthEndpointState>) -> Response {
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        metrics_body(&state.zones),
+        metrics_body(&state.zones, &state.metrics),
     )
         .into_response()
 }
 
-fn metrics_body(zones: &ZoneStore) -> String {
+fn metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
+    let snapshot = metrics.snapshot();
     format!(
         "# HELP oxidedns_zones_total Configured zones.\n\
          # TYPE oxidedns_zones_total gauge\n\
          oxidedns_zones_total {}\n\
          # HELP oxidedns_zones_active Active zones.\n\
          # TYPE oxidedns_zones_active gauge\n\
-         oxidedns_zones_active {}\n",
+         oxidedns_zones_active {}\n\
+         # HELP oxidedns_transfer_sessions_started_total Transfer sessions started.\n\
+         # TYPE oxidedns_transfer_sessions_started_total counter\n\
+         oxidedns_transfer_sessions_started_total{{protocol=\"axfr\"}} {}\n\
+         oxidedns_transfer_sessions_started_total{{protocol=\"ixfr\"}} {}\n\
+         # HELP oxidedns_transfer_sessions_completed_total Transfer sessions completed successfully.\n\
+         # TYPE oxidedns_transfer_sessions_completed_total counter\n\
+         oxidedns_transfer_sessions_completed_total{{protocol=\"axfr\"}} {}\n\
+         oxidedns_transfer_sessions_completed_total{{protocol=\"ixfr\"}} {}\n\
+         # HELP oxidedns_transfer_sessions_failed_total Transfer sessions failed.\n\
+         # TYPE oxidedns_transfer_sessions_failed_total counter\n\
+         oxidedns_transfer_sessions_failed_total{{protocol=\"axfr\"}} {}\n\
+         oxidedns_transfer_sessions_failed_total{{protocol=\"ixfr\"}} {}\n",
         zones.len(),
-        zones.active_count()
+        zones.active_count(),
+        snapshot.axfr_started,
+        snapshot.ixfr_started,
+        snapshot.axfr_succeeded,
+        snapshot.ixfr_succeeded,
+        snapshot.axfr_failed,
+        snapshot.ixfr_failed,
     )
 }
 
@@ -1017,6 +1045,7 @@ fn plain_text(status: StatusCode, body: &'static str) -> Response {
 struct HealthEndpointState {
     zones: ZoneStore,
     runtime_status: RuntimeStatus,
+    metrics: RuntimeMetrics,
 }
 
 #[derive(Clone, Debug)]
@@ -1058,6 +1087,74 @@ impl RuntimeStatus {
             RUNTIME_STATUS_DRAINING => RuntimeStatusValue::Draining,
             RUNTIME_STATUS_UNHEALTHY => RuntimeStatusValue::Unhealthy,
             _ => RuntimeStatusValue::Unhealthy,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeMetrics {
+    inner: Arc<RuntimeMetricsInner>,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeMetricsInner {
+    axfr_started: AtomicU64,
+    axfr_succeeded: AtomicU64,
+    axfr_failed: AtomicU64,
+    ixfr_started: AtomicU64,
+    ixfr_succeeded: AtomicU64,
+    ixfr_failed: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeMetricsSnapshot {
+    axfr_started: u64,
+    axfr_succeeded: u64,
+    axfr_failed: u64,
+    ixfr_started: u64,
+    ixfr_succeeded: u64,
+    ixfr_failed: u64,
+}
+
+impl RuntimeMetrics {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(RuntimeMetricsInner::default()),
+        }
+    }
+
+    fn record_axfr_started(&self) {
+        self.inner.axfr_started.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_axfr_succeeded(&self) {
+        self.inner.axfr_succeeded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_axfr_failed(&self) {
+        self.inner.axfr_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_ixfr_started(&self) {
+        self.inner.ixfr_started.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_ixfr_succeeded(&self) {
+        self.inner.ixfr_succeeded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_ixfr_failed(&self) {
+        self.inner.ixfr_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> RuntimeMetricsSnapshot {
+        RuntimeMetricsSnapshot {
+            axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
+            axfr_succeeded: self.inner.axfr_succeeded.load(Ordering::Relaxed),
+            axfr_failed: self.inner.axfr_failed.load(Ordering::Relaxed),
+            ixfr_started: self.inner.ixfr_started.load(Ordering::Relaxed),
+            ixfr_succeeded: self.inner.ixfr_succeeded.load(Ordering::Relaxed),
+            ixfr_failed: self.inner.ixfr_failed.load(Ordering::Relaxed),
         }
     }
 }
@@ -1680,6 +1777,7 @@ async fn serve_refresh_requests(
     transfer_plan: TransferPlan,
     refresh_registry: ZoneRefreshRegistry,
     ixfr_cooldowns: IxfrCooldownRegistry,
+    metrics: RuntimeMetrics,
     settings: RefreshWorkerSettings,
 ) -> Result<(), RuntimeError> {
     let transfer_limit = Arc::new(Semaphore::new(settings.max_concurrent_transfers));
@@ -1728,16 +1826,20 @@ async fn serve_refresh_requests(
                 let zones = zones.clone();
                 let refresh_registry = refresh_registry.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
+                let metrics = metrics.clone();
                 transfers.spawn(async move {
                     let _transfer_permit = transfer_permit;
                     match refresh_zone_from_primaries(
                         &zones,
                         &plan,
                         request.requested_serial,
-                        &ixfr_cooldowns,
-                        settings.ixfr_timeout,
-                        settings.axfr_timeout,
-                        request.reason.as_str(),
+                        RefreshAttemptContext {
+                            ixfr_cooldowns: &ixfr_cooldowns,
+                            metrics: &metrics,
+                            ixfr_timeout: settings.ixfr_timeout,
+                            axfr_timeout: settings.axfr_timeout,
+                            reason: request.reason.as_str(),
+                        },
                     )
                     .await
                     {
@@ -1764,6 +1866,15 @@ struct RefreshWorkerSettings {
     axfr_timeout: Duration,
     ixfr_timeout: Duration,
     max_concurrent_transfers: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RefreshAttemptContext<'a> {
+    ixfr_cooldowns: &'a IxfrCooldownRegistry,
+    metrics: &'a RuntimeMetrics,
+    ixfr_timeout: Duration,
+    axfr_timeout: Duration,
+    reason: &'a str,
 }
 
 async fn serve_scheduled_refreshes(
@@ -1832,10 +1943,7 @@ async fn refresh_zone_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
-    ixfr_cooldowns: &IxfrCooldownRegistry,
-    ixfr_timeout: Duration,
-    axfr_timeout: Duration,
-    reason: &str,
+    context: RefreshAttemptContext<'_>,
 ) -> Option<ZoneSnapshot> {
     let current_snapshot = zones
         .find_exact_zone(&plan.origin)
@@ -1852,7 +1960,7 @@ async fn refresh_zone_from_primaries(
                 zone = %plan.origin,
                 current_serial,
                 primary_serial,
-                %reason,
+                reason = %context.reason,
                 "SOA serial hint confirmed zone current"
             );
             return Some((**snapshot).clone());
@@ -1862,7 +1970,7 @@ async fn refresh_zone_from_primaries(
             zone = %plan.origin,
             current_serial,
             primary_serial,
-            %reason,
+            reason = %context.reason,
             "SOA serial hint found newer primary serial"
         );
     }
@@ -1878,7 +1986,7 @@ async fn refresh_zone_from_primaries(
                         zone = %plan.origin,
                         %primary,
                         %error,
-                        %reason,
+                        reason = %context.reason,
                         "SOA poll failed"
                     );
                     continue;
@@ -1890,7 +1998,7 @@ async fn refresh_zone_from_primaries(
                 plan.qclass,
                 qid,
                 plan.tsig_key.as_deref(),
-                axfr_timeout,
+                context.axfr_timeout,
             )
             .await
             {
@@ -1900,7 +2008,7 @@ async fn refresh_zone_from_primaries(
                         %primary,
                         current_serial,
                         primary_serial,
-                        %reason,
+                        reason = %context.reason,
                         "SOA poll confirmed zone current"
                     );
                     return Some((**snapshot).clone());
@@ -1911,7 +2019,7 @@ async fn refresh_zone_from_primaries(
                         %primary,
                         current_serial,
                         primary_serial,
-                        %reason,
+                        reason = %context.reason,
                         "SOA poll found newer primary serial"
                     );
                 }
@@ -1920,7 +2028,7 @@ async fn refresh_zone_from_primaries(
                         zone = %plan.origin,
                         %primary,
                         %error,
-                        %reason,
+                        reason = %context.reason,
                         "SOA poll failed"
                     );
                     continue;
@@ -1929,11 +2037,11 @@ async fn refresh_zone_from_primaries(
         }
 
         if let Some(current_snapshot) = &current_snapshot {
-            if ixfr_cooldowns.is_disabled(&plan.origin, *primary) {
+            if context.ixfr_cooldowns.is_disabled(&plan.origin, *primary) {
                 info!(
                     zone = %plan.origin,
                     %primary,
-                    %reason,
+                    reason = %context.reason,
                     "IXFR disabled cooldown active; using AXFR"
                 );
             } else {
@@ -1944,12 +2052,13 @@ async fn refresh_zone_from_primaries(
                             zone = %plan.origin,
                             %primary,
                             %error,
-                            %reason,
+                            reason = %context.reason,
                             "IXFR failed"
                         );
                         continue;
                     }
                 };
+                context.metrics.record_ixfr_started();
                 match transfer_ixfr_from_primary_with_tsig(
                     *primary,
                     &plan.origin,
@@ -1957,41 +2066,46 @@ async fn refresh_zone_from_primaries(
                     qid,
                     current_snapshot,
                     plan.tsig_key.as_deref(),
-                    ixfr_timeout,
+                    context.ixfr_timeout,
                 )
                 .await
                 {
                     Ok(IxfrResponse::Updated(snapshot)) => {
+                        context.metrics.record_ixfr_succeeded();
                         let serial = snapshot.serial;
                         zones.insert_snapshot(snapshot.clone());
                         info!(
                             zone = %plan.origin,
                             %primary,
                             ?serial,
-                            %reason,
+                            reason = %context.reason,
                             "IXFR completed"
                         );
                         return Some(snapshot);
                     }
                     Ok(IxfrResponse::Current) => {
+                        context.metrics.record_ixfr_succeeded();
                         info!(
                             zone = %plan.origin,
                             %primary,
                             current_serial,
-                            %reason,
+                            reason = %context.reason,
                             "IXFR confirmed zone current"
                         );
                         return Some((**current_snapshot).clone());
                     }
                     Err(error) => {
+                        context.metrics.record_ixfr_failed();
                         if ixfr_error_disables_ixfr(&error) {
-                            ixfr_cooldowns.record_unsupported(&plan.origin, *primary);
+                            context
+                                .ixfr_cooldowns
+                                .record_unsupported(&plan.origin, *primary);
                         }
                         warn!(
                             zone = %plan.origin,
                             %primary,
                             %error,
-                            %reason,
+                            reason = %context.reason,
                             "IXFR failed; falling back to AXFR"
                         );
                     }
@@ -2006,40 +2120,43 @@ async fn refresh_zone_from_primaries(
                     zone = %plan.origin,
                     %primary,
                     %error,
-                    %reason,
+                    reason = %context.reason,
                     "AXFR failed"
                 );
                 continue;
             }
         };
+        context.metrics.record_axfr_started();
         match transfer_axfr_from_primary_with_tsig(
             *primary,
             &plan.origin,
             plan.qclass,
             qid,
             plan.tsig_key.as_deref(),
-            axfr_timeout,
+            context.axfr_timeout,
         )
         .await
         {
             Ok(snapshot) => {
+                context.metrics.record_axfr_succeeded();
                 let serial = snapshot.serial;
                 zones.insert_snapshot(snapshot.clone());
                 info!(
                     zone = %plan.origin,
                     %primary,
                     ?serial,
-                    %reason,
+                    reason = %context.reason,
                     "AXFR completed"
                 );
                 return Some(snapshot);
             }
             Err(error) => {
+                context.metrics.record_axfr_failed();
                 warn!(
                     zone = %plan.origin,
                     %primary,
                     %error,
-                    %reason,
+                    reason = %context.reason,
                     "AXFR failed"
                 );
             }
@@ -2218,13 +2335,14 @@ mod tests {
 
     use super::{
         HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction,
-        NotifyRefreshTracker, RefreshRequest, RefreshWorkerSettings, Runtime, RuntimeStatus,
-        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
-        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
+        NotifyRefreshTracker, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
+        Runtime, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
+        ZoneRefreshRegistry, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
+        query_id_from_random_bytes, refresh_zone_from_primaries, serial_after, serve_health,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, sign_notify_response,
+        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
+        write_tcp_message,
     };
 
     #[test]
@@ -2327,9 +2445,19 @@ mod tests {
             Some(1),
             Vec::new(),
         ));
+        let metrics_state = RuntimeMetrics::new();
+        metrics_state.record_axfr_started();
+        metrics_state.record_axfr_succeeded();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_health(listener, health_state(zones)));
+        let server = tokio::spawn(serve_health(
+            listener,
+            HealthEndpointState {
+                zones,
+                runtime_status: RuntimeStatus::new(),
+                metrics: metrics_state,
+            },
+        ));
 
         let ready = http_request(addr, "GET", "/readyz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
@@ -2340,6 +2468,10 @@ mod tests {
         assert!(metrics.contains("content-type: text/plain; version=0.0.4; charset=utf-8"));
         assert!(metrics.contains("oxidedns_zones_total 1"));
         assert!(metrics.contains("oxidedns_zones_active 1"));
+        assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
+        assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
+        assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
+        assert!(metrics.contains("oxidedns_transfer_sessions_failed_total{protocol=\"axfr\"} 0"));
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
@@ -2366,6 +2498,7 @@ mod tests {
             HealthEndpointState {
                 zones,
                 runtime_status: runtime_status.clone(),
+                metrics: RuntimeMetrics::new(),
             },
         ));
 
@@ -2928,6 +3061,7 @@ mod tests {
         .await
         .unwrap();
         drop(tx);
+        let metrics = RuntimeMetrics::new();
 
         serve_refresh_requests(
             rx,
@@ -2939,6 +3073,7 @@ mod tests {
                 std::time::Duration::ZERO,
             ),
             IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+            metrics.clone(),
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
@@ -2953,6 +3088,17 @@ mod tests {
             .expect("published refreshed snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(
+            metrics.snapshot(),
+            super::RuntimeMetricsSnapshot {
+                axfr_started: 0,
+                axfr_succeeded: 0,
+                axfr_failed: 0,
+                ixfr_started: 1,
+                ixfr_succeeded: 1,
+                ixfr_failed: 0,
+            }
+        );
     }
 
     #[tokio::test]
@@ -3016,6 +3162,7 @@ mod tests {
                 std::time::Duration::ZERO,
             ),
             IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+            RuntimeMetrics::new(),
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
@@ -3066,15 +3213,20 @@ mod tests {
                 vec![soa_rdata_with_serial(2)],
             )],
         ));
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
         let snapshot = refresh_zone_from_primaries(
             &zones,
             &plan,
             None,
-            &IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(5),
-            "test",
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
         )
         .await
         .expect("refresh success");
@@ -3119,15 +3271,20 @@ mod tests {
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         assert!(plan.tsig_key.is_some());
         let zones = ZoneStore::new();
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
         let snapshot = refresh_zone_from_primaries(
             &zones,
             &plan,
             None,
-            &IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(5),
-            "test",
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
         )
         .await
         .expect("refresh success");
@@ -3174,15 +3331,19 @@ mod tests {
             )],
         ));
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        let metrics = RuntimeMetrics::new();
 
         let first = refresh_zone_from_primaries(
             &zones,
             &plan,
             Some(2),
-            &ixfr_cooldowns,
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(5),
-            "test",
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
         )
         .await
         .expect("first refresh succeeds via AXFR fallback");
@@ -3192,10 +3353,13 @@ mod tests {
             &zones,
             &plan,
             Some(3),
-            &ixfr_cooldowns,
-            std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(5),
-            "test",
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
         )
         .await
         .expect("second refresh skips IXFR and succeeds via AXFR");
@@ -3208,6 +3372,17 @@ mod tests {
                 RecordType::Axfr as u16,
                 RecordType::Axfr as u16
             ]
+        );
+        assert_eq!(
+            metrics.snapshot(),
+            super::RuntimeMetricsSnapshot {
+                axfr_started: 2,
+                axfr_succeeded: 2,
+                axfr_failed: 0,
+                ixfr_started: 1,
+                ixfr_succeeded: 0,
+                ixfr_failed: 1,
+            }
         );
     }
 
@@ -3283,8 +3458,15 @@ mod tests {
             std::time::Duration::ZERO,
         );
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        let metrics = RuntimeMetrics::new();
         runtime
-            .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns, 4)
+            .load_initial_zones(
+                &transfer_plan,
+                &refresh_registry,
+                &ixfr_cooldowns,
+                4,
+                &metrics,
+            )
             .await;
 
         let snapshot = runtime
@@ -3292,6 +3474,17 @@ mod tests {
             .get("example.test.")
             .expect("published zone snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(
+            metrics.snapshot(),
+            super::RuntimeMetricsSnapshot {
+                axfr_started: 1,
+                axfr_succeeded: 1,
+                axfr_failed: 0,
+                ixfr_started: 0,
+                ixfr_succeeded: 0,
+                ixfr_failed: 0,
+            }
+        );
     }
 
     #[tokio::test]
@@ -3328,8 +3521,15 @@ mod tests {
         );
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
         let loader = tokio::spawn(async move {
+            let metrics = RuntimeMetrics::new();
             runtime
-                .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns, 2)
+                .load_initial_zones(
+                    &transfer_plan,
+                    &refresh_registry,
+                    &ixfr_cooldowns,
+                    2,
+                    &metrics,
+                )
                 .await;
         });
 
@@ -4209,6 +4409,7 @@ mod tests {
         HealthEndpointState {
             zones,
             runtime_status: RuntimeStatus::new(),
+            metrics: RuntimeMetrics::new(),
         }
     }
 
