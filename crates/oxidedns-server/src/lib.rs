@@ -1186,10 +1186,14 @@ async fn serve_health(
 
 fn health_router(state: HealthEndpointState) -> Router {
     Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/metrics", get(metrics))
+        .route("/healthz", get(healthz).head(health_method_not_allowed))
+        .route("/readyz", get(readyz).head(health_method_not_allowed))
+        .route("/metrics", get(metrics).head(health_method_not_allowed))
         .with_state(state)
+}
+
+async fn health_method_not_allowed() -> StatusCode {
+    StatusCode::METHOD_NOT_ALLOWED
 }
 
 async fn healthz(State(state): State<HealthEndpointState>) -> Response {
@@ -3517,8 +3521,12 @@ mod tests {
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
 
-        let method_not_allowed = http_request(addr, "POST", "/metrics").await;
-        assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
+        for method in ["HEAD", "POST"] {
+            for path in ["/healthz", "/readyz", "/metrics"] {
+                let method_not_allowed = http_request(addr, method, path).await;
+                assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
+            }
+        }
 
         server.abort();
     }
