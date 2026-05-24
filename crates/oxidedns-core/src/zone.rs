@@ -147,13 +147,15 @@ impl ZoneSnapshot {
         }
     }
 
-    pub fn augment_lookup_result_with_rrsigs(&self, lookup: LookupResult) -> (LookupResult, bool) {
+    pub fn augment_lookup_result_with_dnssec(&self, lookup: LookupResult) -> (LookupResult, bool) {
         let mut seen = HashSet::new();
         let mut dnssec_augmented = false;
+        let authorities =
+            self.add_referral_ds_augmentations(lookup.authorities, &mut dnssec_augmented);
         let answers =
             self.add_rrsig_augmentations(lookup.answers, &mut seen, &mut dnssec_augmented);
         let authorities =
-            self.add_rrsig_augmentations(lookup.authorities, &mut seen, &mut dnssec_augmented);
+            self.add_rrsig_augmentations(authorities, &mut seen, &mut dnssec_augmented);
         let additionals =
             self.add_rrsig_augmentations(lookup.additionals, &mut seen, &mut dnssec_augmented);
 
@@ -433,6 +435,34 @@ impl ZoneSnapshot {
         additionals
     }
 
+    fn add_referral_ds_augmentations(
+        &self,
+        authorities: Vec<ResourceRecord>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        for record in &authorities {
+            if record.rr_type != RecordType::Ns as u16 {
+                continue;
+            }
+            let Some(ds_rrset) = self.rrset(&record.owner, RecordType::Ds as u16, record.class)
+            else {
+                continue;
+            };
+            for ds in ds_rrset.records() {
+                if seen.insert(record_identity(&ds)) {
+                    augmented.push(ds);
+                    *dnssec_augmented = true;
+                }
+            }
+        }
+        augmented
+    }
+
     fn add_rrsig_augmentations(
         &self,
         records: Vec<ResourceRecord>,
@@ -601,6 +631,15 @@ fn rrsig_type_covered(rdata: &[u8]) -> Option<u16> {
     }
 
     Some(u16::from_be_bytes([rdata[0], rdata[1]]))
+}
+
+fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {
+    (
+        record.owner.canonical_key(),
+        record.rr_type,
+        record.class,
+        record.rdata.clone(),
+    )
 }
 
 fn cname_target(record: &ResourceRecord) -> Option<DomainName> {
