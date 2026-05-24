@@ -71,7 +71,7 @@ Deferred from Alpha to MVP per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC ser
    - Inbound response verification.
 
 8. Health, metrics, packaging, and interop harness.
-   - `/healthz` endpoint.
+   - `/healthz`, `/readyz`, and `/metrics` endpoints.
    - Structured logs and basic counters.
    - Container packaging.
    - NSD/Knot/BIND fixture environments.
@@ -178,9 +178,18 @@ EDNS/query-size work is partially started:
 - EDNS padding requests are recognized, and `[limits].edns_padding_block_size` controls default-off zero-padding of response OPT RDATA when the padded response fits the applicable UDP ceiling;
 - UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum, defaulting to 1232.
 
+Slice 8 has health endpoint foundations:
+
+- optional `[server].health` binds a separate plain HTTP/1 listener when configured, and opens no HTTP listener when unset;
+- `GET /healthz` reports `ready` with HTTP 200 once at least one zone is ACTIVE, otherwise `starting` with HTTP 503;
+- `GET /readyz` reports HTTP 200 only when at least one zone is ACTIVE, otherwise HTTP 503;
+- `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones;
+- unknown paths return HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405.
+
 Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
+- richer metrics counters and per-zone status exposition;
 - broader IXFR fault/interop coverage;
 - TSIG interop coverage;
 - DNSSEC-authenticated referral augmentation;

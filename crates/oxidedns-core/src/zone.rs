@@ -702,6 +702,19 @@ impl ZoneStore {
         self.zones.read().expect("zone store lock poisoned").len()
     }
 
+    pub fn active_count(&self) -> usize {
+        self.zones
+            .read()
+            .expect("zone store lock poisoned")
+            .values()
+            .filter(|snapshot| snapshot.state == ZoneState::Active)
+            .count()
+    }
+
+    pub fn has_active_zone(&self) -> bool {
+        self.active_count() > 0
+    }
+
     pub fn is_empty(&self) -> bool {
         self.zones
             .read()
@@ -832,6 +845,25 @@ mod tests {
             ZoneState::Expired
         );
         assert!(!store.expire_zone(&origin));
+    }
+
+    #[test]
+    fn active_count_tracks_active_zone_snapshots() {
+        let store = ZoneStore::new();
+        let active = DomainName::from_absolute_str("active.test.").unwrap();
+        let loading = DomainName::from_absolute_str("loading.test.").unwrap();
+
+        store.insert_loading(loading);
+        assert_eq!(store.active_count(), 0);
+        assert!(!store.has_active_zone());
+
+        store.insert_snapshot(ZoneSnapshot::active(active.clone(), Some(1), Vec::new()));
+        assert_eq!(store.active_count(), 1);
+        assert!(store.has_active_zone());
+
+        assert!(store.expire_zone(&active));
+        assert_eq!(store.active_count(), 0);
+        assert!(!store.has_active_zone());
     }
 
     fn soa_rdata() -> Vec<u8> {

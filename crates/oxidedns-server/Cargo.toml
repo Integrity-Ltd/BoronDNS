@@ -6,6 +6,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum.workspace = true
 getrandom.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

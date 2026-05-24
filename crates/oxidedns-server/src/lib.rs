@@ -8,6 +8,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use axum::{
+    Router,
+    extract::State,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -41,11 +48,20 @@ pub enum RuntimeError {
         source: std::io::Error,
     },
 
+    #[error("failed to bind health listener {addr}: {source}")]
+    BindHealth {
+        addr: std::net::SocketAddr,
+        source: std::io::Error,
+    },
+
     #[error("UDP listener failed: {0}")]
     Udp(std::io::Error),
 
     #[error("TCP listener failed: {0}")]
     Tcp(std::io::Error),
+
+    #[error("health listener failed: {0}")]
+    Health(std::io::Error),
 
     #[error("shutdown signal failed: {0}")]
     ShutdownSignal(std::io::Error),
@@ -156,6 +172,12 @@ impl Runtime {
             notify_refresh_tx.clone(),
             ZSM_SCHEDULER_TICK,
         ));
+        if let Some(addr) = self.config.server.health {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindHealth { addr, source })?;
+            listeners.spawn(serve_health(listener, self.zones.clone()));
+        }
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
                 .await
@@ -808,6 +830,73 @@ async fn serve_tcp(
             }
         });
     }
+}
+
+async fn serve_health(listener: TcpListener, zones: ZoneStore) -> Result<(), RuntimeError> {
+    let local_addr = listener.local_addr().map_err(RuntimeError::Health)?;
+    info!(%local_addr, "health listener bound");
+
+    axum::serve(listener, health_router(zones))
+        .await
+        .map_err(RuntimeError::Health)
+}
+
+fn health_router(zones: ZoneStore) -> Router {
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics))
+        .with_state(zones)
+}
+
+async fn healthz(State(zones): State<ZoneStore>) -> Response {
+    if zones.has_active_zone() {
+        plain_text(StatusCode::OK, "ready\n")
+    } else {
+        plain_text(StatusCode::SERVICE_UNAVAILABLE, "starting\n")
+    }
+}
+
+async fn readyz(State(zones): State<ZoneStore>) -> Response {
+    if zones.has_active_zone() {
+        plain_text(StatusCode::OK, "ready\n")
+    } else {
+        plain_text(StatusCode::SERVICE_UNAVAILABLE, "not ready\n")
+    }
+}
+
+async fn metrics(State(zones): State<ZoneStore>) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        metrics_body(&zones),
+    )
+        .into_response()
+}
+
+fn metrics_body(zones: &ZoneStore) -> String {
+    format!(
+        "# HELP oxidedns_zones_total Configured zones.\n\
+         # TYPE oxidedns_zones_total gauge\n\
+         oxidedns_zones_total {}\n\
+         # HELP oxidedns_zones_active Active zones.\n\
+         # TYPE oxidedns_zones_active gauge\n\
+         oxidedns_zones_active {}\n",
+        zones.len(),
+        zones.active_count()
+    )
+}
+
+fn plain_text(status: StatusCode, body: &'static str) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 #[derive(Clone)]
@@ -1918,7 +2007,7 @@ mod tests {
         RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
         handle_tcp_connection, jitter_interval, poll_soa_from_primary,
         poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
-        refresh_zone_from_primaries, serial_after, serve_refresh_requests,
+        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
         transfer_ixfr_from_primary, transfer_query_id,
     };
@@ -1989,6 +2078,61 @@ mod tests {
         let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.53".parse().unwrap());
 
         assert!(prepared.is_none());
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_reports_starting_until_zone_active() {
+        let zones = ZoneStore::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_health(listener, zones.clone()));
+
+        let starting = http_request(addr, "GET", "/healthz").await;
+        assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(starting.ends_with("starting\n"));
+
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+
+        let ready = http_request(addr, "GET", "/healthz").await;
+        assert!(ready.starts_with("HTTP/1.1 200 OK"));
+        assert!(ready.ends_with("ready\n"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_handles_readyz_metrics_404_and_405() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_health(listener, zones));
+
+        let ready = http_request(addr, "GET", "/readyz").await;
+        assert!(ready.starts_with("HTTP/1.1 200 OK"));
+        assert!(ready.ends_with("ready\n"));
+
+        let metrics = http_request(addr, "GET", "/metrics").await;
+        assert!(metrics.starts_with("HTTP/1.1 200 OK"));
+        assert!(metrics.contains("content-type: text/plain; version=0.0.4; charset=utf-8"));
+        assert!(metrics.contains("oxidedns_zones_total 1"));
+        assert!(metrics.contains("oxidedns_zones_active 1"));
+
+        let missing = http_request(addr, "GET", "/missing").await;
+        assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+
+        let method_not_allowed = http_request(addr, "POST", "/metrics").await;
+        assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
+
+        server.abort();
     }
 
     #[test]
@@ -3538,6 +3682,22 @@ mod tests {
         let response_len = u16::from_be_bytes(length_prefix) as usize;
         let mut response = vec![0u8; response_len];
         stream.read_exact(&mut response).await.unwrap();
+        response
+    }
+
+    async fn http_request(addr: std::net::SocketAddr, method: &str, path: &str) -> String {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             Connection: close\r\n\
+             Content-Length: 0\r\n\
+             \r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
         response
     }
 
