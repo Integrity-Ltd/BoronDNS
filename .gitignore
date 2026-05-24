@@ -1,0 +1,18 @@
+# Rust build output
+/target/
+
+# Editor and tool backups
+*~
+*.swp
+*.swo
+**/*.rs.bk
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Logs and runtime scratch output
+*.log
+/tmp/
+

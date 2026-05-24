@@ -1,0 +1,23 @@
+[server]
+listen_udp = ["0.0.0.0:5300", "[::]:5300"]
+listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
+health = "127.0.0.1:8080"
+log_level = "info"
+
+[limits]
+axfr_timeout_secs = 300
+ixfr_timeout_secs = 60
+notify_dedup_secs = 1
+max_concurrent_transfers = 4
+
+[[zones]]
+name = "example.test."
+class = "IN"
+primaries = ["192.0.2.53:53"]
+notify_sources = ["192.0.2.53"]
+
+#[[tsig_keys]]
+#name = "transfer-key."
+#algorithm = "hmac-sha256"
+#secret = "base64-secret-material"
+

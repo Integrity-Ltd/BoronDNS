@@ -1,0 +1,21 @@
+[package]
+name = "oxidedns-cli"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "oxidedns"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+oxidedns-core = { path = "../oxidedns-core", version = "0.1.0" }
+oxidedns-server = { path = "../oxidedns-server", version = "0.1.0" }
+
+[lints]
+workspace = true

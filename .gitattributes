@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf diff=markdown
+*.sh text eol=lf
+Cargo.lock text eol=lf
+
+*.docx binary
+*.pdf binary
+*.zip binary
+
