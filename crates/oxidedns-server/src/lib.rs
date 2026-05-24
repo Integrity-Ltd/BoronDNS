@@ -6093,6 +6093,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
+        let (primary, trust_anchor, observed_query) =
+            spawn_xot_axfr_primary_recording_query(1).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                tsig_key = "transfer-key."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        assert!(plan.tsig_key.is_some());
+        assert_eq!(plan.primaries[0].transport, TransferTransportConfig::Xot);
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
+        )
+        .await
+        .expect("refresh success");
+
+        assert_eq!(snapshot.serial, Some(1));
+        let query = observed_query
+            .lock()
+            .expect("observed query lock poisoned")
+            .clone()
+            .expect("primary observed query");
+        assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+        assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
+    }
+
+    #[tokio::test]
     async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
@@ -6960,6 +7022,65 @@ mod tests {
         });
 
         (addr, cert_path.display().to_string())
+    }
+
+    async fn spawn_xot_axfr_primary_recording_query(
+        serial: u32,
+    ) -> (std::net::SocketAddr, String, Arc<Mutex<Option<Vec<u8>>>>) {
+        let (cert_path, key_path) = write_self_signed_xot_cert_files();
+
+        let certs = load_pem_certs(cert_path.to_str().expect("utf-8 cert path"))
+            .expect("load generated cert");
+        let key = load_pem_private_key(
+            "127.0.0.1:0".parse().unwrap(),
+            key_path.to_str().expect("utf-8 key path"),
+        )
+        .expect("load generated key");
+        let mut config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server tls config");
+        config.alpn_protocols = vec![b"dot".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let observed_query = Arc::new(Mutex::new(None));
+        let observed_query_for_task = observed_query.clone();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = acceptor.accept(stream).await.unwrap();
+            let mut length_prefix = [0u8; 2];
+            stream.read_exact(&mut length_prefix).await.unwrap();
+            let query_len = u16::from_be_bytes(length_prefix) as usize;
+            let mut query = vec![0u8; query_len];
+            stream.read_exact(&mut query).await.unwrap();
+
+            let header = Header::parse(&query).unwrap();
+            let request_mac = extract_query_tsig_mac(&query);
+            observed_query_for_task
+                .lock()
+                .expect("observed query lock poisoned")
+                .replace(query);
+
+            let response = axfr_response(header.id, serial);
+            let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+            let response = key
+                .sign_response(
+                    &response,
+                    &request_mac,
+                    current_unix_time(),
+                    DEFAULT_TSIG_FUDGE_SECS,
+                )
+                .unwrap()
+                .message;
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+
+        (addr, cert_path.display().to_string(), observed_query)
     }
 
     fn write_self_signed_xot_cert_files() -> (std::path::PathBuf, std::path::PathBuf) {
