@@ -614,8 +614,21 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
     match record.rr_type {
         rr_type if rr_type == RecordType::A as u16 => validate_fixed_rdata(record, 4),
         rr_type if rr_type == RecordType::Aaaa as u16 => validate_fixed_rdata(record, 16),
+        rr_type if rr_type == RecordType::Srv as u16 => {
+            validate_uncompressed_domain_name_at_end(&record.rdata, 6)
+        }
+        rr_type if rr_type == RecordType::Naptr as u16 => validate_naptr_rdata(&record.rdata),
         rr_type if rr_type == RecordType::Dname as u16 => {
             validate_uncompressed_domain_name_rdata(&record.rdata)
+        }
+        rr_type if rr_type == RecordType::Rrsig as u16 => {
+            validate_uncompressed_domain_name_with_trailing(&record.rdata, 18).map(|_| ())
+        }
+        rr_type if rr_type == RecordType::Nsec as u16 => {
+            validate_uncompressed_domain_name_with_trailing(&record.rdata, 0).map(|_| ())
+        }
+        rr_type if rr_type == RecordType::Svcb as u16 || rr_type == RecordType::Https as u16 => {
+            validate_svcb_like_rdata(&record.rdata)
         }
         _ => Ok(()),
     }
@@ -630,7 +643,32 @@ fn validate_fixed_rdata(record: &ResourceRecord, expected_len: usize) -> Result<
 }
 
 fn validate_uncompressed_domain_name_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
-    let mut pos = 0usize;
+    let consumed = validate_uncompressed_domain_name_at(rdata, 0)?;
+    if consumed == rdata.len() {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
+}
+
+fn validate_uncompressed_domain_name_at_end(rdata: &[u8], offset: usize) -> Result<(), AxfrError> {
+    let consumed = validate_uncompressed_domain_name_at(rdata, offset)?;
+    if offset + consumed == rdata.len() {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidRdata)
+    }
+}
+
+fn validate_uncompressed_domain_name_with_trailing(
+    rdata: &[u8],
+    offset: usize,
+) -> Result<usize, AxfrError> {
+    validate_uncompressed_domain_name_at(rdata, offset)
+}
+
+fn validate_uncompressed_domain_name_at(rdata: &[u8], offset: usize) -> Result<usize, AxfrError> {
+    let mut pos = offset;
     let mut total_len = 1usize;
 
     loop {
@@ -643,11 +681,7 @@ fn validate_uncompressed_domain_name_rdata(rdata: &[u8]) -> Result<(), AxfrError
         pos += 1;
 
         if len == 0 {
-            return if pos == rdata.len() {
-                Ok(())
-            } else {
-                Err(AxfrError::InvalidRdata)
-            };
+            return Ok(pos - offset);
         }
 
         let label_len = len as usize;
@@ -661,6 +695,66 @@ fn validate_uncompressed_domain_name_rdata(rdata: &[u8]) -> Result<(), AxfrError
         }
 
         pos += label_len;
+    }
+}
+
+fn validate_naptr_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    if rdata.len() < 8 {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let mut offset = 4;
+    for _ in 0..3 {
+        offset = skip_character_string(rdata, offset)?;
+    }
+    validate_uncompressed_domain_name_at_end(rdata, offset)
+}
+
+fn validate_svcb_like_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    if rdata.len() < 3 {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let priority = u16::from_be_bytes([rdata[0], rdata[1]]);
+    let target_len = validate_uncompressed_domain_name_with_trailing(rdata, 2)?;
+    let mut offset = 2 + target_len;
+    if priority == 0 && offset != rdata.len() {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let mut last_key = None;
+    while offset < rdata.len() {
+        if offset + 4 > rdata.len() {
+            return Err(AxfrError::InvalidRdata);
+        }
+        let key = u16::from_be_bytes([rdata[offset], rdata[offset + 1]]);
+        let len = u16::from_be_bytes([rdata[offset + 2], rdata[offset + 3]]) as usize;
+        offset += 4;
+        if offset + len > rdata.len() {
+            return Err(AxfrError::InvalidRdata);
+        }
+        if last_key.is_some_and(|last| key <= last) {
+            return Err(AxfrError::InvalidRdata);
+        }
+        last_key = Some(key);
+        offset += len;
+    }
+
+    Ok(())
+}
+
+fn skip_character_string(rdata: &[u8], offset: usize) -> Result<usize, AxfrError> {
+    let Some(&len) = rdata.get(offset) else {
+        return Err(AxfrError::InvalidRdata);
+    };
+    let next = offset
+        .checked_add(1)
+        .and_then(|next| next.checked_add(len as usize))
+        .ok_or(AxfrError::InvalidRdata)?;
+    if next <= rdata.len() {
+        Ok(next)
+    } else {
+        Err(AxfrError::InvalidRdata)
     }
 }
 
@@ -849,6 +943,37 @@ mod tests {
 
     fn name_rdata(name: &str) -> Vec<u8> {
         DomainName::from_absolute_str(name).unwrap().to_wire()
+    }
+
+    fn srv_rdata(target: Vec<u8>) -> Vec<u8> {
+        let mut rdata = vec![0, 10, 0, 20, 1, 187];
+        rdata.extend(target);
+        rdata
+    }
+
+    fn naptr_rdata(replacement: Vec<u8>) -> Vec<u8> {
+        let mut rdata = vec![0, 10, 0, 20, 0, 0, 0];
+        rdata.extend(replacement);
+        rdata
+    }
+
+    fn rrsig_rdata(signer: Vec<u8>) -> Vec<u8> {
+        let mut rdata = vec![0; 18];
+        rdata.extend(signer);
+        rdata
+    }
+
+    fn nsec_rdata(next_name: Vec<u8>) -> Vec<u8> {
+        let mut rdata = next_name;
+        rdata.extend([0, 1, 1]);
+        rdata
+    }
+
+    fn svcb_rdata(priority: u16, target: Vec<u8>, params: &[u8]) -> Vec<u8> {
+        let mut rdata = priority.to_be_bytes().to_vec();
+        rdata.extend(target);
+        rdata.extend(params);
+        rdata
     }
 
     fn current_zone(records: Vec<ResourceRecord>) -> ZoneSnapshot {
@@ -1610,8 +1735,16 @@ mod tests {
             RecordType::Cname as u16,
             name_rdata("target.example.test."),
         );
-        let rrsig = record("alias.example.test.", RecordType::Rrsig as u16, vec![0]);
-        let nsec = record("alias.example.test.", RecordType::Nsec as u16, vec![0]);
+        let rrsig = record(
+            "alias.example.test.",
+            RecordType::Rrsig as u16,
+            rrsig_rdata(name_rdata("example.test.")),
+        );
+        let nsec = record(
+            "alias.example.test.",
+            RecordType::Nsec as u16,
+            nsec_rdata(name_rdata("next.example.test.")),
+        );
         let nsec3 = record("alias.example.test.", RecordType::Nsec3 as u16, vec![0]);
         let snapshot = parse_axfr_response(
             0x1234,
@@ -1723,6 +1856,95 @@ mod tests {
         .expect_err("DNAME with compressed target RDATA");
 
         assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_axfr_post_rfc3597_compressed_name_rdata() {
+        let compressed_name = vec![0xc0, 0];
+        let cases = [
+            (
+                RecordType::Srv as u16,
+                srv_rdata(compressed_name.clone()),
+                "SRV compressed target",
+            ),
+            (
+                RecordType::Naptr as u16,
+                naptr_rdata(compressed_name.clone()),
+                "NAPTR compressed replacement",
+            ),
+            (
+                RecordType::Rrsig as u16,
+                rrsig_rdata(compressed_name.clone()),
+                "RRSIG compressed signer",
+            ),
+            (
+                RecordType::Nsec as u16,
+                nsec_rdata(compressed_name.clone()),
+                "NSEC compressed next domain",
+            ),
+            (
+                RecordType::Svcb as u16,
+                svcb_rdata(1, compressed_name.clone(), &[]),
+                "SVCB compressed target",
+            ),
+            (
+                RecordType::Https as u16,
+                svcb_rdata(1, compressed_name, &[]),
+                "HTTPS compressed target",
+            ),
+        ];
+
+        for (rr_type, rdata, context) in cases {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let invalid = record("www.example.test.", rr_type, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
+    }
+
+    #[test]
+    fn rejects_axfr_malformed_svcb_params() {
+        let cases = [
+            (
+                svcb_rdata(1, name_rdata("svc.example.test."), &[0, 1, 0, 4, 1]),
+                "truncated SVCB param",
+            ),
+            (
+                svcb_rdata(0, name_rdata("alias.example.test."), &[0, 1, 0, 0]),
+                "AliasMode SVCB with params",
+            ),
+            (
+                svcb_rdata(
+                    1,
+                    name_rdata("svc.example.test."),
+                    &[0, 2, 0, 0, 0, 1, 0, 0],
+                ),
+                "out-of-order SVCB params",
+            ),
+        ];
+
+        for (rdata, context) in cases {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let invalid = record("svc.example.test.", RecordType::Svcb as u16, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
     }
 
     #[test]
