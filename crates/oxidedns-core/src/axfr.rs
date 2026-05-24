@@ -614,6 +614,9 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
     match record.rr_type {
         rr_type if rr_type == RecordType::A as u16 => validate_fixed_rdata(record, 4),
         rr_type if rr_type == RecordType::Aaaa as u16 => validate_fixed_rdata(record, 16),
+        rr_type if rr_type == RecordType::Dname as u16 => {
+            validate_uncompressed_domain_name_rdata(&record.rdata)
+        }
         _ => Ok(()),
     }
 }
@@ -623,6 +626,41 @@ fn validate_fixed_rdata(record: &ResourceRecord, expected_len: usize) -> Result<
         Ok(())
     } else {
         Err(AxfrError::InvalidRdata)
+    }
+}
+
+fn validate_uncompressed_domain_name_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    let mut pos = 0usize;
+    let mut total_len = 1usize;
+
+    loop {
+        let Some(&len) = rdata.get(pos) else {
+            return Err(AxfrError::InvalidRdata);
+        };
+        if len & 0xc0 != 0 {
+            return Err(AxfrError::InvalidRdata);
+        }
+        pos += 1;
+
+        if len == 0 {
+            return if pos == rdata.len() {
+                Ok(())
+            } else {
+                Err(AxfrError::InvalidRdata)
+            };
+        }
+
+        let label_len = len as usize;
+        if label_len > 63 || pos + label_len > rdata.len() {
+            return Err(AxfrError::InvalidRdata);
+        }
+
+        total_len += 1 + label_len;
+        if total_len > 255 {
+            return Err(AxfrError::InvalidRdata);
+        }
+
+        pos += label_len;
     }
 }
 
@@ -1229,6 +1267,36 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_dname_with_invalid_target_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let bad_dname = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            vec![0xc0, 0],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, bad_dname, new_soa],
+            )],
+        )
+        .expect_err("IXFR invalid DNAME target RDATA");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::InvalidRdata));
+    }
+
+    #[test]
     fn rejects_ixfr_starting_old_soa_mismatch() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -1615,6 +1683,44 @@ mod tests {
             &[message(0x1234, vec![soa.clone(), apex_ns(), bad_aaaa, soa])],
         )
         .expect_err("invalid AAAA RDATA length");
+
+        assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_axfr_dname_with_trailing_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut target = name_rdata("target.example.test.");
+        target.push(0);
+        let dname = record("redirect.example.test.", RecordType::Dname as u16, target);
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), dname, soa])],
+        )
+        .expect_err("DNAME with trailing RDATA");
+
+        assert_eq!(error, AxfrError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_axfr_dname_with_compressed_target_rdata() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let dname = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            vec![0xc0, 0],
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), dname, soa])],
+        )
+        .expect_err("DNAME with compressed target RDATA");
 
         assert_eq!(error, AxfrError::InvalidRdata);
     }
