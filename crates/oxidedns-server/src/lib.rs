@@ -589,7 +589,19 @@ async fn poll_soa_from_primary_inner(
 
     let response =
         maybe_verify_transfer_response(&buffer[..len], tsig_key, query.request_mac.as_deref())?;
-    axfr::parse_soa_response(qid, zone_apex, qclass, &response).map_err(TransferError::Soa)
+    match axfr::parse_soa_response(qid, zone_apex, qclass, &response) {
+        Ok(serial) => Ok(serial),
+        Err(error) => {
+            warn!(
+                zone = %zone_apex,
+                %primary,
+                qid,
+                %error,
+                "SOA poll response rejected"
+            );
+            Err(TransferError::Soa(error))
+        }
+    }
 }
 
 pub async fn transfer_ixfr_from_primary(
@@ -3265,6 +3277,12 @@ mod tests {
         net::{TcpListener, TcpStream, UdpSocket},
         sync::{mpsc, oneshot},
     };
+    use tracing::{
+        Event, Metadata, Subscriber,
+        field::{Field, Visit},
+        span::{Attributes, Id, Record},
+        subscriber::Interest,
+    };
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
@@ -4265,6 +4283,44 @@ mod tests {
                 .expect("SOA poll");
 
         assert_eq!(serial, 7);
+    }
+
+    #[tokio::test]
+    async fn poll_soa_from_primary_ignores_udp_packet_from_unconnected_peer() {
+        let primary = spawn_soa_primary_with_spoofed_malformed_packet(7).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let serial =
+            poll_soa_from_primary(primary, &apex, 1, 0x1234, std::time::Duration::from_secs(5))
+                .await
+                .expect("SOA poll should ignore the unconnected sender");
+
+        assert_eq!(serial, 7);
+    }
+
+    #[tokio::test]
+    async fn poll_soa_from_primary_records_warning_evidence_for_malformed_response() {
+        let primary = spawn_malformed_soa_primary().await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let error =
+            poll_soa_from_primary(primary, &apex, 1, 0x1234, std::time::Duration::from_secs(5))
+                .await
+                .expect_err("malformed SOA poll response should fail");
+
+        assert!(matches!(
+            error,
+            super::TransferError::Soa(oxidedns_core::axfr::SoaQueryError::MalformedMessage)
+        ));
+        assert!(captured.contains_all(&[
+            "SOA poll response rejected",
+            "zone=example.test.",
+            &format!("primary={primary}"),
+            "qid=4660",
+            "SOA response message is malformed",
+        ]));
     }
 
     #[tokio::test]
@@ -5859,6 +5915,43 @@ mod tests {
         addr
     }
 
+    async fn spawn_soa_primary_with_spoofed_malformed_packet(serial: u32) -> std::net::SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 512];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let query = &buffer[..len];
+            let header = Header::parse(query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+            let attacker = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            attacker.send_to(&[0], peer).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+            let response = soa_response(header.id, serial);
+            socket.send_to(&response, peer).await.unwrap();
+        });
+        addr
+    }
+
+    async fn spawn_malformed_soa_primary() -> std::net::SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 512];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let query = &buffer[..len];
+            let header = Header::parse(query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+            socket.send_to(&[0], peer).await.unwrap();
+        });
+        addr
+    }
+
     async fn spawn_signed_soa_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = socket.local_addr().unwrap();
@@ -6119,6 +6212,86 @@ mod tests {
             NotifyAuthority::from_config(&config),
             TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap(),
         )
+    }
+
+    #[derive(Clone, Debug)]
+    struct CapturedEvents {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CapturedEvents {
+        fn new() -> Self {
+            Self {
+                lines: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn push(&self, line: String) {
+            self.lines
+                .lock()
+                .expect("captured events lock poisoned")
+                .push(line);
+        }
+
+        fn contains_all(&self, needles: &[&str]) -> bool {
+            let lines = self.lines.lock().expect("captured events lock poisoned");
+            lines
+                .iter()
+                .any(|line| needles.iter().all(|needle| line.contains(needle)))
+        }
+    }
+
+    #[derive(Debug)]
+    struct CapturingSubscriber {
+        events: CapturedEvents,
+    }
+
+    impl CapturingSubscriber {
+        fn new(events: CapturedEvents) -> Self {
+            Self { events }
+        }
+    }
+
+    impl Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut visitor = EventLine::default();
+            event.record(&mut visitor);
+            self.events.push(visitor.line);
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+
+        fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+            Interest::always()
+        }
+    }
+
+    #[derive(Default)]
+    struct EventLine {
+        line: String,
+    }
+
+    impl Visit for EventLine {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if !self.line.is_empty() {
+                self.line.push(' ');
+            }
+            self.line.push_str(&format!("{}={:?}", field.name(), value));
+        }
     }
 
     fn replace_final_tsig_mac(message: &[u8], replacement_mac: &[u8]) -> Vec<u8> {
