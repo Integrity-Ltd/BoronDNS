@@ -134,6 +134,8 @@ def axfr_response(qid):
         rr(ZONE, NS, name_wire("ns1.alpha.test.")),
         rr("ns1.alpha.test.", A, bytes([127, 0, 0, 1])),
         rr("www.alpha.test.", A, bytes([192, 0, 2, 10])),
+        rr("child.alpha.test.", NS, name_wire("ns.child.alpha.test.")),
+        rr("ns.child.alpha.test.", A, bytes([192, 0, 2, 53])),
         soa,
     ]
     return struct.pack("!HHHHHH", qid, 0x8000, 0, len(answers), 0, 0) + b"".join(answers)
@@ -188,7 +190,17 @@ import time
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
 LOG_PATH = sys.argv[3]
-ATTEMPTS = 20
+ATTEMPTS_PER_CASE = 8
+A = 1
+AAAA = 28
+
+CASES = [
+    ("positive", "www.alpha.test.", A),
+    ("nxdomain", "missing.alpha.test.", A),
+    ("nodata", "alpha.test.", AAAA),
+    ("referral", "www.child.alpha.test.", A),
+    ("error", "outside.test.", A),
+]
 
 
 def log(message):
@@ -206,11 +218,11 @@ def name_wire(name):
     return bytes(out)
 
 
-def query(qid):
+def query(qid, qname, qtype):
     return b"".join([
         struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0),
-        name_wire("www.alpha.test."),
-        struct.pack("!HH", 1, 1),
+        name_wire(qname),
+        struct.pack("!HH", qtype, 1),
     ])
 
 
@@ -218,43 +230,68 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("127.0.0.1", 0))
 sock.settimeout(0.04)
 
-responses = 0
-truncated = 0
-dropped = 0
-positive = 0
+totals = {"attempts": 0, "responses": 0, "truncated": 0, "dropped": 0, "full": 0}
+case_totals = {
+    name: {"responses": 0, "truncated": 0, "dropped": 0, "full": 0}
+    for name, _, _ in CASES
+}
 
-for index in range(ATTEMPTS):
-    qid = 0xA000 + index
-    sock.sendto(query(qid), (HOST, PORT))
-    try:
-        packet, _ = sock.recvfrom(4096)
-    except socket.timeout:
-        dropped += 1
-        log(f"query={index} result=timeout")
-        continue
-    responses += 1
-    if len(packet) < 12:
-        log(f"query={index} result=short bytes={len(packet)}")
-        continue
-    rid, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", packet[:12])
-    if rid != qid:
-        log(f"query={index} result=mismatched-qid got={rid}")
-        continue
-    tc = bool(flags & 0x0200)
-    if tc:
-        truncated += 1
-    if ancount > 0:
-        positive += 1
-    log(
-        f"query={index} result=response tc={int(tc)} "
-        f"ancount={ancount} nscount={nscount} arcount={arcount}"
+for case_index, (case_name, qname, qtype) in enumerate(CASES):
+    for attempt_index in range(ATTEMPTS_PER_CASE):
+        qid = 0xA000 + case_index * 0x100 + attempt_index
+        totals["attempts"] += 1
+        sock.sendto(query(qid, qname, qtype), (HOST, PORT))
+        try:
+            packet, _ = sock.recvfrom(4096)
+        except socket.timeout:
+            totals["dropped"] += 1
+            case_totals[case_name]["dropped"] += 1
+            log(f"case={case_name} query={attempt_index} result=timeout")
+            continue
+
+        totals["responses"] += 1
+        case_totals[case_name]["responses"] += 1
+        if len(packet) < 12:
+            log(f"case={case_name} query={attempt_index} result=short bytes={len(packet)}")
+            continue
+        rid, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", packet[:12])
+        if rid != qid:
+            log(f"case={case_name} query={attempt_index} result=mismatched-qid got={rid}")
+            continue
+        tc = bool(flags & 0x0200)
+        rcode = flags & 0x000f
+        if tc:
+            totals["truncated"] += 1
+            case_totals[case_name]["truncated"] += 1
+        else:
+            totals["full"] += 1
+            case_totals[case_name]["full"] += 1
+        log(
+            f"case={case_name} query={attempt_index} result=response tc={int(tc)} "
+            f"rcode={rcode} qdcount={qdcount} ancount={ancount} "
+            f"nscount={nscount} arcount={arcount}"
+        )
+        time.sleep(0.005)
+
+summary = [
+    f"{key}={value}"
+    for key, value in totals.items()
+]
+for case_name in case_totals:
+    summary.extend(
+        f"{case_name}_{key}={value}"
+        for key, value in case_totals[case_name].items()
     )
-    time.sleep(0.005)
+print(" ".join(summary))
 
-print(f"attempts={ATTEMPTS} responses={responses} positive={positive} truncated={truncated} dropped={dropped}")
-
-if truncated < 5 or dropped < 5:
-    raise SystemExit("RRL did not produce enough truncated and dropped UDP responses")
+for case_name, counts in case_totals.items():
+    if counts["truncated"] < 3 or counts["dropped"] < 3:
+        raise SystemExit(
+            f"RRL did not limit {case_name} enough: "
+            f"truncated={counts['truncated']} dropped={counts['dropped']}"
+        )
+    if counts["full"] != 0:
+        raise SystemExit(f"RRL emitted unexpected full {case_name} responses")
 PY
 
 cat >"$oxidedns_conf" <<EOF
@@ -325,7 +362,7 @@ metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-  'oxidedns_rrl_keys_tracked 1'; do
+  'oxidedns_rrl_keys_tracked 5'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected line: $expected" >&2
     exit 1
@@ -337,7 +374,7 @@ dropped="$(awk '$1 == "oxidedns_rrl_responses_dropped_total" { print int($2) }' 
 truncated="$(awk '$1 == "oxidedns_rrl_responses_truncated_total" { print int($2) }' <<<"$metrics")"
 queries_truncated="$(awk '$1 == "oxidedns_queries_truncated_total" { print int($2) }' <<<"$metrics")"
 
-if (( subject < 20 || dropped < 5 || truncated < 5 || queries_truncated < 5 )); then
+if (( subject < 40 || dropped < 15 || truncated < 15 || queries_truncated < 15 )); then
   echo "RRL metrics did not show expected UDP limiting: subject=$subject dropped=$dropped truncated=$truncated query_tc=$queries_truncated" >&2
   exit 1
 fi

@@ -225,7 +225,7 @@ RRL foundations are started:
 - UDP query responses are accounted by `(source IP prefix, response category)` for positive, NXDOMAIN, NODATA, referral, and error buckets; TCP responses and non-query responses are not subject to this UDP RRL path;
 - each accounting key uses a token bucket with capacity/refill equal to the configured per-second rate, applies the configured slip policy by dropping or emitting TC=1 empty-section responses that retain the question and OPT pseudo-RR, and evicts least-recently-used keys at the configured cap;
 - `/metrics` exposes RRL subject, dropped, truncated, currently tracked key, and key-eviction counters.
-- `scripts/interop-rrl-udp.sh` starts OxideDNS against a fake AXFR primary, drives repeated UDP positive responses through a zero-rate positive RRL bucket, and verifies both dropped/truncated wire behavior and RRL metrics.
+- `scripts/interop-rrl-udp.sh` starts OxideDNS against a fake AXFR primary, drives repeated UDP positive, NXDOMAIN, NODATA, referral, and error responses through zero-rate RRL buckets, and verifies both dropped/truncated wire behavior and RRL metrics.
 
 XoT foundations are started:
 
@@ -248,7 +248,7 @@ Interop harness foundations:
 - `scripts/interop-knot-axfr-docker.sh` starts Knot DNS inside an Alpine Docker container with the `alpha.test.` fixture, validates Knot SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-knot-tsig-axfr-docker.sh` starts Knot DNS with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
-- `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior plus Prometheus RRL counters.
+- `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
 
 Fuzzing foundations:
 
