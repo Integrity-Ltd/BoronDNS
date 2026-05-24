@@ -116,6 +116,7 @@ Slice 1 has a tested UDP query/response foundation:
 
 - malformed datagrams and response packets are discarded or rejected as specified;
 - unsupported opcodes return NOTIMP;
+- DNS UPDATE opcode 5 returns NOTIMP without mutating the in-memory zone snapshot;
 - malformed questions return FORMERR;
 - unsupported classes and out-of-zone queries return REFUSED;
 - QCLASS ANY matches served IN-class data;

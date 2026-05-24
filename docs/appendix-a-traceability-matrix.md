@@ -27,7 +27,7 @@ drift.
 
 | Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
-| ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/audit-invariants.sh`; `scripts/check.sh`; `docs/verification-ledger.md` | Static invariant inspection evidence exists; add behavioral UPDATE rejection evidence, concurrent refresh/query atomicity stress evidence, and read-only root filesystem runtime evidence before acceptance review. |
+| ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/audit-invariants.sh`; `scripts/check.sh`; `docs/verification-ledger.md`; `crates/oxidedns-core/src/dns.rs` test `dns_update_opcode_gets_notimp_without_zone_mutation` | Static invariant inspection and DNS UPDATE rejection evidence exist; add concurrent refresh/query atomicity stress evidence and read-only root filesystem runtime evidence before acceptance review. |
 
 ## Functional Requirements
 

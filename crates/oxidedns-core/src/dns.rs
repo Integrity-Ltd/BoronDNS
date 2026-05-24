@@ -1867,6 +1867,27 @@ mod tests {
     }
 
     #[test]
+    fn dns_update_opcode_gets_notimp_without_zone_mutation() {
+        let mut packet = query(&example_name(), RecordType::Soa as u16, 1);
+        packet[2..4].copy_from_slice(&(5u16 << 11).to_be_bytes());
+
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(7),
+            Vec::new(),
+        ));
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotImp as u8);
+        assert_eq!(
+            store.get("example.test.").expect("zone exists").serial,
+            Some(7)
+        );
+    }
+
+    #[test]
     fn invalid_qdcount_gets_formerr_without_question() {
         let mut packet = query(&example_name(), 1, 1);
         packet[5] = 2;
