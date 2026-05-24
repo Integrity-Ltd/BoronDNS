@@ -195,7 +195,8 @@ DNSSEC work is partially started:
 - DO=1 NXDOMAIN responses include existing NSEC RRsets covering the queried owner name and the closest-encloser wildcard name, plus their stored covering RRSIGs, and set the response OPT DO bit when those augmentation records are included.
 - DO=1 exact-name NODATA responses include an existing NSEC RRset at the queried owner name, plus its stored covering RRSIG, and set the response OPT DO bit when those augmentation records are included.
 - DO=1 wildcard-synthesized positive responses include an existing NSEC RRset covering the queried owner name, plus its stored covering RRSIG, to prove the exact queried owner did not exist.
-- explicit RRSIG and NSEC queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
+- explicit RRSIG, NSEC, and NSEC3 queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
+- direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
 - response header construction unconditionally clears AD and CD bits.
 
 Slice 8 has health endpoint foundations:

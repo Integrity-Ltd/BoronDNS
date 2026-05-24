@@ -1655,6 +1655,32 @@ mod tests {
         rdata
     }
 
+    fn dnskey_rdata(algorithm: u8) -> Vec<u8> {
+        let mut rdata = Vec::new();
+        rdata.extend_from_slice(&256u16.to_be_bytes());
+        rdata.push(3);
+        rdata.push(algorithm);
+        rdata.extend_from_slice(b"public-key");
+        rdata
+    }
+
+    fn nsec3_rdata(hash_algorithm: u8) -> Vec<u8> {
+        let mut rdata = vec![hash_algorithm, 0];
+        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.push(0);
+        rdata.push(4);
+        rdata.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        rdata.extend_from_slice(&[0, 1, 0x40]);
+        rdata
+    }
+
+    fn nsec3param_rdata(hash_algorithm: u8) -> Vec<u8> {
+        let mut rdata = vec![hash_algorithm, 0];
+        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.push(0);
+        rdata
+    }
+
     #[test]
     fn discards_short_header() {
         assert_eq!(
@@ -4156,6 +4182,82 @@ mod tests {
             vec![RecordType::Nsec as u16]
         );
         assert_eq!(response_opt_ttl(&response), Some(0));
+    }
+
+    #[test]
+    fn explicit_nsec3_query_without_do_returns_nsec3_without_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("hash.example.test.").unwrap(),
+                RecordType::Nsec3 as u16,
+                1,
+                300,
+                vec![nsec3_rdata(253)],
+            )],
+        ));
+        let mut packet = query(
+            b"\x04hash\x07example\x04test\x00",
+            RecordType::Nsec3 as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Nsec3 as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
+    }
+
+    #[test]
+    fn direct_dnskey_and_nsec3param_queries_preserve_unknown_algorithms() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Dnskey as u16,
+                    1,
+                    300,
+                    vec![dnskey_rdata(253)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![nsec3param_rdata(254)],
+                ),
+            ],
+        ));
+
+        let dnskey_response = store_response(
+            &query(b"\x07example\x04test\x00", RecordType::Dnskey as u16, 1),
+            &store,
+        );
+        let nsec3param_response = store_response(
+            &query(b"\x07example\x04test\x00", RecordType::Nsec3Param as u16, 1),
+            &store,
+        );
+
+        assert_eq!(dnskey_response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&dnskey_response),
+            vec![RecordType::Dnskey as u16]
+        );
+        assert_eq!(nsec3param_response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&nsec3param_response),
+            vec![RecordType::Nsec3Param as u16]
+        );
     }
 
     #[test]
