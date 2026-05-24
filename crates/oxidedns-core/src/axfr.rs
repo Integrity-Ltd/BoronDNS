@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tracing::warn;
 
 use crate::{
     dns::{DNS_HEADER_LEN, DnsParseError, DomainName, Header, RecordType},
@@ -1087,6 +1088,17 @@ fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
                 && rrset.rr_type == record.rr_type
                 && rrset.class == record.class
         }) {
+            if existing.ttl != record.ttl {
+                warn!(
+                    owner = %record.owner,
+                    rr_type = record.rr_type,
+                    class = record.class,
+                    existing_ttl = existing.ttl,
+                    incoming_ttl = record.ttl,
+                    adopted_ttl = existing.ttl.min(record.ttl),
+                    "zone transfer delivered non-uniform RRset TTLs; adopting lowest TTL"
+                );
+            }
             existing.ttl = existing.ttl.min(record.ttl);
             existing.rdatas.push(record.rdata);
         } else {
@@ -1509,6 +1521,44 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(rdatas, vec![Vec::new(), vec![0xc0, 0x0c, 0, 255]]);
+    }
+
+    #[test]
+    fn parses_axfr_rrset_with_mismatched_ttls_using_lowest_ttl() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let first_a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let mut second_a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 11],
+        );
+        second_a.ttl = 120;
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), first_a, second_a, soa],
+            )],
+        )
+        .expect("AXFR with non-uniform RRset TTLs");
+
+        let lookup = snapshot.lookup(
+            &DomainName::from_absolute_str("www.example.test.").unwrap(),
+            RecordType::A as u16,
+            1,
+        );
+        assert_eq!(lookup.answers.len(), 2);
+        assert!(
+            lookup.answers.iter().all(|record| record.ttl == 120),
+            "all RRset members should use the adopted lowest TTL"
+        );
     }
 
     #[test]
