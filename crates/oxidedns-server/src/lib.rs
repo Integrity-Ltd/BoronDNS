@@ -23,6 +23,7 @@ use oxidedns_core::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Transport, answer_message_with_notify_hooks,
     },
+    tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
     zone::{SoaTimers, ZoneSnapshot, ZoneStore},
 };
 
@@ -84,6 +85,9 @@ pub enum TransferError {
 
     #[error("failed to generate random DNS query ID: {0}")]
     RandomQueryId(getrandom::Error),
+
+    #[error("failed to sign transfer query with TSIG: {0}")]
+    Tsig(#[from] TsigError),
 }
 
 #[derive(Debug)]
@@ -122,7 +126,7 @@ impl Runtime {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
-        self.load_initial_zones(&refresh_registry, &ixfr_cooldowns)
+        self.load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns)
             .await;
 
         info!(
@@ -235,17 +239,16 @@ impl Runtime {
 
     async fn load_initial_zones(
         &self,
+        transfer_plan: &TransferPlan,
         refresh_registry: &ZoneRefreshRegistry,
         ixfr_cooldowns: &IxfrCooldownRegistry,
     ) {
         for zone in &self.config.zones {
             let zone_apex = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
-            let plan = ZoneTransferPlan {
-                origin: zone_apex,
-                qclass: 1,
-                primaries: zone.primaries.clone(),
-            };
+            let plan = transfer_plan
+                .get(&zone_apex)
+                .expect("configuration validation builds a transfer plan for each zone");
 
             if let Some(snapshot) = refresh_zone_from_primaries(
                 &self.zones,
@@ -275,8 +278,20 @@ pub async fn transfer_axfr_from_primary(
     qid: u16,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
+    transfer_axfr_from_primary_with_tsig(primary, zone_apex, qclass, qid, None, timeout_duration)
+        .await
+}
+
+async fn transfer_axfr_from_primary_with_tsig(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig_key: Option<&TsigKey>,
+    timeout_duration: Duration,
+) -> Result<ZoneSnapshot, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid).await
+        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, tsig_key).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -291,8 +306,19 @@ pub async fn poll_soa_from_primary(
     qid: u16,
     timeout_duration: Duration,
 ) -> Result<u32, TransferError> {
+    poll_soa_from_primary_with_tsig(primary, zone_apex, qclass, qid, None, timeout_duration).await
+}
+
+async fn poll_soa_from_primary_with_tsig(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig_key: Option<&TsigKey>,
+    timeout_duration: Duration,
+) -> Result<u32, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid).await
+        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig_key).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -305,6 +331,7 @@ async fn poll_soa_from_primary_inner(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
+    tsig_key: Option<&TsigKey>,
 ) -> Result<u32, TransferError> {
     let socket = UdpSocket::bind(outbound_udp_bind_addr(primary))
         .await
@@ -320,7 +347,7 @@ async fn poll_soa_from_primary_inner(
             source,
         })?;
 
-    let query = axfr::build_soa_query(qid, zone_apex, qclass);
+    let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig_key)?;
     socket
         .send(&query)
         .await
@@ -349,8 +376,30 @@ pub async fn transfer_ixfr_from_primary(
     current_zone: &ZoneSnapshot,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
+    transfer_ixfr_from_primary_with_tsig(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        current_zone,
+        None,
+        timeout_duration,
+    )
+    .await
+}
+
+async fn transfer_ixfr_from_primary_with_tsig(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    current_zone: &ZoneSnapshot,
+    tsig_key: Option<&TsigKey>,
+    timeout_duration: Duration,
+) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone).await
+        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, tsig_key)
+            .await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -364,6 +413,7 @@ async fn transfer_ixfr_from_primary_inner(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
+    tsig_key: Option<&TsigKey>,
 ) -> Result<IxfrResponse, TransferError> {
     let mut stream =
         TcpStream::connect(primary)
@@ -376,12 +426,11 @@ async fn transfer_ixfr_from_primary_inner(
     let current_soa = current_zone
         .soa_record(qclass)
         .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
-    let query = axfr::frame_tcp_message(&axfr::build_ixfr_query(
-        qid,
-        zone_apex,
-        qclass,
-        &current_soa,
-    )?);
+    let query = maybe_sign_transfer_query(
+        axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
+        tsig_key,
+    )?;
+    let query = axfr::frame_tcp_message(&query);
     stream
         .write_all(&query)
         .await
@@ -441,11 +490,31 @@ fn outbound_udp_bind_addr(primary: SocketAddr) -> SocketAddr {
     }
 }
 
+fn maybe_sign_transfer_query(
+    query: Vec<u8>,
+    tsig_key: Option<&TsigKey>,
+) -> Result<Vec<u8>, TransferError> {
+    let Some(tsig_key) = tsig_key else {
+        return Ok(query);
+    };
+
+    let signed = tsig_key.sign_request(&query, tsig_time_signed(), DEFAULT_TSIG_FUDGE_SECS)?;
+    Ok(signed.message)
+}
+
+fn tsig_time_signed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 async fn transfer_axfr_from_primary_inner(
     primary: SocketAddr,
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
+    tsig_key: Option<&TsigKey>,
 ) -> Result<ZoneSnapshot, TransferError> {
     let mut stream =
         TcpStream::connect(primary)
@@ -455,7 +524,9 @@ async fn transfer_axfr_from_primary_inner(
                 source,
             })?;
 
-    let query = axfr::frame_tcp_message(&axfr::build_axfr_query(qid, zone_apex, qclass));
+    let query =
+        maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig_key)?;
+    let query = axfr::frame_tcp_message(&query);
     stream
         .write_all(&query)
         .await
@@ -658,6 +729,7 @@ struct ZoneTransferPlan {
     origin: DomainName,
     qclass: u16,
     primaries: Vec<SocketAddr>,
+    tsig_key: Option<Arc<TsigKey>>,
 }
 
 #[derive(Debug, Clone)]
@@ -667,18 +739,36 @@ struct TransferPlan {
 
 impl TransferPlan {
     fn from_config(config: &ServerConfig) -> Self {
+        let tsig_keys = config
+            .tsig_keys
+            .iter()
+            .map(|key| {
+                let key = TsigKey::from_base64(&key.name, &key.algorithm, &key.secret)
+                    .expect("configuration validation rejects invalid TSIG keys");
+                (key.name.canonical_key(), Arc::new(key))
+            })
+            .collect::<HashMap<_, _>>();
         let zones_by_key = config
             .zones
             .iter()
             .map(|zone| {
                 let origin = DomainName::from_absolute_str(&zone.name)
                     .expect("configuration validation rejects invalid zone names");
+                let tsig_key = zone.tsig_key.as_ref().map(|name| {
+                    let name = DomainName::from_absolute_str(name)
+                        .expect("configuration validation rejects invalid TSIG key references");
+                    tsig_keys
+                        .get(&name.canonical_key())
+                        .expect("configuration validation rejects unknown TSIG key references")
+                        .clone()
+                });
                 (
                     origin.canonical_key(),
                     ZoneTransferPlan {
                         origin,
                         qclass: 1,
                         primaries: zone.primaries.clone(),
+                        tsig_key,
                     },
                 )
             })
@@ -1300,8 +1390,15 @@ async fn refresh_zone_from_primaries(
                     continue;
                 }
             };
-            match poll_soa_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
-                .await
+            match poll_soa_from_primary_with_tsig(
+                *primary,
+                &plan.origin,
+                plan.qclass,
+                qid,
+                plan.tsig_key.as_deref(),
+                axfr_timeout,
+            )
+            .await
             {
                 Ok(primary_serial) if !serial_after(primary_serial, current_serial) => {
                     info!(
@@ -1359,12 +1456,13 @@ async fn refresh_zone_from_primaries(
                         continue;
                     }
                 };
-                match transfer_ixfr_from_primary(
+                match transfer_ixfr_from_primary_with_tsig(
                     *primary,
                     &plan.origin,
                     plan.qclass,
                     qid,
                     current_snapshot,
+                    plan.tsig_key.as_deref(),
                     ixfr_timeout,
                 )
                 .await
@@ -1420,8 +1518,15 @@ async fn refresh_zone_from_primaries(
                 continue;
             }
         };
-        match transfer_axfr_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
-            .await
+        match transfer_axfr_from_primary_with_tsig(
+            *primary,
+            &plan.origin,
+            plan.qclass,
+            qid,
+            plan.tsig_key.as_deref(),
+            axfr_timeout,
+        )
+        .await
         {
             Ok(snapshot) => {
                 let serial = snapshot.serial;
@@ -2134,6 +2239,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
+        let (primary, observed_query) = spawn_axfr_primary_recording_query(1).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+                tsig_key = "transfer-key."
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        assert!(plan.tsig_key.is_some());
+        let zones = ZoneStore::new();
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            &IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(5),
+            "test",
+        )
+        .await
+        .expect("refresh success");
+
+        assert_eq!(snapshot.serial, Some(1));
+        let query = observed_query
+            .lock()
+            .expect("observed query lock poisoned")
+            .clone()
+            .expect("primary observed query");
+        assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+        assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
+    }
+
+    #[tokio::test]
     async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
         let (primary, qtypes) = spawn_ixfr_notimp_then_axfr_primary().await;
         let config = ServerConfig::from_toml_str(&format!(
@@ -2266,6 +2419,7 @@ mod tests {
         ))
         .expect("valid config");
 
+        let transfer_plan = TransferPlan::from_config(&config);
         let runtime = Runtime::new(config);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
@@ -2274,7 +2428,7 @@ mod tests {
         );
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
         runtime
-            .load_initial_zones(&refresh_registry, &ixfr_cooldowns)
+            .load_initial_zones(&transfer_plan, &refresh_registry, &ixfr_cooldowns)
             .await;
 
         let snapshot = runtime
@@ -2624,6 +2778,32 @@ mod tests {
         addr
     }
 
+    async fn spawn_axfr_primary_recording_query(
+        serial: u32,
+    ) -> (std::net::SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let observed_query = Arc::new(Mutex::new(None));
+        let observed_query_for_task = observed_query.clone();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let query = read_primary_query(&mut stream).await;
+
+            let header = Header::parse(&query).unwrap();
+            observed_query_for_task
+                .lock()
+                .expect("observed query lock poisoned")
+                .replace(query);
+
+            let response = axfr_response(header.id, serial);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        (addr, observed_query)
+    }
+
     async fn spawn_ixfr_mode2_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2786,6 +2966,63 @@ mod tests {
     fn query_qtype(query: &[u8]) -> u16 {
         assert!(query.len() >= 28);
         u16::from_be_bytes([query[26], query[27]])
+    }
+
+    fn assert_query_has_tsig(query: &[u8], key_name: &str, algorithm_name: &str) {
+        let header = Header::parse(query).unwrap();
+        assert_eq!(header.arcount, 1);
+        let original_id = header.id;
+        let (question_name, question_len) = DomainName::parse(query, 12).unwrap();
+        assert_eq!(
+            question_name,
+            DomainName::from_absolute_str("example.test.").unwrap()
+        );
+        let mut offset = 12 + question_len + 4;
+
+        let (owner, owner_len) = DomainName::parse(query, offset).unwrap();
+        assert_eq!(owner, DomainName::from_absolute_str(key_name).unwrap());
+        offset += owner_len;
+        assert_eq!(
+            u16::from_be_bytes([query[offset], query[offset + 1]]),
+            RecordType::Tsig as u16
+        );
+        assert_eq!(
+            u16::from_be_bytes([query[offset + 2], query[offset + 3]]),
+            255
+        );
+        assert_eq!(
+            u32::from_be_bytes([
+                query[offset + 4],
+                query[offset + 5],
+                query[offset + 6],
+                query[offset + 7],
+            ]),
+            0
+        );
+        let rdlen = u16::from_be_bytes([query[offset + 8], query[offset + 9]]) as usize;
+        offset += 10;
+        let rdata_end = offset + rdlen;
+
+        let (algorithm, algorithm_len) = DomainName::parse(query, offset).unwrap();
+        assert_eq!(
+            algorithm,
+            DomainName::from_absolute_str(algorithm_name).unwrap()
+        );
+        offset += algorithm_len + 6 + 2;
+        let mac_len = u16::from_be_bytes([query[offset], query[offset + 1]]) as usize;
+        assert_eq!(mac_len, 32);
+        offset += 2 + mac_len;
+        assert_eq!(
+            u16::from_be_bytes([query[offset], query[offset + 1]]),
+            original_id
+        );
+        offset += 2;
+        assert_eq!(u16::from_be_bytes([query[offset], query[offset + 1]]), 0);
+        offset += 2;
+        assert_eq!(u16::from_be_bytes([query[offset], query[offset + 1]]), 0);
+        offset += 2;
+        assert_eq!(offset, rdata_end);
+        assert_eq!(offset, query.len());
     }
 
     fn error_response(qid: u16, rcode: u8) -> Vec<u8> {
