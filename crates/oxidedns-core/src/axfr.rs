@@ -724,9 +724,8 @@ fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
         rr_type if rr_type == RecordType::Rrsig as u16 => {
             validate_uncompressed_domain_name_with_trailing(&record.rdata, 18).map(|_| ())
         }
-        rr_type if rr_type == RecordType::Nsec as u16 => {
-            validate_uncompressed_domain_name_with_trailing(&record.rdata, 0).map(|_| ())
-        }
+        rr_type if rr_type == RecordType::Nsec as u16 => validate_nsec_rdata(&record.rdata),
+        rr_type if rr_type == RecordType::Nsec3 as u16 => validate_nsec3_rdata(&record.rdata),
         rr_type if rr_type == RecordType::Svcb as u16 || rr_type == RecordType::Https as u16 => {
             validate_svcb_like_rdata(&record.rdata)
         }
@@ -830,6 +829,66 @@ fn validate_naptr_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
         offset = skip_character_string(rdata, offset)?;
     }
     validate_uncompressed_domain_name_at_end(rdata, offset)
+}
+
+fn validate_nsec_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    let next_name_len = validate_uncompressed_domain_name_with_trailing(rdata, 0)?;
+    validate_type_bit_maps(&rdata[next_name_len..])
+}
+
+fn validate_nsec3_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
+    if rdata.len() < 6 {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let salt_len = rdata[4] as usize;
+    let hash_len_offset = 5 + salt_len;
+    let Some(&hash_len) = rdata.get(hash_len_offset) else {
+        return Err(AxfrError::InvalidRdata);
+    };
+    if hash_len == 0 {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let bit_maps_offset = hash_len_offset + 1 + hash_len as usize;
+    if bit_maps_offset > rdata.len() {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    validate_type_bit_maps(&rdata[bit_maps_offset..])
+}
+
+fn validate_type_bit_maps(bit_maps: &[u8]) -> Result<(), AxfrError> {
+    if bit_maps.is_empty() {
+        return Err(AxfrError::InvalidRdata);
+    }
+
+    let mut offset = 0usize;
+    let mut last_window = None;
+    while offset < bit_maps.len() {
+        if offset + 2 > bit_maps.len() {
+            return Err(AxfrError::InvalidRdata);
+        }
+
+        let window = bit_maps[offset];
+        let bitmap_len = bit_maps[offset + 1] as usize;
+        offset += 2;
+
+        if bitmap_len == 0 || bitmap_len > 32 || offset + bitmap_len > bit_maps.len() {
+            return Err(AxfrError::InvalidRdata);
+        }
+        if last_window.is_some_and(|last| window <= last) {
+            return Err(AxfrError::InvalidRdata);
+        }
+        if bit_maps[offset + bitmap_len - 1] == 0 {
+            return Err(AxfrError::InvalidRdata);
+        }
+
+        last_window = Some(window);
+        offset += bitmap_len;
+    }
+
+    Ok(())
 }
 
 fn validate_svcb_like_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
@@ -1132,8 +1191,18 @@ mod tests {
     }
 
     fn nsec_rdata(next_name: Vec<u8>) -> Vec<u8> {
+        nsec_rdata_with_bit_maps(next_name, &[0, 1, 1])
+    }
+
+    fn nsec_rdata_with_bit_maps(next_name: Vec<u8>, bit_maps: &[u8]) -> Vec<u8> {
         let mut rdata = next_name;
-        rdata.extend([0, 1, 1]);
+        rdata.extend(bit_maps);
+        rdata
+    }
+
+    fn nsec3_rdata(bit_maps: &[u8]) -> Vec<u8> {
+        let mut rdata = vec![1, 0, 0, 0, 0, 1, 0];
+        rdata.extend(bit_maps);
         rdata
     }
 
@@ -2043,7 +2112,11 @@ mod tests {
             RecordType::Nsec as u16,
             nsec_rdata(name_rdata("next.example.test.")),
         );
-        let nsec3 = record("alias.example.test.", RecordType::Nsec3 as u16, vec![0]);
+        let nsec3 = record(
+            "alias.example.test.",
+            RecordType::Nsec3 as u16,
+            nsec3_rdata(&[0, 1, 1]),
+        );
         let snapshot = parse_axfr_response(
             0x1234,
             &apex,
@@ -2248,6 +2321,86 @@ mod tests {
             let apex = DomainName::from_absolute_str("example.test.").unwrap();
             let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
             let invalid = record("www.example.test.", rr_type, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
+    }
+
+    #[test]
+    fn rejects_axfr_nsec_with_malformed_type_bit_maps() {
+        let cases = [
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[]),
+                "missing NSEC bitmap",
+            ),
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[0]),
+                "truncated NSEC window header",
+            ),
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[0, 0]),
+                "zero-length NSEC bitmap",
+            ),
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[0, 33, 1]),
+                "overlong NSEC bitmap",
+            ),
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[0, 2, 0x80, 0]),
+                "NSEC bitmap with trailing zero octet",
+            ),
+            (
+                nsec_rdata_with_bit_maps(name_rdata("next.example.test."), &[1, 1, 1, 0, 1, 1]),
+                "out-of-order NSEC bitmap windows",
+            ),
+        ];
+
+        for (rdata, context) in cases {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let invalid = record("www.example.test.", RecordType::Nsec as u16, rdata);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+            )
+            .expect_err(context);
+
+            assert_eq!(error, AxfrError::InvalidRdata, "{context}");
+        }
+    }
+
+    #[test]
+    fn rejects_axfr_nsec3_with_malformed_hash_or_type_bit_maps() {
+        let cases = [
+            (vec![1, 0, 0, 0, 0], "missing NSEC3 hash length"),
+            (vec![1, 0, 0, 0, 0, 0], "zero NSEC3 hash length"),
+            (vec![1, 0, 0, 0, 0, 2, 0], "truncated NSEC3 next hash"),
+            (nsec3_rdata(&[]), "missing NSEC3 bitmap"),
+            (nsec3_rdata(&[0, 0]), "zero-length NSEC3 bitmap"),
+            (nsec3_rdata(&[0, 33, 1]), "overlong NSEC3 bitmap"),
+            (
+                nsec3_rdata(&[0, 2, 0x80, 0]),
+                "NSEC3 bitmap with trailing zero octet",
+            ),
+            (
+                nsec3_rdata(&[1, 1, 1, 0, 1, 1]),
+                "out-of-order NSEC3 bitmap windows",
+            ),
+        ];
+
+        for (rdata, context) in cases {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let invalid = record("hash.example.test.", RecordType::Nsec3 as u16, rdata);
             let error = parse_axfr_response(
                 0x1234,
                 &apex,
