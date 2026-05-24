@@ -349,7 +349,7 @@ async fn poll_soa_from_primary_inner(
 
     let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig_key)?;
     socket
-        .send(&query)
+        .send(&query.message)
         .await
         .map_err(|source| TransferError::Io {
             addr: primary,
@@ -365,7 +365,9 @@ async fn poll_soa_from_primary_inner(
             source,
         })?;
 
-    axfr::parse_soa_response(qid, zone_apex, qclass, &buffer[..len]).map_err(TransferError::Soa)
+    let response =
+        maybe_verify_transfer_response(&buffer[..len], tsig_key, query.request_mac.as_deref())?;
+    axfr::parse_soa_response(qid, zone_apex, qclass, &response).map_err(TransferError::Soa)
 }
 
 pub async fn transfer_ixfr_from_primary(
@@ -430,7 +432,7 @@ async fn transfer_ixfr_from_primary_inner(
         axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
         tsig_key,
     )?;
-    let query = axfr::frame_tcp_message(&query);
+    let query = axfr::frame_tcp_message(&query.message);
     stream
         .write_all(&query)
         .await
@@ -490,16 +492,40 @@ fn outbound_udp_bind_addr(primary: SocketAddr) -> SocketAddr {
     }
 }
 
+struct TransferQuery {
+    message: Vec<u8>,
+    request_mac: Option<Vec<u8>>,
+}
+
 fn maybe_sign_transfer_query(
     query: Vec<u8>,
     tsig_key: Option<&TsigKey>,
-) -> Result<Vec<u8>, TransferError> {
+) -> Result<TransferQuery, TransferError> {
     let Some(tsig_key) = tsig_key else {
-        return Ok(query);
+        return Ok(TransferQuery {
+            message: query,
+            request_mac: None,
+        });
     };
 
     let signed = tsig_key.sign_request(&query, tsig_time_signed(), DEFAULT_TSIG_FUDGE_SECS)?;
-    Ok(signed.message)
+    Ok(TransferQuery {
+        message: signed.message,
+        request_mac: Some(signed.mac),
+    })
+}
+
+fn maybe_verify_transfer_response(
+    message: &[u8],
+    tsig_key: Option<&TsigKey>,
+    request_mac: Option<&[u8]>,
+) -> Result<Vec<u8>, TransferError> {
+    let (Some(tsig_key), Some(request_mac)) = (tsig_key, request_mac) else {
+        return Ok(message.to_vec());
+    };
+
+    let verified = tsig_key.verify_response(message, request_mac, tsig_time_signed())?;
+    Ok(verified.message)
 }
 
 fn tsig_time_signed() -> u64 {
@@ -526,7 +552,7 @@ async fn transfer_axfr_from_primary_inner(
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig_key)?;
-    let query = axfr::frame_tcp_message(&query);
+    let query = axfr::frame_tcp_message(&query.message);
     stream
         .write_all(&query)
         .await
@@ -1694,16 +1720,17 @@ mod tests {
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
         dns::{AnyResponseMode, DomainName, Header, RecordType},
+        tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
 
     use super::{
         IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
         RefreshRequest, Runtime, TcpServerSettings, TransferPlan, ZoneRefreshRegistry,
-        handle_tcp_connection, jitter_interval, poll_soa_from_primary, query_id_from_random_bytes,
-        refresh_zone_from_primaries, serial_after, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id,
+        handle_tcp_connection, jitter_interval, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, query_id_from_random_bytes, refresh_zone_from_primaries,
+        serial_after, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
     };
 
     #[test]
@@ -1930,6 +1957,49 @@ mod tests {
                 .expect("SOA poll");
 
         assert_eq!(serial, 7);
+    }
+
+    #[tokio::test]
+    async fn poll_soa_from_primary_verifies_signed_tsig_response() {
+        let primary = spawn_signed_soa_primary_with_serial(7).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+        let serial = poll_soa_from_primary_with_tsig(
+            primary,
+            &apex,
+            1,
+            0x1234,
+            Some(&key),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("signed SOA poll");
+
+        assert_eq!(serial, 7);
+    }
+
+    #[tokio::test]
+    async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
+        let primary = spawn_soa_primary_with_serial(7).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+        let error = poll_soa_from_primary_with_tsig(
+            primary,
+            &apex,
+            1,
+            0x1234,
+            Some(&key),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect_err("unsigned response must fail");
+
+        assert!(matches!(
+            error,
+            super::TransferError::Tsig(oxidedns_core::tsig::TsigError::MissingTsig)
+        ));
     }
 
     #[test]
@@ -2912,14 +2982,38 @@ mod tests {
             let query = &buffer[..len];
             let header = Header::parse(query).unwrap();
             assert_eq!(header.qdcount, 1);
-            assert!(query.ends_with(&(1u16).to_be_bytes()));
-            assert_eq!(
-                &query[query.len() - 4..query.len() - 2],
-                &(RecordType::Soa as u16).to_be_bytes()
-            );
+            assert_eq!(query_qtype(query), RecordType::Soa as u16);
 
             let response = soa_response(header.id, serial);
             socket.send_to(&response, peer).await.unwrap();
+        });
+        addr
+    }
+
+    async fn spawn_signed_soa_primary_with_serial(serial: u32) -> std::net::SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+            let mut buffer = vec![0u8; 1024];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let query = &buffer[..len];
+            let header = Header::parse(query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(header.arcount, 1);
+            assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+            let request_mac = extract_query_tsig_mac(query);
+            let response = soa_response(header.id, serial);
+            let signed = key
+                .sign_response(
+                    &response,
+                    &request_mac,
+                    current_unix_time(),
+                    DEFAULT_TSIG_FUDGE_SECS,
+                )
+                .unwrap();
+            socket.send_to(&signed.message, peer).await.unwrap();
         });
         addr
     }
@@ -3023,6 +3117,25 @@ mod tests {
         offset += 2;
         assert_eq!(offset, rdata_end);
         assert_eq!(offset, query.len());
+    }
+
+    fn extract_query_tsig_mac(query: &[u8]) -> Vec<u8> {
+        let (_, question_len) = DomainName::parse(query, 12).unwrap();
+        let mut offset = 12 + question_len + 4;
+        let (_, owner_len) = DomainName::parse(query, offset).unwrap();
+        offset += owner_len + 10;
+        let (_, algorithm_len) = DomainName::parse(query, offset).unwrap();
+        offset += algorithm_len + 6 + 2;
+        let mac_len = u16::from_be_bytes([query[offset], query[offset + 1]]) as usize;
+        offset += 2;
+        query[offset..offset + mac_len].to_vec()
+    }
+
+    fn current_unix_time() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     fn error_response(qid: u16, rcode: u8) -> Vec<u8> {
