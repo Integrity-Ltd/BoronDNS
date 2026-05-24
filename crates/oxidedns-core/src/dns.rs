@@ -2725,6 +2725,102 @@ mod tests {
     }
 
     #[test]
+    fn do_wildcard_answer_includes_nsec_proof_for_exact_name_absence() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 20].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("z.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Nsec as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn non_do_wildcard_answer_omits_nsec_dnssec_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 20].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("z.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let packet = query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_authority_types(&response), Vec::<u16>::new());
+    }
+
+    #[test]
     fn wildcard_cname_chases_to_target_rrset() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(

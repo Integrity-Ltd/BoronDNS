@@ -194,6 +194,7 @@ DNSSEC work is partially started:
 - DO=1 referral responses include existing DS RRsets for signed child delegations, existing NSEC no-DS proofs for unsigned child delegations, include stored RRSIG records covering the referral NS, DS, and NSEC RRsets, and set the response OPT DO bit when those augmentation records are included.
 - DO=1 NXDOMAIN responses include existing NSEC RRsets covering the queried owner name and the closest-encloser wildcard name, plus their stored covering RRSIGs, and set the response OPT DO bit when those augmentation records are included.
 - DO=1 exact-name NODATA responses include an existing NSEC RRset at the queried owner name, plus its stored covering RRSIG, and set the response OPT DO bit when those augmentation records are included.
+- DO=1 wildcard-synthesized positive responses include an existing NSEC RRset covering the queried owner name, plus its stored covering RRSIG, to prove the exact queried owner did not exist.
 - explicit RRSIG and NSEC queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
 - response header construction unconditionally clears AD and CD bits.
 

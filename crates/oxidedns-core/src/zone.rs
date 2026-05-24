@@ -160,6 +160,7 @@ impl ZoneSnapshot {
             lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
         let nxdomain_candidate =
             lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
+        let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &lookup);
         let authorities =
             self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_augmented);
         let authorities = self.add_nodata_nsec_augmentations(
@@ -174,6 +175,13 @@ impl ZoneSnapshot {
             qname,
             qclass,
             nxdomain_candidate,
+            authorities,
+            &mut dnssec_augmented,
+        );
+        let authorities = self.add_wildcard_nsec_augmentations(
+            qname,
+            qclass,
+            wildcard_candidate,
             authorities,
             &mut dnssec_augmented,
         );
@@ -193,6 +201,43 @@ impl ZoneSnapshot {
             },
             dnssec_augmented,
         )
+    }
+
+    fn is_wildcard_synthesis(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        lookup: &LookupResult,
+    ) -> bool {
+        if lookup.rcode != Rcode::NoError
+            || !lookup.authoritative
+            || lookup.answers.is_empty()
+            || lookup
+                .answers
+                .first()
+                .is_none_or(|record| record.owner != *qname)
+            || self.name_exists(qname, qclass)
+        {
+            return false;
+        }
+
+        let Some(wildcard) = self
+            .closest_encloser(qname, qclass)
+            .map(|closest| closest.wildcard_child())
+        else {
+            return false;
+        };
+
+        if qtype == 255 {
+            !self.rrsets_at_name(&wildcard, qclass).is_empty()
+        } else {
+            self.rrset(&wildcard, qtype, qclass).is_some()
+                || (qtype != RecordType::Cname as u16
+                    && self
+                        .rrset(&wildcard, RecordType::Cname as u16, qclass)
+                        .is_some())
+        }
     }
 
     fn lookup_cname_chain(
@@ -590,6 +635,27 @@ impl ZoneSnapshot {
                     .iter()
                     .any(|rdata| nsec_covers_name(&rrset.owner, rdata, name))
         })
+    }
+
+    fn add_wildcard_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        wildcard_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        if !wildcard_candidate {
+            return authorities;
+        }
+
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
+        augmented
     }
 
     fn add_rrsig_augmentations(
