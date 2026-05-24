@@ -147,6 +147,7 @@ Slice 4 is in progress:
 - write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream.
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
 - SIGINT and SIGTERM initiate shutdown, abort listener tasks to stop accepting new DNS/health traffic, close the refresh queue, and wait up to `[limits].graceful_shutdown_secs`, defaulting to 30 seconds, for active TCP query connections and in-flight initial or refresh transfers to drain.
+- runtime shutdown tests cover the draining health state while an initial transfer is blocked, and confirm the runtime exits after the transfer releases.
 
 Slice 6 has initial NOTIFY intake foundations:
 
@@ -193,7 +194,7 @@ Slice 8 has health endpoint foundations:
 
 Open near-term work:
 
-- adding end-to-end SIGTERM/SIGINT runtime tests around startup and transfer draining;
+- process-level SIGINT/SIGTERM smoke coverage for the CLI binary;
 - broader IXFR fault/interop coverage;
 - TSIG interop coverage;
 - DNSSEC-authenticated referral augmentation;

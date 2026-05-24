@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
@@ -138,6 +139,15 @@ impl Runtime {
     }
 
     pub async fn run(self) -> Result<(), RuntimeError> {
+        self.run_with_shutdown_signal(wait_for_shutdown_signal())
+            .await
+    }
+
+    async fn run_with_shutdown_signal(
+        self,
+        shutdown_signal: impl Future<Output = Result<&'static str, std::io::Error>>,
+    ) -> Result<(), RuntimeError> {
+        tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
@@ -279,7 +289,7 @@ impl Runtime {
 
         loop {
             tokio::select! {
-                signal = wait_for_shutdown_signal() => {
+                signal = &mut shutdown_signal => {
                     let signal = signal.map_err(RuntimeError::ShutdownSignal)?;
                     info!(
                         signal,
@@ -2919,7 +2929,7 @@ mod tests {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream, UdpSocket},
-        sync::mpsc,
+        sync::{mpsc, oneshot},
     };
     use oxidedns_core::{
         ServerConfig,
@@ -3235,6 +3245,60 @@ mod tests {
 
         let _ = release_primary.send(());
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn runtime_reports_draining_until_initial_transfer_releases() {
+        let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
+        let udp_addr = unused_udp_addr().await;
+        let health_addr = unused_tcp_addr().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["{udp_addr}"]
+                health = "{health_addr}"
+
+                [limits]
+                axfr_timeout_secs = 5
+                graceful_shutdown_secs = 2
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let runtime = Runtime::new(config);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(runtime.run_with_shutdown_signal(async move {
+            shutdown_rx.await.map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "test shutdown dropped")
+            })
+        }));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
+            .await
+            .expect("initial transfer should start")
+            .expect("primary should observe initial transfer query");
+        let starting =
+            eventually_health_body(health_addr, "starting\n", std::time::Duration::from_secs(1))
+                .await;
+        assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        shutdown_tx
+            .send("SIGTERM")
+            .expect("runtime receives shutdown");
+        let draining =
+            eventually_health_body(health_addr, "draining\n", std::time::Duration::from_secs(1))
+                .await;
+        assert!(draining.starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        let _ = release_primary.send(());
+        tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .expect("runtime should finish after transfer release")
+            .expect("runtime task should join")
+            .expect("runtime should shut down cleanly");
     }
 
     #[tokio::test]
