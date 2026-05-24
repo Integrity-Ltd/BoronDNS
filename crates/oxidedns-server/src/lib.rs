@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt,
     future::Future,
     net::{IpAddr, SocketAddr},
     sync::{
@@ -210,7 +211,7 @@ impl Runtime {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
-        let metrics = RuntimeMetrics::new();
+        let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(self.config.rrl.max_keys);
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
 
         info!(
@@ -232,6 +233,10 @@ impl Runtime {
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
         let dns_cookie = dns_cookie_settings(&self.config.cookie);
+        let cookie_prefix_metrics = CookiePrefixMetricSettings {
+            ipv4_prefix_len: self.config.rrl.ipv4_prefix_len,
+            ipv6_prefix_len: self.config.rrl.ipv6_prefix_len,
+        };
         let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
         if dns_cookie.policy.is_some() {
             info!(
@@ -320,6 +325,7 @@ impl Runtime {
                 nsid,
                 dns_cookie_secret,
                 dns_cookie,
+                cookie_prefix_metrics,
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
@@ -359,6 +365,7 @@ impl Runtime {
                 nsid,
                 dns_cookie_secret,
                 dns_cookie,
+                cookie_prefix_metrics,
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
@@ -1276,6 +1283,12 @@ struct DnsCookieRuntimeSettings {
     future_window_secs: u32,
 }
 
+#[derive(Clone, Copy)]
+struct CookiePrefixMetricSettings {
+    ipv4_prefix_len: u8,
+    ipv6_prefix_len: u8,
+}
+
 fn dns_cookie_settings(config: &CookieConfig) -> DnsCookieRuntimeSettings {
     let policy = match config.policy {
         CookiePolicyConfig::Disabled => None,
@@ -1299,6 +1312,14 @@ fn dns_cookie_context<'a>(
     context.past_window_secs = settings.past_window_secs;
     context.future_window_secs = settings.future_window_secs;
     Some(context)
+}
+
+fn cookie_metric_prefix(source: IpAddr, settings: CookiePrefixMetricSettings) -> IpPrefix {
+    let prefix_len = match source {
+        IpAddr::V4(_) => settings.ipv4_prefix_len,
+        IpAddr::V6(_) => settings.ipv6_prefix_len,
+    };
+    IpPrefix::new(source, prefix_len)
 }
 
 #[derive(Clone, Debug)]
@@ -1575,6 +1596,19 @@ impl IpPrefix {
     }
 }
 
+impl fmt::Display for IpPrefix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::V4 { network, len } => {
+                write!(formatter, "{}/{}", std::net::Ipv4Addr::from(*network), len)
+            }
+            Self::V6 { network, len } => {
+                write!(formatter, "{}/{}", std::net::Ipv6Addr::from(*network), len)
+            }
+        }
+    }
+}
+
 fn prefix_mask_v4(len: u8) -> u32 {
     if len == 0 { 0 } else { u32::MAX << (32 - len) }
 }
@@ -1723,8 +1757,13 @@ async fn serve_udp(
         let dns_cookie =
             dns_cookie_context(peer_ip, &settings.dns_cookie_secret, settings.dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
-        let dns_cookie_metrics =
-            observe_dns_cookie_metrics(&prepared.packet, dns_cookie, &settings.metrics);
+        let dns_cookie_metrics = observe_dns_cookie_metrics(
+            &prepared.packet,
+            dns_cookie,
+            peer_ip,
+            settings.cookie_prefix_metrics,
+            &settings.metrics,
+        );
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
@@ -1787,6 +1826,7 @@ async fn serve_udp(
                             &response,
                             &settings.metrics,
                             peer_ip,
+                            settings.cookie_prefix_metrics,
                         );
                         record_query_response_metric(query_metrics, &response, &settings.metrics);
                         socket
@@ -1834,11 +1874,13 @@ fn observe_query_metrics(
 fn observe_dns_cookie_metrics(
     packet: &[u8],
     context: Option<DnsCookieContext>,
+    source: IpAddr,
+    prefix_settings: CookiePrefixMetricSettings,
     metrics: &RuntimeMetrics,
 ) -> Option<DnsCookieRequestStatus> {
     let context = context?;
     let status = dns_cookie_request_status(packet, Some(context))?;
-    metrics.record_dns_cookie_status(status);
+    metrics.record_dns_cookie_status(status, source, prefix_settings);
     Some(status)
 }
 
@@ -1847,6 +1889,7 @@ fn record_dns_cookie_badcookie_if_emitted(
     response: &[u8],
     metrics: &RuntimeMetrics,
     peer_ip: IpAddr,
+    prefix_settings: CookiePrefixMetricSettings,
 ) {
     let Some(
         reason @ (DnsCookieRequestStatus::ClientCookieOnly
@@ -1862,6 +1905,7 @@ fn record_dns_cookie_badcookie_if_emitted(
         return;
     }
     metrics.record_dns_cookie_badcookie();
+    metrics.record_dns_cookie_badcookie_for_source(peer_ip, prefix_settings);
     debug!(
         %peer_ip,
         reason = ?reason,
@@ -1965,6 +2009,7 @@ struct UdpServerSettings {
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
     dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -2013,6 +2058,7 @@ async fn serve_tcp(
                 settings.nsid,
                 settings.dns_cookie_secret,
                 settings.dns_cookie,
+                settings.cookie_prefix_metrics,
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
@@ -2156,6 +2202,7 @@ fn metrics_body(
     );
     append_query_rcode_metrics(&mut body, metrics);
     append_dns_cookie_metrics(&mut body, snapshot);
+    append_dns_cookie_prefix_metrics(&mut body, metrics);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_zone_status_metrics(&mut body, zones);
@@ -2247,14 +2294,27 @@ fn append_dns_cookie_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot
         "# HELP oxidedns_dns_cookie_queries_total DNS Cookie request cases.\n\
          # TYPE oxidedns_dns_cookie_queries_total counter\n",
     );
-    for (case, count) in [
-        ("no_cookie", snapshot.dns_cookie_no_cookie),
-        ("client_only", snapshot.dns_cookie_client_only),
-        ("valid_server", snapshot.dns_cookie_valid_server),
-        ("invalid_server", snapshot.dns_cookie_invalid_server),
+    for (status, count) in [
+        (
+            DnsCookieRequestStatus::NoCookie,
+            snapshot.dns_cookie_no_cookie,
+        ),
+        (
+            DnsCookieRequestStatus::ClientCookieOnly,
+            snapshot.dns_cookie_client_only,
+        ),
+        (
+            DnsCookieRequestStatus::ValidServerCookie,
+            snapshot.dns_cookie_valid_server,
+        ),
+        (
+            DnsCookieRequestStatus::InvalidServerCookie,
+            snapshot.dns_cookie_invalid_server,
+        ),
     ] {
         body.push_str(&format!(
-            "oxidedns_dns_cookie_queries_total{{case=\"{case}\"}} {count}\n"
+            "oxidedns_dns_cookie_queries_total{{case=\"{}\"}} {count}\n",
+            dns_cookie_status_label(status)
         ));
     }
     body.push_str(
@@ -2265,6 +2325,51 @@ fn append_dns_cookie_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot
         "oxidedns_dns_cookie_badcookie_responses_total {}\n",
         snapshot.dns_cookie_badcookie
     ));
+}
+
+fn append_dns_cookie_prefix_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    body.push_str(
+        "# HELP oxidedns_dns_cookie_queries_by_prefix_total DNS Cookie request cases by source prefix.\n\
+         # TYPE oxidedns_dns_cookie_queries_by_prefix_total counter\n\
+         # HELP oxidedns_dns_cookie_badcookie_responses_by_prefix_total BADCOOKIE responses emitted by source prefix.\n\
+         # TYPE oxidedns_dns_cookie_badcookie_responses_by_prefix_total counter\n",
+    );
+    for (prefix, counters) in metrics.dns_cookie_prefix_counts() {
+        let source_prefix = prometheus_label_value(&prefix.to_string());
+        for (status, count) in [
+            (DnsCookieRequestStatus::NoCookie, counters.no_cookie),
+            (
+                DnsCookieRequestStatus::ClientCookieOnly,
+                counters.client_only,
+            ),
+            (
+                DnsCookieRequestStatus::ValidServerCookie,
+                counters.valid_server,
+            ),
+            (
+                DnsCookieRequestStatus::InvalidServerCookie,
+                counters.invalid_server,
+            ),
+        ] {
+            body.push_str(&format!(
+                "oxidedns_dns_cookie_queries_by_prefix_total{{source_prefix=\"{source_prefix}\",case=\"{}\"}} {count}\n",
+                dns_cookie_status_label(status)
+            ));
+        }
+        body.push_str(&format!(
+            "oxidedns_dns_cookie_badcookie_responses_by_prefix_total{{source_prefix=\"{source_prefix}\"}} {}\n",
+            counters.badcookie
+        ));
+    }
+}
+
+fn dns_cookie_status_label(status: DnsCookieRequestStatus) -> &'static str {
+    match status {
+        DnsCookieRequestStatus::NoCookie => "no_cookie",
+        DnsCookieRequestStatus::ClientCookieOnly => "client_only",
+        DnsCookieRequestStatus::ValidServerCookie => "valid_server",
+        DnsCookieRequestStatus::InvalidServerCookie => "invalid_server",
+    }
 }
 
 fn known_rcodes() -> &'static [u16] {
@@ -2473,6 +2578,8 @@ struct RuntimeMetrics {
     inner: Arc<RuntimeMetricsInner>,
 }
 
+const DEFAULT_COOKIE_PREFIX_METRIC_LIMIT: usize = 100_000;
+
 #[derive(Debug, Default)]
 struct RuntimeMetricsInner {
     queries_received: AtomicU64,
@@ -2505,6 +2612,7 @@ struct RuntimeMetricsInner {
     dns_cookie_valid_server: AtomicU64,
     dns_cookie_invalid_server: AtomicU64,
     dns_cookie_badcookie: AtomicU64,
+    dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
 }
@@ -2543,10 +2651,114 @@ struct RuntimeMetricsSnapshot {
     dns_cookie_badcookie: u64,
 }
 
-impl RuntimeMetrics {
-    fn new() -> Self {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CookiePrefixCounters {
+    no_cookie: u64,
+    client_only: u64,
+    valid_server: u64,
+    invalid_server: u64,
+    badcookie: u64,
+}
+
+#[derive(Debug)]
+struct CookiePrefixMetrics {
+    max_prefixes: usize,
+    counts: HashMap<IpPrefix, CookiePrefixCounters>,
+    lru: VecDeque<IpPrefix>,
+}
+
+impl Default for CookiePrefixMetrics {
+    fn default() -> Self {
+        Self::new(DEFAULT_COOKIE_PREFIX_METRIC_LIMIT)
+    }
+}
+
+impl CookiePrefixMetrics {
+    fn new(max_prefixes: usize) -> Self {
         Self {
-            inner: Arc::new(RuntimeMetricsInner::default()),
+            max_prefixes: max_prefixes.max(1),
+            counts: HashMap::new(),
+            lru: VecDeque::new(),
+        }
+    }
+
+    fn record_status(&mut self, prefix: IpPrefix, status: DnsCookieRequestStatus) {
+        self.ensure_prefix(prefix);
+        let Some(counters) = self.counts.get_mut(&prefix) else {
+            return;
+        };
+        match status {
+            DnsCookieRequestStatus::NoCookie => {
+                counters.no_cookie = counters.no_cookie.saturating_add(1)
+            }
+            DnsCookieRequestStatus::ClientCookieOnly => {
+                counters.client_only = counters.client_only.saturating_add(1);
+            }
+            DnsCookieRequestStatus::ValidServerCookie => {
+                counters.valid_server = counters.valid_server.saturating_add(1);
+            }
+            DnsCookieRequestStatus::InvalidServerCookie => {
+                counters.invalid_server = counters.invalid_server.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_badcookie(&mut self, prefix: IpPrefix) {
+        self.ensure_prefix(prefix);
+        if let Some(counters) = self.counts.get_mut(&prefix) {
+            counters.badcookie = counters.badcookie.saturating_add(1);
+        }
+    }
+
+    fn samples(&self) -> Vec<(IpPrefix, CookiePrefixCounters)> {
+        let mut samples = self
+            .counts
+            .iter()
+            .map(|(prefix, counters)| (*prefix, *counters))
+            .collect::<Vec<_>>();
+        samples.sort_unstable_by_key(|(prefix, _)| prefix.to_string());
+        samples
+    }
+
+    fn ensure_prefix(&mut self, prefix: IpPrefix) {
+        if self.counts.contains_key(&prefix) {
+            self.touch_lru(prefix);
+            return;
+        }
+        self.evict_one_if_needed();
+        self.counts.insert(prefix, CookiePrefixCounters::default());
+        self.touch_lru(prefix);
+    }
+
+    fn evict_one_if_needed(&mut self) {
+        if self.counts.len() < self.max_prefixes {
+            return;
+        }
+        while let Some(prefix) = self.lru.pop_front() {
+            if self.counts.remove(&prefix).is_some() {
+                return;
+            }
+        }
+    }
+
+    fn touch_lru(&mut self, prefix: IpPrefix) {
+        self.lru.retain(|candidate| *candidate != prefix);
+        self.lru.push_back(prefix);
+    }
+}
+
+impl RuntimeMetrics {
+    #[cfg(test)]
+    fn new() -> Self {
+        Self::new_with_cookie_prefix_limit(DEFAULT_COOKIE_PREFIX_METRIC_LIMIT)
+    }
+
+    fn new_with_cookie_prefix_limit(cookie_prefix_limit: usize) -> Self {
+        Self {
+            inner: Arc::new(RuntimeMetricsInner {
+                dns_cookie_prefixes: Mutex::new(CookiePrefixMetrics::new(cookie_prefix_limit)),
+                ..RuntimeMetricsInner::default()
+            }),
         }
     }
 
@@ -2663,7 +2875,12 @@ impl RuntimeMetrics {
         self.inner.rrl_key_evictions.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_dns_cookie_status(&self, status: DnsCookieRequestStatus) {
+    fn record_dns_cookie_status(
+        &self,
+        status: DnsCookieRequestStatus,
+        source: IpAddr,
+        prefix_settings: CookiePrefixMetricSettings,
+    ) {
         let counter = match status {
             DnsCookieRequestStatus::NoCookie => &self.inner.dns_cookie_no_cookie,
             DnsCookieRequestStatus::ClientCookieOnly => &self.inner.dns_cookie_client_only,
@@ -2671,12 +2888,37 @@ impl RuntimeMetrics {
             DnsCookieRequestStatus::InvalidServerCookie => &self.inner.dns_cookie_invalid_server,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .dns_cookie_prefixes
+            .lock()
+            .expect("runtime metrics DNS Cookie prefix counter lock poisoned")
+            .record_status(cookie_metric_prefix(source, prefix_settings), status);
     }
 
     fn record_dns_cookie_badcookie(&self) {
         self.inner
             .dns_cookie_badcookie
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_dns_cookie_badcookie_for_source(
+        &self,
+        source: IpAddr,
+        prefix_settings: CookiePrefixMetricSettings,
+    ) {
+        self.inner
+            .dns_cookie_prefixes
+            .lock()
+            .expect("runtime metrics DNS Cookie prefix counter lock poisoned")
+            .record_badcookie(cookie_metric_prefix(source, prefix_settings));
+    }
+
+    fn dns_cookie_prefix_counts(&self) -> Vec<(IpPrefix, CookiePrefixCounters)> {
+        self.inner
+            .dns_cookie_prefixes
+            .lock()
+            .expect("runtime metrics DNS Cookie prefix counter lock poisoned")
+            .samples()
     }
 
     fn record_query_response_rcode(&self, rcode: u16) {
@@ -2777,6 +3019,7 @@ struct TcpServerSettings {
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
     dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -4094,6 +4337,7 @@ async fn handle_tcp_connection(
     nsid: Vec<u8>,
     dns_cookie_secret: [u8; 16],
     dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
@@ -4115,7 +4359,13 @@ async fn handle_tcp_connection(
         }
         let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
-        let dns_cookie_metrics = observe_dns_cookie_metrics(&prepared.packet, dns_cookie, &metrics);
+        let dns_cookie_metrics = observe_dns_cookie_metrics(
+            &prepared.packet,
+            dns_cookie,
+            peer_ip,
+            cookie_prefix_metrics,
+            &metrics,
+        );
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
@@ -4158,6 +4408,7 @@ async fn handle_tcp_connection(
                     &response,
                     &metrics,
                     peer_ip,
+                    cookie_prefix_metrics,
                 );
                 record_query_response_metric(query_metrics, &response, &metrics);
                 let response = match sign_notify_response(response, prepared.response_tsig) {
@@ -4279,17 +4530,18 @@ mod tests {
     };
 
     use super::{
-        DnsCookieRuntimeSettings, HealthEndpointState, IxfrCooldownRegistry, NotifyAuthority,
-        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation,
-        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
-        RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings,
-        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
-        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        load_pem_certs, load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
-        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        CookiePrefixMetricSettings, DnsCookieRuntimeSettings, HealthEndpointState,
+        IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
+        NotifyTsigResult, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
+        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError,
+        RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan, UdpServerSettings,
+        ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        response_category, response_opt_record, response_question_end, response_rcode,
+        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
         signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
         transfer_query_id, validate_runtime_config, write_tcp_message,
@@ -4506,11 +4758,32 @@ mod tests {
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTime);
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadAlg);
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTrunc);
-        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::NoCookie);
-        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::ClientCookieOnly);
-        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::ValidServerCookie);
-        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::InvalidServerCookie);
+        let cookie_prefix_metrics = cookie_prefix_metrics_for_test();
+        metrics_state.record_dns_cookie_status(
+            DnsCookieRequestStatus::NoCookie,
+            "192.0.2.10".parse().unwrap(),
+            cookie_prefix_metrics,
+        );
+        metrics_state.record_dns_cookie_status(
+            DnsCookieRequestStatus::ClientCookieOnly,
+            "192.0.2.10".parse().unwrap(),
+            cookie_prefix_metrics,
+        );
+        metrics_state.record_dns_cookie_status(
+            DnsCookieRequestStatus::ValidServerCookie,
+            "2001:db8::10".parse().unwrap(),
+            cookie_prefix_metrics,
+        );
+        metrics_state.record_dns_cookie_status(
+            DnsCookieRequestStatus::InvalidServerCookie,
+            "2001:db8::10".parse().unwrap(),
+            cookie_prefix_metrics,
+        );
         metrics_state.record_dns_cookie_badcookie();
+        metrics_state.record_dns_cookie_badcookie_for_source(
+            "192.0.2.10".parse().unwrap(),
+            cookie_prefix_metrics,
+        );
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -4567,6 +4840,18 @@ mod tests {
         assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"valid_server\"} 1"));
         assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"invalid_server\"} 1"));
         assert!(metrics.contains("oxidedns_dns_cookie_badcookie_responses_total 1"));
+        assert!(metrics.contains(
+            "oxidedns_dns_cookie_queries_by_prefix_total{source_prefix=\"192.0.2.0/24\",case=\"no_cookie\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_dns_cookie_queries_by_prefix_total{source_prefix=\"192.0.2.0/24\",case=\"client_only\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_dns_cookie_queries_by_prefix_total{source_prefix=\"2001:db8::/56\",case=\"valid_server\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix=\"192.0.2.0/24\"} 1"
+        ));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
@@ -5540,6 +5825,30 @@ mod tests {
     }
 
     #[test]
+    fn dns_cookie_prefix_metrics_use_rrl_prefixes_and_evict_at_cap() {
+        let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(1);
+        let prefix_settings = cookie_prefix_metrics_for_test();
+
+        metrics.record_dns_cookie_status(
+            DnsCookieRequestStatus::ClientCookieOnly,
+            "192.0.2.10".parse().unwrap(),
+            prefix_settings,
+        );
+        metrics
+            .record_dns_cookie_badcookie_for_source("192.0.2.10".parse().unwrap(), prefix_settings);
+        metrics.record_dns_cookie_status(
+            DnsCookieRequestStatus::ValidServerCookie,
+            "198.51.100.25".parse().unwrap(),
+            prefix_settings,
+        );
+
+        let samples = metrics.dns_cookie_prefix_counts();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].0.to_string(), "198.51.100.0/24");
+        assert_eq!(samples[0].1.valid_server, 1);
+    }
+
+    #[test]
     fn query_metrics_count_cname_termination_causes_for_queries_only() {
         let metrics = RuntimeMetrics::new();
         let observation = QueryMetricObservation { is_query: true };
@@ -5746,6 +6055,7 @@ mod tests {
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -5815,6 +6125,7 @@ mod tests {
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -7428,6 +7739,7 @@ mod tests {
                 Vec::new(),
                 [7; 16],
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7508,6 +7820,7 @@ mod tests {
                 Vec::new(),
                 [7; 16],
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7563,6 +7876,7 @@ mod tests {
                 Vec::new(),
                 [7; 16],
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7604,6 +7918,7 @@ mod tests {
                 Vec::new(),
                 [7; 16],
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7659,6 +7974,7 @@ mod tests {
                 Vec::new(),
                 [7; 16],
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
@@ -7702,6 +8018,7 @@ mod tests {
                 nsid: Vec::new(),
                 dns_cookie_secret: [7; 16],
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
@@ -8859,6 +9176,7 @@ mod tests {
             nsid: Vec::new(),
             dns_cookie_secret: [7; 16],
             dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+            cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
             notify_authority: NotifyAuthority::default(),
             notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
             notify_refresh_tx: notify_refresh_tx(),
@@ -8872,6 +9190,13 @@ mod tests {
             policy: Some(policy),
             past_window_secs: 3600,
             future_window_secs: 300,
+        }
+    }
+
+    fn cookie_prefix_metrics_for_test() -> CookiePrefixMetricSettings {
+        CookiePrefixMetricSettings {
+            ipv4_prefix_len: 24,
+            ipv6_prefix_len: 56,
         }
     }
 
