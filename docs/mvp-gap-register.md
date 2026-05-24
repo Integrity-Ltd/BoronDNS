@@ -11,7 +11,7 @@ queue for remaining release blockers.
 | AXFR | Unit parser coverage; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
 | IXFR | Unit parser/fault coverage; BIND true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
 | NOTIFY | Unit/runtime coverage; BIND, NSD, and Knot NOTIFY refresh interop | Release traceability and broader negative interop evidence |
-| XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, untrusted-cert, expired-cert, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR interop script | Additional real-primary XoT evidence |
+| XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, untrusted-cert, expired-cert, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR and XoT+TSIG interop scripts | Broader real-primary XoT evidence beyond Knot |
 | DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve scripts for DO-sensitive RRSIG/NSEC/NSEC3/DNSKEY/NSEC3PARAM and truncation behavior; Knot signed-primary NSEC3 interop script | Release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
 
@@ -47,6 +47,7 @@ scripts/interop-knot-axfr-docker.sh
 scripts/interop-knot-tsig-axfr-docker.sh
 scripts/interop-knot-notify-refresh-docker.sh
 scripts/interop-knot-xot-docker.sh
+scripts/interop-knot-xot-tsig-docker.sh
 scripts/interop-knot-dnssec-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-rrl-udp.sh

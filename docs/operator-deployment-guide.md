@@ -267,6 +267,7 @@ XoT coverage:
 
 ```sh
 scripts/interop-knot-xot-docker.sh
+scripts/interop-knot-xot-tsig-docker.sh
 scripts/interop-knot-dnssec-docker.sh
 ```
 
