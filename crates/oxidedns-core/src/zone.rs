@@ -14,11 +14,20 @@ pub enum ZoneState {
     Expired,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoaTimers {
+    pub refresh: u32,
+    pub retry: u32,
+    pub expire: u32,
+    pub minimum: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneSnapshot {
     pub origin: DomainName,
     pub state: ZoneState,
     pub serial: Option<u32>,
+    pub soa_timers: Option<SoaTimers>,
     rrsets: HashMap<RrsetKey, Rrset>,
 }
 
@@ -28,6 +37,7 @@ impl ZoneSnapshot {
             origin,
             state: ZoneState::Loading,
             serial: None,
+            soa_timers: None,
             rrsets: HashMap::new(),
         }
     }
@@ -40,11 +50,13 @@ impl ZoneSnapshot {
                 rrset,
             );
         }
+        let soa_timers = soa_timers_from_rrsets(&origin, &by_key);
 
         Self {
             origin,
             state: ZoneState::Active,
             serial,
+            soa_timers,
             rrsets: by_key,
         }
     }
@@ -453,6 +465,51 @@ impl ZoneSnapshot {
     }
 }
 
+fn soa_timers_from_rrsets(
+    origin: &DomainName,
+    rrsets: &HashMap<RrsetKey, Rrset>,
+) -> Option<SoaTimers> {
+    let soa = rrsets.get(&RrsetKey::new(origin, RecordType::Soa as u16, 1))?;
+    soa.rdatas.first().and_then(|rdata| soa_timers(rdata))
+}
+
+fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
+    let (_, consumed_mname) = DomainName::parse(rdata, 0).ok()?;
+    let rname_offset = consumed_mname;
+    let (_, consumed_rname) = DomainName::parse(rdata, rname_offset).ok()?;
+    let serial_offset = rname_offset + consumed_rname;
+    if serial_offset + 20 != rdata.len() {
+        return None;
+    }
+
+    Some(SoaTimers {
+        refresh: u32::from_be_bytes([
+            rdata[serial_offset + 4],
+            rdata[serial_offset + 5],
+            rdata[serial_offset + 6],
+            rdata[serial_offset + 7],
+        ]),
+        retry: u32::from_be_bytes([
+            rdata[serial_offset + 8],
+            rdata[serial_offset + 9],
+            rdata[serial_offset + 10],
+            rdata[serial_offset + 11],
+        ]),
+        expire: u32::from_be_bytes([
+            rdata[serial_offset + 12],
+            rdata[serial_offset + 13],
+            rdata[serial_offset + 14],
+            rdata[serial_offset + 15],
+        ]),
+        minimum: u32::from_be_bytes([
+            rdata[serial_offset + 16],
+            rdata[serial_offset + 17],
+            rdata[serial_offset + 18],
+            rdata[serial_offset + 19],
+        ]),
+    })
+}
+
 fn cname_target(record: &ResourceRecord) -> Option<DomainName> {
     parse_single_name_rdata(record)
 }
@@ -686,5 +743,40 @@ impl RrsetKey {
             rr_type,
             class,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_snapshot_extracts_soa_timers() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin,
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        );
+
+        assert_eq!(
+            snapshot.soa_timers,
+            Some(SoaTimers {
+                refresh: 3600,
+                retry: 600,
+                expire: 604800,
+                minimum: 300,
+            })
+        );
+    }
+
+    fn soa_rdata() -> Vec<u8> {
+        b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec()
     }
 }

@@ -282,7 +282,7 @@ impl From<DnsParseError> for AxfrError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns::RecordType;
+    use crate::{dns::RecordType, zone::SoaTimers};
 
     fn soa_rdata() -> Vec<u8> {
         b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec()
@@ -355,6 +355,15 @@ mod tests {
         assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
         assert_eq!(snapshot.origin, apex);
         assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(
+            snapshot.soa_timers,
+            Some(SoaTimers {
+                refresh: 3600,
+                retry: 600,
+                expire: 604800,
+                minimum: 300,
+            })
+        );
         assert!(
             snapshot
                 .lookup(

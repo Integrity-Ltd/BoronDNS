@@ -114,7 +114,7 @@ Slice 5 is in progress:
 
 - AXFR query construction is implemented only for TCP framing;
 - AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, class, bailiwick, and reserved RR types;
-- successful AXFR responses are converted into active zone snapshots with the SOA serial captured from the initial SOA record;
+- successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
@@ -155,6 +155,7 @@ Open near-term work:
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - recurring zone refresh, retry, and expire timers;
 - replacing NOTIFY-triggered AXFR-only refresh with the full ZSM refresh-check flow;
+- scheduling recurring refresh, retry, and expire actions from captured SOA timing fields;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.
