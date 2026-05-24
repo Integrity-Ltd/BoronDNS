@@ -52,13 +52,19 @@ pub enum RuntimeError {
 
 #[derive(Debug, Error)]
 pub enum TransferError {
-    #[error("failed to connect to AXFR primary {addr}: {source}")]
+    #[error("failed to bind outbound UDP socket for primary {addr}: {source}")]
+    BindUdp {
+        addr: SocketAddr,
+        source: std::io::Error,
+    },
+
+    #[error("failed to connect to TCP primary {addr}: {source}")]
     ConnectTcp {
         addr: SocketAddr,
         source: std::io::Error,
     },
 
-    #[error("AXFR TCP I/O with primary {addr} failed: {source}")]
+    #[error("DNS transfer I/O with primary {addr} failed: {source}")]
     Io {
         addr: SocketAddr,
         source: std::io::Error,
@@ -69,6 +75,9 @@ pub enum TransferError {
 
     #[error("AXFR response validation failed: {0}")]
     Axfr(#[from] AxfrError),
+
+    #[error("SOA poll response validation failed: {0}")]
+    Soa(#[from] axfr::SoaQueryError),
 
     #[error("failed to generate random DNS query ID: {0}")]
     RandomQueryId(getrandom::Error),
@@ -228,6 +237,7 @@ impl Runtime {
             if let Some(snapshot) = refresh_zone_from_primaries(
                 &self.zones,
                 &plan,
+                None,
                 Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 "initial",
             )
@@ -257,6 +267,74 @@ pub async fn transfer_axfr_from_primary(
     .map_err(|_| TransferError::Timeout {
         timeout_secs: timeout_duration.as_secs(),
     })?
+}
+
+pub async fn poll_soa_from_primary(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    timeout_duration: Duration,
+) -> Result<u32, TransferError> {
+    tokio::time::timeout(timeout_duration, async {
+        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid).await
+    })
+    .await
+    .map_err(|_| TransferError::Timeout {
+        timeout_secs: timeout_duration.as_secs(),
+    })?
+}
+
+async fn poll_soa_from_primary_inner(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+) -> Result<u32, TransferError> {
+    let socket = UdpSocket::bind(outbound_udp_bind_addr(primary))
+        .await
+        .map_err(|source| TransferError::BindUdp {
+            addr: primary,
+            source,
+        })?;
+    socket
+        .connect(primary)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary,
+            source,
+        })?;
+
+    let query = axfr::build_soa_query(qid, zone_apex, qclass);
+    socket
+        .send(&query)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary,
+            source,
+        })?;
+
+    let mut buffer = vec![0u8; 512];
+    let len = socket
+        .recv(&mut buffer)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary,
+            source,
+        })?;
+
+    axfr::parse_soa_response(qid, zone_apex, qclass, &buffer[..len]).map_err(TransferError::Soa)
+}
+
+fn outbound_udp_bind_addr(primary: SocketAddr) -> SocketAddr {
+    match primary {
+        SocketAddr::V4(_) => "0.0.0.0:0"
+            .parse()
+            .expect("hard-coded IPv4 wildcard socket address is valid"),
+        SocketAddr::V6(_) => "[::]:0"
+            .parse()
+            .expect("hard-coded IPv6 wildcard socket address is valid"),
+    }
 }
 
 async fn transfer_axfr_from_primary_inner(
@@ -924,8 +1002,14 @@ async fn serve_refresh_requests(
             continue;
         }
 
-        match refresh_zone_from_primaries(&zones, &plan, axfr_timeout, request.reason.as_str())
-            .await
+        match refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            request.requested_serial,
+            axfr_timeout,
+            request.reason.as_str(),
+        )
+        .await
         {
             Some(snapshot) => refresh_registry.record_success(&snapshot),
             None => {
@@ -995,10 +1079,94 @@ fn serial_after(candidate: u32, current: u32) -> bool {
 async fn refresh_zone_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
+    primary_serial_hint: Option<u32>,
     axfr_timeout: Duration,
     reason: &str,
 ) -> Option<ZoneSnapshot> {
+    let current_snapshot = zones
+        .find_exact_zone(&plan.origin)
+        .filter(|snapshot| snapshot.serial.is_some());
+    let current_serial = current_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.serial);
+
+    if let (Some(snapshot), Some(current_serial), Some(primary_serial)) =
+        (&current_snapshot, current_serial, primary_serial_hint)
+    {
+        if !serial_after(primary_serial, current_serial) {
+            info!(
+                zone = %plan.origin,
+                current_serial,
+                primary_serial,
+                %reason,
+                "SOA serial hint confirmed zone current"
+            );
+            return Some((**snapshot).clone());
+        }
+
+        info!(
+            zone = %plan.origin,
+            current_serial,
+            primary_serial,
+            %reason,
+            "SOA serial hint found newer primary serial"
+        );
+    }
+
     for primary in &plan.primaries {
+        if primary_serial_hint.is_none()
+            && let (Some(snapshot), Some(current_serial)) = (&current_snapshot, current_serial)
+        {
+            let qid = match transfer_query_id() {
+                Ok(qid) => qid,
+                Err(error) => {
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        %error,
+                        %reason,
+                        "SOA poll failed"
+                    );
+                    continue;
+                }
+            };
+            match poll_soa_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
+                .await
+            {
+                Ok(primary_serial) if !serial_after(primary_serial, current_serial) => {
+                    info!(
+                        zone = %plan.origin,
+                        %primary,
+                        current_serial,
+                        primary_serial,
+                        %reason,
+                        "SOA poll confirmed zone current"
+                    );
+                    return Some((**snapshot).clone());
+                }
+                Ok(primary_serial) => {
+                    info!(
+                        zone = %plan.origin,
+                        %primary,
+                        current_serial,
+                        primary_serial,
+                        %reason,
+                        "SOA poll found newer primary serial"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        %error,
+                        %reason,
+                        "SOA poll failed"
+                    );
+                    continue;
+                }
+            }
+        }
+
         let qid = match transfer_query_id() {
             Ok(qid) => qid,
             Err(error) => {
@@ -1174,7 +1342,7 @@ mod tests {
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream},
+        net::{TcpListener, TcpStream, UdpSocket},
         sync::mpsc,
     };
     use oxidedns_core::{
@@ -1187,7 +1355,8 @@ mod tests {
     use super::{
         NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
         TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection,
-        jitter_interval, query_id_from_random_bytes, serial_after, serve_refresh_requests,
+        jitter_interval, poll_soa_from_primary, query_id_from_random_bytes,
+        refresh_zone_from_primaries, serial_after, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary, transfer_query_id,
     };
 
@@ -1282,6 +1451,18 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn poll_soa_from_primary_reads_udp_response() {
+        let primary = spawn_soa_primary_with_serial(7).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let serial =
+            poll_soa_from_primary(primary, &apex, 1, 0x1234, std::time::Duration::from_secs(5))
+                .await
+                .expect("SOA poll");
+
+        assert_eq!(serial, 7);
     }
 
     #[test]
@@ -1514,6 +1695,63 @@ mod tests {
             .expect("published refreshed snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(2));
+    }
+
+    #[tokio::test]
+    async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
+        let primary = spawn_soa_primary_with_serial(2).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let plan = transfer_plan
+            .get(&DomainName::from_absolute_str("example.test.").unwrap())
+            .expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            apex.clone(),
+            Some(2),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(2)],
+            )],
+        ));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            std::time::Duration::from_secs(5),
+            "test",
+        )
+        .await
+        .expect("refresh success");
+
+        assert_eq!(snapshot.serial, Some(2));
+        assert!(
+            zones
+                .get("example.test.")
+                .expect("unchanged zone snapshot")
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1935,6 +2173,27 @@ mod tests {
         addr
     }
 
+    async fn spawn_soa_primary_with_serial(serial: u32) -> std::net::SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 512];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let query = &buffer[..len];
+            let header = Header::parse(query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert!(query.ends_with(&(1u16).to_be_bytes()));
+            assert_eq!(
+                &query[query.len() - 4..query.len() - 2],
+                &(RecordType::Soa as u16).to_be_bytes()
+            );
+
+            let response = soa_response(header.id, serial);
+            socket.send_to(&response, peer).await.unwrap();
+        });
+        addr
+    }
+
     fn axfr_response(qid: u16, serial: u32) -> Vec<u8> {
         let soa = record(
             "example.test.",
@@ -1962,6 +2221,32 @@ mod tests {
             out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
             out.extend_from_slice(&answer.rdata);
         }
+        out
+    }
+
+    fn soa_response(qid: u16, serial: u32) -> Vec<u8> {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(serial),
+        );
+        let mut out = Vec::new();
+        out.extend_from_slice(&qid.to_be_bytes());
+        out.extend_from_slice(&0x8000u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&apex.to_wire());
+        out.extend_from_slice(&(RecordType::Soa as u16).to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&soa.owner.to_wire());
+        out.extend_from_slice(&soa.rr_type.to_be_bytes());
+        out.extend_from_slice(&soa.class.to_be_bytes());
+        out.extend_from_slice(&soa.ttl.to_be_bytes());
+        out.extend_from_slice(&(soa.rdata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&soa.rdata);
         out
     }
 

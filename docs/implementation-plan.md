@@ -127,7 +127,8 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - `[limits].zsm_min_interval_secs` configures the 60-second minimum effective SOA REFRESH/RETRY interval;
 - scheduled REFRESH, RETRY, and initial-load backoff intervals receive independently sampled ±10% jitter;
 - the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
-- due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path.
+- due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path;
+- refresh attempts for zones with an existing serial perform a UDP SOA poll with strict QID, opcode, echoed-question, RCODE, class, owner, and serial parsing before transfer; if the primary serial is equal to or older than the held serial, the attempt is recorded as successful without AXFR.
 
 Slice 4 is in progress:
 
@@ -164,7 +165,7 @@ EDNS/query-size work is partially started:
 Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
-- replacing the current AXFR-only scheduled refresh with the full ZSM refresh-check flow, including SOA poll and IXFR preference;
+- replacing the current AXFR fallback after newer SOA detection with IXFR preference;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

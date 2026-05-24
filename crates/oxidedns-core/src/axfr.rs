@@ -47,7 +47,48 @@ pub enum AxfrError {
     ReservedType,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SoaQueryError {
+    #[error("SOA response message is malformed")]
+    MalformedMessage,
+
+    #[error("SOA response was not marked as a response")]
+    NotResponse,
+
+    #[error("SOA response QID does not match query QID")]
+    MismatchedQid,
+
+    #[error("SOA response opcode is not QUERY")]
+    MismatchedOpcode,
+
+    #[error("SOA response returned error RCODE {0}")]
+    ErrorRcode(u8),
+
+    #[error("SOA response question does not match the SOA poll query")]
+    MismatchedQuestion,
+
+    #[error("SOA response did not contain an SOA answer at the zone apex")]
+    MissingSoa,
+
+    #[error("SOA response contained an answer with an unexpected class")]
+    ClassMismatch,
+
+    #[error("SOA response contained an out-of-zone answer owner name")]
+    OutOfZoneOwner,
+
+    #[error("SOA response contained a reserved RR type")]
+    ReservedType,
+}
+
 pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
+    build_query(qid, zone_apex, RecordType::Axfr as u16, qclass)
+}
+
+pub fn build_soa_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
+    build_query(qid, zone_apex, RecordType::Soa as u16, qclass)
+}
+
+fn build_query(qid: u16, zone_apex: &DomainName, qtype: u16, qclass: u16) -> Vec<u8> {
     let mut message = Vec::new();
     message.extend_from_slice(&qid.to_be_bytes());
     message.extend_from_slice(&0u16.to_be_bytes());
@@ -56,7 +97,7 @@ pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8
     message.extend_from_slice(&0u16.to_be_bytes());
     message.extend_from_slice(&0u16.to_be_bytes());
     message.extend_from_slice(&zone_apex.to_wire());
-    message.extend_from_slice(&(RecordType::Axfr as u16).to_be_bytes());
+    message.extend_from_slice(&qtype.to_be_bytes());
     message.extend_from_slice(&qclass.to_be_bytes());
     message
 }
@@ -144,6 +185,68 @@ pub fn parse_axfr_response(
     ))
 }
 
+pub fn parse_soa_response(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    message: &[u8],
+) -> Result<u32, SoaQueryError> {
+    let header = Header::parse(message).map_err(|_| SoaQueryError::MalformedMessage)?;
+    if header.id != qid {
+        return Err(SoaQueryError::MismatchedQid);
+    }
+    if !header.is_response() {
+        return Err(SoaQueryError::NotResponse);
+    }
+    if header.opcode_value() != 0 {
+        return Err(SoaQueryError::MismatchedOpcode);
+    }
+    let rcode = (header.flags & 0x000f) as u8;
+    if rcode != 0 {
+        return Err(SoaQueryError::ErrorRcode(rcode));
+    }
+
+    let mut offset = validate_soa_response_question(message, header.qdcount, zone_apex, qclass)?;
+    for _ in 0..header.ancount {
+        let (record, consumed) =
+            parse_record(message, offset).map_err(|_| SoaQueryError::MalformedMessage)?;
+        offset += consumed;
+
+        validate_soa_answer_scope(&record, zone_apex, qclass)?;
+        if record.owner == *zone_apex && record.rr_type == RecordType::Soa as u16 {
+            return soa_serial(&record.rdata).map_err(|_| SoaQueryError::MalformedMessage);
+        }
+    }
+
+    Err(SoaQueryError::MissingSoa)
+}
+
+fn validate_soa_response_question(
+    message: &[u8],
+    qdcount: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+) -> Result<usize, SoaQueryError> {
+    if qdcount != 1 {
+        return Err(SoaQueryError::MismatchedQuestion);
+    }
+
+    let (qname, consumed) =
+        DomainName::parse(message, DNS_HEADER_LEN).map_err(|_| SoaQueryError::MalformedMessage)?;
+    let offset = DNS_HEADER_LEN + consumed;
+    if offset + 4 > message.len() {
+        return Err(SoaQueryError::MalformedMessage);
+    }
+
+    let qtype = u16::from_be_bytes([message[offset], message[offset + 1]]);
+    let response_qclass = u16::from_be_bytes([message[offset + 2], message[offset + 3]]);
+    if qname != *zone_apex || qtype != RecordType::Soa as u16 || response_qclass != qclass {
+        return Err(SoaQueryError::MismatchedQuestion);
+    }
+
+    Ok(offset + 4)
+}
+
 fn soa_serial(rdata: &[u8]) -> Result<u32, AxfrError> {
     let (_, consumed_mname) = DomainName::parse(rdata, 0)?;
     let rname_offset = consumed_mname;
@@ -175,13 +278,12 @@ fn skip_questions(message: &[u8], qdcount: u16) -> Result<usize, AxfrError> {
     Ok(offset)
 }
 
-fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize), AxfrError> {
+fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize), DnsParseError> {
     let start = offset;
-    let (owner, consumed) =
-        DomainName::parse(message, offset).map_err(|_| AxfrError::MalformedMessage)?;
+    let (owner, consumed) = DomainName::parse(message, offset)?;
     let mut offset = offset + consumed;
     if offset + 10 > message.len() {
-        return Err(AxfrError::MalformedMessage);
+        return Err(DnsParseError::FormErr);
     }
 
     let rr_type = u16::from_be_bytes([message[offset], message[offset + 1]]);
@@ -195,7 +297,7 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
     let rdlength = u16::from_be_bytes([message[offset + 8], message[offset + 9]]) as usize;
     offset += 10;
     if offset + rdlength > message.len() {
-        return Err(AxfrError::MalformedMessage);
+        return Err(DnsParseError::FormErr);
     }
 
     let rdata = message[offset..offset + rdlength].to_vec();
@@ -226,6 +328,23 @@ fn validate_record_scope(
     }
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
         return Err(AxfrError::OutOfZoneOwner);
+    }
+    Ok(())
+}
+
+fn validate_soa_answer_scope(
+    record: &ResourceRecord,
+    zone_apex: &DomainName,
+    qclass: u16,
+) -> Result<(), SoaQueryError> {
+    if record.class != qclass {
+        return Err(SoaQueryError::ClassMismatch);
+    }
+    if record.rr_type == 0 || record.rr_type == u16::MAX {
+        return Err(SoaQueryError::ReservedType);
+    }
+    if !record.owner.is_equal_or_subdomain_of(zone_apex) {
+        return Err(SoaQueryError::OutOfZoneOwner);
     }
     Ok(())
 }
@@ -308,6 +427,29 @@ mod tests {
         out
     }
 
+    fn soa_message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&qid.to_be_bytes());
+        out.extend_from_slice(&0x8000u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&apex.to_wire());
+        out.extend_from_slice(&(RecordType::Soa as u16).to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        for answer in answers {
+            out.extend_from_slice(&answer.owner.to_wire());
+            out.extend_from_slice(&answer.rr_type.to_be_bytes());
+            out.extend_from_slice(&answer.class.to_be_bytes());
+            out.extend_from_slice(&answer.ttl.to_be_bytes());
+            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
+            out.extend_from_slice(&answer.rdata);
+        }
+        out
+    }
+
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
         ResourceRecord {
             owner: DomainName::from_absolute_str(owner).unwrap(),
@@ -327,6 +469,18 @@ mod tests {
         assert_eq!(&query[4..6], &1u16.to_be_bytes());
         assert_eq!(&query[12..26], b"\x07example\x04test\x00");
         assert_eq!(&query[26..28], &(RecordType::Axfr as u16).to_be_bytes());
+        assert_eq!(&query[28..30], &1u16.to_be_bytes());
+    }
+
+    #[test]
+    fn builds_soa_query_wire_message() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let query = build_soa_query(0x1234, &apex, 1);
+        assert_eq!(&query[0..2], &0x1234u16.to_be_bytes());
+        assert_eq!(&query[2..4], &0u16.to_be_bytes());
+        assert_eq!(&query[4..6], &1u16.to_be_bytes());
+        assert_eq!(&query[12..26], b"\x07example\x04test\x00");
+        assert_eq!(&query[26..28], &(RecordType::Soa as u16).to_be_bytes());
         assert_eq!(&query[28..30], &1u16.to_be_bytes());
     }
 
@@ -376,6 +530,40 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn parses_valid_soa_response_serial() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let serial =
+            parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![soa])).expect("SOA");
+
+        assert_eq!(serial, 1);
+    }
+
+    #[test]
+    fn rejects_soa_response_with_mismatched_qid() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let error = parse_soa_response(0x1234, &apex, 1, &soa_message(0x9999, vec![soa]))
+            .expect_err("mismatched qid");
+
+        assert_eq!(error, SoaQueryError::MismatchedQid);
+    }
+
+    #[test]
+    fn rejects_soa_response_without_apex_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![a]))
+            .expect_err("missing SOA");
+
+        assert_eq!(error, SoaQueryError::MissingSoa);
     }
 
     #[test]
