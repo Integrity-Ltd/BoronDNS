@@ -41,6 +41,15 @@ pub enum TsigError {
     #[error("DNS message is missing the expected TSIG record")]
     MissingTsig,
 
+    #[error("DNS TCP response stream did not end with a TSIG record")]
+    MissingTerminalTsig,
+
+    #[error("DNS TCP response stream exceeded 99 unsigned messages between TSIG records")]
+    TooManyUnsignedMessages,
+
+    #[error("DNS TCP response stream TSIG times moved backwards")]
+    NonMonotonicTimeSigned,
+
     #[error("DNS message TSIG record is not the final additional record")]
     MisplacedTsig,
 
@@ -105,6 +114,7 @@ pub struct SignedMessage {
 pub struct VerifiedMessage {
     pub message: Vec<u8>,
     pub mac: Vec<u8>,
+    pub time_signed: u64,
 }
 
 struct TsigRecordFields<'a> {
@@ -181,6 +191,25 @@ impl TsigKey {
         now_unix: u64,
     ) -> Result<VerifiedMessage, TsigError> {
         verify_response(message, self, request_mac, now_unix)
+    }
+
+    pub fn verify_tcp_response_stream(
+        &self,
+        messages: &[Vec<u8>],
+        request_mac: &[u8],
+        now_unix: u64,
+    ) -> Result<Vec<Vec<u8>>, TsigError> {
+        verify_tcp_response_stream(messages, self, request_mac, now_unix)
+    }
+
+    pub fn sign_tcp_response_continuation(
+        &self,
+        message: &[u8],
+        prior_mac: &[u8],
+        time_signed: u64,
+        fudge: u16,
+    ) -> Result<SignedMessage, TsigError> {
+        sign_tcp_response_continuation(message, self, prior_mac, time_signed, fudge)
     }
 }
 
@@ -286,6 +315,61 @@ pub fn sign_response(
     })
 }
 
+pub fn sign_tcp_response_continuation(
+    message: &[u8],
+    key: &TsigKey,
+    prior_mac: &[u8],
+    time_signed: u64,
+    fudge: u16,
+) -> Result<SignedMessage, TsigError> {
+    if message.len() < DNS_HEADER_LEN {
+        return Err(TsigError::MalformedMessage);
+    }
+
+    let original_id = u16::from_be_bytes([
+        message[DNS_HEADER_ID_OFFSET],
+        message[DNS_HEADER_ID_OFFSET + 1],
+    ]);
+    let arcount = u16::from_be_bytes([
+        message[DNS_HEADER_ARCOUNT_OFFSET],
+        message[DNS_HEADER_ARCOUNT_OFFSET + 1],
+    ]);
+    let signed_arcount = arcount
+        .checked_add(1)
+        .ok_or(TsigError::AdditionalRecordCountOverflow)?;
+
+    let mut mac_input = Vec::new();
+    mac_input.extend_from_slice(&(prior_mac.len() as u16).to_be_bytes());
+    mac_input.extend_from_slice(prior_mac);
+    mac_input.extend_from_slice(message);
+    append_u48(&mut mac_input, time_signed);
+    mac_input.extend_from_slice(&fudge.to_be_bytes());
+    let mac = key.sign(&mac_input)?;
+    mac_input.zeroize();
+
+    let mut signed_message = Vec::with_capacity(message.len() + tsig_rr_len(key, mac.len()));
+    signed_message.extend_from_slice(message);
+    signed_message[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
+        .copy_from_slice(&signed_arcount.to_be_bytes());
+    append_tsig_rr(
+        &mut signed_message,
+        key,
+        TsigRecordFields {
+            time_signed,
+            fudge,
+            mac: &mac,
+            original_id,
+            error: TSIG_ERROR_NOERROR,
+            other_data: &[],
+        },
+    );
+
+    Ok(SignedMessage {
+        message: signed_message,
+        mac,
+    })
+}
+
 pub fn verify_response(
     message: &[u8],
     key: &TsigKey,
@@ -325,7 +409,68 @@ pub fn verify_response(
     Ok(VerifiedMessage {
         message: unsigned_message,
         mac: tsig.mac,
+        time_signed: tsig.time_signed,
     })
+}
+
+pub fn verify_tcp_response_stream(
+    messages: &[Vec<u8>],
+    key: &TsigKey,
+    request_mac: &[u8],
+    now_unix: u64,
+) -> Result<Vec<Vec<u8>>, TsigError> {
+    let Some(first_message) = messages.first() else {
+        return Err(TsigError::MissingTsig);
+    };
+
+    let first = verify_response(first_message, key, request_mac, now_unix)?;
+    let mut unsigned_messages = Vec::with_capacity(messages.len());
+    let mut last_time_signed = first.time_signed;
+    unsigned_messages.push(first.message);
+    let mut prior_mac = first.mac;
+    let mut pending_unsigned = Vec::new();
+    let mut last_message_had_tsig = true;
+
+    for message in &messages[1..] {
+        match remove_tsig(message) {
+            Ok((unsigned_message, tsig)) => {
+                validate_tcp_tsig(key, &tsig, now_unix)?;
+                if tsig.time_signed < last_time_signed {
+                    return Err(TsigError::NonMonotonicTimeSigned);
+                }
+                pending_unsigned.push(unsigned_message.clone());
+                verify_tcp_tsig_mac(key, &prior_mac, &pending_unsigned, &tsig)?;
+                unsigned_messages.push(unsigned_message);
+                last_time_signed = tsig.time_signed;
+                prior_mac = tsig.mac;
+                pending_unsigned.clear();
+                last_message_had_tsig = true;
+            }
+            Err(TsigError::MissingTsig) => {
+                if pending_unsigned.len() >= 99 {
+                    return Err(TsigError::TooManyUnsignedMessages);
+                }
+                pending_unsigned.push(message.clone());
+                unsigned_messages.push(message.clone());
+                last_message_had_tsig = false;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    if !last_message_had_tsig {
+        return Err(TsigError::MissingTerminalTsig);
+    }
+
+    Ok(unsigned_messages)
+}
+
+pub fn message_has_tsig(message: &[u8]) -> Result<bool, TsigError> {
+    match remove_tsig(message) {
+        Ok(_) => Ok(true),
+        Err(TsigError::MissingTsig) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 impl TsigAlgorithm {
@@ -504,6 +649,47 @@ fn parse_tsig_record(record: &RecordView<'_>) -> Result<ParsedTsig, TsigError> {
         error,
         other_data,
     })
+}
+
+fn validate_tcp_tsig(key: &TsigKey, tsig: &ParsedTsig, now_unix: u64) -> Result<(), TsigError> {
+    if tsig.owner.canonical_key() != key.name.canonical_key() {
+        return Err(TsigError::KeyMismatch);
+    }
+    if tsig.algorithm != key.algorithm {
+        return Err(TsigError::AlgorithmMismatch);
+    }
+    if tsig.error != TSIG_ERROR_NOERROR {
+        return Err(TsigError::ResponseError(tsig.error));
+    }
+    if now_unix.saturating_add(tsig.fudge as u64) < tsig.time_signed
+        || tsig.time_signed.saturating_add(tsig.fudge as u64) < now_unix
+    {
+        return Err(TsigError::TimeOutsideFudge);
+    }
+    Ok(())
+}
+
+fn verify_tcp_tsig_mac(
+    key: &TsigKey,
+    prior_mac: &[u8],
+    messages_since_tsig: &[Vec<u8>],
+    tsig: &ParsedTsig,
+) -> Result<(), TsigError> {
+    let mut mac_input = Vec::new();
+    mac_input.extend_from_slice(&(prior_mac.len() as u16).to_be_bytes());
+    mac_input.extend_from_slice(prior_mac);
+    for message in messages_since_tsig {
+        mac_input.extend_from_slice(message);
+    }
+    append_u48(&mut mac_input, tsig.time_signed);
+    mac_input.extend_from_slice(&tsig.fudge.to_be_bytes());
+
+    let expected_mac = key.sign(&mac_input)?;
+    mac_input.zeroize();
+    if !bool::from(expected_mac.ct_eq(&tsig.mac)) {
+        return Err(TsigError::InvalidMac);
+    }
+    Ok(())
 }
 
 fn response_mac_input(request_mac: &[u8], message: &[u8], variables: &[u8]) -> Vec<u8> {
@@ -774,6 +960,121 @@ mod tests {
     }
 
     #[test]
+    fn verifies_tcp_response_stream_with_unsigned_intermediary_message() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first_message = sample_response_with_id_and_serial(0x1234, 1);
+        let unsigned_middle = sample_response_with_id_and_serial(0x1234, 2);
+        let final_message = sample_response_with_id_and_serial(0x1234, 3);
+        let first = key
+            .sign_response(
+                &first_message,
+                &request.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+
+        let mut continuation_input = Vec::new();
+        continuation_input.extend_from_slice(&(first.mac.len() as u16).to_be_bytes());
+        continuation_input.extend_from_slice(&first.mac);
+        continuation_input.extend_from_slice(&unsigned_middle);
+        continuation_input.extend_from_slice(&final_message);
+        append_u48(&mut continuation_input, 1_700_000_002);
+        continuation_input.extend_from_slice(&DEFAULT_TSIG_FUDGE_SECS.to_be_bytes());
+        let expected_final_mac = key.sign(&continuation_input).unwrap();
+
+        let final_signed = signed_tcp_response_for_messages(
+            &key,
+            &first.mac,
+            &[unsigned_middle.clone(), final_message.clone()],
+            1_700_000_002,
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap();
+        assert_eq!(final_signed.mac, expected_final_mac);
+
+        let verified = key
+            .verify_tcp_response_stream(
+                &[first.message, unsigned_middle.clone(), final_signed.message],
+                &request.mac,
+                1_700_000_002,
+            )
+            .expect("verified TCP response stream");
+
+        assert_eq!(
+            verified,
+            vec![first_message, unsigned_middle, final_message]
+        );
+    }
+
+    #[test]
+    fn rejects_tcp_response_stream_without_terminal_tsig() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first = key
+            .sign_response(
+                &sample_response_with_id_and_serial(0x1234, 1),
+                &request.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let final_unsigned = sample_response_with_id_and_serial(0x1234, 2);
+
+        let error = key
+            .verify_tcp_response_stream(
+                &[first.message, final_unsigned],
+                &request.mac,
+                1_700_000_002,
+            )
+            .expect_err("missing terminal TSIG");
+
+        assert_eq!(error, TsigError::MissingTerminalTsig);
+    }
+
+    #[test]
+    fn rejects_tcp_response_stream_when_tsig_time_moves_backwards() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first = key
+            .sign_response(
+                &sample_response_with_id_and_serial(0x1234, 1),
+                &request.mac,
+                1_700_000_002,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let final_signed = key
+            .sign_tcp_response_continuation(
+                &sample_response_with_id_and_serial(0x1234, 2),
+                &first.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+
+        let error = key
+            .verify_tcp_response_stream(
+                &[first.message, final_signed.message],
+                &request.mac,
+                1_700_000_002,
+            )
+            .expect_err("backwards TSIG time");
+
+        assert_eq!(error, TsigError::NonMonotonicTimeSigned);
+    }
+
+    #[test]
     fn rejects_response_with_invalid_mac() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
@@ -853,6 +1154,10 @@ mod tests {
     }
 
     fn sample_soa_response() -> Vec<u8> {
+        sample_response_with_id_and_serial(0x1234, 1)
+    }
+
+    fn sample_response_with_id_and_serial(qid: u16, serial: u32) -> Vec<u8> {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let mut rdata = Vec::new();
         rdata.extend_from_slice(
@@ -865,14 +1170,14 @@ mod tests {
                 .unwrap()
                 .to_wire(),
         );
-        rdata.extend_from_slice(&1u32.to_be_bytes());
+        rdata.extend_from_slice(&serial.to_be_bytes());
         rdata.extend_from_slice(&3600u32.to_be_bytes());
         rdata.extend_from_slice(&600u32.to_be_bytes());
         rdata.extend_from_slice(&604800u32.to_be_bytes());
         rdata.extend_from_slice(&300u32.to_be_bytes());
 
         let mut response = Vec::new();
-        response.extend_from_slice(&0x1234u16.to_be_bytes());
+        response.extend_from_slice(&qid.to_be_bytes());
         response.extend_from_slice(&0x8000u16.to_be_bytes());
         response.extend_from_slice(&1u16.to_be_bytes());
         response.extend_from_slice(&1u16.to_be_bytes());
@@ -888,5 +1193,48 @@ mod tests {
         response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
         response.extend_from_slice(&rdata);
         response
+    }
+
+    fn signed_tcp_response_for_messages(
+        key: &TsigKey,
+        prior_mac: &[u8],
+        messages_since_tsig: &[Vec<u8>],
+        time_signed: u64,
+        fudge: u16,
+    ) -> Result<SignedMessage, TsigError> {
+        let Some(final_message) = messages_since_tsig.last() else {
+            return Err(TsigError::MalformedMessage);
+        };
+        let mut mac_input = Vec::new();
+        mac_input.extend_from_slice(&(prior_mac.len() as u16).to_be_bytes());
+        mac_input.extend_from_slice(prior_mac);
+        for message in messages_since_tsig {
+            mac_input.extend_from_slice(message);
+        }
+        append_u48(&mut mac_input, time_signed);
+        mac_input.extend_from_slice(&fudge.to_be_bytes());
+        let mac = key.sign(&mac_input)?;
+
+        let original_id = u16::from_be_bytes([final_message[0], final_message[1]]);
+        let arcount = u16::from_be_bytes([final_message[10], final_message[11]]);
+        let mut signed_message = final_message.clone();
+        signed_message[10..12].copy_from_slice(&(arcount + 1).to_be_bytes());
+        append_tsig_rr(
+            &mut signed_message,
+            key,
+            TsigRecordFields {
+                time_signed,
+                fudge,
+                mac: &mac,
+                original_id,
+                error: TSIG_ERROR_NOERROR,
+                other_data: &[],
+            },
+        );
+
+        Ok(SignedMessage {
+            message: signed_message,
+            mac,
+        })
     }
 }

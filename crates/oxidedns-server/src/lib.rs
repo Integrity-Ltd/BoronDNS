@@ -432,9 +432,9 @@ async fn transfer_ixfr_from_primary_inner(
         axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
         tsig_key,
     )?;
-    let query = axfr::frame_tcp_message(&query.message);
+    let framed_query = axfr::frame_tcp_message(&query.message);
     stream
-        .write_all(&query)
+        .write_all(&framed_query)
         .await
         .map_err(|source| TransferError::Io {
             addr: primary,
@@ -447,8 +447,19 @@ async fn transfer_ixfr_from_primary_inner(
         match stream.read_exact(&mut length_prefix).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages)
-                    .map_err(TransferError::Ixfr);
+                let verified_messages = maybe_verify_tcp_transfer_messages(
+                    &messages,
+                    tsig_key,
+                    query.request_mac.as_deref(),
+                )?;
+                return axfr::parse_ixfr_response(
+                    qid,
+                    zone_apex,
+                    qclass,
+                    current_zone,
+                    &verified_messages,
+                )
+                .map_err(TransferError::Ixfr);
             }
             Err(source) => {
                 return Err(TransferError::Io {
@@ -473,7 +484,26 @@ async fn transfer_ixfr_from_primary_inner(
         messages.push(message);
 
         match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages) {
-            Ok(response) => return Ok(response),
+            Ok(_) => {
+                match maybe_verify_tcp_transfer_messages(
+                    &messages,
+                    tsig_key,
+                    query.request_mac.as_deref(),
+                ) {
+                    Ok(verified_messages) => {
+                        return axfr::parse_ixfr_response(
+                            qid,
+                            zone_apex,
+                            qclass,
+                            current_zone,
+                            &verified_messages,
+                        )
+                        .map_err(TransferError::Ixfr);
+                    }
+                    Err(TransferError::Tsig(TsigError::MissingTerminalTsig)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
             Err(axfr::IxfrError::IncompleteResponse)
             | Err(axfr::IxfrError::Axfr(AxfrError::MissingTerminatingSoa)) => {}
             Err(error) => return Err(TransferError::Ixfr(error)),
@@ -528,6 +558,20 @@ fn maybe_verify_transfer_response(
     Ok(verified.message)
 }
 
+fn maybe_verify_tcp_transfer_messages(
+    messages: &[Vec<u8>],
+    tsig_key: Option<&TsigKey>,
+    request_mac: Option<&[u8]>,
+) -> Result<Vec<Vec<u8>>, TransferError> {
+    let (Some(tsig_key), Some(request_mac)) = (tsig_key, request_mac) else {
+        return Ok(messages.to_vec());
+    };
+
+    tsig_key
+        .verify_tcp_response_stream(messages, request_mac, tsig_time_signed())
+        .map_err(TransferError::Tsig)
+}
+
 fn tsig_time_signed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -552,9 +596,9 @@ async fn transfer_axfr_from_primary_inner(
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig_key)?;
-    let query = axfr::frame_tcp_message(&query.message);
+    let framed_query = axfr::frame_tcp_message(&query.message);
     stream
-        .write_all(&query)
+        .write_all(&framed_query)
         .await
         .map_err(|source| TransferError::Io {
             addr: primary,
@@ -567,7 +611,12 @@ async fn transfer_axfr_from_primary_inner(
         match stream.read_exact(&mut length_prefix).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return axfr::parse_axfr_response(qid, zone_apex, qclass, &messages)
+                let verified_messages = maybe_verify_tcp_transfer_messages(
+                    &messages,
+                    tsig_key,
+                    query.request_mac.as_deref(),
+                )?;
+                return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
                     .map_err(TransferError::Axfr);
             }
             Err(source) => {
@@ -593,7 +642,25 @@ async fn transfer_axfr_from_primary_inner(
         messages.push(message);
 
         match axfr::parse_axfr_response(qid, zone_apex, qclass, &messages) {
-            Ok(snapshot) => return Ok(snapshot),
+            Ok(_) => {
+                match maybe_verify_tcp_transfer_messages(
+                    &messages,
+                    tsig_key,
+                    query.request_mac.as_deref(),
+                ) {
+                    Ok(verified_messages) => {
+                        return axfr::parse_axfr_response(
+                            qid,
+                            zone_apex,
+                            qclass,
+                            &verified_messages,
+                        )
+                        .map_err(TransferError::Axfr);
+                    }
+                    Err(TransferError::Tsig(TsigError::MissingTerminalTsig)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
             Err(AxfrError::MissingTerminatingSoa) => {}
             Err(error) => return Err(TransferError::Axfr(error)),
         }
@@ -2860,12 +2927,23 @@ mod tests {
             let query = read_primary_query(&mut stream).await;
 
             let header = Header::parse(&query).unwrap();
+            let request_mac = extract_query_tsig_mac(&query);
             observed_query_for_task
                 .lock()
                 .expect("observed query lock poisoned")
-                .replace(query);
+                .replace(query.clone());
 
             let response = axfr_response(header.id, serial);
+            let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+            let response = key
+                .sign_response(
+                    &response,
+                    &request_mac,
+                    current_unix_time(),
+                    DEFAULT_TSIG_FUDGE_SECS,
+                )
+                .unwrap()
+                .message;
             stream
                 .write_all(&frame_tcp_message(&response))
                 .await

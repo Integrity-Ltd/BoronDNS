@@ -163,6 +163,7 @@ Slice 7 has TSIG HMAC-SHA256 foundations:
 - RFC 8945 request signing is implemented for HMAC-SHA256, including canonical TSIG variables, 48-bit Time Signed encoding, TSIG RR wire format, ARCOUNT incrementing, and placement as the last additional record;
 - zones that reference a configured TSIG key sign outbound SOA poll, IXFR, and AXFR transfer queries.
 - signed SOA poll responses are verified against the stored request MAC, TSIG key name and algorithm, MAC, and time fudge before the unsigned DNS response is parsed.
+- signed TCP AXFR/IXFR response streams are verified before publication, including first-message request-MAC verification, subsequent running-MAC verification, terminal TSIG enforcement, the 99-message unsigned compatibility window, and non-decreasing TSIG times.
 
 EDNS/query-size work is partially started:
 
@@ -178,6 +179,6 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - broader IXFR fault/interop coverage;
-- TSIG inbound NOTIFY verification and multi-message AXFR/IXFR response MAC chaining;
+- TSIG inbound NOTIFY verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.
