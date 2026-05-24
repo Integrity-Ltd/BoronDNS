@@ -1003,6 +1003,9 @@ fn record_query_response_metric(
     let Ok(header) = Header::parse(response) else {
         return;
     };
+    if header.flags & 0x0200 != 0 {
+        metrics.record_query_truncated();
+    }
     metrics.record_query_response_rcode(response_rcode(response, &header));
 }
 
@@ -1192,6 +1195,9 @@ fn metrics_body(
          # HELP oxidedns_queries_received_total Query messages received.\n\
          # TYPE oxidedns_queries_received_total counter\n\
          oxidedns_queries_received_total {}\n\
+         # HELP oxidedns_queries_truncated_total Query responses emitted with the TC bit set.\n\
+         # TYPE oxidedns_queries_truncated_total counter\n\
+         oxidedns_queries_truncated_total {}\n\
          # HELP oxidedns_transfer_sessions_started_total Transfer sessions started.\n\
          # TYPE oxidedns_transfer_sessions_started_total counter\n\
          oxidedns_transfer_sessions_started_total{{protocol=\"axfr\"}} {}\n\
@@ -1207,6 +1213,7 @@ fn metrics_body(
         zones.len(),
         zones.active_count(),
         snapshot.queries_received,
+        snapshot.queries_truncated,
         snapshot.axfr_started,
         snapshot.ixfr_started,
         snapshot.axfr_succeeded,
@@ -1457,6 +1464,7 @@ struct RuntimeMetrics {
 #[derive(Debug, Default)]
 struct RuntimeMetricsInner {
     queries_received: AtomicU64,
+    queries_truncated: AtomicU64,
     axfr_started: AtomicU64,
     axfr_succeeded: AtomicU64,
     axfr_failed: AtomicU64,
@@ -1470,6 +1478,7 @@ struct RuntimeMetricsInner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeMetricsSnapshot {
     queries_received: u64,
+    queries_truncated: u64,
     axfr_started: u64,
     axfr_succeeded: u64,
     axfr_failed: u64,
@@ -1513,6 +1522,10 @@ impl RuntimeMetrics {
         self.inner.queries_received.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_query_truncated(&self) {
+        self.inner.queries_truncated.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_query_response_rcode(&self, rcode: u16) {
         let mut rcodes = self
             .inner
@@ -1552,6 +1565,7 @@ impl RuntimeMetrics {
     fn snapshot(&self) -> RuntimeMetricsSnapshot {
         RuntimeMetricsSnapshot {
             queries_received: self.inner.queries_received.load(Ordering::Relaxed),
+            queries_truncated: self.inner.queries_truncated.load(Ordering::Relaxed),
             axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
             axfr_succeeded: self.inner.axfr_succeeded.load(Ordering::Relaxed),
             axfr_failed: self.inner.axfr_failed.load(Ordering::Relaxed),
@@ -2998,6 +3012,7 @@ mod tests {
         metrics_state.record_zone_query(&active_origin);
         metrics_state.record_query_received();
         metrics_state.record_query_received();
+        metrics_state.record_query_truncated();
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
@@ -3043,6 +3058,7 @@ mod tests {
         assert!(metrics.contains("oxidedns_zones_total 2"));
         assert!(metrics.contains("oxidedns_zones_active 1"));
         assert!(metrics.contains("oxidedns_queries_received_total 2"));
+        assert!(metrics.contains("oxidedns_queries_truncated_total 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NOERROR\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"SERVFAIL\"} 0"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
@@ -3624,17 +3640,21 @@ mod tests {
         noerror[2] |= 0x80;
         let mut nxdomain = noerror.clone();
         nxdomain[3] |= 3;
+        let mut truncated = noerror.clone();
+        truncated[2] |= 0x02;
         let mut badvers = noerror.clone();
         badvers[11] = 1;
         badvers.extend_from_slice(&[0, 0, 41, 4, 208, 1, 0, 0, 0, 0, 0]);
 
         record_query_response_metric(observation, &noerror, &metrics);
         record_query_response_metric(observation, &nxdomain, &metrics);
+        record_query_response_metric(observation, &truncated, &metrics);
         record_query_response_metric(observation, &badvers, &metrics);
-        record_query_response_metric(non_query_observation, &nxdomain, &metrics);
+        record_query_response_metric(non_query_observation, &truncated, &metrics);
 
+        assert_eq!(metrics.snapshot().queries_truncated, 1);
         let rcodes = metrics.query_rcode_counts();
-        assert_eq!(rcodes.get(&0), Some(&1));
+        assert_eq!(rcodes.get(&0), Some(&2));
         assert_eq!(rcodes.get(&3), Some(&1));
         assert_eq!(rcodes.get(&16), Some(&1));
     }
@@ -3931,6 +3951,7 @@ mod tests {
             metrics.snapshot(),
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
+                queries_truncated: 0,
                 axfr_started: 0,
                 axfr_succeeded: 0,
                 axfr_failed: 0,
@@ -4217,6 +4238,7 @@ mod tests {
             metrics.snapshot(),
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
+                queries_truncated: 0,
                 axfr_started: 2,
                 axfr_succeeded: 2,
                 axfr_failed: 0,
@@ -4319,6 +4341,7 @@ mod tests {
             metrics.snapshot(),
             super::RuntimeMetricsSnapshot {
                 queries_received: 0,
+                queries_truncated: 0,
                 axfr_started: 1,
                 axfr_succeeded: 1,
                 axfr_failed: 0,
