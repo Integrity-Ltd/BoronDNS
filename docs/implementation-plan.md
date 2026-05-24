@@ -300,6 +300,7 @@ Interop harness foundations:
 Non-functional evidence foundations:
 
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
+- `scripts/engineering-mvp-evidence.sh` captures the narrow Engineering MVP gate: repository checks, parser fuzz compile, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh interop logs under `target/evidence/engineering-mvp/<timestamp>/`.
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.
 - `scripts/audit-maintainability.sh` records the first-party Rust source line count and module map, and reports the current ODS-NFR-MAINT-001 line-count target status for release review.

@@ -99,6 +99,11 @@ if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
   while IFS= read -r command_line; do
     [[ -z "$command_line" || "$command_line" =~ ^# ]] && continue
     [[ "$command_line" == ./* || "$command_line" == scripts/* ]] || continue
+    case "$command_line" in
+      *scripts/release-evidence-snapshot.sh*|*scripts/engineering-mvp-evidence.sh*)
+        continue
+        ;;
+    esac
     name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
     run_and_capture "interop-$name" bash -lc "cd '$repo_root' && $command_line"
   done < <(awk '/^```sh$/ { in_block=1; next } /^```$/ && in_block { in_block=0 } in_block { print }' "$repo_root/docs/mvp-gap-register.md")

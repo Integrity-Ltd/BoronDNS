@@ -224,8 +224,14 @@ General validation:
 
 ```sh
 ./scripts/check.sh
+scripts/engineering-mvp-evidence.sh
 ./scripts/release-evidence-snapshot.sh
 ```
+
+`scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
+under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
+fuzz compile, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh
+interop logs.
 
 `scripts/release-evidence-snapshot.sh` writes command logs under
 `target/evidence/<timestamp>/`. By default it captures the repo check, fuzz

@@ -42,6 +42,14 @@ compliance.
 
 ## Current Verification Commands
 
+Engineering MVP evidence profile:
+
+```sh
+scripts/engineering-mvp-evidence.sh
+```
+
+Broader SRS acceptance evidence commands:
+
 ```sh
 ./scripts/check.sh
 scripts/audit-safe-rust.sh
