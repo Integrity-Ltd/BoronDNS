@@ -76,6 +76,10 @@ impl ZoneSnapshot {
             .and_then(|rrset| rrset.records().into_iter().next())
     }
 
+    pub fn records(&self) -> Vec<ResourceRecord> {
+        self.rrsets.values().flat_map(Rrset::records).collect()
+    }
+
     pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
         self.lookup_with_options(
             qname,

@@ -106,8 +106,14 @@ pub enum IxfrError {
     #[error("IXFR response ended before a complete mode could be determined")]
     IncompleteResponse,
 
-    #[error("IXFR mode 1 incremental responses are not implemented yet")]
-    IncrementalUnsupported,
+    #[error("IXFR response difference sequence does not chain SOA serials correctly")]
+    BrokenSoaChain,
+
+    #[error("IXFR response tried to delete a record that is not present")]
+    DeleteAbsentRecord,
+
+    #[error("IXFR response tried to add a record that is already present")]
+    AddExistingRecord,
 
     #[error("IXFR mode 2 AXFR fallback response validation failed: {0}")]
     Axfr(#[from] AxfrError),
@@ -295,10 +301,13 @@ pub fn parse_ixfr_response(
     qid: u16,
     zone_apex: &DomainName,
     qclass: u16,
-    current_soa: &ResourceRecord,
+    current_zone: &ZoneSnapshot,
     messages: &[Vec<u8>],
 ) -> Result<IxfrResponse, IxfrError> {
-    validate_current_soa(current_soa, zone_apex, qclass)?;
+    let current_soa = current_zone
+        .soa_record(qclass)
+        .ok_or(IxfrError::InvalidCurrentSoa)?;
+    validate_current_soa(&current_soa, zone_apex, qclass)?;
     if messages.is_empty() {
         return Err(IxfrError::EmptyResponse);
     }
@@ -346,12 +355,88 @@ pub fn parse_ixfr_response(
     }
 
     if answers[1].rr_type == RecordType::Soa as u16 {
-        return Err(IxfrError::IncrementalUnsupported);
+        return apply_ixfr_incremental(zone_apex, qclass, current_zone, &answers);
     }
 
     parse_axfr_response(qid, zone_apex, qclass, messages)
         .map(IxfrResponse::Updated)
         .map_err(IxfrError::Axfr)
+}
+
+fn apply_ixfr_incremental(
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_zone: &ZoneSnapshot,
+    answers: &[ResourceRecord],
+) -> Result<IxfrResponse, IxfrError> {
+    let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
+    let final_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+    let current_soa = current_zone
+        .soa_record(qclass)
+        .ok_or(IxfrError::InvalidCurrentSoa)?;
+    let mut expected_old_soa = current_soa;
+    let mut records = current_zone.records();
+    let mut index = 1usize;
+
+    while index < answers.len() {
+        let old_soa = &answers[index];
+        if old_soa.rr_type != RecordType::Soa as u16 || old_soa != &expected_old_soa {
+            return Err(IxfrError::BrokenSoaChain);
+        }
+        remove_record(&mut records, old_soa)?;
+        index += 1;
+
+        while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
+            remove_record(&mut records, &answers[index])?;
+            index += 1;
+        }
+
+        let Some(new_soa) = answers.get(index) else {
+            return Err(IxfrError::IncompleteResponse);
+        };
+        if new_soa.rr_type != RecordType::Soa as u16 || new_soa.owner != *zone_apex {
+            return Err(IxfrError::BrokenSoaChain);
+        }
+        add_record(&mut records, new_soa.clone())?;
+        expected_old_soa = new_soa.clone();
+        index += 1;
+
+        while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
+            add_record(&mut records, answers[index].clone())?;
+            index += 1;
+        }
+    }
+
+    let final_applied_serial =
+        soa_serial(&expected_old_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
+    if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
+        return Err(IxfrError::BrokenSoaChain);
+    }
+
+    Ok(IxfrResponse::Updated(ZoneSnapshot::active(
+        zone_apex.clone(),
+        Some(final_serial),
+        rrsets_from_records(records),
+    )))
+}
+
+fn remove_record(
+    records: &mut Vec<ResourceRecord>,
+    target: &ResourceRecord,
+) -> Result<(), IxfrError> {
+    let Some(index) = records.iter().position(|record| record == target) else {
+        return Err(IxfrError::DeleteAbsentRecord);
+    };
+    records.remove(index);
+    Ok(())
+}
+
+fn add_record(records: &mut Vec<ResourceRecord>, record: ResourceRecord) -> Result<(), IxfrError> {
+    if records.contains(&record) {
+        return Err(IxfrError::AddExistingRecord);
+    }
+    records.push(record);
+    Ok(())
 }
 
 fn ixfr_scope_error(error: AxfrError) -> IxfrError {
@@ -559,10 +644,22 @@ impl From<DnsParseError> for AxfrError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{dns::RecordType, zone::SoaTimers};
+    use crate::{
+        dns::RecordType,
+        zone::{SoaTimers, ZoneSnapshot, ZoneState},
+    };
 
     fn soa_rdata() -> Vec<u8> {
-        b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec()
+        soa_rdata_with_serial(1)
+    }
+
+    fn soa_rdata_with_serial(serial: u32) -> Vec<u8> {
+        let mut rdata = b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec();
+        let (_, consumed_mname) = DomainName::parse(&rdata, 0).unwrap();
+        let (_, consumed_rname) = DomainName::parse(&rdata, consumed_mname).unwrap();
+        let serial_offset = consumed_mname + consumed_rname;
+        rdata[serial_offset..serial_offset + 4].copy_from_slice(&serial.to_be_bytes());
+        rdata
     }
 
     fn message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
@@ -615,6 +712,14 @@ mod tests {
             ttl: 300,
             rdata,
         }
+    }
+
+    fn current_zone(records: Vec<ResourceRecord>) -> ZoneSnapshot {
+        ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            rrsets_from_records(records),
+        )
     }
 
     #[test]
@@ -733,6 +838,7 @@ mod tests {
     fn parses_ixfr_mode2_axfr_fallback_into_active_zone() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
         let new_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let a = record(
             "www.example.test.",
@@ -743,7 +849,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &current_soa,
+            &current_zone,
             &[message(0x1234, vec![new_soa.clone(), a, new_soa])],
         )
         .expect("mode 2 fallback");
@@ -751,7 +857,7 @@ mod tests {
         let IxfrResponse::Updated(snapshot) = response else {
             panic!("expected updated zone");
         };
-        assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
+        assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(1));
     }
 
@@ -759,11 +865,12 @@ mod tests {
     fn parses_ixfr_mode3_current_response() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
         let response = parse_ixfr_response(
             0x1234,
             &apex,
             1,
-            &current_soa,
+            &current_zone,
             &[message(0x1234, vec![current_soa.clone()])],
         )
         .expect("mode 3 current");
@@ -772,23 +879,127 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ixfr_mode1_incremental_until_diff_application_exists() {
+    fn parses_ixfr_mode1_incremental_diff_into_active_zone() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
-        let response_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), old_a.clone()]);
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    old_a,
+                    new_soa.clone(),
+                    new_a.clone(),
+                ],
+            )],
+        )
+        .expect("mode 1 diff");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.serial, Some(2));
+        assert!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("old.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
+        assert_eq!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("new.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers,
+            vec![new_a]
+        );
+    }
+
+    #[test]
+    fn rejects_ixfr_deleting_absent_record() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let absent_a = record(
+            "absent.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa.clone()]);
         let error = parse_ixfr_response(
             0x1234,
             &apex,
             1,
-            &current_soa,
+            &current_zone,
             &[message(
                 0x1234,
-                vec![response_soa, current_soa.clone(), current_soa.clone()],
+                vec![new_soa.clone(), current_soa, absent_a, new_soa],
             )],
         )
-        .expect_err("mode 1 unsupported");
+        .expect_err("absent delete");
 
-        assert_eq!(error, IxfrError::IncrementalUnsupported);
+        assert_eq!(error, IxfrError::DeleteAbsentRecord);
+    }
+
+    #[test]
+    fn rejects_ixfr_adding_existing_record() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let existing_a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), existing_a.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, new_soa, existing_a],
+            )],
+        )
+        .expect_err("existing add");
+
+        assert_eq!(error, IxfrError::AddExistingRecord);
     }
 
     #[test]

@@ -129,7 +129,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
 - due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path;
 - refresh attempts for zones with an existing serial perform a UDP SOA poll with strict QID, opcode, echoed-question, RCODE, class, owner, and serial parsing before transfer; if the primary serial is equal to or older than the held serial, the attempt is recorded as successful without transfer;
-- when a refresh has existing zone data and a newer primary serial, the runtime constructs a TCP IXFR query with the currently held apex SOA in the authority section, accepts IXFR Mode 2 AXFR-style fallback and Mode 3 current responses, and falls back to AXFR if IXFR is unsupported or incomplete.
+- when a refresh has existing zone data and a newer primary serial, the runtime constructs a TCP IXFR query with the currently held apex SOA in the authority section, applies IXFR Mode 1 incremental diffs with strict delete/add consistency checks, accepts IXFR Mode 2 AXFR-style fallback and Mode 3 current responses, and falls back to AXFR if IXFR is unsupported or incomplete.
 
 Slice 4 is in progress:
 
@@ -166,7 +166,7 @@ EDNS/query-size work is partially started:
 Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
-- implementing full IXFR Mode 1 incremental diff application and IXFR-disabled cooldown after primary NOTIMP/FORMERR responses;
+- adding IXFR-disabled cooldown after primary NOTIMP/FORMERR responses and broader IXFR fault/interop coverage;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

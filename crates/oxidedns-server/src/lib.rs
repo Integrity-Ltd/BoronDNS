@@ -336,11 +336,11 @@ pub async fn transfer_ixfr_from_primary(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    current_soa: &oxidedns_core::zone::ResourceRecord,
+    current_zone: &ZoneSnapshot,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_soa).await
+        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -353,7 +353,7 @@ async fn transfer_ixfr_from_primary_inner(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    current_soa: &oxidedns_core::zone::ResourceRecord,
+    current_zone: &ZoneSnapshot,
 ) -> Result<IxfrResponse, TransferError> {
     let mut stream =
         TcpStream::connect(primary)
@@ -363,11 +363,14 @@ async fn transfer_ixfr_from_primary_inner(
                 source,
             })?;
 
+    let current_soa = current_zone
+        .soa_record(qclass)
+        .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
     let query = axfr::frame_tcp_message(&axfr::build_ixfr_query(
         qid,
         zone_apex,
         qclass,
-        current_soa,
+        &current_soa,
     )?);
     stream
         .write_all(&query)
@@ -383,7 +386,7 @@ async fn transfer_ixfr_from_primary_inner(
         match stream.read_exact(&mut length_prefix).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return axfr::parse_ixfr_response(qid, zone_apex, qclass, current_soa, &messages)
+                return axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages)
                     .map_err(TransferError::Ixfr);
             }
             Err(source) => {
@@ -408,7 +411,7 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
         messages.push(message);
 
-        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_soa, &messages) {
+        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages) {
             Ok(response) => return Ok(response),
             Err(axfr::IxfrError::IncompleteResponse)
             | Err(axfr::IxfrError::Axfr(AxfrError::MissingTerminatingSoa)) => {}
@@ -1183,9 +1186,6 @@ async fn refresh_zone_from_primaries(
     let current_serial = current_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.serial);
-    let current_soa = current_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.soa_record(plan.qclass));
 
     if let (Some(snapshot), Some(current_serial), Some(primary_serial)) =
         (&current_snapshot, current_serial, primary_serial_hint)
@@ -1264,7 +1264,7 @@ async fn refresh_zone_from_primaries(
             }
         }
 
-        if let Some(current_soa) = &current_soa {
+        if let Some(current_snapshot) = &current_snapshot {
             let qid = match transfer_query_id() {
                 Ok(qid) => qid,
                 Err(error) => {
@@ -1283,7 +1283,7 @@ async fn refresh_zone_from_primaries(
                 &plan.origin,
                 plan.qclass,
                 qid,
-                current_soa,
+                current_snapshot,
                 ixfr_timeout,
             )
             .await
@@ -1301,16 +1301,14 @@ async fn refresh_zone_from_primaries(
                     return Some(snapshot);
                 }
                 Ok(IxfrResponse::Current) => {
-                    if let Some(snapshot) = &current_snapshot {
-                        info!(
-                            zone = %plan.origin,
-                            %primary,
-                            current_serial,
-                            %reason,
-                            "IXFR confirmed zone current"
-                        );
-                        return Some((**snapshot).clone());
-                    }
+                    info!(
+                        zone = %plan.origin,
+                        %primary,
+                        current_serial,
+                        %reason,
+                        "IXFR confirmed zone current"
+                    );
+                    return Some((**current_snapshot).clone());
                 }
                 Err(error) => {
                     warn!(
@@ -1620,12 +1618,23 @@ mod tests {
             RecordType::Soa as u16,
             soa_rdata_with_serial(1),
         );
+        let current_zone = ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![current_soa.rdata],
+            )],
+        );
         let response = transfer_ixfr_from_primary(
             primary,
             &apex,
             1,
             0x1234,
-            &current_soa,
+            &current_zone,
             std::time::Duration::from_secs(5),
         )
         .await
@@ -1640,6 +1649,78 @@ mod tests {
             snapshot
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_ixfr_from_primary_applies_mode1_incremental_diff() {
+        let primary = spawn_ixfr_mode1_primary().await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(1),
+        );
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let current_zone = ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    current_soa.ttl,
+                    vec![current_soa.rdata],
+                ),
+                Rrset::new(
+                    old_a.owner.clone(),
+                    old_a.rr_type,
+                    old_a.class,
+                    old_a.ttl,
+                    vec![old_a.rdata],
+                ),
+            ],
+        );
+        let response = transfer_ixfr_from_primary(
+            primary,
+            &apex,
+            1,
+            0x1234,
+            &current_zone,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("IXFR transfer");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.serial, Some(2));
+        assert!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("old.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
+        assert_eq!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("new.example.test.").unwrap(),
                     RecordType::A as u16,
                     1,
                 )
@@ -2396,6 +2477,31 @@ mod tests {
         addr
     }
 
+    async fn spawn_ixfr_mode1_primary() -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut length_prefix = [0u8; 2];
+            stream.read_exact(&mut length_prefix).await.unwrap();
+            let query_len = u16::from_be_bytes(length_prefix) as usize;
+            let mut query = vec![0u8; query_len];
+            stream.read_exact(&mut query).await.unwrap();
+
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(header.nscount, 1);
+            assert_eq!(&query[26..28], &(RecordType::Ixfr as u16).to_be_bytes());
+
+            let response = ixfr_mode1_response(header.id);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        addr
+    }
+
     async fn spawn_soa_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let addr = socket.local_addr().unwrap();
@@ -2429,6 +2535,46 @@ mod tests {
             vec![192, 0, 2, 10],
         );
         let answers = vec![soa.clone(), a, soa];
+        let mut out = Vec::new();
+        out.extend_from_slice(&qid.to_be_bytes());
+        out.extend_from_slice(&0x8000u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        for answer in answers {
+            out.extend_from_slice(&answer.owner.to_wire());
+            out.extend_from_slice(&answer.rr_type.to_be_bytes());
+            out.extend_from_slice(&answer.class.to_be_bytes());
+            out.extend_from_slice(&answer.ttl.to_be_bytes());
+            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
+            out.extend_from_slice(&answer.rdata);
+        }
+        out
+    }
+
+    fn ixfr_mode1_response(qid: u16) -> Vec<u8> {
+        let old_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(1),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let answers = vec![new_soa.clone(), old_soa, old_a, new_soa, new_a];
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());
         out.extend_from_slice(&0x8000u16.to_be_bytes());
