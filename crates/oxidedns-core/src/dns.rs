@@ -978,8 +978,7 @@ fn encode_opt_record(
     response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
     response.extend_from_slice(&options.max_udp_payload.to_be_bytes());
     let ext_rcode = ((extended_rcode >> 4) as u32) << 24;
-    let ttl = ext_rcode | u32::from(edns.do_bit) << 15;
-    response.extend_from_slice(&ttl.to_be_bytes());
+    response.extend_from_slice(&ext_rcode.to_be_bytes());
     response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
     response.extend_from_slice(&rdata);
 }
@@ -1083,7 +1082,6 @@ impl RequestMetadata {
                 let metadata = EdnsMetadata {
                     payload_size: record.class.max(512),
                     version: ((record.ttl >> 16) & 0xff) as u8,
-                    do_bit: record.ttl & 0x8000 != 0,
                     tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
                     padding_requested: parsed_options.padding_requested,
                 };
@@ -1122,7 +1120,6 @@ impl RequestMetadata {
 struct EdnsMetadata {
     payload_size: u16,
     version: u8,
-    do_bit: bool,
     tcp_keepalive_requested: bool,
     padding_requested: bool,
 }
@@ -1487,6 +1484,38 @@ mod tests {
         None
     }
 
+    fn response_opt_ttl(response: &[u8]) -> Option<u32> {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+
+        skip_response_records(response, &mut offset, header.ancount);
+        skip_response_records(response, &mut offset, header.nscount);
+
+        for _ in 0..header.arcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed;
+            let rr_type = u16::from_be_bytes([response[offset], response[offset + 1]]);
+            let ttl = u32::from_be_bytes([
+                response[offset + 4],
+                response[offset + 5],
+                response[offset + 6],
+                response[offset + 7],
+            ]);
+            let rdlength =
+                u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
+            offset += 10 + rdlength;
+            if rr_type == RecordType::Opt as u16 {
+                return Some(ttl);
+            }
+        }
+
+        None
+    }
+
     fn skip_response_records(response: &[u8], offset: &mut usize, count: u16) {
         for _ in 0..count {
             let (_, consumed) = DomainName::parse(response, *offset).unwrap();
@@ -1750,14 +1779,17 @@ mod tests {
     }
 
     #[test]
-    fn preserves_rd_and_clears_ra_z_bits() {
-        let packet = query(&example_name(), 1, 1);
+    fn preserves_rd_and_clears_ra_z_ad_cd_bits() {
+        let mut packet = query(&example_name(), 1, 1);
+        packet[2..4].copy_from_slice(&0x01f0u16.to_be_bytes());
         let response = store_response(&packet, &ZoneStore::new());
         let flags = u16::from_be_bytes([response[2], response[3]]);
         assert_eq!(flags & 0x8000, 0x8000);
         assert_eq!(flags & 0x0100, 0x0100);
         assert_eq!(flags & 0x0080, 0);
         assert_eq!(flags & 0x0070, 0);
+        assert_eq!(flags & 0x0020, 0);
+        assert_eq!(flags & 0x0010, 0);
     }
 
     #[test]
@@ -3272,15 +3304,7 @@ mod tests {
             u16::from_be_bytes([response[opt_offset + 3], response[opt_offset + 4]]),
             DEFAULT_MAX_UDP_PAYLOAD
         );
-        assert_eq!(
-            u32::from_be_bytes([
-                response[opt_offset + 5],
-                response[opt_offset + 6],
-                response[opt_offset + 7],
-                response[opt_offset + 8]
-            ]),
-            0x8000
-        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
     }
 
     #[test]
@@ -3331,6 +3355,17 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
         assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+    }
+
+    #[test]
+    fn response_opt_clears_do_bit_without_dnssec_augmentation() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(response_opt_ttl(&response), Some(0));
     }
 
     #[test]
@@ -3431,22 +3466,13 @@ mod tests {
     #[test]
     fn unsupported_edns_version_gets_badvers_opt_response() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
-        append_opt(&mut packet, 4096, 1 << 16, &[]);
+        append_opt(&mut packet, 4096, (1 << 16) | 0x8000, &[]);
 
         let response = store_response(&packet, &ZoneStore::new());
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
-        let opt_offset = response.len() - 11;
-        assert_eq!(
-            u32::from_be_bytes([
-                response[opt_offset + 5],
-                response[opt_offset + 6],
-                response[opt_offset + 7],
-                response[opt_offset + 8]
-            ]),
-            1 << 24
-        );
+        assert_eq!(response_opt_ttl(&response), Some(1 << 24));
     }
 
     #[test]

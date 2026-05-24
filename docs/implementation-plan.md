@@ -185,6 +185,11 @@ EDNS/query-size work is partially started:
 - EDNS TCP keepalive requests are recognized on TCP and the response advertises the configured TCP idle timeout in 100ms units; UDP keepalive requests are silently ignored;
 - EDNS padding requests are recognized, and `[limits].edns_padding_block_size` controls default-off zero-padding of response OPT RDATA when the padded response fits the applicable UDP ceiling;
 - UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum, defaulting to 1232.
+- response OPT TTL handling clears the DNSSEC DO bit until DNSSEC augmentation records are actually included, and BADVERS responses preserve only the extended RCODE bits.
+
+DNSSEC work is partially started:
+
+- response header construction unconditionally clears AD and CD bits.
 
 Slice 8 has health endpoint foundations:
 
