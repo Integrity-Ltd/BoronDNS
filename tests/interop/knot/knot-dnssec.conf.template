@@ -1,0 +1,37 @@
+server:
+    rundir: "/tmp"
+    listen: 0.0.0.0@5353
+    user: root:root
+
+log:
+  - target: stderr
+    any: info
+
+database:
+    storage: "/tmp/knot-db"
+
+policy:
+  - id: nsec3_policy
+    algorithm: ecdsap256sha256
+    nsec3: on
+    nsec3-iterations: 0
+    nsec3-salt-length: 0
+    cds-cdnskey-publish: none
+
+template:
+  - id: default
+    storage: "/work"
+    file: "%s.zone"
+    dnssec-signing: on
+    dnssec-policy: nsec3_policy
+    zonefile-load: difference
+    zonefile-sync: 0
+
+acl:
+  - id: transfer_acl
+    address: 0.0.0.0/0
+    action: transfer
+
+zone:
+  - domain: alpha.test.
+    acl: transfer_acl

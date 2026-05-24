@@ -252,6 +252,7 @@ Interop harness foundations:
 - `scripts/interop-knot-tsig-axfr-docker.sh` starts Knot DNS with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-knot-notify-refresh-docker.sh` starts Knot DNS inside Docker, observes a Knot-generated NOTIFY through a forwarding probe, verifies OxideDNS accepts the NOTIFY response path, and confirms OxideDNS refreshes and republishes the newer serial and data.
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
+- `scripts/interop-knot-dnssec-docker.sh` starts Knot DNS inside Docker with automatic ECDSAP256SHA256 NSEC3 signing, verifies primary AXFR carries DNSKEY, RRSIG, NSEC3, and NSEC3PARAM, then starts OxideDNS and verifies DO-sensitive positive, NXDOMAIN, NODATA, direct DNSKEY/NSEC3, non-DO suppression, and metrics behavior from the signed transfer.
 - `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
 - `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, and NSEC records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, and handles DNSSEC UDP truncation/response-DO semantics.
 - `scripts/interop-dnssec-nsec3-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC3, and NSEC3PARAM records, verifies direct NSEC3/NSEC3PARAM serving, and verifies DO-sensitive NXDOMAIN NSEC3 proof material with covering RRSIGs.
@@ -271,5 +272,5 @@ Open near-term work:
 
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - broaden real-primary XoT interop evidence;
-- broaden DNSSEC runtime evidence to real signed primary fixtures;
+- split DNSSEC evidence into release traceability and broader conformance matrix entries;
 - add remaining parser fuzz targets and start collecting long-run performance and fuzz evidence for MVP verification.

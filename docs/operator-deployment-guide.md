@@ -259,6 +259,7 @@ XoT coverage:
 
 ```sh
 scripts/interop-knot-xot-docker.sh
+scripts/interop-knot-dnssec-docker.sh
 ```
 
 Feature-specific runtime coverage:
@@ -408,8 +409,9 @@ current operator-relevant limitations are:
   real-primary IXFR behavior matrix evidence remains pending.
 - XoT has in-process TLS success and fault coverage plus a Knot XoT script;
   additional real-primary evidence remains pending.
-- DNSSEC serving has unit and fake-primary runtime coverage for NSEC and
-  NSEC3 paths; real signed-primary evidence remains pending.
+- DNSSEC serving has unit, fake-primary runtime, and Knot signed-primary
+  runtime coverage for NSEC and NSEC3 paths; release traceability remains
+  pending.
 - RRL has runtime behavior and metrics coverage; release threshold decisions
   and longer-running evidence remain pending.
 - Performance targets, 30-day soak evidence, and 24-hour fuzz campaigns per
