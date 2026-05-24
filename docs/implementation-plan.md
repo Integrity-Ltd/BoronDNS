@@ -189,6 +189,7 @@ EDNS/query-size work is partially started:
 
 DNSSEC work is partially started:
 
+- DO=1 positive responses include stored RRSIG records covering RRsets placed in the response, and set the response OPT DO bit when those augmentation records are included.
 - response header construction unconditionally clears AD and CD bits.
 
 Slice 8 has health endpoint foundations:

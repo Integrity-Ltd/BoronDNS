@@ -147,6 +147,27 @@ impl ZoneSnapshot {
         }
     }
 
+    pub fn augment_lookup_result_with_rrsigs(&self, lookup: LookupResult) -> (LookupResult, bool) {
+        let mut seen = HashSet::new();
+        let mut dnssec_augmented = false;
+        let answers =
+            self.add_rrsig_augmentations(lookup.answers, &mut seen, &mut dnssec_augmented);
+        let authorities =
+            self.add_rrsig_augmentations(lookup.authorities, &mut seen, &mut dnssec_augmented);
+        let additionals =
+            self.add_rrsig_augmentations(lookup.additionals, &mut seen, &mut dnssec_augmented);
+
+        (
+            LookupResult {
+                answers,
+                authorities,
+                additionals,
+                ..lookup
+            },
+            dnssec_augmented,
+        )
+    }
+
     fn lookup_cname_chain(
         &self,
         qname: &DomainName,
@@ -412,6 +433,42 @@ impl ZoneSnapshot {
         additionals
     }
 
+    fn add_rrsig_augmentations(
+        &self,
+        records: Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        let mut augmented = records.clone();
+        for record in &records {
+            if record.rr_type == RecordType::Rrsig as u16 {
+                continue;
+            }
+            let Some(rrsig_rrset) =
+                self.rrset(&record.owner, RecordType::Rrsig as u16, record.class)
+            else {
+                continue;
+            };
+
+            for rrsig in rrsig_rrset.records() {
+                if rrsig_type_covered(&rrsig.rdata) != Some(record.rr_type) {
+                    continue;
+                }
+                let key = (
+                    rrsig.owner.canonical_key(),
+                    rrsig.rr_type,
+                    rrsig.class,
+                    rrsig.rdata.clone(),
+                );
+                if seen.insert(key) {
+                    augmented.push(rrsig);
+                    *dnssec_augmented = true;
+                }
+            }
+        }
+        augmented
+    }
+
     fn closest_encloser(&self, qname: &DomainName, qclass: u16) -> Option<DomainName> {
         let mut candidate = qname.parent()?;
         loop {
@@ -536,6 +593,14 @@ fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
             rdata[serial_offset + 19],
         ]),
     })
+}
+
+fn rrsig_type_covered(rdata: &[u8]) -> Option<u16> {
+    if rdata.len() < 2 {
+        return None;
+    }
+
+    Some(u16::from_be_bytes([rdata[0], rdata[1]]))
 }
 
 fn cname_target(record: &ResourceRecord) -> Option<DomainName> {

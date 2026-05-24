@@ -622,6 +622,11 @@ fn answer_query_message(
         options.max_cname_chain,
         options.any_response,
     );
+    let (lookup, dnssec_augmented) = if metadata.dnssec_requested() {
+        zone.augment_lookup_result_with_rrsigs(lookup)
+    } else {
+        (lookup, false)
+    };
     query_answered(&lookup);
     DatagramAction::Respond(build_response(
         header,
@@ -631,7 +636,7 @@ fn answer_query_message(
         &lookup.answers,
         &lookup.authorities,
         &lookup.additionals,
-        metadata,
+        metadata.with_dnssec_augmented(dnssec_augmented),
         options,
     ))
 }
@@ -895,6 +900,7 @@ fn build_response_inner(
         encode_opt_record(
             edns,
             metadata.extended_rcode,
+            metadata.dnssec_augmented,
             options,
             metadata.udp_ceiling(options),
             &mut response,
@@ -968,6 +974,7 @@ fn encode_record(record: &ResourceRecord, response: &mut Vec<u8>) {
 fn encode_opt_record(
     edns: EdnsMetadata,
     extended_rcode: u16,
+    dnssec_augmented: bool,
     options: AnswerOptions,
     udp_ceiling: usize,
     response: &mut Vec<u8>,
@@ -978,7 +985,8 @@ fn encode_opt_record(
     response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
     response.extend_from_slice(&options.max_udp_payload.to_be_bytes());
     let ext_rcode = ((extended_rcode >> 4) as u32) << 24;
-    response.extend_from_slice(&ext_rcode.to_be_bytes());
+    let ttl = ext_rcode | u32::from(dnssec_augmented) << 15;
+    response.extend_from_slice(&ttl.to_be_bytes());
     response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
     response.extend_from_slice(&rdata);
 }
@@ -1042,6 +1050,7 @@ fn rejected_qtype(qtype: u16) -> Option<Rcode> {
 struct RequestMetadata {
     edns: Option<EdnsMetadata>,
     extended_rcode: u16,
+    dnssec_augmented: bool,
 }
 
 impl RequestMetadata {
@@ -1049,6 +1058,7 @@ impl RequestMetadata {
         Self {
             edns: None,
             extended_rcode: 0,
+            dnssec_augmented: false,
         }
     }
 
@@ -1082,6 +1092,7 @@ impl RequestMetadata {
                 let metadata = EdnsMetadata {
                     payload_size: record.class.max(512),
                     version: ((record.ttl >> 16) & 0xff) as u8,
+                    do_bit: record.ttl & 0x8000 != 0,
                     tcp_keepalive_requested: parsed_options.tcp_keepalive_requested,
                     padding_requested: parsed_options.padding_requested,
                 };
@@ -1089,6 +1100,7 @@ impl RequestMetadata {
                     return Err(EdnsError::BadVers(Self {
                         edns: Some(metadata),
                         extended_rcode: 0,
+                        dnssec_augmented: false,
                     }));
                 }
                 edns = Some(metadata);
@@ -1102,12 +1114,22 @@ impl RequestMetadata {
         Ok(Self {
             edns,
             extended_rcode: 0,
+            dnssec_augmented: false,
         })
     }
 
     fn with_extended_rcode(mut self, extended_rcode: u16) -> Self {
         self.extended_rcode = extended_rcode;
         self
+    }
+
+    fn with_dnssec_augmented(mut self, dnssec_augmented: bool) -> Self {
+        self.dnssec_augmented = dnssec_augmented;
+        self
+    }
+
+    fn dnssec_requested(&self) -> bool {
+        self.edns.is_some_and(|edns| edns.do_bit)
     }
 
     fn udp_ceiling(&self, options: AnswerOptions) -> usize {
@@ -1120,6 +1142,7 @@ impl RequestMetadata {
 struct EdnsMetadata {
     payload_size: u16,
     version: u8,
+    do_bit: bool,
     tcp_keepalive_requested: bool,
     padding_requested: bool,
 }
@@ -1571,6 +1594,18 @@ mod tests {
 
     fn soa_rdata() -> Vec<u8> {
         b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00\x00\x00\x00\x01\x00\x00\x0e\x10\x00\x00\x02\x58\x00\x09\x3a\x80\x00\x00\x01\x2c".to_vec()
+    }
+
+    fn rrsig_rdata(type_covered: RecordType) -> Vec<u8> {
+        let mut rdata = (type_covered as u16).to_be_bytes().to_vec();
+        rdata.extend_from_slice(&[8, 2]);
+        rdata.extend_from_slice(&300u32.to_be_bytes());
+        rdata.extend_from_slice(&1_700_086_400u32.to_be_bytes());
+        rdata.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.extend(cname_rdata("example.test."));
+        rdata.extend_from_slice(b"signature");
+        rdata
     }
 
     #[test]
@@ -3366,6 +3401,73 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
         assert_eq!(response_opt_ttl(&response), Some(0));
+    }
+
+    #[test]
+    fn do_query_includes_covering_rrsig_and_sets_response_do_bit() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+            ],
+        ));
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::A as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn non_do_query_omits_dnssec_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+            ],
+        ));
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
     }
 
     #[test]
