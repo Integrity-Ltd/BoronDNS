@@ -46,6 +46,9 @@ pub enum AxfrError {
     #[error("AXFR response contained a reserved RR type")]
     ReservedType,
 
+    #[error("AXFR response contained a pseudo or transfer meta RR type as zone content")]
+    ProhibitedType,
+
     #[error("AXFR response contained invalid RDATA for a known RR type")]
     InvalidRdata,
 
@@ -93,6 +96,9 @@ pub enum SoaQueryError {
 
     #[error("SOA response contained a reserved RR type")]
     ReservedType,
+
+    #[error("SOA response contained a pseudo or transfer meta RR type as zone content")]
+    ProhibitedType,
 
     #[error("SOA response contained invalid RDATA for a known RR type")]
     InvalidRdata,
@@ -679,6 +685,9 @@ fn validate_record_scope(
     if record.rr_type == 0 || record.rr_type == u16::MAX {
         return Err(AxfrError::ReservedType);
     }
+    if is_prohibited_transfer_content_type(record.rr_type) {
+        return Err(AxfrError::ProhibitedType);
+    }
     validate_known_rdata(record)?;
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
         return Err(AxfrError::OutOfZoneOwner);
@@ -697,11 +706,22 @@ fn validate_soa_answer_scope(
     if record.rr_type == 0 || record.rr_type == u16::MAX {
         return Err(SoaQueryError::ReservedType);
     }
+    if is_prohibited_transfer_content_type(record.rr_type) {
+        return Err(SoaQueryError::ProhibitedType);
+    }
     validate_known_rdata(record).map_err(|_| SoaQueryError::InvalidRdata)?;
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
         return Err(SoaQueryError::OutOfZoneOwner);
     }
     Ok(())
+}
+
+fn is_prohibited_transfer_content_type(rr_type: u16) -> bool {
+    rr_type == RecordType::Opt as u16
+        || rr_type == RecordType::Tkey as u16
+        || rr_type == RecordType::Tsig as u16
+        || rr_type == RecordType::Ixfr as u16
+        || rr_type == RecordType::Axfr as u16
 }
 
 fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
@@ -2043,6 +2063,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_pseudo_and_transfer_meta_record_types() {
+        for rr_type in [
+            RecordType::Opt as u16,
+            RecordType::Tkey as u16,
+            RecordType::Tsig as u16,
+            RecordType::Ixfr as u16,
+            RecordType::Axfr as u16,
+        ] {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let new_soa = record(
+                "example.test.",
+                RecordType::Soa as u16,
+                soa_rdata_with_serial(2),
+            );
+            let prohibited = record("www.example.test.", rr_type, vec![0]);
+            let current_zone = current_zone(vec![current_soa.clone()]);
+            let error = parse_ixfr_response(
+                0x1234,
+                &apex,
+                1,
+                &current_zone,
+                &[message(
+                    0x1234,
+                    vec![new_soa.clone(), current_soa, prohibited, new_soa],
+                )],
+            )
+            .expect_err("IXFR prohibited type");
+
+            assert_eq!(
+                error,
+                IxfrError::Axfr(AxfrError::ProhibitedType),
+                "RR type {rr_type}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_soa_response_with_mismatched_qid() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2570,6 +2628,43 @@ mod tests {
             .expect_err("invalid A RDATA in SOA response");
 
         assert_eq!(error, SoaQueryError::InvalidRdata);
+    }
+
+    #[test]
+    fn rejects_soa_response_with_pseudo_or_transfer_meta_answer_type() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let prohibited = record("www.example.test.", RecordType::Tsig as u16, vec![0]);
+        let error = parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![prohibited]))
+            .expect_err("prohibited SOA answer type");
+
+        assert_eq!(error, SoaQueryError::ProhibitedType);
+    }
+
+    #[test]
+    fn rejects_axfr_pseudo_and_transfer_meta_record_types() {
+        for rr_type in [
+            RecordType::Opt as u16,
+            RecordType::Tkey as u16,
+            RecordType::Tsig as u16,
+            RecordType::Ixfr as u16,
+            RecordType::Axfr as u16,
+        ] {
+            let apex = DomainName::from_absolute_str("example.test.").unwrap();
+            let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+            let prohibited = record("www.example.test.", rr_type, vec![0]);
+            let error = parse_axfr_response(
+                0x1234,
+                &apex,
+                1,
+                &[message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), prohibited, soa],
+                )],
+            )
+            .expect_err("AXFR prohibited type");
+
+            assert_eq!(error, AxfrError::ProhibitedType, "RR type {rr_type}");
+        }
     }
 
     #[test]
