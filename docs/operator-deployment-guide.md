@@ -78,19 +78,28 @@ sudo install -d -m 0755 /etc/oxidedns-secondary
 sudo install -m 0640 config/oxidedns.example.toml /etc/oxidedns-secondary/config.toml
 ```
 
-Validate the config before starting service. The current binary uses the
-repo-native `check-config` subcommand; SRS v0.7 requires the release CLI to
-provide equivalent `--validate-config` behavior before Alpha signoff:
+Validate the config before starting service. The SRS v0.7 CLI mode validates
+the same startup configuration path without binding sockets:
 
 ```sh
-oxidedns check-config --config /etc/oxidedns-secondary/config.toml
+oxidedns --validate-config /etc/oxidedns-secondary/config.toml
+```
+
+The effective configuration can also be dumped after validation. Inline TSIG
+secret values are redacted in this output; file path references such as XoT
+trust anchors, client certificates, and private-key paths are preserved so
+operators can audit deployment wiring:
+
+```sh
+oxidedns --dump-config /etc/oxidedns-secondary/config.toml
 ```
 
 When `--config` is omitted, OxideDNS reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
-both `check-config` and `serve`. SRS v0.7 standardizes broader environment
-overrides under the `ODS_<SECTION>_<KEY>` naming convention; full schema support
-for that convention is tracked in the gap register.
+`--validate-config`, `--dump-config`, `check-config`, and `serve`. SRS v0.7
+standardizes broader environment overrides under the `ODS_<SECTION>_<KEY>`
+naming convention; full schema support for that convention is tracked in the
+gap register.
 
 ## Configuration
 

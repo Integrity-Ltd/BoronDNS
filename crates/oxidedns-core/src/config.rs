@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -24,11 +24,14 @@ pub enum ConfigError {
     #[error("failed to parse TOML configuration: {0}")]
     Parse(#[from] toml::de::Error),
 
+    #[error("failed to serialize TOML configuration: {0}")]
+    Serialize(#[from] toml::ser::Error),
+
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ServerConfig {
     pub server: ServerSettings,
     #[serde(default)]
@@ -57,6 +60,14 @@ impl ServerConfig {
         let config = toml::from_str::<Self>(text)?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn to_redacted_toml(&self) -> Result<String, ConfigError> {
+        let mut redacted = self.clone();
+        for key in &mut redacted.tsig_keys {
+            key.secret = "<redacted>".to_owned();
+        }
+        Ok(toml::to_string_pretty(&redacted)?)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -182,7 +193,7 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ServerSettings {
     #[serde(default = "default_dns_listeners")]
     pub listen_udp: Vec<SocketAddr>,
@@ -197,7 +208,7 @@ pub struct ServerSettings {
     pub log_format: LogFormatConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct QuerySettings {
     #[serde(default)]
     pub any_response: AnyResponseConfig,
@@ -220,7 +231,7 @@ impl Default for QuerySettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum AnyResponseConfig {
     #[default]
@@ -228,7 +239,7 @@ pub enum AnyResponseConfig {
     Full,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogFormatConfig {
     #[default]
@@ -236,7 +247,7 @@ pub enum LogFormatConfig {
     Plain,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RrlConfig {
     #[serde(default = "default_rrl_enabled")]
     pub enabled: bool,
@@ -306,7 +317,7 @@ impl RrlConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Limits {
     #[serde(default = "default_max_udp_payload")]
     pub max_udp_payload: u16,
@@ -365,7 +376,7 @@ impl Default for Limits {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ZoneConfig {
     pub name: String,
     #[serde(default = "default_dns_class")]
@@ -446,7 +457,7 @@ impl ZoneConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TransferPrimaryConfig {
     pub addr: SocketAddr,
     #[serde(default)]
@@ -541,7 +552,7 @@ impl TransferPrimaryConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransferTransportConfig {
     #[default]
@@ -549,7 +560,7 @@ pub enum TransferTransportConfig {
     Xot,
 }
 
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TsigKeyConfig {
     pub name: String,
     pub algorithm: String,
@@ -1658,6 +1669,36 @@ mod tests {
         assert_eq!(config.tsig_keys.len(), 1);
         assert_eq!(config.zones[0].tsig_key.as_deref(), Some("transfer-key."));
         assert!(!format!("{config:?}").contains("c2VjcmV0LWtleQ=="));
+    }
+
+    #[test]
+    fn redacted_toml_dump_preserves_shape_without_secret_material() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                nsid = "dns-bud-1"
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "c2VjcmV0LWtleQ=="
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("valid TSIG config");
+
+        let dumped = config.to_redacted_toml().expect("redacted TOML dump");
+
+        assert!(dumped.contains("[[tsig_keys]]"));
+        assert!(dumped.contains("name = \"transfer-key.\""));
+        assert!(dumped.contains("secret = \"<redacted>\""));
+        assert!(dumped.contains("nsid = \"dns-bud-1\""));
+        assert!(!dumped.contains("c2VjcmV0LWtleQ=="));
     }
 
     #[test]
