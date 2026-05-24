@@ -117,6 +117,7 @@ Slice 5 is in progress:
 - AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, rejects answer records after the terminating SOA, and validates class, bailiwick, and reserved RR types;
 - successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
+- initial LOADING-zone transfers run in the background after runtime services are bound, so health can report `starting` while first transfers are still in progress;
 - initial LOADING-zone transfers are bounded by `[limits].max_concurrent_transfers`, defaulting to 4;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
@@ -145,7 +146,7 @@ Slice 4 is in progress:
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds;
 - write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream.
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
-- SIGINT and SIGTERM initiate shutdown, abort listener tasks to stop accepting new DNS/health traffic, close the refresh queue, and wait up to `[limits].graceful_shutdown_secs`, defaulting to 30 seconds, for active TCP query connections and in-flight refresh transfers to drain.
+- SIGINT and SIGTERM initiate shutdown, abort listener tasks to stop accepting new DNS/health traffic, close the refresh queue, and wait up to `[limits].graceful_shutdown_secs`, defaulting to 30 seconds, for active TCP query connections and in-flight initial or refresh transfers to drain.
 
 Slice 6 has initial NOTIFY intake foundations:
 
@@ -192,7 +193,7 @@ Slice 8 has health endpoint foundations:
 
 Open near-term work:
 
-- completing graceful shutdown coverage for initial startup transfers;
+- adding end-to-end SIGTERM/SIGINT runtime tests around startup and transfer draining;
 - richer per-zone metrics and status exposition;
 - broader IXFR fault/interop coverage;
 - TSIG interop coverage;

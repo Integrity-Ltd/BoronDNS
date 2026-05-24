@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
+    config::ZoneConfig,
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Header, Opcode, Question, Transport, answer_message_with_notify_hooks,
@@ -146,14 +147,7 @@ impl Runtime {
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
         let metrics = RuntimeMetrics::new();
-        self.load_initial_zones(
-            &transfer_plan,
-            &refresh_registry,
-            &ixfr_cooldowns,
-            self.config.limits.max_concurrent_transfers,
-            &metrics,
-        )
-        .await;
+        let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
 
         info!(
             udp_listeners = self.config.server.listen_udp.len(),
@@ -172,6 +166,19 @@ impl Runtime {
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
+        refresh_workers.spawn(run_initial_zone_loads(
+            self.zones.clone(),
+            self.config.zones.clone(),
+            transfer_plan.clone(),
+            refresh_registry.clone(),
+            ixfr_cooldowns.clone(),
+            metrics.clone(),
+            InitialLoadSettings {
+                axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
+                ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                transfer_limit: transfer_limit.clone(),
+            },
+        ));
         refresh_workers.spawn(serve_refresh_requests(
             notify_refresh_rx,
             self.zones.clone(),
@@ -182,7 +189,7 @@ impl Runtime {
             RefreshWorkerSettings {
                 axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
-                max_concurrent_transfers: self.config.limits.max_concurrent_transfers,
+                transfer_limit: transfer_limit.clone(),
             },
         ));
         listeners.spawn(serve_scheduled_refreshes(
@@ -265,55 +272,63 @@ impl Runtime {
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
         }
 
-        tokio::select! {
-            signal = wait_for_shutdown_signal() => {
-                let signal = signal.map_err(RuntimeError::ShutdownSignal)?;
-                info!(
-                    signal,
-                    grace_secs = shutdown_grace.as_secs(),
-                    active_tcp_connections = tcp_connections.load(Ordering::Acquire),
-                    "shutdown signal received; draining runtime"
-                );
-                runtime_status.mark_draining();
-                abort_task_set(&mut listeners, "listener").await;
-                drop(notify_refresh_tx);
-                let (tcp_drained, refresh_drained) = tokio::join!(
-                    drain_tcp_connections(
-                        tcp_connections.clone(),
-                        shutdown_grace,
-                        Duration::from_millis(50),
-                    ),
-                    drain_task_set(&mut refresh_workers, shutdown_grace, "refresh transfer")
-                );
-                if tcp_drained {
-                    info!("TCP connection drain completed");
-                } else {
-                    warn!(
+        loop {
+            tokio::select! {
+                signal = wait_for_shutdown_signal() => {
+                    let signal = signal.map_err(RuntimeError::ShutdownSignal)?;
+                    info!(
+                        signal,
+                        grace_secs = shutdown_grace.as_secs(),
                         active_tcp_connections = tcp_connections.load(Ordering::Acquire),
-                        "shutdown grace period elapsed with active TCP connections"
+                        "shutdown signal received; draining runtime"
                     );
+                    runtime_status.mark_draining();
+                    abort_task_set(&mut listeners, "listener").await;
+                    drop(notify_refresh_tx);
+                    let (tcp_drained, refresh_drained) = tokio::join!(
+                        drain_tcp_connections(
+                            tcp_connections.clone(),
+                            shutdown_grace,
+                            Duration::from_millis(50),
+                        ),
+                        drain_task_set(&mut refresh_workers, shutdown_grace, "refresh transfer")
+                    );
+                    if tcp_drained {
+                        info!("TCP connection drain completed");
+                    } else {
+                        warn!(
+                            active_tcp_connections = tcp_connections.load(Ordering::Acquire),
+                            "shutdown grace period elapsed with active TCP connections"
+                        );
+                    }
+                    if refresh_drained {
+                        info!("refresh transfer drain completed");
+                    } else {
+                        warn!("shutdown grace period elapsed with active refresh transfers");
+                    }
+                    abort_task_set(&mut health_listeners, "health listener").await;
+                    break;
                 }
-                if refresh_drained {
-                    info!("refresh transfer drain completed");
-                } else {
-                    warn!("shutdown grace period elapsed with active refresh transfers");
+                result = listeners.join_next(), if !listeners.is_empty() => {
+                    handle_runtime_task_result("listener", result)?;
                 }
-                abort_task_set(&mut health_listeners, "health listener").await;
+                result = refresh_workers.join_next(), if !refresh_workers.is_empty() => {
+                    handle_runtime_task_result("refresh transfer", result)?;
+                }
+                result = health_listeners.join_next(), if !health_listeners.is_empty() => {
+                    handle_runtime_task_result("health listener", result)?;
+                }
             }
-            result = listeners.join_next(), if !listeners.is_empty() => {
-                handle_runtime_task_result("listener", result)?;
-            }
-            result = refresh_workers.join_next(), if !refresh_workers.is_empty() => {
-                handle_runtime_task_result("refresh transfer", result)?;
-            }
-            result = health_listeners.join_next(), if !health_listeners.is_empty() => {
-                handle_runtime_task_result("health listener", result)?;
+
+            if listeners.is_empty() && refresh_workers.is_empty() && health_listeners.is_empty() {
+                break;
             }
         }
 
         Ok(())
     }
 
+    #[cfg(test)]
     async fn load_initial_zones(
         &self,
         transfer_plan: &TransferPlan,
@@ -322,57 +337,21 @@ impl Runtime {
         max_concurrent_transfers: usize,
         metrics: &RuntimeMetrics,
     ) {
-        let transfer_limit = Arc::new(Semaphore::new(max_concurrent_transfers));
-        let mut transfers = JoinSet::new();
-        let axfr_timeout = Duration::from_secs(self.config.limits.axfr_timeout_secs);
-        let ixfr_timeout = Duration::from_secs(self.config.limits.ixfr_timeout_secs);
-
-        for zone in &self.config.zones {
-            let zone_apex = DomainName::from_absolute_str(&zone.name)
-                .expect("configuration validation rejects invalid zone names");
-            let plan = transfer_plan
-                .get(&zone_apex)
-                .expect("configuration validation builds a transfer plan for each zone");
-            let zones = self.zones.clone();
-            let refresh_registry = refresh_registry.clone();
-            let ixfr_cooldowns = ixfr_cooldowns.clone();
-            let metrics = metrics.clone();
-            let transfer_permit = transfer_limit
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("transfer semaphore is not closed");
-
-            transfers.spawn(async move {
-                let _transfer_permit = transfer_permit;
-                if let Some(snapshot) = refresh_zone_from_primaries(
-                    &zones,
-                    &plan,
-                    None,
-                    RefreshAttemptContext {
-                        ixfr_cooldowns: &ixfr_cooldowns,
-                        metrics: &metrics,
-                        ixfr_timeout,
-                        axfr_timeout,
-                        reason: "initial",
-                    },
-                )
-                .await
-                {
-                    refresh_registry.record_success(&snapshot);
-                } else {
-                    let zone_apex = &plan.origin;
-                    refresh_registry.record_failure(zone_apex, zones.find_exact_zone(zone_apex));
-                    warn!(zone = %zone_apex, "zone remains in LOADING state");
-                }
-            });
-        }
-
-        while let Some(result) = transfers.join_next().await {
-            if let Err(error) = result {
-                warn!(%error, "initial zone transfer task failed");
-            }
-        }
+        run_initial_zone_loads(
+            self.zones.clone(),
+            self.config.zones.clone(),
+            transfer_plan.clone(),
+            refresh_registry.clone(),
+            ixfr_cooldowns.clone(),
+            metrics.clone(),
+            InitialLoadSettings {
+                axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
+                ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                transfer_limit: Arc::new(Semaphore::new(max_concurrent_transfers)),
+            },
+        )
+        .await
+        .expect("initial zone load worker does not return runtime errors");
     }
 }
 
@@ -1865,7 +1844,6 @@ async fn serve_refresh_requests(
     metrics: RuntimeMetrics,
     settings: RefreshWorkerSettings,
 ) -> Result<(), RuntimeError> {
-    let transfer_limit = Arc::new(Semaphore::new(settings.max_concurrent_transfers));
     let mut transfers = JoinSet::new();
 
     loop {
@@ -1903,11 +1881,13 @@ async fn serve_refresh_requests(
                     continue;
                 }
 
-                let transfer_permit = transfer_limit
+                let transfer_permit = settings.transfer_limit
                     .clone()
                     .acquire_owned()
                     .await
                     .expect("transfer semaphore is not closed");
+                let axfr_timeout = settings.axfr_timeout;
+                let ixfr_timeout = settings.ixfr_timeout;
                 let zones = zones.clone();
                 let refresh_registry = refresh_registry.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
@@ -1921,8 +1901,8 @@ async fn serve_refresh_requests(
                         RefreshAttemptContext {
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
-                            ixfr_timeout: settings.ixfr_timeout,
-                            axfr_timeout: settings.axfr_timeout,
+                            ixfr_timeout,
+                            axfr_timeout,
                             reason: request.reason.as_str(),
                         },
                     )
@@ -1946,11 +1926,18 @@ async fn serve_refresh_requests(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RefreshWorkerSettings {
     axfr_timeout: Duration,
     ixfr_timeout: Duration,
-    max_concurrent_transfers: usize,
+    transfer_limit: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+struct InitialLoadSettings {
+    axfr_timeout: Duration,
+    ixfr_timeout: Duration,
+    transfer_limit: Arc<Semaphore>,
 }
 
 #[derive(Clone, Copy)]
@@ -1960,6 +1947,70 @@ struct RefreshAttemptContext<'a> {
     ixfr_timeout: Duration,
     axfr_timeout: Duration,
     reason: &'a str,
+}
+
+async fn run_initial_zone_loads(
+    zones: ZoneStore,
+    configured_zones: Vec<ZoneConfig>,
+    transfer_plan: TransferPlan,
+    refresh_registry: ZoneRefreshRegistry,
+    ixfr_cooldowns: IxfrCooldownRegistry,
+    metrics: RuntimeMetrics,
+    settings: InitialLoadSettings,
+) -> Result<(), RuntimeError> {
+    let mut transfers = JoinSet::new();
+
+    for zone in configured_zones {
+        let zone_apex = DomainName::from_absolute_str(&zone.name)
+            .expect("configuration validation rejects invalid zone names");
+        let plan = transfer_plan
+            .get(&zone_apex)
+            .expect("configuration validation builds a transfer plan for each zone");
+        let zones = zones.clone();
+        let refresh_registry = refresh_registry.clone();
+        let ixfr_cooldowns = ixfr_cooldowns.clone();
+        let metrics = metrics.clone();
+        let axfr_timeout = settings.axfr_timeout;
+        let ixfr_timeout = settings.ixfr_timeout;
+        let transfer_permit = settings
+            .transfer_limit
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("transfer semaphore is not closed");
+
+        transfers.spawn(async move {
+            let _transfer_permit = transfer_permit;
+            if let Some(snapshot) = refresh_zone_from_primaries(
+                &zones,
+                &plan,
+                None,
+                RefreshAttemptContext {
+                    ixfr_cooldowns: &ixfr_cooldowns,
+                    metrics: &metrics,
+                    ixfr_timeout,
+                    axfr_timeout,
+                    reason: "initial",
+                },
+            )
+            .await
+            {
+                refresh_registry.record_success(&snapshot);
+            } else {
+                let zone_apex = &plan.origin;
+                refresh_registry.record_failure(zone_apex, zones.find_exact_zone(zone_apex));
+                warn!(zone = %zone_apex, "zone remains in LOADING state");
+            }
+        });
+    }
+
+    while let Some(result) = transfers.join_next().await {
+        if let Err(error) = result {
+            warn!(%error, "initial zone transfer task failed");
+        }
+    }
+
+    Ok(())
 }
 
 async fn serve_scheduled_refreshes(
@@ -2605,6 +2656,87 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn runtime_binds_health_while_initial_transfer_is_in_progress() {
+        let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
+        let udp_addr = unused_udp_addr().await;
+        let health_addr = unused_tcp_addr().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["{udp_addr}"]
+                health = "{health_addr}"
+
+                [limits]
+                axfr_timeout_secs = 5
+                graceful_shutdown_secs = 1
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let runtime = Runtime::new(config);
+        let server = tokio::spawn(runtime.run());
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
+            .await
+            .expect("initial transfer should start")
+            .expect("primary should observe initial transfer query");
+
+        let health = eventually_http_request(
+            health_addr,
+            "GET",
+            "/healthz",
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(health.ends_with("starting\n"));
+
+        let _ = release_primary.send(());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn runtime_keeps_serving_after_initial_transfer_completes() {
+        let primary = spawn_axfr_primary().await;
+        let udp_addr = unused_udp_addr().await;
+        let health_addr = unused_tcp_addr().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["{udp_addr}"]
+                health = "{health_addr}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        let runtime = Runtime::new(config);
+        let server = tokio::spawn(runtime.run());
+
+        let ready =
+            eventually_health_body(health_addr, "ready\n", std::time::Duration::from_secs(1)).await;
+        assert!(ready.starts_with("HTTP/1.1 200 OK"));
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let still_ready = eventually_http_request(
+            health_addr,
+            "GET",
+            "/healthz",
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(still_ready.starts_with("HTTP/1.1 200 OK"));
+        assert!(still_ready.ends_with("ready\n"));
+
+        server.abort();
+    }
+
     #[test]
     fn signed_notify_is_verified_stripped_and_response_signed() {
         let config = ServerConfig::from_toml_str(
@@ -3188,7 +3320,7 @@ mod tests {
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
-                max_concurrent_transfers: 4,
+                transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
             },
         )
         .await
@@ -3277,7 +3409,7 @@ mod tests {
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
-                max_concurrent_transfers: 2,
+                transfer_limit: Arc::new(tokio::sync::Semaphore::new(2)),
             },
         ));
 
@@ -4041,6 +4173,32 @@ mod tests {
         addr
     }
 
+    async fn spawn_blocked_axfr_primary() -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (query_seen_tx, query_seen_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let query = read_primary_query(&mut stream).await;
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            let (_, qname_len) = DomainName::parse(&query, 12).unwrap();
+            let qtype_offset = 12 + qname_len;
+            assert_eq!(
+                u16::from_be_bytes([query[qtype_offset], query[qtype_offset + 1]]),
+                RecordType::Axfr as u16
+            );
+            let _ = query_seen_tx.send(());
+            let _ = release_rx.await;
+        });
+        (addr, query_seen_rx, release_tx)
+    }
+
     async fn spawn_axfr_primary_recording_query(
         serial: u32,
     ) -> (std::net::SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
@@ -4514,6 +4672,75 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).await.unwrap();
         response
+    }
+
+    async fn eventually_http_request(
+        addr: std::net::SocketAddr,
+        method: &str,
+        path: &str,
+        timeout: std::time::Duration,
+    ) -> String {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match TcpStream::connect(addr).await {
+                Ok(mut stream) => {
+                    let request = format!(
+                        "{method} {path} HTTP/1.1\r\n\
+                         Host: localhost\r\n\
+                         Connection: close\r\n\
+                         Content-Length: 0\r\n\
+                         \r\n"
+                    );
+                    stream.write_all(request.as_bytes()).await.unwrap();
+
+                    let mut response = String::new();
+                    stream.read_to_string(&mut response).await.unwrap();
+                    return response;
+                }
+                Err(error) => {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    assert!(
+                        !remaining.is_zero(),
+                        "HTTP endpoint {addr} did not accept connection before timeout: {error}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(10).min(remaining)).await;
+                }
+            }
+        }
+    }
+
+    async fn eventually_health_body(
+        addr: std::net::SocketAddr,
+        expected_body: &str,
+        timeout: std::time::Duration,
+    ) -> String {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "health endpoint {addr} did not return expected body {expected_body:?} before timeout"
+            );
+            let response = eventually_http_request(addr, "GET", "/healthz", remaining).await;
+            if response.ends_with(expected_body) {
+                return response;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    async fn unused_tcp_addr() -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        addr
+    }
+
+    async fn unused_udp_addr() -> std::net::SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        drop(socket);
+        addr
     }
 
     fn health_state(zones: ZoneStore) -> HealthEndpointState {
