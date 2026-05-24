@@ -88,6 +88,7 @@ Slice 1 has a tested UDP query/response foundation:
 - QTYPE ANY defaults to a deterministic minimal real-RRset response and can be configured to return the full owner RRset set;
 - LOADING zones return SERVFAIL;
 - active zones can return positive, NODATA, and NXDOMAIN responses with SOA authority data;
+- SOA records placed in NODATA and NXDOMAIN authority sections use `min(SOA RRset TTL, SOA MINIMUM)`, while direct SOA answers preserve the stored RRset TTL;
 - CNAME queries return CNAME RRsets directly;
 - non-CNAME queries follow in-zone CNAME chains, retain constructed CNAME answers for negative terminal responses, stop when chains leave the served zone, and stop on loops or the configured chain limit;
 - the CNAME chain limit is configurable under `[limits]`, defaults to 8, and loop/limit termination emits warning logs;

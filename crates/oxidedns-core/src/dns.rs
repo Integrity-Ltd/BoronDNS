@@ -1352,7 +1352,7 @@ impl LookupResult {
             rcode: Rcode::NoError,
             authoritative: true,
             answers: Vec::new(),
-            authorities: soa.map_or_else(Vec::new, Rrset::records),
+            authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
         }
@@ -1363,7 +1363,7 @@ impl LookupResult {
             rcode: Rcode::NoError,
             authoritative: true,
             answers,
-            authorities: soa.map_or_else(Vec::new, Rrset::records),
+            authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
         }
@@ -1378,11 +1378,39 @@ impl LookupResult {
             rcode: Rcode::NxDomain,
             authoritative: true,
             answers,
-            authorities: soa.map_or_else(Vec::new, Rrset::records),
+            authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
         }
     }
+}
+
+fn negative_soa_records(soa: Option<&Rrset>) -> Vec<ResourceRecord> {
+    soa.map_or_else(Vec::new, |rrset| {
+        rrset
+            .records()
+            .into_iter()
+            .map(|mut record| {
+                if record.rr_type == RecordType::Soa as u16
+                    && let Some(minimum) = soa_minimum(&record.rdata)
+                {
+                    record.ttl = record.ttl.min(minimum);
+                }
+                record
+            })
+            .collect()
+    })
+}
+
+fn soa_minimum(rdata: &[u8]) -> Option<u32> {
+    let (_, consumed_mname) = DomainName::parse(rdata, 0).ok()?;
+    let rname_offset = consumed_mname;
+    let (_, consumed_rname) = DomainName::parse(rdata, rname_offset).ok()?;
+    let minimum_offset = rname_offset + consumed_rname + 16;
+    let minimum = rdata.get(minimum_offset..minimum_offset + 4)?;
+    Some(u32::from_be_bytes([
+        minimum[0], minimum[1], minimum[2], minimum[3],
+    ]))
 }
 
 #[cfg(test)]
@@ -1508,6 +1536,14 @@ mod tests {
             .collect()
     }
 
+    fn response_answer_ttls(response: &[u8], expected_type: u16) -> Vec<u32> {
+        response_section_ttls(response, expected_type, Section::Answer)
+    }
+
+    fn response_authority_ttls(response: &[u8], expected_type: u16) -> Vec<u32> {
+        response_section_ttls(response, expected_type, Section::Authority)
+    }
+
     fn response_additional_types(response: &[u8]) -> Vec<u16> {
         response_sections(response)
             .2
@@ -1517,6 +1553,31 @@ mod tests {
     }
 
     type ParsedSection = Vec<(DomainName, u16)>;
+
+    #[derive(Debug, Clone, Copy)]
+    enum Section {
+        Answer,
+        Authority,
+    }
+
+    fn response_section_ttls(response: &[u8], expected_type: u16, section: Section) -> Vec<u32> {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+
+        if matches!(section, Section::Authority) {
+            skip_response_records(response, &mut offset, header.ancount);
+        }
+
+        let count = match section {
+            Section::Answer => header.ancount,
+            Section::Authority => header.nscount,
+        };
+        parse_response_record_ttls(response, &mut offset, count, expected_type)
+    }
 
     fn response_sections(response: &[u8]) -> (ParsedSection, ParsedSection, ParsedSection) {
         let header = Header::parse(response).unwrap();
@@ -1544,6 +1605,33 @@ mod tests {
             *offset += 10 + rdlength;
         }
         records
+    }
+
+    fn parse_response_record_ttls(
+        response: &[u8],
+        offset: &mut usize,
+        count: u16,
+        expected_type: u16,
+    ) -> Vec<u32> {
+        let mut ttls = Vec::new();
+        for _ in 0..count {
+            let (_, consumed) = DomainName::parse(response, *offset).unwrap();
+            *offset += consumed;
+            let rr_type = u16::from_be_bytes([response[*offset], response[*offset + 1]]);
+            let ttl = u32::from_be_bytes([
+                response[*offset + 4],
+                response[*offset + 5],
+                response[*offset + 6],
+                response[*offset + 7],
+            ]);
+            let rdlength =
+                u16::from_be_bytes([response[*offset + 8], response[*offset + 9]]) as usize;
+            if rr_type == expected_type {
+                ttls.push(ttl);
+            }
+            *offset += 10 + rdlength;
+        }
+        ttls
     }
 
     fn response_opt_rdata(response: &[u8]) -> Option<Vec<u8>> {
@@ -1977,6 +2065,32 @@ mod tests {
     }
 
     #[test]
+    fn direct_soa_answer_keeps_rrset_ttl() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        let packet = query(b"\x07example\x04test\x00", RecordType::Soa as u16, 1);
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+        assert_eq!(
+            response_answer_ttls(&response, RecordType::Soa as u16),
+            vec![3600]
+        );
+    }
+
+    #[test]
     fn qclass_any_matches_in_zone_data() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -2234,6 +2348,10 @@ mod tests {
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+        assert_eq!(
+            response_authority_ttls(&response, RecordType::Soa as u16),
+            vec![300]
+        );
     }
 
     #[test]
@@ -2371,6 +2489,10 @@ mod tests {
         assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+        assert_eq!(
+            response_authority_ttls(&response, RecordType::Soa as u16),
+            vec![300]
+        );
     }
 
     #[test]
