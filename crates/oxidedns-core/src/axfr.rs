@@ -1476,6 +1476,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_axfr_unknown_types_as_opaque_rdata() {
+        const UNKNOWN_TYPE: u16 = 65_280;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let zero_rdata = record("opaque.example.test.", UNKNOWN_TYPE, Vec::new());
+        let pointer_like_rdata = record(
+            "opaque.example.test.",
+            UNKNOWN_TYPE,
+            vec![0xc0, 0x0c, 0, 255],
+        );
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), zero_rdata, pointer_like_rdata, soa],
+            )],
+        )
+        .expect("AXFR with opaque unknown RDATA");
+
+        let lookup = snapshot.lookup(
+            &DomainName::from_absolute_str("opaque.example.test.").unwrap(),
+            UNKNOWN_TYPE,
+            1,
+        );
+        let rdatas = lookup
+            .answers
+            .into_iter()
+            .map(|record| record.rdata)
+            .collect::<Vec<_>>();
+
+        assert_eq!(rdatas, vec![Vec::new(), vec![0xc0, 0x0c, 0, 255]]);
+    }
+
+    #[test]
     fn parses_valid_soa_response_serial() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());

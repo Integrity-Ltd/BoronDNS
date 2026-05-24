@@ -1472,6 +1472,30 @@ mod tests {
             .collect()
     }
 
+    fn response_answer_rdatas(response: &[u8], expected_type: u16) -> Vec<Vec<u8>> {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+
+        let mut rdatas = Vec::new();
+        for _ in 0..header.ancount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed;
+            let rr_type = u16::from_be_bytes([response[offset], response[offset + 1]]);
+            let rdlength =
+                u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
+            offset += 10;
+            if rr_type == expected_type {
+                rdatas.push(response[offset..offset + rdlength].to_vec());
+            }
+            offset += rdlength;
+        }
+        rdatas
+    }
+
     fn response_answers(response: &[u8]) -> Vec<(DomainName, u16)> {
         response_sections(response).0
     }
@@ -1981,6 +2005,46 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
+    }
+
+    #[test]
+    fn unknown_type_query_preserves_zero_and_pointer_like_rdata() {
+        const UNKNOWN_TYPE: u16 = 65_280;
+        let pointer_like_rdata = vec![0xc0, 0x0c, 0, 255];
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("opaque.example.test.").unwrap(),
+                    UNKNOWN_TYPE,
+                    1,
+                    300,
+                    vec![Vec::new(), pointer_like_rdata.clone()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x06opaque\x07example\x04test\x00", UNKNOWN_TYPE, 1);
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![UNKNOWN_TYPE, UNKNOWN_TYPE]
+        );
+        assert_eq!(
+            response_answer_rdatas(&response, UNKNOWN_TYPE),
+            vec![Vec::new(), pointer_like_rdata]
+        );
     }
 
     #[test]
