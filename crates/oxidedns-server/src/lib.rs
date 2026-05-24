@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -41,9 +42,10 @@ use oxidedns_core::{
     },
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DnsCookieContext, DnsCookiePolicy, DomainName, Header, LookupResult, LookupTermination,
-        Opcode, Question, Rcode, RecordType, Transport,
-        answer_message_with_notify_hooks_and_query_observer, request_has_valid_dns_server_cookie,
+        DnsCookieContext, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
+        LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
+        answer_message_with_notify_hooks_and_query_observer, dns_cookie_request_status,
+        request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -229,8 +231,14 @@ impl Runtime {
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
-        let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
         let dns_cookie = dns_cookie_settings(&self.config.cookie);
+        let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
+        if dns_cookie.policy.is_some() {
+            info!(
+                secret_fingerprint = %dns_cookie_secret_fingerprint(&dns_cookie_secret),
+                "DNS Cookie server secret generated"
+            );
+        }
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
             self.config.zones.clone(),
@@ -1239,6 +1247,21 @@ fn dns_cookie_secret() -> Result<[u8; 16], getrandom::Error> {
     Ok(secret)
 }
 
+fn dns_cookie_secret_fingerprint(secret: &[u8; 16]) -> String {
+    let digest = Sha256::digest(secret);
+    lower_hex(&digest[..8])
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 fn current_unix_time_secs() -> u32 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1700,6 +1723,8 @@ async fn serve_udp(
         let dns_cookie =
             dns_cookie_context(peer_ip, &settings.dns_cookie_secret, settings.dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
+        let dns_cookie_metrics =
+            observe_dns_cookie_metrics(&prepared.packet, dns_cookie, &settings.metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
@@ -1757,6 +1782,12 @@ async fn serve_udp(
                 };
                 match rrl_decision {
                     RrlDecision::Send(response) => {
+                        record_dns_cookie_badcookie_if_emitted(
+                            dns_cookie_metrics,
+                            &response,
+                            &settings.metrics,
+                            peer_ip,
+                        );
                         record_query_response_metric(query_metrics, &response, &settings.metrics);
                         socket
                             .send_to(&response, peer)
@@ -1798,6 +1829,44 @@ fn observe_query_metrics(
         metrics.record_zone_query(&zone.origin);
     }
     QueryMetricObservation { is_query: true }
+}
+
+fn observe_dns_cookie_metrics(
+    packet: &[u8],
+    context: Option<DnsCookieContext>,
+    metrics: &RuntimeMetrics,
+) -> Option<DnsCookieRequestStatus> {
+    let context = context?;
+    let status = dns_cookie_request_status(packet, Some(context))?;
+    metrics.record_dns_cookie_status(status);
+    Some(status)
+}
+
+fn record_dns_cookie_badcookie_if_emitted(
+    status: Option<DnsCookieRequestStatus>,
+    response: &[u8],
+    metrics: &RuntimeMetrics,
+    peer_ip: IpAddr,
+) {
+    let Some(
+        reason @ (DnsCookieRequestStatus::ClientCookieOnly
+        | DnsCookieRequestStatus::InvalidServerCookie),
+    ) = status
+    else {
+        return;
+    };
+    let Ok(header) = Header::parse(response) else {
+        return;
+    };
+    if response_rcode(response, &header) != Rcode::BadCookie as u16 {
+        return;
+    }
+    metrics.record_dns_cookie_badcookie();
+    debug!(
+        %peer_ip,
+        reason = ?reason,
+        "DNS Cookie BADCOOKIE response emitted"
+    );
 }
 
 fn record_query_response_metric(
@@ -2086,6 +2155,7 @@ fn metrics_body(
         snapshot.ixfr_failed,
     );
     append_query_rcode_metrics(&mut body, metrics);
+    append_dns_cookie_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_zone_status_metrics(&mut body, zones);
@@ -2172,8 +2242,33 @@ fn append_tsig_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
     }
 }
 
+fn append_dns_cookie_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_dns_cookie_queries_total DNS Cookie request cases.\n\
+         # TYPE oxidedns_dns_cookie_queries_total counter\n",
+    );
+    for (case, count) in [
+        ("no_cookie", snapshot.dns_cookie_no_cookie),
+        ("client_only", snapshot.dns_cookie_client_only),
+        ("valid_server", snapshot.dns_cookie_valid_server),
+        ("invalid_server", snapshot.dns_cookie_invalid_server),
+    ] {
+        body.push_str(&format!(
+            "oxidedns_dns_cookie_queries_total{{case=\"{case}\"}} {count}\n"
+        ));
+    }
+    body.push_str(
+        "# HELP oxidedns_dns_cookie_badcookie_responses_total BADCOOKIE responses emitted for DNS Cookie enforcement.\n\
+         # TYPE oxidedns_dns_cookie_badcookie_responses_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_dns_cookie_badcookie_responses_total {}\n",
+        snapshot.dns_cookie_badcookie
+    ));
+}
+
 fn known_rcodes() -> &'static [u16] {
-    &[0, 1, 2, 3, 4, 5, 9, 16, 22]
+    &[0, 1, 2, 3, 4, 5, 9, 16, 22, 23]
 }
 
 fn rcode_label(rcode: u16) -> &'static str {
@@ -2187,6 +2282,7 @@ fn rcode_label(rcode: u16) -> &'static str {
         9 => "NOTAUTH",
         16 => "BADVERS",
         22 => "BADTRUNC",
+        23 => "BADCOOKIE",
         _ => "UNKNOWN",
     }
 }
@@ -2404,6 +2500,11 @@ struct RuntimeMetricsInner {
     rrl_truncated: AtomicU64,
     rrl_tracked_keys: AtomicU64,
     rrl_key_evictions: AtomicU64,
+    dns_cookie_no_cookie: AtomicU64,
+    dns_cookie_client_only: AtomicU64,
+    dns_cookie_valid_server: AtomicU64,
+    dns_cookie_invalid_server: AtomicU64,
+    dns_cookie_badcookie: AtomicU64,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
 }
@@ -2435,6 +2536,11 @@ struct RuntimeMetricsSnapshot {
     rrl_truncated: u64,
     rrl_tracked_keys: u64,
     rrl_key_evictions: u64,
+    dns_cookie_no_cookie: u64,
+    dns_cookie_client_only: u64,
+    dns_cookie_valid_server: u64,
+    dns_cookie_invalid_server: u64,
+    dns_cookie_badcookie: u64,
 }
 
 impl RuntimeMetrics {
@@ -2557,6 +2663,22 @@ impl RuntimeMetrics {
         self.inner.rrl_key_evictions.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_dns_cookie_status(&self, status: DnsCookieRequestStatus) {
+        let counter = match status {
+            DnsCookieRequestStatus::NoCookie => &self.inner.dns_cookie_no_cookie,
+            DnsCookieRequestStatus::ClientCookieOnly => &self.inner.dns_cookie_client_only,
+            DnsCookieRequestStatus::ValidServerCookie => &self.inner.dns_cookie_valid_server,
+            DnsCookieRequestStatus::InvalidServerCookie => &self.inner.dns_cookie_invalid_server,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_dns_cookie_badcookie(&self) {
+        self.inner
+            .dns_cookie_badcookie
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_query_response_rcode(&self, rcode: u16) {
         let mut rcodes = self
             .inner
@@ -2623,6 +2745,11 @@ impl RuntimeMetrics {
             rrl_truncated: self.inner.rrl_truncated.load(Ordering::Relaxed),
             rrl_tracked_keys: self.inner.rrl_tracked_keys.load(Ordering::Relaxed),
             rrl_key_evictions: self.inner.rrl_key_evictions.load(Ordering::Relaxed),
+            dns_cookie_no_cookie: self.inner.dns_cookie_no_cookie.load(Ordering::Relaxed),
+            dns_cookie_client_only: self.inner.dns_cookie_client_only.load(Ordering::Relaxed),
+            dns_cookie_valid_server: self.inner.dns_cookie_valid_server.load(Ordering::Relaxed),
+            dns_cookie_invalid_server: self.inner.dns_cookie_invalid_server.load(Ordering::Relaxed),
+            dns_cookie_badcookie: self.inner.dns_cookie_badcookie.load(Ordering::Relaxed),
         }
     }
 }
@@ -3988,6 +4115,7 @@ async fn handle_tcp_connection(
         }
         let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
+        let dns_cookie_metrics = observe_dns_cookie_metrics(&prepared.packet, dns_cookie, &metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
             &zones,
@@ -4025,6 +4153,12 @@ async fn handle_tcp_connection(
                 debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
             }
             DatagramAction::Respond(response) => {
+                record_dns_cookie_badcookie_if_emitted(
+                    dns_cookie_metrics,
+                    &response,
+                    &metrics,
+                    peer_ip,
+                );
                 record_query_response_metric(query_metrics, &response, &metrics);
                 let response = match sign_notify_response(response, prepared.response_tsig) {
                     Ok(response) => response,
@@ -4134,8 +4268,8 @@ mod tests {
         axfr::{IxfrResponse, frame_tcp_message},
         config::{RrlConfig, TransferTransportConfig},
         dns::{
-            AnyResponseMode, DnsCookiePolicy, DomainName, Header, LookupTermination, Opcode, Rcode,
-            RecordType,
+            AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
+            LookupTermination, Opcode, Rcode, RecordType,
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -4149,9 +4283,9 @@ mod tests {
         NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryMetricObservation,
         RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
         RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings,
-        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, drain_task_set,
-        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
-        load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
+        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
+        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        load_pem_certs, load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
         poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
         query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
         refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
@@ -4361,6 +4495,7 @@ mod tests {
         metrics_state.record_query_cname_loop();
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
+        metrics_state.record_query_response_rcode(23);
         metrics_state.record_notify_received();
         metrics_state.record_notify_unauthorized();
         metrics_state.record_notify_refresh_action(NotifyRefreshAction::Signalled);
@@ -4371,6 +4506,11 @@ mod tests {
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTime);
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadAlg);
         metrics_state.record_notify_tsig_result(NotifyTsigResult::BadTrunc);
+        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::NoCookie);
+        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::ClientCookieOnly);
+        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::ValidServerCookie);
+        metrics_state.record_dns_cookie_status(DnsCookieRequestStatus::InvalidServerCookie);
+        metrics_state.record_dns_cookie_badcookie();
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -4421,6 +4561,12 @@ mod tests {
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NOERROR\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"SERVFAIL\"} 0"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
+        assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
+        assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"no_cookie\"} 1"));
+        assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"client_only\"} 1"));
+        assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"valid_server\"} 1"));
+        assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"invalid_server\"} 1"));
+        assert!(metrics.contains("oxidedns_dns_cookie_badcookie_responses_total 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
@@ -5314,6 +5460,16 @@ mod tests {
     }
 
     #[test]
+    fn dns_cookie_secret_fingerprint_is_redacted_and_stable() {
+        let secret = *b"0123456789abcdef";
+        let fingerprint = dns_cookie_secret_fingerprint(&secret);
+
+        assert_eq!(fingerprint.len(), 16);
+        assert_eq!(fingerprint, dns_cookie_secret_fingerprint(&secret));
+        assert_ne!(fingerprint, "3031323334353637");
+    }
+
+    #[test]
     fn query_metrics_count_configured_zone_queries_only() {
         let zones = ZoneStore::new();
         let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
@@ -5716,6 +5872,9 @@ mod tests {
         let cookie = response_cookie_option(&response).expect("COOKIE response option");
         assert_eq!(&cookie[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(cookie.len(), 24);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.dns_cookie_client_only, 1);
+        assert_eq!(snapshot.dns_cookie_badcookie, 0);
     }
 
     #[tokio::test]
@@ -5724,7 +5883,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let server_addr = socket.local_addr().unwrap();
-        let mut settings = udp_settings_for_test(metrics, RrlConfig::default());
+        let mut settings = udp_settings_for_test(metrics.clone(), RrlConfig::default());
         settings.dns_cookie = dns_cookie_settings_for_test(DnsCookiePolicy::Strict);
         let server = tokio::spawn(serve_udp(socket, zones, settings));
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -5740,6 +5899,9 @@ mod tests {
         assert_eq!(response_rcode(&response, &header), Rcode::BadCookie as u16);
         assert_eq!(header.ancount, 0);
         assert!(response_cookie_option(&response).is_some());
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.dns_cookie_client_only, 1);
+        assert_eq!(snapshot.dns_cookie_badcookie, 1);
     }
 
     #[tokio::test]
@@ -5781,6 +5943,8 @@ mod tests {
         assert_eq!(snapshot.rrl_subject, 1);
         assert_eq!(snapshot.rrl_dropped, 0);
         assert_eq!(snapshot.rrl_truncated, 0);
+        assert_eq!(snapshot.dns_cookie_client_only, 1);
+        assert_eq!(snapshot.dns_cookie_valid_server, 3);
     }
 
     #[tokio::test]
@@ -5817,6 +5981,8 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.rrl_subject, 2);
         assert_eq!(snapshot.rrl_dropped, 1);
+        assert_eq!(snapshot.dns_cookie_invalid_server, 2);
+        assert_eq!(snapshot.dns_cookie_badcookie, 0);
     }
 
     #[test]

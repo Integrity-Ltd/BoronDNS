@@ -223,7 +223,8 @@ curl -fsS http://127.0.0.1:8080/metrics
 Metrics currently include configured and active zone gauges, per-zone state,
 SOA serials, refresh timestamps, transfer counters, query counters, RCODE
 counters, truncation counters, CNAME limit/loop counters, NOTIFY counters, TSIG
-verification outcomes for authorized NOTIFY, and RRL counters.
+verification outcomes for authorized NOTIFY, DNS Cookie case/BADCOOKIE counters,
+and RRL counters.
 
 SRS v0.7 also requires release evidence for build-info metrics, latency
 histograms, `/livez`+`/readyz` split conformance, health response-time bounds,
@@ -451,8 +452,9 @@ current operator-relevant limitations are:
   release CLI shape.
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
   validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
-  valid-cookie RRL exemption. Rotation, logs, metrics, and interop artifacts
-  remain open before MVP acceptance.
+  valid-cookie RRL exemption. Startup and BADCOOKIE logs plus global cookie
+  counters are implemented; optional rotation, per-source-prefix counters, and
+  interop artifacts remain open before MVP acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.

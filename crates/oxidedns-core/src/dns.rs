@@ -424,6 +424,14 @@ pub enum DnsCookiePolicy {
     Strict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsCookieRequestStatus {
+    NoCookie,
+    ClientCookieOnly,
+    ValidServerCookie,
+    InvalidServerCookie,
+}
+
 impl AnswerOptions<'_> {
     pub fn udp(max_udp_payload: u16) -> Self {
         Self {
@@ -1161,22 +1169,42 @@ fn append_edns_padding_if_it_fits(
 }
 
 pub fn request_has_valid_dns_server_cookie(packet: &[u8], context: DnsCookieContext) -> bool {
+    matches!(
+        dns_cookie_request_status(packet, Some(context)),
+        Some(DnsCookieRequestStatus::ValidServerCookie)
+    )
+}
+
+pub fn dns_cookie_request_status(
+    packet: &[u8],
+    context: Option<DnsCookieContext>,
+) -> Option<DnsCookieRequestStatus> {
     let Ok(header) = Header::parse(packet) else {
-        return false;
+        return None;
     };
-    if header.is_response() || header.qdcount != 1 {
-        return false;
+    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount != 1 {
+        return None;
     }
     let Ok(question) = Question::parse(packet) else {
-        return false;
+        return None;
     };
     let Ok(metadata) = RequestMetadata::parse(&header, packet, &question) else {
-        return false;
+        return None;
     };
     let Some(cookie) = metadata.edns.and_then(|edns| edns.cookie) else {
-        return false;
+        return Some(DnsCookieRequestStatus::NoCookie);
     };
-    dns_server_cookie_is_valid(cookie, context)
+    if cookie.server.is_none() {
+        return Some(DnsCookieRequestStatus::ClientCookieOnly);
+    }
+    let Some(context) = context else {
+        return Some(DnsCookieRequestStatus::InvalidServerCookie);
+    };
+    if dns_server_cookie_is_valid(cookie, context) {
+        Some(DnsCookieRequestStatus::ValidServerCookie)
+    } else {
+        Some(DnsCookieRequestStatus::InvalidServerCookie)
+    }
 }
 
 fn dns_server_cookie_is_valid(cookie: EdnsCookie, context: DnsCookieContext) -> bool {
@@ -4925,6 +4953,10 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
         assert_eq!(response_opt_rdata(&response), Some(Vec::new()));
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::NoCookie)
+        );
     }
 
     #[test]
@@ -4962,6 +4994,10 @@ mod tests {
                 "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
             ))
         );
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::ClientCookieOnly)
+        );
     }
 
     #[test]
@@ -4981,6 +5017,10 @@ mod tests {
         );
 
         assert!(request_has_valid_dns_server_cookie(&packet, context));
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::ValidServerCookie)
+        );
     }
 
     #[test]
@@ -5023,6 +5063,10 @@ mod tests {
             &tampered,
             valid_context
         ));
+        assert_eq!(
+            dns_cookie_request_status(&tampered, Some(valid_context)),
+            Some(DnsCookieRequestStatus::InvalidServerCookie)
+        );
     }
 
     #[test]
