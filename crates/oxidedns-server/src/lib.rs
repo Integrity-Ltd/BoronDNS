@@ -6331,6 +6331,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_xot_rejects_untrusted_certificate_before_query() {
+        let (cert_path, key_path) =
+            write_self_signed_xot_cert_files_for_name("primary.example.test");
+        let (untrusted_anchor, _untrusted_key) =
+            write_self_signed_xot_cert_files_for_name("untrusted.example.test");
+        let (primary, mut query_seen) =
+            spawn_xot_primary_detecting_query_with_cert_files(&cert_path, &key_path, true).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            untrusted_anchor.display()
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(100),
+                axfr_timeout: std::time::Duration::from_millis(100),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        let query_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+        assert!(
+            !matches!(query_result, Ok(Some(()))),
+            "untrusted XoT certificate must abort before sending a DNS transfer query"
+        );
+        assert_eq!(metrics.snapshot().axfr_failed, 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_xot_rejects_expired_certificate_before_query() {
+        let (cert_path, key_path) =
+            write_expired_self_signed_xot_cert_files_for_name("primary.example.test");
+        let (primary, mut query_seen) =
+            spawn_xot_primary_detecting_query_with_cert_files(&cert_path, &key_path, true).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            cert_path.display()
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(100),
+                axfr_timeout: std::time::Duration::from_millis(100),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        let query_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+        assert!(
+            !matches!(query_result, Ok(Some(()))),
+            "expired XoT certificate must abort before sending a DNS transfer query"
+        );
+        assert_eq!(metrics.snapshot().axfr_failed, 1);
+    }
+
+    #[tokio::test]
     async fn refresh_xot_uses_configured_client_certificate() {
         let (client_cert, client_key) =
             write_self_signed_xot_cert_files_for_name("oxidedns-client.example.test");
@@ -7373,7 +7487,20 @@ mod tests {
         negotiate_dot_alpn: bool,
     ) -> (std::net::SocketAddr, String, mpsc::Receiver<()>) {
         let (cert_path, key_path) = write_self_signed_xot_cert_files_for_name(cert_dns_name);
+        let (addr, query_seen_rx) = spawn_xot_primary_detecting_query_with_cert_files(
+            &cert_path,
+            &key_path,
+            negotiate_dot_alpn,
+        )
+        .await;
+        (addr, cert_path.display().to_string(), query_seen_rx)
+    }
 
+    async fn spawn_xot_primary_detecting_query_with_cert_files(
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+        negotiate_dot_alpn: bool,
+    ) -> (std::net::SocketAddr, mpsc::Receiver<()>) {
         let certs = load_pem_certs(cert_path.to_str().expect("utf-8 cert path"))
             .expect("load generated cert");
         let key = load_pem_private_key(
@@ -7413,7 +7540,7 @@ mod tests {
             }
         });
 
-        (addr, cert_path.display().to_string(), query_seen_rx)
+        (addr, query_seen_rx)
     }
 
     fn write_self_signed_xot_cert_files() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -7427,6 +7554,27 @@ mod tests {
             .expect("self-signed certificate");
         let cert_pem = cert.cert.pem();
         let key_pem = cert.signing_key.serialize_pem();
+        write_xot_cert_files(cert_pem, key_pem)
+    }
+
+    fn write_expired_self_signed_xot_cert_files_for_name(
+        dns_name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let mut params =
+            rcgen::CertificateParams::new(vec![dns_name.to_owned()]).expect("certificate params");
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+        let key_pair = rcgen::KeyPair::generate().expect("generate key pair");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("expired self-signed certificate");
+        write_xot_cert_files(cert.pem(), key_pair.serialize_pem())
+    }
+
+    fn write_xot_cert_files(
+        cert_pem: String,
+        key_pem: String,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         let cert_path = unique_test_path("xot-primary", "pem");
         let key_path = unique_test_path("xot-primary-key", "pem");
         std::fs::write(&cert_path, cert_pem.as_bytes()).expect("write cert pem");

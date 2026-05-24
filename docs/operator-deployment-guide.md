@@ -406,8 +406,8 @@ current operator-relevant limitations are:
 - Full per-requirement traceability against the SRS is still pending.
 - IXFR has BIND true incremental interop and fallback coverage, but broader
   real-primary IXFR behavior matrix evidence remains pending.
-- XoT has in-process TLS coverage and a Knot XoT script; remaining TLS fault
-  matrix and additional real-primary evidence remain pending.
+- XoT has in-process TLS success and fault coverage plus a Knot XoT script;
+  additional real-primary evidence remains pending.
 - DNSSEC serving has unit and fake-primary runtime coverage for NSEC and
   NSEC3 paths; real signed-primary evidence remains pending.
 - RRL has runtime behavior and metrics coverage; release threshold decisions
