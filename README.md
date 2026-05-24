@@ -16,6 +16,8 @@ Normative order from the email:
 Implementation planning:
 
 - [MVP and Alpha implementation plan](docs/implementation-plan.md)
+- [MVP gap register](docs/mvp-gap-register.md)
+- [Verification ledger](docs/verification-ledger.md)
 
 ## Workspace
 
