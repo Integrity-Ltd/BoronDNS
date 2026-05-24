@@ -904,7 +904,7 @@ fn validate_dnskey_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
 
 fn validate_nsec_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     let next_name_len = validate_uncompressed_domain_name_with_trailing(rdata, 0)?;
-    validate_type_bit_maps(&rdata[next_name_len..])
+    validate_type_bit_maps(&rdata[next_name_len..], false)
 }
 
 fn validate_nsec3_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
@@ -926,7 +926,7 @@ fn validate_nsec3_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
         return Err(AxfrError::InvalidRdata);
     }
 
-    validate_type_bit_maps(&rdata[bit_maps_offset..])
+    validate_type_bit_maps(&rdata[bit_maps_offset..], true)
 }
 
 fn validate_nsec3param_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
@@ -942,8 +942,11 @@ fn validate_nsec3param_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     }
 }
 
-fn validate_type_bit_maps(bit_maps: &[u8]) -> Result<(), AxfrError> {
+fn validate_type_bit_maps(bit_maps: &[u8], allow_empty: bool) -> Result<(), AxfrError> {
     if bit_maps.is_empty() {
+        if allow_empty {
+            return Ok(());
+        }
         return Err(AxfrError::InvalidRdata);
     }
 
@@ -2680,7 +2683,6 @@ mod tests {
             (vec![1, 0, 0, 0, 0], "missing NSEC3 hash length"),
             (vec![1, 0, 0, 0, 0, 0], "zero NSEC3 hash length"),
             (vec![1, 0, 0, 0, 0, 2, 0], "truncated NSEC3 next hash"),
-            (nsec3_rdata(&[]), "missing NSEC3 bitmap"),
             (nsec3_rdata(&[0, 0]), "zero-length NSEC3 bitmap"),
             (nsec3_rdata(&[0, 33, 1]), "overlong NSEC3 bitmap"),
             (
@@ -2707,6 +2709,25 @@ mod tests {
 
             assert_eq!(error, AxfrError::InvalidRdata, "{context}");
         }
+    }
+
+    #[test]
+    fn accepts_axfr_nsec3_with_empty_type_bit_maps() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let nsec3 = record(
+            "hash.example.test.",
+            RecordType::Nsec3 as u16,
+            nsec3_rdata(&[]),
+        );
+
+        parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(0x1234, vec![soa.clone(), apex_ns(), nsec3, soa])],
+        )
+        .expect("NSEC3 for an empty non-terminal may have an empty type bitmap");
     }
 
     #[test]

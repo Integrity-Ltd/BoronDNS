@@ -13,3 +13,4 @@ www IN A 192.0.2.10
 mail IN A 192.0.2.20
 alias IN CNAME www.alpha.test.
 txt IN TXT "knot dnssec interop fixture"
+_sip._tcp IN SRV 10 20 5060 www.alpha.test.
