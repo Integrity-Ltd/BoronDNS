@@ -183,6 +183,8 @@ pub struct ServerSettings {
     pub health: Option<SocketAddr>,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    #[serde(default)]
+    pub log_format: LogFormatConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -214,6 +216,14 @@ pub enum AnyResponseConfig {
     #[default]
     Minimal,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LogFormatConfig {
+    #[default]
+    Json,
+    Plain,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -432,6 +442,8 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.server.listen_udp.len(), 1);
+        assert_eq!(config.server.log_level, "info");
+        assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.query.any_response, AnyResponseConfig::Minimal);
         assert_eq!(config.query.any_response_mode(), AnyResponseMode::Minimal);
         assert_eq!(config.zones[0].class, "IN");
@@ -449,6 +461,44 @@ mod tests {
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
+    }
+
+    #[test]
+    fn parses_plain_log_format() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                log_level = "debug"
+                log_format = "plain"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.server.log_level, "debug");
+        assert_eq!(config.server.log_format, LogFormatConfig::Plain);
+    }
+
+    #[test]
+    fn rejects_invalid_log_format() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                log_format = "syslog"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("invalid log format must fail");
+
+        assert!(error.to_string().contains("log_format"));
     }
 
     #[test]
