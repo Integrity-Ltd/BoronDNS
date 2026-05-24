@@ -266,6 +266,7 @@ Non-functional evidence foundations:
 
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
+- `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.
 
 Fuzzing foundations:
 
