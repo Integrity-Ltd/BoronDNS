@@ -18,6 +18,9 @@ const DNS_CLASS_ANY: u16 = 255;
 const TSIG_RR_TYPE: u16 = 250;
 const TSIG_TTL: u32 = 0;
 const TSIG_ERROR_NOERROR: u16 = 0;
+pub const TSIG_ERROR_BADSIG: u16 = 16;
+pub const TSIG_ERROR_BADTIME: u16 = 18;
+pub const TSIG_ERROR_BADTRUNC: u16 = 22;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TsigError {
@@ -396,6 +399,47 @@ pub fn sign_tcp_response_continuation(
         message: signed_message,
         mac,
     })
+}
+
+pub fn append_unsigned_tsig_error(
+    message: &[u8],
+    key: &TsigKey,
+    time_signed: u64,
+    fudge: u16,
+    original_id: u16,
+    error: u16,
+    other_data: &[u8],
+) -> Result<Vec<u8>, TsigError> {
+    if message.len() < DNS_HEADER_LEN {
+        return Err(TsigError::MalformedMessage);
+    }
+
+    let arcount = u16::from_be_bytes([
+        message[DNS_HEADER_ARCOUNT_OFFSET],
+        message[DNS_HEADER_ARCOUNT_OFFSET + 1],
+    ]);
+    let signed_arcount = arcount
+        .checked_add(1)
+        .ok_or(TsigError::AdditionalRecordCountOverflow)?;
+
+    let mut signed_message = Vec::with_capacity(message.len() + tsig_rr_len(key, 0));
+    signed_message.extend_from_slice(message);
+    signed_message[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
+        .copy_from_slice(&signed_arcount.to_be_bytes());
+    append_tsig_rr(
+        &mut signed_message,
+        key,
+        TsigRecordFields {
+            time_signed,
+            fudge,
+            mac: &[],
+            original_id,
+            error,
+            other_data,
+        },
+    );
+
+    Ok(signed_message)
 }
 
 pub fn verify_response(

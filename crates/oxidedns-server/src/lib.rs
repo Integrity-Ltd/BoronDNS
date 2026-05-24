@@ -30,10 +30,13 @@ use oxidedns_core::{
     config::ZoneConfig,
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DomainName, Header, LookupResult, LookupTermination, Opcode, Question, RecordType,
+        DomainName, Header, LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType,
         Transport, answer_message_with_notify_hooks_and_query_observer,
     },
-    tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
+    tsig::{
+        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC,
+        TsigError, TsigKey, append_unsigned_tsig_error,
+    },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
 
@@ -920,6 +923,13 @@ async fn serve_udp(
             debug!(%peer, bytes = len, "discarded DNS datagram");
             continue;
         };
+        if let Some(response) = prepared.immediate_response {
+            socket
+                .send_to(&response, peer)
+                .await
+                .map_err(RuntimeError::Udp)?;
+            continue;
+        }
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -2146,6 +2156,7 @@ impl NotifyAuthority {
 struct PreparedDnsMessage {
     packet: Vec<u8>,
     response_tsig: Option<ResponseTsig>,
+    immediate_response: Option<Vec<u8>>,
 }
 
 struct ResponseTsig {
@@ -2161,6 +2172,7 @@ fn prepare_notify_packet(
     let unsigned = || PreparedDnsMessage {
         packet: packet.to_vec(),
         response_tsig: None,
+        immediate_response: None,
     };
 
     let header = match Header::parse(packet) {
@@ -2178,6 +2190,10 @@ fn prepare_notify_packet(
     let Some(key) = notify_authority.tsig_key_for_notify(&question.qname, question.qclass) else {
         return Some(unsigned());
     };
+    let authorized = notify_authority.is_authorized(&question.qname, question.qclass, source);
+    if !authorized {
+        return Some(unsigned());
+    }
 
     match key.verify_request(packet, tsig_time_signed()) {
         Ok(verified) => Some(PreparedDnsMessage {
@@ -2186,12 +2202,69 @@ fn prepare_notify_packet(
                 key,
                 request_mac: verified.mac,
             }),
+            immediate_response: None,
         }),
         Err(error) => {
             warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
-            None
+            tsig_error_response(&header, &question, &key, &error).map(|response| {
+                PreparedDnsMessage {
+                    packet: packet.to_vec(),
+                    response_tsig: None,
+                    immediate_response: Some(response),
+                }
+            })
         }
     }
+}
+
+fn tsig_error_response(
+    header: &Header,
+    question: &Question,
+    key: &TsigKey,
+    error: &TsigError,
+) -> Option<Vec<u8>> {
+    let now = tsig_time_signed();
+    let (tsig_error, other_data) = tsig_error_fields(error, now)?;
+    let mut response = Vec::new();
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &(0x8000u16 | ((Opcode::Notify as u16) << 11) | Rcode::NotAuth as u16).to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&question.qname.to_wire());
+    response.extend_from_slice(&question.qtype.to_be_bytes());
+    response.extend_from_slice(&question.qclass.to_be_bytes());
+
+    append_unsigned_tsig_error(
+        &response,
+        key,
+        now,
+        DEFAULT_TSIG_FUDGE_SECS,
+        header.id,
+        tsig_error,
+        &other_data,
+    )
+    .ok()
+}
+
+fn tsig_error_fields(error: &TsigError, now: u64) -> Option<(u16, Vec<u8>)> {
+    match error {
+        TsigError::InvalidMac => Some((TSIG_ERROR_BADSIG, Vec::new())),
+        TsigError::BadTrunc => Some((TSIG_ERROR_BADTRUNC, Vec::new())),
+        TsigError::TimeOutsideFudge => Some((TSIG_ERROR_BADTIME, u48_bytes(now))),
+        _ => None,
+    }
+}
+
+fn u48_bytes(value: u64) -> Vec<u8> {
+    let value = value & 0x0000_ffff_ffff_ffff;
+    let mut out = Vec::with_capacity(6);
+    out.extend_from_slice(&((value >> 32) as u16).to_be_bytes());
+    out.extend_from_slice(&(value as u32).to_be_bytes());
+    out
 }
 
 fn sign_notify_response(
@@ -2808,6 +2881,12 @@ async fn handle_tcp_connection(
             debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
             continue;
         };
+        if let Some(response) = prepared.immediate_response {
+            if !write_tcp_message(&mut stream, &response, write_timeout).await? {
+                return Ok(());
+            }
+            continue;
+        }
         let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
         match answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -2934,8 +3013,11 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, RecordType},
-        tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
+        dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, Rcode, RecordType},
+        tsig::{
+            DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADSIG, TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC,
+            TsigKey,
+        },
         zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
     };
 
@@ -3380,6 +3462,83 @@ mod tests {
             .verify_response(&signed_response, &signed_notify.mac, current_unix_time())
             .expect("verified NOTIFY response");
         assert_eq!(verified_response.message, response);
+    }
+
+    #[test]
+    fn authorized_notify_with_bad_tsig_mac_gets_badsig_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+        let mut bad_mac = signed_notify.mac.clone();
+        bad_mac[0] ^= 0x01;
+        let bad_notify = replace_final_tsig_mac(&signed_notify.message, &bad_mac);
+
+        let prepared =
+            prepare_notify_packet(&bad_notify, &authority, "192.0.2.53".parse().unwrap())
+                .expect("TSIG error response");
+        let response = prepared
+            .immediate_response
+            .expect("immediate TSIG error response");
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADSIG);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn authorized_notify_with_too_short_tsig_mac_gets_badtrunc_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let signed_notify = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+        let too_short_mac = &signed_notify.mac[..key.algorithm.min_mac_len() - 1];
+        let bad_notify = replace_final_tsig_mac(&signed_notify.message, too_short_mac);
+
+        let prepared =
+            prepare_notify_packet(&bad_notify, &authority, "192.0.2.53".parse().unwrap())
+                .expect("TSIG error response");
+        let response = prepared
+            .immediate_response
+            .expect("immediate TSIG error response");
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADTRUNC);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn authorized_notify_outside_tsig_fudge_gets_badtime_response_with_server_time() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
+        let stale_notify = key
+            .sign_request(&packet, 1, DEFAULT_TSIG_FUDGE_SECS)
+            .expect("signed NOTIFY");
+
+        let prepared = prepare_notify_packet(
+            &stale_notify.message,
+            &authority,
+            "192.0.2.53".parse().unwrap(),
+        )
+        .expect("TSIG error response");
+        let response = prepared
+            .immediate_response
+            .expect("immediate TSIG error response");
+
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
+        assert_eq!(tsig.other_data.len(), 6);
     }
 
     #[test]
@@ -5464,6 +5623,97 @@ mod tests {
         packet.extend_from_slice(&qtype.to_be_bytes());
         packet.extend_from_slice(&qclass.to_be_bytes());
         packet
+    }
+
+    fn tsig_notify_authority() -> (NotifyAuthority, TsigKey) {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("valid config");
+        (
+            NotifyAuthority::from_config(&config),
+            TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap(),
+        )
+    }
+
+    fn replace_final_tsig_mac(message: &[u8], replacement_mac: &[u8]) -> Vec<u8> {
+        let mut out = message.to_vec();
+        let mut offset = 12;
+        let (_, qname_len) = DomainName::parse(&out, offset).unwrap();
+        offset += qname_len + 4;
+        let (_, owner_len) = DomainName::parse(&out, offset).unwrap();
+        let rdlen_offset = offset + owner_len + 8;
+        let rdata_offset = offset + owner_len + 10;
+        let old_rdlen = u16::from_be_bytes([out[rdlen_offset], out[rdlen_offset + 1]]) as usize;
+        let mut rdata_cursor = rdata_offset;
+        let (_, algorithm_len) = DomainName::parse(&out, rdata_cursor).unwrap();
+        rdata_cursor += algorithm_len + 6 + 2;
+        let mac_len_offset = rdata_cursor;
+        let old_mac_len =
+            u16::from_be_bytes([out[mac_len_offset], out[mac_len_offset + 1]]) as usize;
+        let mac_offset = mac_len_offset + 2;
+        out.splice(
+            mac_offset..mac_offset + old_mac_len,
+            replacement_mac.iter().copied(),
+        );
+        out[mac_len_offset..mac_len_offset + 2]
+            .copy_from_slice(&(replacement_mac.len() as u16).to_be_bytes());
+        let new_rdlen = old_rdlen - old_mac_len + replacement_mac.len();
+        out[rdlen_offset..rdlen_offset + 2].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
+        out
+    }
+
+    struct ParsedTsigResponseFields {
+        mac_len: usize,
+        original_id: u16,
+        error: u16,
+        other_data: Vec<u8>,
+    }
+
+    fn parse_tsig_response_fields(response: &[u8]) -> ParsedTsigResponseFields {
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        let mut offset = 12;
+        let (_, qname_len) = DomainName::parse(response, offset).unwrap();
+        offset += qname_len + 4;
+        let (_, owner_len) = DomainName::parse(response, offset).unwrap();
+        offset += owner_len;
+        assert_eq!(
+            u16::from_be_bytes([response[offset], response[offset + 1]]),
+            RecordType::Tsig as u16
+        );
+        let rdlen = u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
+        offset += 10;
+        let rdata_end = offset + rdlen;
+        let (_, algorithm_len) = DomainName::parse(response, offset).unwrap();
+        offset += algorithm_len + 6 + 2;
+        let mac_len = u16::from_be_bytes([response[offset], response[offset + 1]]) as usize;
+        offset += 2 + mac_len;
+        let original_id = u16::from_be_bytes([response[offset], response[offset + 1]]);
+        offset += 2;
+        let error = u16::from_be_bytes([response[offset], response[offset + 1]]);
+        offset += 2;
+        let other_len = u16::from_be_bytes([response[offset], response[offset + 1]]) as usize;
+        offset += 2;
+        assert_eq!(offset + other_len, rdata_end);
+        ParsedTsigResponseFields {
+            mac_len,
+            original_id,
+            error,
+            other_data: response[offset..offset + other_len].to_vec(),
+        }
     }
 
     fn notify_response(qid: u16) -> Vec<u8> {
