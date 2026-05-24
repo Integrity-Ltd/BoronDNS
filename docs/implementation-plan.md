@@ -139,6 +139,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - when a refresh has existing zone data and a newer primary serial, the runtime constructs a TCP IXFR query with the currently held apex SOA in the authority section, applies IXFR Mode 1 incremental diffs with strict delete/add consistency checks, accepts IXFR Mode 2 AXFR-style fallback and Mode 3 current responses, and falls back to AXFR if IXFR is unsupported or incomplete.
 - IXFR fault coverage rejects non-response messages, mismatched QIDs, unexpected opcodes, error RCODEs, missing initial SOAs, incomplete newer single-SOA responses, mismatched starting old-SOA serials, final SOA chain mismatches, absent-record deletions, already-present record additions, class mismatches, out-of-zone owners, reserved record types, prohibited pseudo-RR and transfer meta-types, invalid fixed-length A/AAAA RDATA, invalid DS/DNSKEY/NSEC3PARAM/TLSA fixed-prefix RDATA, invalid HINFO/TXT/URI character-string RDATA, invalid post-RFC3597 embedded-name RDATA, invalid NSEC/NSEC3 type bit-map RDATA, and final updated zones that violate apex SOA, apex NS, CNAME coexistence, or DNAME/CNAME coexistence requirements.
 - primaries that return FORMERR or NOTIMP to IXFR are placed in a per-zone IXFR-disabled cooldown, configured by `[limits].ixfr_disabled_cooldown_secs` and defaulting to 3600 seconds, during which refresh attempts use AXFR for that primary.
+- `scripts/interop-ixfr-notimp-fallback.sh` covers the external process path for initial AXFR, IXFR NOTIMP fallback to AXFR, and the next refresh using AXFR while IXFR cooldown is active.
 
 Slice 4 is in progress:
 
@@ -231,6 +232,7 @@ Interop harness foundations:
 
 Open near-term work:
 
-- broader IXFR fault/interop coverage;
-- DNSSEC-authenticated referral augmentation;
-- interop fixture against at least one real primary implementation.
+- broaden the primary interop matrix beyond BIND to NSD and Knot, including AXFR, NOTIFY, and HMAC-SHA256 TSIG paths;
+- broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
+- add XoT configuration and transfer-path foundations;
+- add parser fuzzing harnesses and start collecting long-run evidence for MVP verification.
