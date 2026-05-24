@@ -1,0 +1,14 @@
+server:
+    do-ip4: yes
+    do-ip6: no
+    ip-address: 0.0.0.0@5353
+    hide-version: yes
+    verbosity: 1
+    database: "/tmp/nsd.db"
+    pidfile: "/tmp/nsd.pid"
+    zonesdir: "/work"
+
+zone:
+    name: "alpha.test."
+    zonefile: "/work/alpha.test.zone"
+    provide-xfr: 0.0.0.0/0 NOKEY

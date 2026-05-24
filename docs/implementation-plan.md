@@ -229,10 +229,11 @@ Interop harness foundations:
 
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-bind-tsig-axfr.sh` starts a BIND 9 primary whose AXFR is restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
+- `scripts/interop-nsd-axfr-docker.sh` starts NSD inside an Alpine Docker container with the `alpha.test.` fixture, validates NSD SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 
 Open near-term work:
 
-- broaden the primary interop matrix beyond BIND to NSD and Knot, including AXFR, NOTIFY, and HMAC-SHA256 TSIG paths;
+- broaden the primary interop matrix to Knot, and extend NSD/Knot coverage beyond AXFR to NOTIFY and HMAC-SHA256 TSIG paths;
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - add XoT configuration and transfer-path foundations;
 - add parser fuzzing harnesses and start collecting long-run evidence for MVP verification.
