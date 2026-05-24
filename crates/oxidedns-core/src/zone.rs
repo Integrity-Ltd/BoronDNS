@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use sha1::{Digest, Sha1};
 use tracing::warn;
 
 use crate::dns::{
@@ -525,12 +526,15 @@ impl ZoneSnapshot {
                 .or_else(|| self.rrset(&record.owner, RecordType::Nsec as u16, record.class));
 
             if let Some(proof_rrset) = proof_rrset {
-                for proof in proof_rrset.records() {
-                    if seen.insert(record_identity(&proof)) {
-                        augmented.push(proof);
-                        *dnssec_augmented = true;
-                    }
-                }
+                push_rrset_records(proof_rrset, &mut augmented, &mut seen, dnssec_augmented);
+            } else {
+                self.push_nsec3_for_name(
+                    &record.owner,
+                    record.class,
+                    &mut augmented,
+                    &mut seen,
+                    dnssec_augmented,
+                );
             }
         }
         augmented
@@ -554,20 +558,15 @@ impl ZoneSnapshot {
             return authorities;
         }
 
-        let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) else {
-            return authorities;
-        };
-
         let mut augmented = authorities.clone();
         let mut seen = authorities
             .iter()
             .map(record_identity)
             .collect::<HashSet<_>>();
-        for nsec in nsec_rrset.records() {
-            if seen.insert(record_identity(&nsec)) {
-                augmented.push(nsec);
-                *dnssec_augmented = true;
-            }
+        if let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) {
+            push_rrset_records(nsec_rrset, &mut augmented, &mut seen, dnssec_augmented);
+        } else {
+            self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
         }
         augmented
     }
@@ -594,8 +593,23 @@ impl ZoneSnapshot {
             .map(record_identity)
             .collect::<HashSet<_>>();
         self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
+        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
         if let Some(closest_encloser) = self.closest_encloser(qname, qclass) {
             self.push_nsec_covering_name(
+                &closest_encloser.wildcard_child(),
+                qclass,
+                &mut augmented,
+                &mut seen,
+                dnssec_augmented,
+            );
+            self.push_nsec3_for_name(
+                &closest_encloser,
+                qclass,
+                &mut augmented,
+                &mut seen,
+                dnssec_augmented,
+            );
+            self.push_nsec3_for_name(
                 &closest_encloser.wildcard_child(),
                 qclass,
                 &mut augmented,
@@ -655,7 +669,53 @@ impl ZoneSnapshot {
             .map(record_identity)
             .collect::<HashSet<_>>();
         self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
+        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
         augmented
+    }
+
+    fn push_nsec3_for_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        records: &mut Vec<ResourceRecord>,
+        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+        dnssec_augmented: &mut bool,
+    ) {
+        let Some(nsec3_rrset) = self.nsec3_rrset_for_name(name, qclass) else {
+            return;
+        };
+
+        push_rrset_records(nsec3_rrset, records, seen, dnssec_augmented);
+    }
+
+    fn nsec3_rrset_for_name(&self, name: &DomainName, qclass: u16) -> Option<&Rrset> {
+        let candidates = self
+            .rrsets
+            .values()
+            .filter(|rrset| rrset.rr_type == RecordType::Nsec3 as u16)
+            .filter(|rrset| qclass == 255 || rrset.class == qclass)
+            .filter_map(|rrset| {
+                let rdata = rrset.rdatas.first()?;
+                let params = nsec3_params_from_rdata(rdata)?;
+                let hash = nsec3_hash_name(name, &params)?;
+                let owner_hash = nsec3_owner_hash_label(&rrset.owner, &self.origin)?;
+                let next_hash = nsec3_next_hash_label(rdata)?;
+                Some((rrset, hash, owner_hash, next_hash))
+            })
+            .collect::<Vec<_>>();
+
+        candidates
+            .iter()
+            .find(|(_, hash, owner_hash, _)| hash == owner_hash)
+            .map(|(rrset, _, _, _)| *rrset)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|(_, hash, owner_hash, next_hash)| {
+                        nsec3_range_covers_hash(owner_hash, next_hash, hash)
+                    })
+                    .map(|(rrset, _, _, _)| *rrset)
+            })
     }
 
     fn add_rrsig_augmentations(
@@ -840,6 +900,112 @@ fn nsec_covers_name(owner: &DomainName, rdata: &[u8], name: &DomainName) -> bool
     canonical_nsec_range_covers(owner, &next_owner, name)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Nsec3Params {
+    hash_algorithm: u8,
+    iterations: u16,
+    salt: Vec<u8>,
+}
+
+fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
+    if rdata.len() < 5 {
+        return None;
+    }
+
+    let salt_len = rdata[4] as usize;
+    if rdata.len() < 5 + salt_len + 1 {
+        return None;
+    }
+
+    Some(Nsec3Params {
+        hash_algorithm: rdata[0],
+        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
+        salt: rdata[5..5 + salt_len].to_vec(),
+    })
+}
+
+fn nsec3_next_hash_label(rdata: &[u8]) -> Option<String> {
+    let params = nsec3_params_from_rdata(rdata)?;
+    let hash_len_offset = 5 + params.salt.len();
+    let hash_len = *rdata.get(hash_len_offset)? as usize;
+    let hash_start = hash_len_offset + 1;
+    let hash_end = hash_start.checked_add(hash_len)?;
+    if hash_end > rdata.len() {
+        return None;
+    }
+
+    Some(base32hex_no_padding_lower(&rdata[hash_start..hash_end]))
+}
+
+fn nsec3_hash_name(name: &DomainName, params: &Nsec3Params) -> Option<String> {
+    if params.hash_algorithm != 1 {
+        return None;
+    }
+
+    let canonical = DomainName::from_absolute_str(&name.canonical_key())
+        .ok()?
+        .to_wire();
+    let mut digest = Sha1::new();
+    digest.update(&canonical);
+    digest.update(&params.salt);
+    let mut hash = digest.finalize().to_vec();
+
+    for _ in 0..params.iterations {
+        let mut digest = Sha1::new();
+        digest.update(&hash);
+        digest.update(&params.salt);
+        hash = digest.finalize().to_vec();
+    }
+
+    Some(base32hex_no_padding_lower(&hash))
+}
+
+fn nsec3_owner_hash_label(owner: &DomainName, origin: &DomainName) -> Option<String> {
+    let owner_key = owner.canonical_key();
+    let origin_key = origin.canonical_key();
+    let prefix = owner_key.strip_suffix(&origin_key)?;
+    let hash_label = prefix.strip_suffix('.')?;
+    if hash_label.is_empty() || hash_label.contains('.') {
+        return None;
+    }
+
+    Some(hash_label.to_owned())
+}
+
+fn nsec3_range_covers_hash(owner_hash: &str, next_hash: &str, hash: &str) -> bool {
+    if owner_hash < next_hash {
+        owner_hash < hash && hash < next_hash
+    } else if owner_hash > next_hash {
+        owner_hash < hash || hash < next_hash
+    } else {
+        hash != owner_hash
+    }
+}
+
+fn base32hex_no_padding_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+    let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buffer = 0u16;
+    let mut bits = 0u8;
+
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((buffer >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index] as char);
+            bits -= 5;
+        }
+    }
+
+    if bits > 0 {
+        let index = ((buffer << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index] as char);
+    }
+
+    out
+}
+
 fn canonical_nsec_range_covers(
     owner: &DomainName,
     next_owner: &DomainName,
@@ -863,6 +1029,20 @@ fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {
         record.class,
         record.rdata.clone(),
     )
+}
+
+fn push_rrset_records(
+    rrset: &Rrset,
+    records: &mut Vec<ResourceRecord>,
+    seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
+    dnssec_augmented: &mut bool,
+) {
+    for record in rrset.records() {
+        if seen.insert(record_identity(&record)) {
+            records.push(record);
+            *dnssec_augmented = true;
+        }
+    }
 }
 
 fn is_dnssec_proof_or_signature_type(rr_type: u16) -> bool {

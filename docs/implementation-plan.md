@@ -204,6 +204,7 @@ DNSSEC work is partially started:
 - explicit RRSIG, NSEC, and NSEC3 queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
 - QTYPE ANY responses do not return RRSIG, NSEC, or NSEC3 RRsets as ordinary data when those types were not explicitly queried, preserving the non-DO DNSSEC augmentation boundary.
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
+- NSEC3 denial proof augmentation supports transferred SHA-1 NSEC3 records for exact hash matches and covering hash ranges without generating or validating DNSSEC material.
 - response header construction unconditionally clears AD and CD bits.
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
 - authorized NOTIFY messages missing required TSIG, or with BADKEY, BADSIG, BADALG, or BADTRUNC verification failures, receive NOTAUTH responses carrying zero-MAC TSIG error records; BADTIME failures receive signed NOTAUTH TSIG error records with server-time other data.
@@ -253,6 +254,11 @@ Interop harness foundations:
 - `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
 - `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
 - `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, and NSEC records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, and handles DNSSEC UDP truncation/response-DO semantics.
+- `scripts/interop-dnssec-nsec3-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC3, and NSEC3PARAM records, verifies direct NSEC3/NSEC3PARAM serving, and verifies DO-sensitive NXDOMAIN NSEC3 proof material with covering RRSIGs.
+
+Non-functional evidence foundations:
+
+- `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
 
 Fuzzing foundations:
 
@@ -265,5 +271,5 @@ Open near-term work:
 
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - add real-primary XoT interop and the remaining TLS fault matrix;
-- broaden DNSSEC runtime evidence to NSEC3 and real signed primary fixtures;
-- add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.
+- broaden DNSSEC runtime evidence to real signed primary fixtures;
+- add remaining parser fuzz targets and start collecting long-run performance and fuzz evidence for MVP verification.

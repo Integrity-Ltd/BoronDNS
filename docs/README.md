@@ -9,6 +9,7 @@ The email says the SDS and SBVR material are normatively subordinate to the SRS 
 - `OxideDNS-Secondary-SRS-v0.1.md`: primary normative Software Requirements Specification.
 - `OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion specification.
 - `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary.
+- `operator-deployment-guide.md`: practical MVP deployment and operations guide.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
 
 - `source-exports-removed/`: removed source exports, including DOCX/PDF/ZIP files.

@@ -1425,6 +1425,7 @@ fn soa_minimum(rdata: &[u8]) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::zone::{ZoneSnapshot, ZoneStore};
+    use sha1::{Digest, Sha1};
 
     fn query(qname: &[u8], qtype: u16, qclass: u16) -> Vec<u8> {
         let mut packet = Vec::new();
@@ -1794,6 +1795,41 @@ mod tests {
         rdata.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
         rdata.extend_from_slice(&[0, 1, 0x40]);
         rdata
+    }
+
+    fn nsec3_owner(name: &str, origin: &str) -> DomainName {
+        DomainName::from_absolute_str(&format!("{}.{}", nsec3_hash_label(name), origin)).unwrap()
+    }
+
+    fn nsec3_hash_label(name: &str) -> String {
+        let canonical = DomainName::from_absolute_str(name).unwrap().canonical_key();
+        let wire = DomainName::from_absolute_str(&canonical).unwrap().to_wire();
+        let mut digest = Sha1::new();
+        digest.update(wire);
+        let first = digest.finalize();
+        let mut digest = Sha1::new();
+        digest.update(first);
+        let hash = digest.finalize();
+        base32hex_lower(&hash)
+    }
+
+    fn base32hex_lower(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+        let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
+        let mut buffer = 0u16;
+        let mut bits = 0u8;
+        for byte in bytes {
+            buffer = (buffer << 8) | u16::from(*byte);
+            bits += 8;
+            while bits >= 5 {
+                out.push(ALPHABET[((buffer >> (bits - 5)) & 0x1f) as usize] as char);
+                bits -= 5;
+            }
+        }
+        if bits > 0 {
+            out.push(ALPHABET[((buffer << (5 - bits)) & 0x1f) as usize] as char);
+        }
+        out
     }
 
     fn nsec3param_rdata(hash_algorithm: u8) -> Vec<u8> {
@@ -2609,6 +2645,83 @@ mod tests {
                 RecordType::Soa as u16,
                 RecordType::Nsec as u16,
                 RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs() {
+        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
+        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Nsec3Param as u16,
+                    1,
+                    300,
+                    vec![nsec3param_rdata(1)],
+                ),
+                Rrset::new(
+                    missing_nsec3.clone(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata(1)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3.clone(),
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata(1)],
+                ),
+                Rrset::new(
+                    missing_nsec3,
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec3)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3,
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec3)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec3 as u16,
+                RecordType::Nsec3 as u16,
                 RecordType::Rrsig as u16,
                 RecordType::Rrsig as u16,
             ]

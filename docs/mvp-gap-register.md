@@ -12,7 +12,7 @@ queue for remaining release blockers.
 | IXFR | Unit parser/fault coverage; BIND true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
 | NOTIFY | Unit/runtime coverage; BIND, NSD, and Knot NOTIFY refresh interop | Release traceability and broader negative interop evidence |
 | XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, ALPN-failure, and missing-client-cert tests; Knot XoT AXFR interop script | Remaining TLS fault matrix and any additional real-primary XoT evidence |
-| DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve script for DO-sensitive RRSIG/NSEC/DNSKEY and truncation behavior | NSEC3 and real signed primary evidence; release-level conformance matrix |
+| DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records; runtime fake-primary DNSSEC serve scripts for DO-sensitive RRSIG/NSEC/NSEC3/DNSKEY/NSEC3PARAM and truncation behavior | Real signed primary evidence; release-level conformance matrix |
 | RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks | Release threshold decisions and longer-running evidence |
 
 ## Non-Functional Evidence
@@ -21,7 +21,7 @@ queue for remaining release blockers.
 | --- | --- | --- |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks | 24-hour campaigns per parser target with retained logs/artifacts |
 | Dependency Audit | `cargo deny` in `scripts/check.sh` | Release snapshot of advisory/license/source results |
-| Performance | No accepted benchmark artifact yet | Throughput, latency, memory, and transfer performance evidence against SRS NFR targets |
+| Performance | `scripts/perf-smoke.sh` provides a repeatable startup-to-ready, AXFR ingestion, metrics, and UDP direct-hit latency smoke harness | Release benchmark artifacts for throughput, latency, memory, transfer performance, and capacity against SRS NFR targets |
 | Soak | No accepted soak artifact yet | 30-day production-representative soak without anomaly |
 | Portability | Linux CI-style local checks | Linux distribution/container evidence and documented platform boundaries |
 | Operator Docs | README, implementation plan, verification ledger, and example config | Operator Deployment Guide and full Appendix A traceability matrix |
@@ -49,4 +49,6 @@ scripts/interop-knot-xot-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-rrl-udp.sh
 scripts/interop-dnssec-serve.sh
+scripts/interop-dnssec-nsec3-serve.sh
+scripts/perf-smoke.sh
 ```
