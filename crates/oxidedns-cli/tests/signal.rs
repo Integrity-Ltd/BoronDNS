@@ -55,6 +55,7 @@ fn write_test_config() -> std::path::PathBuf {
         r#"
             [server]
             listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
 
             [limits]
             axfr_timeout_secs = 1

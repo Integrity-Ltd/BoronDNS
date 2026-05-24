@@ -3787,6 +3787,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -3805,6 +3806,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -3828,6 +3830,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -4107,6 +4110,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["{udp_addr}"]
+                listen_tcp = []
                 health = "{health_addr}"
 
                 [limits]
@@ -4149,6 +4153,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["{udp_addr}"]
+                listen_tcp = []
 
                 [limits]
                 axfr_timeout_secs = 5
@@ -4193,6 +4198,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["{udp_addr}"]
+                listen_tcp = []
                 health = "{health_addr}"
 
                 [limits]
@@ -4247,6 +4253,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["{udp_addr}"]
+                listen_tcp = []
                 health = "{health_addr}"
 
                 [[zones]]
@@ -4282,6 +4289,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -5497,6 +5505,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -5581,6 +5590,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [limits]
                 max_concurrent_transfers = 2
@@ -5660,6 +5670,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -5724,6 +5735,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -5777,6 +5789,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -5918,6 +5931,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[zones]]
                 name = "example.test."
@@ -5977,6 +5991,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [limits]
                 max_concurrent_transfers = 2
@@ -6905,6 +6920,7 @@ mod tests {
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
 
                 [[tsig_keys]]
                 name = "transfer-key."
