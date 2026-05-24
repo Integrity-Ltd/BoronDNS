@@ -161,6 +161,7 @@ Slice 7 has TSIG HMAC-SHA foundations:
 - configured TSIG secrets are redacted from debug formatting and validation error messages;
 - HMAC-SHA256 signing and constant-time MAC verification are implemented against an RFC 4231 test vector.
 - HMAC-SHA1 signing and constant-time MAC verification are implemented against an RFC 2202 test vector.
+- HMAC-SHA384 and HMAC-SHA512 signing and constant-time MAC verification are implemented against RFC 4231 test vectors.
 - RFC 8945 request signing is implemented for HMAC-SHA256, including canonical TSIG variables, 48-bit Time Signed encoding, TSIG RR wire format, ARCOUNT incrementing, and placement as the last additional record;
 - zones that reference a configured TSIG key sign outbound SOA poll, IXFR, and AXFR transfer queries.
 - signed SOA poll responses are verified against the stored request MAC, TSIG key name and algorithm, MAC, and time fudge before the unsigned DNS response is parsed.
@@ -181,6 +182,6 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - broader IXFR fault/interop coverage;
-- TSIG HMAC-SHA384/SHA512 support and interop coverage;
+- TSIG interop coverage;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

@@ -3,7 +3,7 @@ use std::fmt;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
-use sha2::Sha256;
+use sha2::{Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -77,6 +77,8 @@ pub enum TsigError {
 pub enum TsigAlgorithm {
     HmacSha1,
     HmacSha256,
+    HmacSha384,
+    HmacSha512,
 }
 
 impl TsigAlgorithm {
@@ -84,6 +86,8 @@ impl TsigAlgorithm {
         match canonical_algorithm_name(name).as_str() {
             "hmac-sha1" => Ok(Self::HmacSha1),
             "hmac-sha256" => Ok(Self::HmacSha256),
+            "hmac-sha384" => Ok(Self::HmacSha384),
+            "hmac-sha512" => Ok(Self::HmacSha512),
             other => Err(TsigError::UnsupportedAlgorithm(other.to_owned())),
         }
     }
@@ -92,6 +96,8 @@ impl TsigAlgorithm {
         match self {
             Self::HmacSha1 => "hmac-sha1",
             Self::HmacSha256 => "hmac-sha256",
+            Self::HmacSha384 => "hmac-sha384",
+            Self::HmacSha512 => "hmac-sha512",
         }
     }
 
@@ -99,6 +105,8 @@ impl TsigAlgorithm {
         match self {
             Self::HmacSha1 => 20,
             Self::HmacSha256 => 32,
+            Self::HmacSha384 => 48,
+            Self::HmacSha512 => 64,
         }
     }
 }
@@ -553,6 +561,18 @@ impl TsigAlgorithm {
                 mac.update(message);
                 Ok(mac.finalize().into_bytes().to_vec())
             }
+            Self::HmacSha384 => {
+                let mut mac = Hmac::<Sha384>::new_from_slice(secret)
+                    .map_err(|_| TsigError::InvalidHmacKey)?;
+                mac.update(message);
+                Ok(mac.finalize().into_bytes().to_vec())
+            }
+            Self::HmacSha512 => {
+                let mut mac = Hmac::<Sha512>::new_from_slice(secret)
+                    .map_err(|_| TsigError::InvalidHmacKey)?;
+                mac.update(message);
+                Ok(mac.finalize().into_bytes().to_vec())
+            }
         }
     }
 }
@@ -882,6 +902,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_hmac_sha384_and_sha512_algorithm_names_case_insensitively() {
+        assert_eq!(
+            TsigAlgorithm::parse("HMAC-SHA384.").unwrap(),
+            TsigAlgorithm::HmacSha384
+        );
+        assert_eq!(
+            TsigAlgorithm::parse("HMAC-SHA512.").unwrap(),
+            TsigAlgorithm::HmacSha512
+        );
+        assert_eq!(TsigAlgorithm::HmacSha384.name(), "hmac-sha384");
+        assert_eq!(TsigAlgorithm::HmacSha384.mac_len(), 48);
+        assert_eq!(TsigAlgorithm::HmacSha512.name(), "hmac-sha512");
+        assert_eq!(TsigAlgorithm::HmacSha512.mac_len(), 64);
+    }
+
+    #[test]
     fn rejects_hmac_md5_algorithm() {
         let error =
             TsigAlgorithm::parse("hmac-md5.sig-alg.reg.int.").expect_err("MD5 is prohibited");
@@ -915,6 +951,41 @@ mod tests {
         let mac = key.sign(b"Hi There").unwrap();
 
         assert_eq!(hex(&mac), "b617318655057264e28bc0b6fb378c8ef146be00");
+        assert!(key.verify(b"Hi There", &mac).unwrap());
+        assert!(!key.verify(b"Hi there", &mac).unwrap());
+    }
+
+    #[test]
+    fn signs_hmac_sha384_rfc4231_case_1() {
+        let secret = STANDARD.encode([0x0b; 20]);
+        let key = TsigKey::from_base64("transfer.example.", "hmac-sha384", &secret).unwrap();
+        let mac = key.sign(b"Hi There").unwrap();
+
+        assert_eq!(
+            hex(&mac),
+            "afd03944d84895626b0825f4ab46907f\
+             15f9dadbe4101ec682aa034c7cebc59c\
+             faea9ea9076ede7f4af152e8b2fa9cb6"
+                .replace(char::is_whitespace, "")
+        );
+        assert!(key.verify(b"Hi There", &mac).unwrap());
+        assert!(!key.verify(b"Hi there", &mac).unwrap());
+    }
+
+    #[test]
+    fn signs_hmac_sha512_rfc4231_case_1() {
+        let secret = STANDARD.encode([0x0b; 20]);
+        let key = TsigKey::from_base64("transfer.example.", "hmac-sha512", &secret).unwrap();
+        let mac = key.sign(b"Hi There").unwrap();
+
+        assert_eq!(
+            hex(&mac),
+            "87aa7cdea5ef619d4ff0b4241a1d6cb0\
+             2379f4e2ce4ec2787ad0b30545e17cde\
+             daa833b7d6b8a702038b274eaea3f4e4\
+             be9d914eeb61f1702e696c203a126854"
+                .replace(char::is_whitespace, "")
+        );
         assert!(key.verify(b"Hi There", &mac).unwrap());
         assert!(!key.verify(b"Hi there", &mac).unwrap());
     }

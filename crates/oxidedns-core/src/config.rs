@@ -813,6 +813,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_hmac_sha384_and_sha512_tsig_keys() {
+        for algorithm in ["hmac-sha384", "hmac-sha512"] {
+            let config = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [[tsig_keys]]
+                    name = "transfer-key."
+                    algorithm = "{algorithm}"
+                    secret = "c2VjcmV0LWtleQ=="
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                    tsig_key = "transfer-key."
+                "#
+            ))
+            .expect("valid HMAC-SHA TSIG config");
+
+            assert_eq!(config.tsig_keys[0].algorithm, algorithm);
+            assert_eq!(config.zones[0].tsig_key.as_deref(), Some("transfer-key."));
+        }
+    }
+
+    #[test]
     fn rejects_invalid_tsig_secret_without_leaking_it() {
         let error = ServerConfig::from_toml_str(
             r#"
