@@ -1063,6 +1063,89 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_record_with_mismatched_class() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let mut wrong_class = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        wrong_class.class = 3;
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, wrong_class, new_soa],
+            )],
+        )
+        .expect_err("IXFR class mismatch");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::ClassMismatch));
+    }
+
+    #[test]
+    fn rejects_ixfr_out_of_zone_record() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let out = record("outside.test.", RecordType::A as u16, vec![192, 0, 2, 10]);
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, out, new_soa],
+            )],
+        )
+        .expect_err("IXFR out-of-zone record");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::OutOfZoneOwner));
+    }
+
+    #[test]
+    fn rejects_ixfr_reserved_record_type() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let reserved = record("www.example.test.", 0, vec![192, 0, 2, 10]);
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, reserved, new_soa],
+            )],
+        )
+        .expect_err("IXFR reserved type");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::ReservedType));
+    }
+
+    #[test]
     fn rejects_soa_response_with_mismatched_qid() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
