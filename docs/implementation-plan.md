@@ -235,6 +235,7 @@ XoT foundations are started:
 - runtime transfer planning preserves each target's transport mode and uses Rustls/Tokio-Rustls for XoT AXFR and IXFR TCP framing;
 - XoT client connections load configured PEM trust anchors, send the configured server name as SNI, require ALPN `dot`, support optional client certificate/key material, and do not fall back to cleartext TCP after TLS failure;
 - focused in-process tests cover successful XoT AXFR and TLS-handshake failure without cleartext retry. Real-primary XoT interop and the full TLS fault matrix remain pending.
+- `scripts/interop-knot-xot-docker.sh` covers a real Knot DNS XoT primary path with generated local CA/server certificates, ALPN `dot`, OxideDNS XoT transfer configuration, readiness, served data, and transfer metrics. Broader real-primary XoT matrix coverage remains pending.
 
 Interop harness foundations:
 
@@ -245,6 +246,14 @@ Interop harness foundations:
 - `scripts/interop-nsd-tsig-axfr-docker.sh` starts NSD inside an Alpine Docker container with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-knot-axfr-docker.sh` starts Knot DNS inside an Alpine Docker container with the `alpha.test.` fixture, validates Knot SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-knot-tsig-axfr-docker.sh` starts Knot DNS with AXFR restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
+- `scripts/interop-knot-xot-docker.sh` starts Knot DNS with an XoT listener, verifies ALPN `dot`, starts OxideDNS with `transport = "xot"` and a generated trust anchor, waits for `/readyz`, and verifies served data and transfer metrics from the transferred zone.
+
+Fuzzing foundations:
+
+- `fuzz/fuzz_targets/dns_datagram.rs` covers DNS header/question parsing and ordinary datagram response construction.
+- `fuzz/fuzz_targets/transfer_stream.rs` covers AXFR and IXFR response-stream parsing from TCP-style length-prefixed chunks.
+- `fuzz/fuzz_targets/tsig_message.rs` covers TSIG detection, MAC extraction, request/response verification, TSIG error responses, and TCP response-stream TSIG chaining.
+- `fuzz/fuzz_targets/notify_edns_datagram.rs` covers NOTIFY request handling and EDNS OPT parsing against a populated `alpha.test.` zone.
 
 Open near-term work:
 

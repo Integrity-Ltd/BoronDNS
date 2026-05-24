@@ -24,3 +24,17 @@ path = "fuzz_targets/transfer_stream.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tsig_message"
+path = "fuzz_targets/tsig_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "notify_edns_datagram"
+path = "fuzz_targets/notify_edns_datagram.rs"
+test = false
+doc = false
+bench = false
