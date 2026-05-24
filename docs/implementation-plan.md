@@ -133,6 +133,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - refresh transfers are bounded by `[limits].max_concurrent_transfers`, and AXFR/IXFR attempts share the same transfer pool;
 - refresh attempts for zones with an existing serial perform a UDP SOA poll with strict QID, opcode, echoed-question, RCODE, class, owner, and serial parsing before transfer; if the primary serial is equal to or older than the held serial, the attempt is recorded as successful without transfer;
 - when a refresh has existing zone data and a newer primary serial, the runtime constructs a TCP IXFR query with the currently held apex SOA in the authority section, applies IXFR Mode 1 incremental diffs with strict delete/add consistency checks, accepts IXFR Mode 2 AXFR-style fallback and Mode 3 current responses, and falls back to AXFR if IXFR is unsupported or incomplete.
+- IXFR fault coverage rejects mismatched starting old-SOA serials, final SOA chain mismatches, absent-record deletions, and already-present record additions.
 - primaries that return FORMERR or NOTIMP to IXFR are placed in a per-zone IXFR-disabled cooldown, configured by `[limits].ixfr_disabled_cooldown_secs` and defaulting to 3600 seconds, during which refresh attempts use AXFR for that primary.
 
 Slice 4 is in progress:

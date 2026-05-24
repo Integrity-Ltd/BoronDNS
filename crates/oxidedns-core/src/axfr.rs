@@ -943,6 +943,66 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_starting_old_soa_mismatch() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let wrong_old_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(9),
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![new_soa.clone(), wrong_old_soa, new_soa],
+            )],
+        )
+        .expect_err("starting old SOA mismatch");
+
+        assert_eq!(error, IxfrError::BrokenSoaChain);
+    }
+
+    #[test]
+    fn rejects_ixfr_final_soa_chain_mismatch() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let intermediate_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let final_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(3),
+        );
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![final_soa, current_soa, intermediate_soa],
+            )],
+        )
+        .expect_err("final SOA chain mismatch");
+
+        assert_eq!(error, IxfrError::BrokenSoaChain);
+    }
+
+    #[test]
     fn rejects_ixfr_deleting_absent_record() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
