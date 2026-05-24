@@ -13,7 +13,7 @@ queue for remaining release blockers.
 | NOTIFY | Unit/runtime coverage; BIND NOTIFY refresh interop | NSD and Knot NOTIFY refresh interop |
 | XoT | Configuration and startup validation; in-process TLS transport and XoT+TSIG tests; Knot XoT AXFR interop script | Wider TLS fault matrix and any additional real-primary XoT evidence |
 | DNSSEC Serving | Unit-level response augmentation for stored DNSSEC records | Release-level conformance matrix for DNSSEC responses and truncation interactions |
-| RRL | Unit-level token bucket and metrics coverage | Runtime/interop evidence under UDP load and release threshold decisions |
+| RRL | Unit-level token bucket and metrics coverage; runtime UDP drop/slip script with metrics checks | Broader runtime evidence across response categories and release threshold decisions |
 
 ## Non-Functional Evidence
 
@@ -44,4 +44,5 @@ scripts/interop-knot-axfr-docker.sh
 scripts/interop-knot-tsig-axfr-docker.sh
 scripts/interop-knot-xot-docker.sh
 scripts/interop-ixfr-notimp-fallback.sh
+scripts/interop-rrl-udp.sh
 ```
