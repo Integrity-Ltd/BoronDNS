@@ -17,7 +17,7 @@ use axum::{
 };
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
     sync::mpsc,
     task::JoinSet,
@@ -1920,21 +1920,34 @@ async fn handle_tcp_connection(
                         continue;
                     }
                 };
-                match tokio::time::timeout(
-                    write_timeout,
-                    stream.write_all(&frame_dns_tcp_message(&response)),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => return Err(RuntimeError::Tcp(error)),
-                    Err(_) => return Ok(()),
+                if !write_tcp_message(&mut stream, &response, write_timeout).await? {
+                    return Ok(());
                 }
             }
         }
     }
 
     Ok(())
+}
+
+async fn write_tcp_message<W>(
+    stream: &mut W,
+    message: &[u8],
+    write_timeout: Duration,
+) -> Result<bool, RuntimeError>
+where
+    W: AsyncWrite + Unpin,
+{
+    match tokio::time::timeout(
+        write_timeout,
+        stream.write_all(&frame_dns_tcp_message(message)),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(error)) => Err(RuntimeError::Tcp(error)),
+        Err(_) => Ok(false),
+    }
 }
 
 async fn read_tcp_message(
@@ -2009,7 +2022,7 @@ mod tests {
         poll_soa_from_primary_with_tsig, prepare_notify_packet, query_id_from_random_bytes,
         refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id,
+        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -3133,6 +3146,19 @@ mod tests {
 
         assert_eq!(read, 0);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tcp_write_times_out_when_backpressured() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let response = vec![0u8; 4096];
+
+        let completed =
+            write_tcp_message(&mut writer, &response, std::time::Duration::from_millis(25))
+                .await
+                .unwrap();
+
+        assert!(!completed);
     }
 
     #[tokio::test]

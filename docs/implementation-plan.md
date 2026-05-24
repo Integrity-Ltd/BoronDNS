@@ -140,7 +140,8 @@ Slice 4 is in progress:
 - back-to-back framed TCP queries on one connection receive independently framed responses matched by query ID;
 - TCP query handling reuses the same authoritative response core as UDP;
 - idle TCP connections close after the configured `[limits].tcp_idle_timeout_secs`, defaulting to 30 seconds;
-- accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds.
+- accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds;
+- write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream.
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
 
 Slice 6 has initial NOTIFY intake foundations:
@@ -188,7 +189,7 @@ Slice 8 has health endpoint foundations:
 
 Open near-term work:
 
-- TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
+- TCP pipelining and graceful shutdown;
 - richer metrics counters and per-zone status exposition;
 - broader IXFR fault/interop coverage;
 - TSIG interop coverage;
