@@ -23,7 +23,7 @@ use oxidedns_core::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Transport, answer_message_with_notify_hooks,
     },
-    zone::{ZoneSnapshot, ZoneStore},
+    zone::{SoaTimers, ZoneSnapshot, ZoneStore},
 };
 
 #[derive(Debug, Error)]
@@ -78,6 +78,8 @@ pub struct Runtime {
 }
 
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
+const ZSM_MIN_INTERVAL: Duration = Duration::from_secs(60);
+const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
 
 impl Runtime {
     pub fn new(config: ServerConfig) -> Self {
@@ -97,7 +99,9 @@ impl Runtime {
     }
 
     pub async fn run(self) -> Result<(), RuntimeError> {
-        self.load_initial_zones().await;
+        let transfer_plan = TransferPlan::from_config(&self.config);
+        let refresh_registry = ZoneRefreshRegistry::new(ZSM_MIN_INTERVAL, ZSM_MIN_INTERVAL);
+        self.load_initial_zones(&refresh_registry).await;
 
         info!(
             udp_listeners = self.config.server.listen_udp.len(),
@@ -110,13 +114,19 @@ impl Runtime {
         let notify_authority = NotifyAuthority::from_config(&self.config);
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
-        let transfer_plan = TransferPlan::from_config(&self.config);
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
-        listeners.spawn(serve_notify_refreshes(
+        listeners.spawn(serve_refresh_requests(
             notify_refresh_rx,
             self.zones.clone(),
-            transfer_plan,
+            transfer_plan.clone(),
+            refresh_registry.clone(),
             Duration::from_secs(self.config.limits.axfr_timeout_secs),
+        ));
+        listeners.spawn(serve_scheduled_refreshes(
+            self.zones.clone(),
+            refresh_registry.clone(),
+            notify_refresh_tx.clone(),
+            ZSM_SCHEDULER_TICK,
         ));
         for addr in &self.config.server.listen_udp {
             let socket = UdpSocket::bind(addr)
@@ -199,7 +209,7 @@ impl Runtime {
         Ok(())
     }
 
-    async fn load_initial_zones(&self) {
+    async fn load_initial_zones(&self, refresh_registry: &ZoneRefreshRegistry) {
         for zone in &self.config.zones {
             let zone_apex = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
@@ -209,7 +219,7 @@ impl Runtime {
                 primaries: zone.primaries.clone(),
             };
 
-            if !refresh_zone_from_primaries(
+            if let Some(snapshot) = refresh_zone_from_primaries(
                 &self.zones,
                 &plan,
                 Duration::from_secs(self.config.limits.axfr_timeout_secs),
@@ -217,7 +227,10 @@ impl Runtime {
             )
             .await
             {
+                refresh_registry.record_success(&snapshot);
+            } else {
                 let zone_apex = &plan.origin;
+                refresh_registry.record_failure(zone_apex, self.zones.find_exact_zone(zone_apex));
                 warn!(zone = %zone_apex, "zone remains in LOADING state");
             }
         }
@@ -499,6 +512,160 @@ impl TransferPlan {
 struct RefreshRequest {
     zone: DomainName,
     requested_serial: Option<u32>,
+    reason: RefreshReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshReason {
+    Notify,
+    Scheduled,
+}
+
+impl RefreshReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Notify => "notify",
+            Self::Scheduled => "scheduled",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ZoneRefreshRegistry {
+    min_interval: Duration,
+    initial_retry: Duration,
+    statuses: Arc<Mutex<HashMap<String, ZoneRefreshStatus>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ZoneRefreshStatus {
+    origin: DomainName,
+    soa_timers: Option<SoaTimers>,
+    next_refresh: Option<Instant>,
+    expire_at: Option<Instant>,
+    in_progress: bool,
+    expired: bool,
+}
+
+impl ZoneRefreshRegistry {
+    fn new(min_interval: Duration, initial_retry: Duration) -> Self {
+        Self {
+            min_interval,
+            initial_retry,
+            statuses: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn record_success(&self, snapshot: &ZoneSnapshot) {
+        self.record_success_at(snapshot, Instant::now());
+    }
+
+    fn record_success_at(&self, snapshot: &ZoneSnapshot, now: Instant) {
+        let timers = snapshot.soa_timers;
+        let next_refresh = timers.map(|timers| now + self.effective_interval(timers.refresh));
+        let expire_at = timers.map(|timers| now + Duration::from_secs(timers.expire as u64));
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        statuses.insert(
+            snapshot.origin.canonical_key(),
+            ZoneRefreshStatus {
+                origin: snapshot.origin.clone(),
+                soa_timers: timers,
+                next_refresh,
+                expire_at,
+                in_progress: false,
+                expired: false,
+            },
+        );
+    }
+
+    fn record_failure(&self, origin: &DomainName, current: Option<Arc<ZoneSnapshot>>) {
+        self.record_failure_at(origin, current, Instant::now());
+    }
+
+    fn record_failure_at(
+        &self,
+        origin: &DomainName,
+        current: Option<Arc<ZoneSnapshot>>,
+        now: Instant,
+    ) {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        let status = statuses
+            .entry(origin.canonical_key())
+            .or_insert_with(|| ZoneRefreshStatus {
+                origin: origin.clone(),
+                soa_timers: current.as_ref().and_then(|snapshot| snapshot.soa_timers),
+                next_refresh: None,
+                expire_at: None,
+                in_progress: false,
+                expired: false,
+            });
+
+        if let Some(snapshot) = current {
+            status.soa_timers = snapshot.soa_timers;
+            status.expired = snapshot.state == oxidedns_core::zone::ZoneState::Expired;
+        }
+        let retry = status
+            .soa_timers
+            .map(|timers| self.effective_interval(timers.retry))
+            .unwrap_or(self.initial_retry);
+        status.next_refresh = Some(now + retry);
+        status.in_progress = false;
+    }
+
+    fn start_due_refreshes(&self, now: Instant) -> Vec<DomainName> {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        statuses
+            .values_mut()
+            .filter_map(|status| {
+                if status.in_progress || status.next_refresh.is_none_or(|next| next > now) {
+                    return None;
+                }
+                status.in_progress = true;
+                Some(status.origin.clone())
+            })
+            .collect()
+    }
+
+    fn expire_due_zones(&self, now: Instant) -> Vec<DomainName> {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        statuses
+            .values_mut()
+            .filter_map(|status| {
+                if status.expired || status.expire_at.is_none_or(|expire_at| expire_at > now) {
+                    return None;
+                }
+                status.expired = true;
+                Some(status.origin.clone())
+            })
+            .collect()
+    }
+
+    fn cancel_in_progress(&self, origin: &DomainName) {
+        if let Some(status) = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned")
+            .get_mut(&origin.canonical_key())
+        {
+            status.in_progress = false;
+        }
+    }
+
+    fn effective_interval(&self, seconds: u32) -> Duration {
+        Duration::from_secs(seconds as u64).max(self.min_interval)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -592,6 +759,7 @@ fn signal_notify_refresh(
             match notify_refresh_tx.try_send(RefreshRequest {
                 zone: qname.clone(),
                 requested_serial: soa_serial,
+                reason: RefreshReason::Notify,
             }) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
@@ -622,21 +790,28 @@ fn signal_notify_refresh(
     }
 }
 
-async fn serve_notify_refreshes(
+async fn serve_refresh_requests(
     mut refresh_rx: mpsc::Receiver<RefreshRequest>,
     zones: ZoneStore,
     transfer_plan: TransferPlan,
+    refresh_registry: ZoneRefreshRegistry,
     axfr_timeout: Duration,
 ) -> Result<(), RuntimeError> {
     while let Some(request) = refresh_rx.recv().await {
         let Some(plan) = transfer_plan.get(&request.zone) else {
             let zone = &request.zone;
             warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
+            refresh_registry.cancel_in_progress(zone);
             continue;
         };
 
         if notify_serial_is_current(&zones, &request) {
             let zone = &request.zone;
+            if let Some(snapshot) = zones.find_exact_zone(zone) {
+                refresh_registry.record_success(&snapshot);
+            } else {
+                refresh_registry.cancel_in_progress(zone);
+            }
             info!(
                 zone = %zone,
                 requested_serial = ?request.requested_serial,
@@ -646,10 +821,54 @@ async fn serve_notify_refreshes(
             continue;
         }
 
-        refresh_zone_from_primaries(&zones, &plan, axfr_timeout, "notify").await;
+        match refresh_zone_from_primaries(&zones, &plan, axfr_timeout, request.reason.as_str())
+            .await
+        {
+            Some(snapshot) => refresh_registry.record_success(&snapshot),
+            None => {
+                refresh_registry.record_failure(&request.zone, zones.find_exact_zone(&request.zone))
+            }
+        }
     }
 
     Ok(())
+}
+
+async fn serve_scheduled_refreshes(
+    zones: ZoneStore,
+    refresh_registry: ZoneRefreshRegistry,
+    refresh_tx: mpsc::Sender<RefreshRequest>,
+    tick: Duration,
+) -> Result<(), RuntimeError> {
+    let mut interval = tokio::time::interval(tick);
+    loop {
+        interval.tick().await;
+        let now = Instant::now();
+        for zone in refresh_registry.expire_due_zones(now) {
+            if zones.expire_zone(&zone) {
+                warn!(zone = %zone, "zone expired");
+            }
+        }
+
+        for zone in refresh_registry.start_due_refreshes(now) {
+            match refresh_tx.try_send(RefreshRequest {
+                zone: zone.clone(),
+                requested_serial: None,
+                reason: RefreshReason::Scheduled,
+            }) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    refresh_registry.cancel_in_progress(&zone);
+                    warn!(zone = %zone, "refresh queue full; scheduled refresh deferred");
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    refresh_registry.cancel_in_progress(&zone);
+                    warn!(zone = %zone, "refresh queue closed; scheduled refresh stopped");
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 fn notify_serial_is_current(zones: &ZoneStore, request: &RefreshRequest) -> bool {
@@ -675,7 +894,7 @@ async fn refresh_zone_from_primaries(
     plan: &ZoneTransferPlan,
     axfr_timeout: Duration,
     reason: &str,
-) -> bool {
+) -> Option<ZoneSnapshot> {
     for primary in &plan.primaries {
         let qid = transfer_query_id(&plan.origin, *primary);
         match transfer_axfr_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
@@ -683,7 +902,7 @@ async fn refresh_zone_from_primaries(
         {
             Ok(snapshot) => {
                 let serial = snapshot.serial;
-                zones.insert_snapshot(snapshot);
+                zones.insert_snapshot(snapshot.clone());
                 info!(
                     zone = %plan.origin,
                     %primary,
@@ -691,7 +910,7 @@ async fn refresh_zone_from_primaries(
                     %reason,
                     "AXFR completed"
                 );
-                return true;
+                return Some(snapshot);
             }
             Err(error) => {
                 warn!(
@@ -705,7 +924,7 @@ async fn refresh_zone_from_primaries(
         }
     }
 
-    false
+    None
 }
 
 impl Drop for TcpConnectionPermit {
@@ -852,8 +1071,8 @@ mod tests {
 
     use super::{
         NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
-        TcpServerSettings, TransferPlan, handle_tcp_connection, serial_after,
-        serve_notify_refreshes, serve_tcp, transfer_axfr_from_primary,
+        TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection, serial_after,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary,
     };
 
     #[test]
@@ -958,6 +1177,93 @@ mod tests {
         assert!(!serial_after(0x8000_0001, 1));
     }
 
+    #[test]
+    fn refresh_registry_schedules_refresh_and_retry() {
+        let registry = ZoneRefreshRegistry::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::ZERO,
+        );
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+
+        registry.record_success_at(&snapshot, now);
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(3599))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.start_due_refreshes(now + std::time::Duration::from_secs(3600)),
+            vec![origin.clone()]
+        );
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(3601))
+                .is_empty()
+        );
+
+        registry.record_failure_at(
+            &origin,
+            Some(Arc::new(snapshot)),
+            now + std::time::Duration::from_secs(3600),
+        );
+        assert!(
+            registry
+                .start_due_refreshes(now + std::time::Duration::from_secs(4199))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.start_due_refreshes(now + std::time::Duration::from_secs(4200)),
+            vec![origin]
+        );
+    }
+
+    #[test]
+    fn refresh_registry_expires_zone_once() {
+        let registry =
+            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+
+        registry.record_success_at(&snapshot, now);
+        assert!(
+            registry
+                .expire_due_zones(now + std::time::Duration::from_secs(604799))
+                .is_empty()
+        );
+        assert_eq!(
+            registry.expire_due_zones(now + std::time::Duration::from_secs(604800)),
+            vec![origin]
+        );
+        assert!(
+            registry
+                .expire_due_zones(now + std::time::Duration::from_secs(604801))
+                .is_empty()
+        );
+    }
+
     #[tokio::test]
     async fn notify_refresh_worker_publishes_requested_refresh() {
         let primary = spawn_axfr_primary_with_serial(2).await;
@@ -990,15 +1296,17 @@ mod tests {
         tx.send(RefreshRequest {
             zone: apex,
             requested_serial: Some(2),
+            reason: super::RefreshReason::Notify,
         })
         .await
         .unwrap();
         drop(tx);
 
-        serve_notify_refreshes(
+        serve_refresh_requests(
             rx,
             zones.clone(),
             transfer_plan,
+            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -1009,6 +1317,52 @@ mod tests {
             .expect("published refreshed snapshot");
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(2));
+    }
+
+    #[tokio::test]
+    async fn scheduled_refresh_worker_expires_zone_and_enqueues_refresh() {
+        let zones = ZoneStore::new();
+        let registry =
+            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+        zones.insert_snapshot(snapshot.clone());
+        registry.record_success_at(
+            &snapshot,
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(604800))
+                .unwrap(),
+        );
+        let (tx, mut rx) = mpsc::channel(1);
+        let worker = tokio::spawn(serve_scheduled_refreshes(
+            zones.clone(),
+            registry,
+            tx,
+            std::time::Duration::from_millis(1),
+        ));
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("scheduled refresh should be enqueued")
+            .expect("scheduled refresh request");
+
+        assert_eq!(request.zone, origin);
+        assert_eq!(request.reason, super::RefreshReason::Scheduled);
+        assert_eq!(
+            zones.find_exact_zone(&origin).expect("expired zone").state,
+            ZoneState::Expired
+        );
+        worker.abort();
     }
 
     #[tokio::test]
@@ -1027,7 +1381,9 @@ mod tests {
         .expect("valid config");
 
         let runtime = Runtime::new(config);
-        runtime.load_initial_zones().await;
+        let refresh_registry =
+            ZoneRefreshRegistry::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+        runtime.load_initial_zones(&refresh_registry).await;
 
         let snapshot = runtime
             .zones

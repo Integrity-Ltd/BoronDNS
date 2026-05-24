@@ -118,6 +118,13 @@ Slice 5 is in progress:
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
+Slice 6 has a preliminary AXFR-backed zone state machine:
+
+- successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to a 60-second minimum interval;
+- failed initial and refresh transfers schedule retry from the transferred SOA RETRY field where available, or the 60-second initial retry default for LOADING zones;
+- the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
+- due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path.
+
 Slice 4 is in progress:
 
 - TCP listeners bind from static configuration;
@@ -153,9 +160,8 @@ EDNS/query-size work is partially started:
 Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
-- recurring zone refresh, retry, and expire timers;
-- replacing NOTIFY-triggered AXFR-only refresh with the full ZSM refresh-check flow;
-- scheduling recurring refresh, retry, and expire actions from captured SOA timing fields;
+- replacing the current AXFR-only scheduled refresh with the full ZSM refresh-check flow, including SOA poll and IXFR preference;
+- exponential initial-load backoff, configurable ZSM intervals, and ±10% scheduling jitter;
 - TSIG HMAC-SHA256 signing and verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

@@ -61,6 +61,16 @@ impl ZoneSnapshot {
         }
     }
 
+    pub fn with_state(&self, state: ZoneState) -> Self {
+        Self {
+            origin: self.origin.clone(),
+            state,
+            serial: self.serial,
+            soa_timers: self.soa_timers,
+            rrsets: self.rrsets.clone(),
+        }
+    }
+
     pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
         self.lookup_with_options(
             qname,
@@ -638,6 +648,21 @@ impl ZoneStore {
             .insert(snapshot.origin.canonical_key(), Arc::new(snapshot));
     }
 
+    pub fn expire_zone(&self, origin: &DomainName) -> bool {
+        let mut zones = self.zones.write().expect("zone store lock poisoned");
+        let key = origin.canonical_key();
+        let Some(snapshot) = zones.get(&key) else {
+            return false;
+        };
+        if snapshot.state == ZoneState::Expired {
+            return false;
+        }
+
+        let expired = snapshot.with_state(ZoneState::Expired);
+        zones.insert(key, Arc::new(expired));
+        true
+    }
+
     pub fn get(&self, origin: &str) -> Option<Arc<ZoneSnapshot>> {
         self.zones
             .read()
@@ -774,6 +799,30 @@ mod tests {
                 minimum: 300,
             })
         );
+    }
+
+    #[test]
+    fn expire_zone_marks_snapshot_expired() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        assert!(store.expire_zone(&origin));
+        assert_eq!(
+            store.find_exact_zone(&origin).expect("expired zone").state,
+            ZoneState::Expired
+        );
+        assert!(!store.expire_zone(&origin));
     }
 
     fn soa_rdata() -> Vec<u8> {
