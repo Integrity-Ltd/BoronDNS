@@ -1,0 +1,148 @@
+# OxideDNS Implementation Plan
+
+This plan tracks the implementation path from the current Rust scaffold to the SRS milestones.
+
+## Goal
+
+Reach the SRS-defined MVP:
+
+- all requirements in SRS sections 3 through 6 satisfied;
+- interoperability with NSD, Knot DNS, and BIND 9 primaries;
+- performance targets met;
+- 30-day soak test completed without anomaly;
+- parser fuzzing run for at least 24 hours per parser without findings;
+- dependency security audit clean;
+- SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
+- at least one production-representative external operator has independently deployed and validated the server.
+
+## First Milestone: Alpha
+
+The SRS Alpha gate is the practical route to MVP. Alpha requires:
+
+- all architectural invariants;
+- DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
+- a TSIG HMAC-SHA256 interop subset;
+- network, configuration, logging, health, and signal interfaces;
+- selected reliability, maintainability, portability, observability, and resource NFRs;
+- interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
+
+Deferred from Alpha to MVP per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue, performance NFR conformance, full security/maintainability verification, second and third primary interop.
+
+## Implementation Slices
+
+1. DNS wire core and UDP response loop.
+   - Parse DNS headers and questions.
+   - Discard sub-header datagrams and QR=1 messages.
+   - Return NOTIMP for unsupported opcodes.
+   - Return FORMERR for invalid question count or malformed QNAME.
+   - Return REFUSED for unsupported classes and out-of-zone queries.
+   - Preserve query ID, OPCODE, RD bit, and question bytes in responses.
+
+2. In-memory zone data model.
+   - Represent RRsets atomically by owner, class, and type.
+   - Implement most-specific-zone lookup.
+   - Support RFC 1035 RR types plus AAAA for Alpha.
+
+3. Authoritative query answers.
+   - Positive RRset answers.
+   - NODATA and NXDOMAIN with SOA in authority.
+   - Referral and glue handling.
+   - Wildcard synthesis.
+
+4. TCP query transport.
+   - DNS-over-TCP framing.
+   - Pipelined query handling.
+   - Graceful connection limits and shutdown.
+
+5. AXFR client and atomic publication.
+   - TCP AXFR query construction.
+   - Multi-message response reassembly.
+   - SOA framing and validation.
+   - Atomic zone replacement.
+
+6. Zone state machine and NOTIFY.
+   - Startup loading.
+   - REFRESH, RETRY, EXPIRE timers.
+   - NOTIFY validation, deduplication, and expedited refresh.
+
+7. TSIG HMAC-SHA256 subset.
+   - Static key config.
+   - Outbound transfer signing.
+   - Inbound response verification.
+
+8. Health, metrics, packaging, and interop harness.
+   - `/healthz` endpoint.
+   - Structured logs and basic counters.
+   - Container packaging.
+   - NSD/Knot/BIND fixture environments.
+
+## Current Status
+
+Slice 1 has a tested UDP query/response foundation:
+
+- malformed datagrams and response packets are discarded or rejected as specified;
+- unsupported opcodes return NOTIMP;
+- malformed questions return FORMERR;
+- unsupported classes and out-of-zone queries return REFUSED;
+- QCLASS ANY matches served IN-class data;
+- QTYPE ANY defaults to a deterministic minimal real-RRset response and can be configured to return the full owner RRset set;
+- LOADING zones return SERVFAIL;
+- active zones can return positive, NODATA, and NXDOMAIN responses with SOA authority data;
+- CNAME queries return CNAME RRsets directly;
+- non-CNAME queries follow in-zone CNAME chains, retain constructed CNAME answers for negative terminal responses, stop when chains leave the served zone, and stop on loops or the configured chain limit;
+- the CNAME chain limit is configurable under `[limits]`, defaults to 8, and loop/limit termination emits warning logs;
+- direct DNAME queries return DNAME RRsets directly;
+- queries below a DNAME owner include the DNAME RRset, synthesize the required CNAME, and continue resolution for positive, in-zone negative, and out-of-zone terminal targets;
+- wildcard owner names are stored normally and applied at query time;
+- wildcard positive responses synthesize the owner name to the QNAME;
+- wildcard CNAME responses synthesize the owner name and continue CNAME resolution for positive, in-zone negative, and out-of-zone terminal targets;
+- wildcard names without the requested QTYPE return NODATA with SOA authority;
+- empty non-terminals return NODATA and do not expand higher wildcard owner names;
+- delegated child-zone queries return referrals with AA cleared, NS RRsets in authority, and in-bailiwick A/AAAA glue in additional;
+- direct queries for glue or other retained occluded data below a delegation cut return a referral rather than serving the occluded RRset as parent-zone authoritative data;
+- answer-section NS RRsets include in-zone target A/AAAA RRsets in the additional section;
+- DS queries at the delegation owner remain authoritative in the parent zone, returning either DS answers or NODATA with SOA authority;
+- DS queries below a delegation owner return the normal referral;
+- MX answers include in-zone exchange A/AAAA RRsets in the additional section and omit out-of-zone exchange targets;
+- SRV answers include in-zone target A/AAAA RRsets in the additional section;
+- NAPTR answers include in-zone replacement A/AAAA RRsets in the additional section;
+- SVCB and HTTPS answers include in-zone TargetName A/AAAA RRsets in the additional section.
+
+Slice 2 has an in-memory zone snapshot model with atomic publication through the shared `ZoneStore`.
+
+Slice 5 is in progress:
+
+- AXFR query construction is implemented only for TCP framing;
+- AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, class, bailiwick, and reserved RR types;
+- successful AXFR responses are converted into active zone snapshots;
+- the runtime performs an initial AXFR over TCP from configured primaries in order and publishes the first successful snapshot;
+- failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
+
+Slice 4 is in progress:
+
+- TCP listeners bind from static configuration;
+- DNS-over-TCP messages use the two-octet length prefix;
+- zero-length DNS-over-TCP frames close the connection and emit a warning log;
+- TCP query handling reuses the same authoritative response core as UDP;
+- idle TCP connections close after the configured `[limits].tcp_idle_timeout_secs`, defaulting to 30 seconds;
+- accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds.
+- accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
+
+EDNS/query-size work is partially started:
+
+- inbound OPT pseudo-RRs are parsed from the additional section;
+- malformed EDNS option RDATA, duplicate OPT records, and misplaced OPT records return FORMERR;
+- unsupported EDNS versions return BADVERS with a response OPT record;
+- responses include OPT only when the request included OPT;
+- EDNS TCP keepalive requests are recognized on TCP and the response advertises the configured TCP idle timeout in 100ms units; UDP keepalive requests are silently ignored;
+- EDNS padding requests are recognized, and `[limits].edns_padding_block_size` controls default-off zero-padding of response OPT RDATA when the padded response fits the applicable UDP ceiling;
+- UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum, defaulting to 1232.
+
+Open near-term work:
+
+- TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
+- recurring zone refresh, retry, and expire timers;
+- NOTIFY intake and refresh triggering;
+- TSIG HMAC-SHA256 signing and verification;
+- DNSSEC-authenticated referral augmentation;
+- interop fixture against at least one real primary implementation.

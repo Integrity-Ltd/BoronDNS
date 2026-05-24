@@ -3,6 +3,8 @@ use std::{fs, net::SocketAddr, path::Path};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::dns::{AnyResponseMode, DomainName};
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read configuration from {path}: {source}")]
@@ -21,6 +23,8 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
     pub server: ServerSettings,
+    #[serde(default)]
+    pub query: QuerySettings,
     #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
@@ -58,6 +62,43 @@ impl ServerConfig {
             ));
         }
 
+        if self.limits.max_udp_payload < 512 {
+            return Err(ConfigError::Invalid(
+                "limits.max_udp_payload must be at least 512".to_owned(),
+            ));
+        }
+        if self.limits.max_cname_chain == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_cname_chain must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.tcp_idle_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.tcp_idle_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.tcp_read_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.tcp_read_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.tcp_write_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.tcp_write_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.max_tcp_connections == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_tcp_connections must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.edns_padding_block_size == 1 {
+            return Err(ConfigError::Invalid(
+                "limits.edns_padding_block_size must be 0 to disable padding or at least 2"
+                    .to_owned(),
+            ));
+        }
+
         for zone in &self.zones {
             zone.validate()?;
         }
@@ -78,7 +119,52 @@ pub struct ServerSettings {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct QuerySettings {
+    #[serde(default)]
+    pub any_response: AnyResponseConfig,
+}
+
+impl QuerySettings {
+    pub fn any_response_mode(&self) -> AnyResponseMode {
+        match self.any_response {
+            AnyResponseConfig::Minimal => AnyResponseMode::Minimal,
+            AnyResponseConfig::Full => AnyResponseMode::Full,
+        }
+    }
+}
+
+impl Default for QuerySettings {
+    fn default() -> Self {
+        Self {
+            any_response: AnyResponseConfig::Minimal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AnyResponseConfig {
+    #[default]
+    Minimal,
+    Full,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Limits {
+    #[serde(default = "default_max_udp_payload")]
+    pub max_udp_payload: u16,
+    #[serde(default = "default_max_cname_chain")]
+    pub max_cname_chain: usize,
+    #[serde(default = "default_tcp_idle_timeout_secs")]
+    pub tcp_idle_timeout_secs: u64,
+    #[serde(default = "default_tcp_read_timeout_secs")]
+    pub tcp_read_timeout_secs: u64,
+    #[serde(default = "default_tcp_write_timeout_secs")]
+    pub tcp_write_timeout_secs: u64,
+    #[serde(default = "default_max_tcp_connections")]
+    pub max_tcp_connections: usize,
+    #[serde(default = "default_edns_padding_block_size")]
+    pub edns_padding_block_size: u16,
     #[serde(default = "default_axfr_timeout_secs")]
     pub axfr_timeout_secs: u64,
     #[serde(default = "default_ixfr_timeout_secs")]
@@ -92,6 +178,13 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            max_udp_payload: default_max_udp_payload(),
+            max_cname_chain: default_max_cname_chain(),
+            tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
+            tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
+            tcp_write_timeout_secs: default_tcp_write_timeout_secs(),
+            max_tcp_connections: default_max_tcp_connections(),
+            edns_padding_block_size: default_edns_padding_block_size(),
             axfr_timeout_secs: default_axfr_timeout_secs(),
             ixfr_timeout_secs: default_ixfr_timeout_secs(),
             notify_dedup_secs: default_notify_dedup_secs(),
@@ -126,6 +219,10 @@ impl ZoneConfig {
             )));
         }
 
+        DomainName::from_absolute_str(&self.name).map_err(|_| {
+            ConfigError::Invalid(format!("zone {} is not a valid DNS name", self.name))
+        })?;
+
         if !self.class.eq_ignore_ascii_case("IN") {
             return Err(ConfigError::Invalid(format!(
                 "zone {} uses unsupported class {}; only IN is currently allowed",
@@ -157,6 +254,34 @@ fn default_log_level() -> String {
 
 fn default_dns_class() -> String {
     "IN".to_owned()
+}
+
+fn default_max_udp_payload() -> u16 {
+    1232
+}
+
+fn default_max_cname_chain() -> usize {
+    8
+}
+
+fn default_tcp_idle_timeout_secs() -> u64 {
+    30
+}
+
+fn default_tcp_read_timeout_secs() -> u64 {
+    30
+}
+
+fn default_tcp_write_timeout_secs() -> u64 {
+    30
+}
+
+fn default_max_tcp_connections() -> usize {
+    1024
+}
+
+fn default_edns_padding_block_size() -> u16 {
+    0
 }
 
 fn default_axfr_timeout_secs() -> u64 {
@@ -194,7 +319,16 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.server.listen_udp.len(), 1);
+        assert_eq!(config.query.any_response, AnyResponseConfig::Minimal);
+        assert_eq!(config.query.any_response_mode(), AnyResponseMode::Minimal);
         assert_eq!(config.zones[0].class, "IN");
+        assert_eq!(config.limits.max_udp_payload, 1232);
+        assert_eq!(config.limits.max_cname_chain, 8);
+        assert_eq!(config.limits.tcp_idle_timeout_secs, 30);
+        assert_eq!(config.limits.tcp_read_timeout_secs, 30);
+        assert_eq!(config.limits.tcp_write_timeout_secs, 30);
+        assert_eq!(config.limits.max_tcp_connections, 1024);
+        assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
     }
 
@@ -213,5 +347,255 @@ mod tests {
         .expect_err("relative zone must fail");
 
         assert!(error.to_string().contains("absolute DNS name"));
+    }
+
+    #[test]
+    fn rejects_too_small_udp_payload_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_udp_payload = 511
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("small UDP limit must fail");
+
+        assert!(error.to_string().contains("max_udp_payload"));
+    }
+
+    #[test]
+    fn parses_full_any_response_policy() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [query]
+                any_response = "full"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.query.any_response, AnyResponseConfig::Full);
+        assert_eq!(config.query.any_response_mode(), AnyResponseMode::Full);
+    }
+
+    #[test]
+    fn rejects_invalid_any_response_policy() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [query]
+                any_response = "hinfo"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("invalid any-response policy must fail");
+
+        assert!(error.to_string().contains("any_response"));
+    }
+
+    #[test]
+    fn parses_custom_cname_chain_limit() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_cname_chain = 4
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.max_cname_chain, 4);
+    }
+
+    #[test]
+    fn rejects_zero_cname_chain_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_cname_chain = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero CNAME chain limit must fail");
+
+        assert!(error.to_string().contains("max_cname_chain"));
+    }
+
+    #[test]
+    fn parses_custom_tcp_idle_timeout() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                tcp_idle_timeout_secs = 5
+                tcp_read_timeout_secs = 6
+                tcp_write_timeout_secs = 7
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.tcp_idle_timeout_secs, 5);
+        assert_eq!(config.limits.tcp_read_timeout_secs, 6);
+        assert_eq!(config.limits.tcp_write_timeout_secs, 7);
+    }
+
+    #[test]
+    fn rejects_zero_tcp_idle_timeout() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                tcp_idle_timeout_secs = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero TCP idle timeout must fail");
+
+        assert!(error.to_string().contains("tcp_idle_timeout_secs"));
+    }
+
+    #[test]
+    fn rejects_zero_tcp_read_or_write_timeout() {
+        for (key, expected) in [
+            ("tcp_read_timeout_secs", "tcp_read_timeout_secs"),
+            ("tcp_write_timeout_secs", "tcp_write_timeout_secs"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_tcp = ["127.0.0.1:5300"]
+
+                    [limits]
+                    {key} = 0
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("zero TCP read/write timeout must fail");
+
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn parses_custom_tcp_connection_limit() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_tcp_connections = 16
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.max_tcp_connections, 16);
+    }
+
+    #[test]
+    fn rejects_zero_tcp_connection_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_tcp_connections = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero TCP connection limit must fail");
+
+        assert!(error.to_string().contains("max_tcp_connections"));
+    }
+
+    #[test]
+    fn parses_custom_edns_padding_block_size() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                edns_padding_block_size = 128
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.edns_padding_block_size, 128);
+    }
+
+    #[test]
+    fn rejects_one_octet_edns_padding_block_size() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                edns_padding_block_size = 1
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("one-octet padding block is not useful");
+
+        assert!(error.to_string().contains("edns_padding_block_size"));
     }
 }

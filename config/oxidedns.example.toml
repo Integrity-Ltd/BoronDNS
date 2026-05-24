@@ -4,7 +4,17 @@ listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
 health = "127.0.0.1:8080"
 log_level = "info"
 
+[query]
+any_response = "minimal"
+
 [limits]
+max_udp_payload = 1232
+max_cname_chain = 8
+tcp_idle_timeout_secs = 30
+tcp_read_timeout_secs = 30
+tcp_write_timeout_secs = 30
+max_tcp_connections = 1024
+edns_padding_block_size = 0
 axfr_timeout_secs = 300
 ixfr_timeout_secs = 60
 notify_dedup_secs = 1
@@ -20,4 +30,3 @@ notify_sources = ["192.0.2.53"]
 #name = "transfer-key."
 #algorithm = "hmac-sha256"
 #secret = "base64-secret-material"
-

@@ -2,7 +2,7 @@
 
 OxideDNS is the working Rust project for the secondary-only authoritative DNS server described by Tibor's 2026-05-23 specification package.
 
-The initial implementation is intentionally a skeleton: it establishes the workspace, configuration surface, zone-state model, CLI entrypoints, and documentation layout before implementing protocol behavior.
+The implementation is currently in early Alpha work: it establishes the workspace, configuration surface, zone-state model, CLI entrypoints, documentation layout, and initial DNS protocol behavior.
 
 ## Source Documents
 
@@ -13,10 +13,14 @@ Normative order from the email:
 3. [Executive Summary](docs/OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md)
 4. Raw mailbox messages and attachment exports are intentionally not versioned in this repository.
 
+Implementation planning:
+
+- [MVP and Alpha implementation plan](docs/implementation-plan.md)
+
 ## Workspace
 
-- `oxidedns-core`: configuration, DNS vocabulary, and in-memory zone-state foundations.
-- `oxidedns-server`: runtime shell for loading configuration and eventually serving DNS.
+- `oxidedns-core`: configuration, DNS wire parsing, EDNS handling, AXFR parsing, and in-memory zone-state foundations.
+- `oxidedns-server`: runtime for loading configuration, initial AXFR, and UDP/TCP authoritative DNS serving.
 - `oxidedns-cli`: command-line entrypoint.
 
 ## Current Commands
@@ -29,7 +33,7 @@ cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 
 The workspace targets Rust 1.95 with the Rust 2024 edition and Cargo resolver 3.
 
-The `serve` command currently validates configuration and starts the runtime skeleton. DNS query serving, AXFR/IXFR, NOTIFY, TSIG, XoT, EDNS0, DNSSEC record serving, and RRL are tracked by the specification but not implemented in this first project slice.
+The `serve` command currently validates configuration, performs initial AXFR attempts from configured primaries, binds configured UDP/TCP listeners, parses DNS queries, and emits authoritative responses from active in-memory zone snapshots. EDNS0 OPT parsing, UDP truncation, TCP keepalive advertisement, default-off response padding, and configurable ANY-query minimisation are partially implemented. IXFR, recurring refresh, NOTIFY, TSIG, XoT, DNSSEC record serving, RRL, and full query semantics are tracked by the specification but are not complete yet.
 
 ## License
 
