@@ -180,6 +180,15 @@ impl Runtime {
         self,
         shutdown_signal: impl Future<Output = Result<&'static str, std::io::Error>>,
     ) -> Result<(), RuntimeError> {
+        self.run_with_shutdown_signal_inner(shutdown_signal, None)
+            .await
+    }
+
+    async fn run_with_shutdown_signal_inner(
+        self,
+        shutdown_signal: impl Future<Output = Result<&'static str, std::io::Error>>,
+        mut health_bound: Option<oneshot::Sender<SocketAddr>>,
+    ) -> Result<(), RuntimeError> {
         validate_runtime_config(&self.config)
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         tokio::pin!(shutdown_signal);
@@ -250,6 +259,9 @@ impl Runtime {
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|source| RuntimeError::BindHealth { addr, source })?;
+            if let Some(health_bound) = health_bound.take() {
+                let _ = health_bound.send(listener.local_addr().map_err(RuntimeError::Health)?);
+            }
             let (health_shutdown_tx, health_shutdown_rx) = oneshot::channel();
             health_shutdown = Some(health_shutdown_tx);
             health_listeners.spawn(serve_health(
@@ -4417,14 +4429,12 @@ mod tests {
     #[tokio::test]
     async fn runtime_binds_health_while_initial_transfer_is_in_progress() {
         let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
-        let udp_addr = unused_udp_addr().await;
-        let health_addr = unused_tcp_addr().await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
-                listen_udp = ["{udp_addr}"]
+                listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
-                health = "{health_addr}"
+                health = "127.0.0.1:0"
 
                 [limits]
                 axfr_timeout_secs = 5
@@ -4437,7 +4447,7 @@ mod tests {
         ))
         .expect("valid config");
         let runtime = Runtime::new(config);
-        let server = tokio::spawn(runtime.run());
+        let (server, health_addr) = spawn_runtime_with_bound_health(runtime).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
             .await
@@ -4505,14 +4515,12 @@ mod tests {
     #[tokio::test]
     async fn runtime_reports_draining_until_initial_transfer_releases() {
         let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
-        let udp_addr = unused_udp_addr().await;
-        let health_addr = unused_tcp_addr().await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
-                listen_udp = ["{udp_addr}"]
+                listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
-                health = "{health_addr}"
+                health = "127.0.0.1:0"
 
                 [limits]
                 axfr_timeout_secs = 5
@@ -4526,11 +4534,13 @@ mod tests {
         .expect("valid config");
         let runtime = Runtime::new(config);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = tokio::spawn(runtime.run_with_shutdown_signal(async move {
-            shutdown_rx.await.map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "test shutdown dropped")
+        let (server, health_addr) =
+            spawn_runtime_with_bound_health_and_shutdown(runtime, async move {
+                shutdown_rx.await.map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Interrupted, "test shutdown dropped")
+                })
             })
-        }));
+            .await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
             .await
@@ -4560,14 +4570,12 @@ mod tests {
     #[tokio::test]
     async fn runtime_keeps_serving_after_initial_transfer_completes() {
         let primary = spawn_axfr_primary().await;
-        let udp_addr = unused_udp_addr().await;
-        let health_addr = unused_tcp_addr().await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
-                listen_udp = ["{udp_addr}"]
+                listen_udp = ["127.0.0.1:0"]
                 listen_tcp = []
-                health = "{health_addr}"
+                health = "127.0.0.1:0"
 
                 [[zones]]
                 name = "example.test."
@@ -4576,7 +4584,7 @@ mod tests {
         ))
         .expect("valid config");
         let runtime = Runtime::new(config);
-        let server = tokio::spawn(runtime.run());
+        let (server, health_addr) = spawn_runtime_with_bound_health(runtime).await;
 
         let ready =
             eventually_health_body(health_addr, "ready\n", std::time::Duration::from_secs(1)).await;
@@ -8440,6 +8448,37 @@ mod tests {
         response
     }
 
+    async fn spawn_runtime_with_bound_health(
+        runtime: Runtime,
+    ) -> (
+        tokio::task::JoinHandle<Result<(), RuntimeError>>,
+        std::net::SocketAddr,
+    ) {
+        spawn_runtime_with_bound_health_and_shutdown(
+            runtime,
+            std::future::pending::<Result<&'static str, std::io::Error>>(),
+        )
+        .await
+    }
+
+    async fn spawn_runtime_with_bound_health_and_shutdown(
+        runtime: Runtime,
+        shutdown_signal: impl Future<Output = Result<&'static str, std::io::Error>> + Send + 'static,
+    ) -> (
+        tokio::task::JoinHandle<Result<(), RuntimeError>>,
+        std::net::SocketAddr,
+    ) {
+        let (health_bound_tx, health_bound_rx) = oneshot::channel();
+        let server = tokio::spawn(
+            runtime.run_with_shutdown_signal_inner(shutdown_signal, Some(health_bound_tx)),
+        );
+        let health_addr = tokio::time::timeout(std::time::Duration::from_secs(1), health_bound_rx)
+            .await
+            .expect("runtime did not bind health listener before timeout")
+            .expect("runtime exited before binding health listener");
+        (server, health_addr)
+    }
+
     async fn http_request(addr: std::net::SocketAddr, method: &str, path: &str) -> String {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let request = format!(
@@ -8509,13 +8548,6 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-    }
-
-    async fn unused_tcp_addr() -> std::net::SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        addr
     }
 
     async fn unused_udp_addr() -> std::net::SocketAddr {
