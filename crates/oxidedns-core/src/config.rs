@@ -1,9 +1,12 @@
-use std::{fs, net::SocketAddr, path::Path};
+use std::{collections::HashSet, fmt, fs, net::SocketAddr, path::Path};
 
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::dns::{AnyResponseMode, DomainName};
+use crate::{
+    dns::{AnyResponseMode, DomainName},
+    tsig::TsigKey,
+};
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -120,11 +123,44 @@ impl ServerConfig {
             ));
         }
 
+        let tsig_key_names = self.validate_tsig_keys()?;
+
         for zone in &self.zones {
             zone.validate()?;
+            if let Some(tsig_key) = &zone.tsig_key {
+                let key_name = DomainName::from_absolute_str(tsig_key).map_err(|_| {
+                    ConfigError::Invalid(format!(
+                        "zone {} references TSIG key {tsig_key}; TSIG key names must be absolute DNS names",
+                        zone.name
+                    ))
+                })?;
+                if !tsig_key_names.contains(&key_name.canonical_key()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "zone {} references unknown TSIG key {tsig_key}",
+                        zone.name
+                    )));
+                }
+            }
         }
 
         Ok(())
+    }
+
+    fn validate_tsig_keys(&self) -> Result<HashSet<String>, ConfigError> {
+        let mut names = HashSet::new();
+        for key in &self.tsig_keys {
+            let parsed_key =
+                TsigKey::from_base64(&key.name, &key.algorithm, &key.secret).map_err(|error| {
+                    ConfigError::Invalid(format!("invalid TSIG key {}: {error}", key.name))
+                })?;
+            if !names.insert(parsed_key.name.canonical_key()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate TSIG key {}",
+                    key.name
+                )));
+            }
+        }
+        Ok(names)
     }
 }
 
@@ -274,11 +310,22 @@ impl ZoneConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, PartialEq, Eq)]
 pub struct TsigKeyConfig {
     pub name: String,
     pub algorithm: String,
     pub secret: String,
+}
+
+impl fmt::Debug for TsigKeyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TsigKeyConfig")
+            .field("name", &self.name)
+            .field("algorithm", &self.algorithm)
+            .field("secret", &"<redacted>")
+            .finish()
+    }
 }
 
 fn default_log_level() -> String {
@@ -714,6 +761,97 @@ mod tests {
         .expect_err("zero IXFR disabled cooldown must fail");
 
         assert!(error.to_string().contains("ixfr_disabled_cooldown_secs"));
+    }
+
+    #[test]
+    fn parses_hmac_sha256_tsig_key_and_zone_reference() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "c2VjcmV0LWtleQ=="
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("valid TSIG config");
+
+        assert_eq!(config.tsig_keys.len(), 1);
+        assert_eq!(config.zones[0].tsig_key.as_deref(), Some("transfer-key."));
+        assert!(!format!("{config:?}").contains("c2VjcmV0LWtleQ=="));
+    }
+
+    #[test]
+    fn rejects_invalid_tsig_secret_without_leaking_it() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "not base64"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect_err("invalid TSIG secret must fail");
+        let message = error.to_string();
+
+        assert!(message.contains("invalid TSIG key transfer-key."));
+        assert!(!message.contains("not base64"));
+    }
+
+    #[test]
+    fn rejects_unknown_zone_tsig_key_reference() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "missing-key."
+            "#,
+        )
+        .expect_err("unknown TSIG key reference must fail");
+
+        assert!(error.to_string().contains("unknown TSIG key"));
+    }
+
+    #[test]
+    fn rejects_hmac_md5_tsig_key_algorithm() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-md5.sig-alg.reg.int."
+                secret = "c2VjcmV0LWtleQ=="
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect_err("HMAC-MD5 must be rejected");
+
+        assert!(error.to_string().contains("hmac-md5.sig-alg.reg.int"));
     }
 
     #[test]

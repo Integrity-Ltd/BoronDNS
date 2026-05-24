@@ -29,8 +29,9 @@ name = "example.test."
 class = "IN"
 primaries = ["192.0.2.53:53"]
 notify_sources = ["192.0.2.53"]
+#tsig_key = "transfer-key."
 
 #[[tsig_keys]]
 #name = "transfer-key."
 #algorithm = "hmac-sha256"
-#secret = "base64-secret-material"
+#secret = "c2VjcmV0LWtleQ=="

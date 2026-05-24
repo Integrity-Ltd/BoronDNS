@@ -154,6 +154,13 @@ Slice 6 has initial NOTIFY intake foundations:
 - accepted NOTIFY requests call a refresh-signalling hook with the optional embedded SOA serial, and the runtime deduplicates per-zone refresh signals using `[limits].notify_dedup_secs`, defaulting to 1 second, while still responding to duplicate NOTIFY messages.
 - non-duplicate accepted NOTIFY signals are queued for the transfer worker; if the embedded SOA serial is newer than the active zone serial, or no comparable serial is available, the worker attempts AXFR against configured primaries and publishes the first successful snapshot.
 
+Slice 7 has TSIG HMAC-SHA256 foundations:
+
+- TSIG keys are parsed from static configuration with absolute DNS key names, supported algorithm validation, base64 secret decoding, duplicate-key rejection, and zone-to-key reference validation;
+- HMAC-MD5 TSIG keys are rejected during configuration validation;
+- configured TSIG secrets are redacted from debug formatting and validation error messages;
+- HMAC-SHA256 signing and constant-time MAC verification are implemented against an RFC 4231 test vector.
+
 EDNS/query-size work is partially started:
 
 - inbound OPT pseudo-RRs are parsed from the additional section;
@@ -168,6 +175,6 @@ Open near-term work:
 
 - TCP pipelining, graceful shutdown, and write-timeout backpressure tests;
 - broader IXFR fault/interop coverage;
-- TSIG HMAC-SHA256 signing and verification;
+- TSIG wire-format records plus outbound transfer signing and inbound response/NOTIFY verification;
 - DNSSEC-authenticated referral augmentation;
 - interop fixture against at least one real primary implementation.

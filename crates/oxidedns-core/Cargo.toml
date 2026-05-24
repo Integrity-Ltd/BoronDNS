@@ -6,10 +6,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+base64.workspace = true
+hmac.workspace = true
 serde.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
