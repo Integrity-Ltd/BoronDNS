@@ -226,6 +226,13 @@ RRL foundations are started:
 - each accounting key uses a token bucket with capacity/refill equal to the configured per-second rate, applies the configured slip policy by dropping or emitting TC=1 empty-section responses that retain the question and OPT pseudo-RR, and evicts least-recently-used keys at the configured cap;
 - `/metrics` exposes RRL subject, dropped, truncated, currently tracked key, and key-eviction counters.
 
+XoT foundations are started:
+
+- legacy `primaries = ["addr"]` remains the plain TCP transfer shorthand for existing deployments and test harnesses;
+- explicit `[[zones.transfer_primaries]]` entries can select `transport = "tcp"` or `transport = "xot"` per primary, and cannot be mixed with the legacy shorthand inside one zone;
+- XoT transfer targets require SNI-style `server_name`, at least one configured trust anchor, and paired optional client certificate/key references;
+- runtime transfer planning preserves each target's transport mode and refuses XoT targets with an explicit warning until the TLS transport implementation lands, preventing accidental cleartext fallback.
+
 Interop harness foundations:
 
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
@@ -240,5 +247,5 @@ Open near-term work:
 
 - extend NSD and Knot coverage beyond AXFR/TSIG to NOTIFY paths;
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
-- add XoT configuration and transfer-path foundations;
+- implement XoT TLS transport and interop after the configuration/selection foundation;
 - add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.

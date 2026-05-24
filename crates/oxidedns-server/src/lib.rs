@@ -27,7 +27,7 @@ use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
-    config::{RrlConfig, ZoneConfig},
+    config::{RrlConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
         DomainName, Header, LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType,
@@ -2301,7 +2301,7 @@ struct TcpConnectionPermit {
 struct ZoneTransferPlan {
     origin: DomainName,
     qclass: u16,
-    primaries: Vec<SocketAddr>,
+    primaries: Vec<TransferPrimaryConfig>,
     tsig_key: Option<Arc<TsigKey>>,
 }
 
@@ -2340,7 +2340,7 @@ impl TransferPlan {
                     ZoneTransferPlan {
                         origin,
                         qclass: 1,
-                        primaries: zone.primaries.clone(),
+                        primaries: zone.transfer_targets(),
                         tsig_key,
                     },
                 )
@@ -2750,8 +2750,8 @@ impl NotifyAuthority {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
             let mut sources = zone
-                .primaries
-                .iter()
+                .transfer_target_addrs()
+                .into_iter()
                 .map(|primary| primary.ip())
                 .collect::<HashSet<_>>();
             sources.extend(zone.notify_sources.iter().copied());
@@ -3377,7 +3377,19 @@ async fn refresh_zone_from_primaries(
         );
     }
 
-    for primary in &plan.primaries {
+    for primary_target in &plan.primaries {
+        let primary = primary_target.addr;
+        if primary_target.transport == TransferTransportConfig::Xot {
+            warn!(
+                zone = %plan.origin,
+                %primary,
+                server_name = ?primary_target.server_name,
+                reason = %context.reason,
+                "XoT transfer target configured but TLS transport is not implemented"
+            );
+            continue;
+        }
+
         if primary_serial_hint.is_none()
             && let (Some(snapshot), Some(current_serial)) = (&current_snapshot, current_serial)
         {
@@ -3395,7 +3407,7 @@ async fn refresh_zone_from_primaries(
                 }
             };
             match poll_soa_from_primary_with_tsig(
-                *primary,
+                primary,
                 &plan.origin,
                 plan.qclass,
                 qid,
@@ -3439,7 +3451,7 @@ async fn refresh_zone_from_primaries(
         }
 
         if let Some(current_snapshot) = &current_snapshot {
-            if context.ixfr_cooldowns.is_disabled(&plan.origin, *primary) {
+            if context.ixfr_cooldowns.is_disabled(&plan.origin, primary) {
                 info!(
                     zone = %plan.origin,
                     %primary,
@@ -3462,7 +3474,7 @@ async fn refresh_zone_from_primaries(
                 };
                 context.metrics.record_ixfr_started();
                 match transfer_ixfr_from_primary_with_tsig(
-                    *primary,
+                    primary,
                     &plan.origin,
                     plan.qclass,
                     qid,
@@ -3501,7 +3513,7 @@ async fn refresh_zone_from_primaries(
                         if ixfr_error_disables_ixfr(&error) {
                             context
                                 .ixfr_cooldowns
-                                .record_unsupported(&plan.origin, *primary);
+                                .record_unsupported(&plan.origin, primary);
                         }
                         warn!(
                             zone = %plan.origin,
@@ -3530,7 +3542,7 @@ async fn refresh_zone_from_primaries(
         };
         context.metrics.record_axfr_started();
         match transfer_axfr_from_primary_with_tsig(
-            *primary,
+            primary,
             &plan.origin,
             plan.qclass,
             qid,
@@ -3756,7 +3768,7 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        config::RrlConfig,
+        config::{RrlConfig, TransferTransportConfig},
         dns::{AnyResponseMode, DomainName, Header, LookupTermination, Opcode, Rcode, RecordType},
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -3822,6 +3834,43 @@ mod tests {
         assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 1, "203.0.113.53".parse().unwrap()));
         assert!(!authority.is_authorized(&zone, 255, "192.0.2.53".parse().unwrap()));
+    }
+
+    #[test]
+    fn explicit_transfer_primaries_feed_notify_authority_and_transfer_plan() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                notify_sources = ["198.51.100.53"]
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+            "#,
+        )
+        .expect("valid config");
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        let authority = NotifyAuthority::from_config(&config);
+        assert!(authority.is_authorized(&zone, 1, "192.0.2.53".parse().unwrap()));
+        assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
+
+        let plan = TransferPlan::from_config(&config)
+            .get(&zone)
+            .expect("transfer plan");
+        assert_eq!(plan.primaries.len(), 1);
+        assert_eq!(plan.primaries[0].transport, TransferTransportConfig::Xot);
+        assert_eq!(
+            plan.primaries[0].server_name.as_deref(),
+            Some("primary.example.test")
+        );
     }
 
     #[test]
@@ -5780,6 +5829,65 @@ mod tests {
             .expect("primary observed query");
         assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
         assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
+    }
+
+    #[tokio::test]
+    async fn refresh_refuses_xot_target_without_cleartext_fallback() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = listener.local_addr().unwrap();
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let accept_task = tokio::spawn(async move {
+            if listener.accept().await.is_ok() {
+                let _ = accepted_tx.send(());
+            }
+        });
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(50),
+                axfr_timeout: std::time::Duration::from_millis(50),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), accepted_rx)
+                .await
+                .is_err(),
+            "XoT target must not be retried as cleartext TCP"
+        );
+        accept_task.abort();
     }
 
     #[tokio::test]

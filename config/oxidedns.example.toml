@@ -48,6 +48,22 @@ primaries = ["192.0.2.53:53"]
 notify_sources = ["192.0.2.53"]
 #tsig_key = "transfer-key."
 
+# For per-primary transfer transport settings, replace primaries with explicit
+# transfer_primaries entries. Plain TCP remains the default transport.
+#[[zones.transfer_primaries]]
+#addr = "192.0.2.53:53"
+#transport = "tcp"
+
+# XoT transfer targets are validated and preserved by configuration/runtime
+# planning. TLS transport implementation is still tracked toward MVP.
+#[[zones.transfer_primaries]]
+#addr = "192.0.2.53:853"
+#transport = "xot"
+#server_name = "primary.example.test"
+#trust_anchors = ["/etc/oxidedns/xot-ca.pem"]
+#client_cert = "/etc/oxidedns/xot-client.pem"
+#client_key = "/etc/oxidedns/xot-client.key"
+
 #[[tsig_keys]]
 #name = "transfer-key."
 #algorithm = "hmac-sha256" # also supports "hmac-sha1", "hmac-sha384", "hmac-sha512"

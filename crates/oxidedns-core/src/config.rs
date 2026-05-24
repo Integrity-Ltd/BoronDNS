@@ -368,13 +368,35 @@ pub struct ZoneConfig {
     pub name: String,
     #[serde(default = "default_dns_class")]
     pub class: String,
+    #[serde(default)]
     pub primaries: Vec<SocketAddr>,
+    #[serde(default)]
+    pub transfer_primaries: Vec<TransferPrimaryConfig>,
     #[serde(default)]
     pub notify_sources: Vec<std::net::IpAddr>,
     pub tsig_key: Option<String>,
 }
 
 impl ZoneConfig {
+    pub fn transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        if self.transfer_primaries.is_empty() {
+            self.primaries
+                .iter()
+                .copied()
+                .map(TransferPrimaryConfig::tcp)
+                .collect()
+        } else {
+            self.transfer_primaries.clone()
+        }
+    }
+
+    pub fn transfer_target_addrs(&self) -> Vec<SocketAddr> {
+        self.transfer_targets()
+            .into_iter()
+            .map(|target| target.addr)
+            .collect()
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         if self.name.trim().is_empty() {
             return Err(ConfigError::Invalid(
@@ -400,15 +422,129 @@ impl ZoneConfig {
             )));
         }
 
-        if self.primaries.is_empty() {
+        if self.primaries.is_empty() && self.transfer_primaries.is_empty() {
             return Err(ConfigError::Invalid(format!(
-                "zone {} requires at least one primary",
+                "zone {} requires at least one primary or transfer primary",
                 self.name
             )));
         }
 
+        if !self.primaries.is_empty() && !self.transfer_primaries.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "zone {} must not mix legacy primaries and transfer_primaries",
+                self.name
+            )));
+        }
+
+        for primary in &self.transfer_primaries {
+            primary.validate(&self.name)?;
+        }
+
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct TransferPrimaryConfig {
+    pub addr: SocketAddr,
+    #[serde(default)]
+    pub transport: TransferTransportConfig,
+    pub server_name: Option<String>,
+    #[serde(default)]
+    pub trust_anchors: Vec<String>,
+    pub client_cert: Option<String>,
+    pub client_key: Option<String>,
+}
+
+impl TransferPrimaryConfig {
+    pub fn tcp(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            transport: TransferTransportConfig::Tcp,
+            server_name: None,
+            trust_anchors: Vec::new(),
+            client_cert: None,
+            client_key: None,
+        }
+    }
+
+    fn validate(&self, zone_name: &str) -> Result<(), ConfigError> {
+        if self.addr.port() == 0 {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} transfer primary {} must use a non-zero port",
+                self.addr
+            )));
+        }
+
+        match self.transport {
+            TransferTransportConfig::Tcp => self.validate_tcp(zone_name),
+            TransferTransportConfig::Xot => self.validate_xot(zone_name),
+        }
+    }
+
+    fn validate_tcp(&self, zone_name: &str) -> Result<(), ConfigError> {
+        if self.server_name.is_some()
+            || !self.trust_anchors.is_empty()
+            || self.client_cert.is_some()
+            || self.client_key.is_some()
+        {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} TCP transfer primary {} must not set XoT TLS fields",
+                self.addr
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_xot(&self, zone_name: &str) -> Result<(), ConfigError> {
+        let Some(server_name) = self.server_name.as_deref() else {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} requires server_name",
+                self.addr
+            )));
+        };
+        validate_xot_server_name(server_name).map_err(|error| {
+            ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} has invalid server_name {server_name:?}: {error}",
+                self.addr
+            ))
+        })?;
+        if self.trust_anchors.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} requires at least one trust_anchors entry",
+                self.addr
+            )));
+        }
+        for trust_anchor in &self.trust_anchors {
+            if trust_anchor.trim().is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "zone {zone_name} XoT transfer primary {} has an empty trust_anchors entry",
+                    self.addr
+                )));
+            }
+        }
+        match (&self.client_cert, &self.client_key) {
+            (Some(cert), Some(key)) if cert.trim().is_empty() || key.trim().is_empty() => {
+                Err(ConfigError::Invalid(format!(
+                    "zone {zone_name} XoT transfer primary {} has an empty client certificate or key path",
+                    self.addr
+                )))
+            }
+            (Some(_), Some(_)) | (None, None) => Ok(()),
+            _ => Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} requires client_cert and client_key to be configured together",
+                self.addr
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TransferTransportConfig {
+    #[default]
+    Tcp,
+    Xot,
 }
 
 #[derive(Clone, Deserialize, PartialEq, Eq)]
@@ -500,6 +636,31 @@ fn validate_ip_prefix(prefix: &str) -> Result<(), &'static str> {
         IpAddr::V4(_) => Err("IPv4 prefix length must be at most 32"),
         IpAddr::V6(_) => Err("IPv6 prefix length must be at most 128"),
     }
+}
+
+fn validate_xot_server_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.len() > 253 {
+        return Err("expected non-empty DNS name of at most 253 octets");
+    }
+    if name.ends_with('.') {
+        return Err("expected DNS name without a trailing root label for TLS SNI");
+    }
+    for label in name.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err("expected DNS labels between 1 and 63 octets");
+        }
+        let bytes = label.as_bytes();
+        if bytes.first() == Some(&b'-') || bytes.last() == Some(&b'-') {
+            return Err("expected DNS labels not to start or end with '-'");
+        }
+        if !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        {
+            return Err("expected only ASCII letters, digits, '-' and '.'");
+        }
+    }
+    Ok(())
 }
 
 fn default_dns_class() -> String {
@@ -625,6 +786,226 @@ mod tests {
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
+        assert_eq!(
+            config.zones[0].transfer_targets(),
+            vec![TransferPrimaryConfig::tcp(SocketAddr::from((
+                Ipv4Addr::new(192, 0, 2, 53),
+                53
+            )))]
+        );
+    }
+
+    #[test]
+    fn parses_explicit_tcp_transfer_primary_config() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:53"
+                transport = "tcp"
+            "#,
+        )
+        .expect("valid config");
+
+        assert!(config.zones[0].primaries.is_empty());
+        assert_eq!(config.zones[0].transfer_primaries.len(), 1);
+        assert_eq!(
+            config.zones[0].transfer_primaries[0].transport,
+            TransferTransportConfig::Tcp
+        );
+        assert_eq!(
+            config.zones[0].transfer_targets(),
+            config.zones[0].transfer_primaries
+        );
+    }
+
+    #[test]
+    fn parses_xot_transfer_primary_config() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+                client_cert = "/etc/oxidedns/client.pem"
+                client_key = "/etc/oxidedns/client.key"
+            "#,
+        )
+        .expect("valid config");
+
+        let target = &config.zones[0].transfer_primaries[0];
+        assert_eq!(
+            target.addr,
+            SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 853))
+        );
+        assert_eq!(target.transport, TransferTransportConfig::Xot);
+        assert_eq!(target.server_name.as_deref(), Some("primary.example.test"));
+        assert_eq!(target.trust_anchors, vec!["/etc/oxidedns/ca.pem"]);
+        assert_eq!(target.client_cert.as_deref(), Some("/etc/oxidedns/client.pem"));
+        assert_eq!(target.client_key.as_deref(), Some("/etc/oxidedns/client.key"));
+    }
+
+    #[test]
+    fn rejects_zone_without_transfer_primary() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+            "#,
+        )
+        .expect_err("missing transfer primary must fail");
+
+        assert!(error.to_string().contains("requires at least one primary"));
+    }
+
+    #[test]
+    fn rejects_mixed_legacy_and_explicit_transfer_primaries() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.54:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+            "#,
+        )
+        .expect_err("mixed primary forms must fail");
+
+        assert!(error.to_string().contains("must not mix legacy primaries"));
+    }
+
+    #[test]
+    fn rejects_xot_transfer_primary_without_server_name() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+            "#,
+        )
+        .expect_err("xot server name is required");
+
+        assert!(error.to_string().contains("requires server_name"));
+    }
+
+    #[test]
+    fn rejects_xot_transfer_primary_without_trust_anchor() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+            "#,
+        )
+        .expect_err("xot trust anchor is required");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires at least one trust_anchors")
+        );
+    }
+
+    #[test]
+    fn rejects_xot_transfer_primary_with_unpaired_client_key_material() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+                client_cert = "/etc/oxidedns/client.pem"
+            "#,
+        )
+        .expect_err("xot client certificate and key must be paired");
+
+        assert!(error.to_string().contains("configured together"));
+    }
+
+    #[test]
+    fn rejects_tcp_transfer_primary_with_xot_fields() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:53"
+                transport = "tcp"
+                server_name = "primary.example.test"
+            "#,
+        )
+        .expect_err("tcp target must not accept tls fields");
+
+        assert!(error.to_string().contains("must not set XoT TLS fields"));
+    }
+
+    #[test]
+    fn rejects_xot_server_name_with_trailing_root_label() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test."
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+            "#,
+        )
+        .expect_err("xot server name should use SNI form");
+
+        assert!(error.to_string().contains("without a trailing root label"));
     }
 
     #[test]
