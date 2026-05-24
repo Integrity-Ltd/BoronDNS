@@ -6,7 +6,7 @@ use std::{
 use tracing::warn;
 
 use crate::dns::{
-    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
+    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination, Rcode,
     RecordType,
 };
 
@@ -147,11 +147,27 @@ impl ZoneSnapshot {
         }
     }
 
-    pub fn augment_lookup_result_with_dnssec(&self, lookup: LookupResult) -> (LookupResult, bool) {
+    pub fn augment_lookup_result_with_dnssec(
+        &self,
+        lookup: LookupResult,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+    ) -> (LookupResult, bool) {
         let mut seen = HashSet::new();
         let mut dnssec_augmented = false;
+        let nodata_candidate =
+            lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
         let authorities =
             self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_augmented);
+        let authorities = self.add_nodata_nsec_augmentations(
+            qname,
+            qtype,
+            qclass,
+            nodata_candidate,
+            authorities,
+            &mut dnssec_augmented,
+        );
         let answers =
             self.add_rrsig_augmentations(lookup.answers, &mut seen, &mut dnssec_augmented);
         let authorities =
@@ -461,6 +477,42 @@ impl ZoneSnapshot {
                         *dnssec_augmented = true;
                     }
                 }
+            }
+        }
+        augmented
+    }
+
+    fn add_nodata_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        nodata_candidate: bool,
+        authorities: Vec<ResourceRecord>,
+        dnssec_augmented: &mut bool,
+    ) -> Vec<ResourceRecord> {
+        if !nodata_candidate
+            || !authorities
+                .iter()
+                .any(|record| record.rr_type == RecordType::Soa as u16)
+            || self.rrset(qname, qtype, qclass).is_some()
+        {
+            return authorities;
+        }
+
+        let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) else {
+            return authorities;
+        };
+
+        let mut augmented = authorities.clone();
+        let mut seen = authorities
+            .iter()
+            .map(record_identity)
+            .collect::<HashSet<_>>();
+        for nsec in nsec_rrset.records() {
+            if seen.insert(record_identity(&nsec)) {
+                augmented.push(nsec);
+                *dnssec_augmented = true;
             }
         }
         augmented

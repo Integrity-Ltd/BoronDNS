@@ -623,7 +623,12 @@ fn answer_query_message(
         options.any_response,
     );
     let (lookup, dnssec_augmented) = if metadata.dnssec_requested() {
-        zone.augment_lookup_result_with_dnssec(lookup)
+        zone.augment_lookup_result_with_dnssec(
+            lookup,
+            &question.qname,
+            question.qtype,
+            question.qclass,
+        )
     } else {
         (lookup, false)
     };
@@ -2066,6 +2071,117 @@ mod tests {
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
         assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+    }
+
+    #[test]
+    fn do_nodata_for_existing_name_includes_nsec_and_covering_rrsig() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("zzz.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Aaaa as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+    }
+
+    #[test]
+    fn non_do_nodata_omits_nsec_dnssec_augmentation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("zzz.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let packet = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Aaaa as u16,
+            1,
+        );
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16]
+        );
     }
 
     #[test]
