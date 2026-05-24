@@ -17,3 +17,10 @@ path = "fuzz_targets/dns_datagram.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "transfer_stream"
+path = "fuzz_targets/transfer_stream.rs"
+test = false
+doc = false
+bench = false

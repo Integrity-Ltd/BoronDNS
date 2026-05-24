@@ -236,4 +236,4 @@ Open near-term work:
 - broaden the primary interop matrix to Knot, and extend NSD/Knot coverage beyond AXFR to NOTIFY and HMAC-SHA256 TSIG paths;
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
 - add XoT configuration and transfer-path foundations;
-- add parser fuzzing harnesses and start collecting long-run evidence for MVP verification.
+- add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.
