@@ -132,8 +132,10 @@ NSEC3_OWNER = sys.argv[3]
 LOG_PATH = sys.argv[4]
 
 A = 1
+NS = 2
 AAAA = 28
 SOA = 6
+DS = 43
 RRSIG = 46
 DNSKEY = 48
 NSEC3 = 50
@@ -238,6 +240,9 @@ def exchange(qid, qname, qtype, payload=None, do=False, timeout=1.0):
         "answer_types": [record["type"] for record in answers],
         "authority_types": [record["type"] for record in authorities],
         "additional_types": [record["type"] for record in additionals],
+        "answer_owners": [record["owner"] for record in answers],
+        "authority_owners": [record["owner"] for record in authorities],
+        "additional_owners": [record["owner"] for record in additionals],
         "opt_ttls": opt_ttls,
         "size": len(packet),
     }
@@ -265,7 +270,17 @@ if positive_non_do["rcode"] != 0 or A not in positive_non_do["answer_types"]:
 if RRSIG in positive_non_do["answer_types"] or has_response_do(positive_non_do):
     raise AssertionError(f"positive non-DO response leaked DNSSEC augmentation: {positive_non_do}")
 
-nxdomain_do = exchange(0xA003, "missing.alpha.test.", A, payload=4096, do=True)
+wildcard_do = exchange(0xA008, "wildcard-hit.alpha.test.", A, payload=4096, do=True)
+if wildcard_do["rcode"] != 0 or wildcard_do["tc"]:
+    raise AssertionError(f"wildcard positive DO response failed: {wildcard_do}")
+if wildcard_do["answer_types"] != [A] or wildcard_do["answer_owners"] != ["wildcard-hit.alpha.test."]:
+    raise AssertionError(f"wildcard positive DO did not synthesize the requested owner A RR: {wildcard_do}")
+if NSEC3 not in wildcard_do["authority_types"] or RRSIG not in wildcard_do["authority_types"]:
+    raise AssertionError(f"wildcard positive DO lacked NSEC3/RRSIG exact-name absence proof: {wildcard_do}")
+if not has_response_do(wildcard_do):
+    raise AssertionError(f"wildcard positive DO response did not set response DO bit: {wildcard_do}")
+
+nxdomain_do = exchange(0xA003, "missing.mail.alpha.test.", A, payload=4096, do=True)
 if nxdomain_do["rcode"] != 3:
     raise AssertionError(f"NXDOMAIN DO did not return NXDOMAIN: {nxdomain_do}")
 if SOA not in nxdomain_do["authority_types"] or NSEC3 not in nxdomain_do["authority_types"] or RRSIG not in nxdomain_do["authority_types"]:
@@ -278,6 +293,26 @@ if nodata_do["rcode"] != 0 or nodata_do["answer_types"]:
     raise AssertionError(f"NODATA DO did not return empty NOERROR answer: {nodata_do}")
 if SOA not in nodata_do["authority_types"] or NSEC3 not in nodata_do["authority_types"] or RRSIG not in nodata_do["authority_types"]:
     raise AssertionError(f"NODATA DO lacked SOA/NSEC3/RRSIG proof material: {nodata_do}")
+
+signed_referral_do = exchange(0xA009, "www.signed-child.alpha.test.", A, payload=4096, do=True)
+if signed_referral_do["rcode"] != 0 or signed_referral_do["answer_types"]:
+    raise AssertionError(f"signed-child referral DO did not return empty NOERROR answer: {signed_referral_do}")
+if NS not in signed_referral_do["authority_types"] or DS not in signed_referral_do["authority_types"] or RRSIG not in signed_referral_do["authority_types"]:
+    raise AssertionError(f"signed-child referral DO lacked NS/DS/RRSIG authority proof: {signed_referral_do}")
+if NSEC3 in signed_referral_do["authority_types"]:
+    raise AssertionError(f"signed-child referral DO unexpectedly used NSEC3 no-DS proof: {signed_referral_do}")
+if not has_response_do(signed_referral_do):
+    raise AssertionError(f"signed-child referral DO response did not set response DO bit: {signed_referral_do}")
+
+unsigned_referral_do = exchange(0xA00A, "www.unsigned-child.alpha.test.", A, payload=4096, do=True)
+if unsigned_referral_do["rcode"] != 0 or unsigned_referral_do["answer_types"]:
+    raise AssertionError(f"unsigned-child referral DO did not return empty NOERROR answer: {unsigned_referral_do}")
+if NS not in unsigned_referral_do["authority_types"] or NSEC3 not in unsigned_referral_do["authority_types"] or RRSIG not in unsigned_referral_do["authority_types"]:
+    raise AssertionError(f"unsigned-child referral DO lacked NS/NSEC3/RRSIG no-DS proof: {unsigned_referral_do}")
+if DS in unsigned_referral_do["authority_types"]:
+    raise AssertionError(f"unsigned-child referral DO unexpectedly included DS proof: {unsigned_referral_do}")
+if not has_response_do(unsigned_referral_do):
+    raise AssertionError(f"unsigned-child referral DO response did not set response DO bit: {unsigned_referral_do}")
 
 dnskey = exchange(0xA005, "alpha.test.", DNSKEY, payload=4096, do=False)
 if DNSKEY not in dnskey["answer_types"] or RRSIG in dnskey["answer_types"]:

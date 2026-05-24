@@ -14,3 +14,9 @@ mail IN A 192.0.2.20
 alias IN CNAME www.alpha.test.
 txt IN TXT "knot dnssec interop fixture"
 _sip._tcp IN SRV 10 20 5060 www.alpha.test.
+* IN A 192.0.2.30
+signed-child IN NS ns.signed-child.alpha.test.
+signed-child IN DS 12345 13 2 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ns.signed-child IN A 192.0.2.53
+unsigned-child IN NS ns.unsigned-child.alpha.test.
+ns.unsigned-child IN A 192.0.2.54
