@@ -69,6 +69,9 @@ pub enum TransferError {
 
     #[error("AXFR response validation failed: {0}")]
     Axfr(#[from] AxfrError),
+
+    #[error("failed to generate random DNS query ID: {0}")]
+    RandomQueryId(getrandom::Error),
 }
 
 #[derive(Debug)]
@@ -318,16 +321,14 @@ async fn transfer_axfr_from_primary_inner(
     }
 }
 
-fn transfer_query_id(zone_apex: &DomainName, primary: SocketAddr) -> u16 {
-    let since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut hash = since_epoch as u64 ^ primary.port() as u64;
-    for byte in zone_apex.canonical_key().bytes() {
-        hash = hash.wrapping_mul(16_777_619) ^ byte as u64;
-    }
-    (hash & 0xffff) as u16
+fn transfer_query_id() -> Result<u16, TransferError> {
+    let mut bytes = [0u8; 2];
+    getrandom::fill(&mut bytes).map_err(TransferError::RandomQueryId)?;
+    Ok(query_id_from_random_bytes(bytes))
+}
+
+fn query_id_from_random_bytes(bytes: [u8; 2]) -> u16 {
+    u16::from_be_bytes(bytes)
 }
 
 async fn serve_udp(
@@ -998,7 +999,19 @@ async fn refresh_zone_from_primaries(
     reason: &str,
 ) -> Option<ZoneSnapshot> {
     for primary in &plan.primaries {
-        let qid = transfer_query_id(&plan.origin, *primary);
+        let qid = match transfer_query_id() {
+            Ok(qid) => qid,
+            Err(error) => {
+                warn!(
+                    zone = %plan.origin,
+                    %primary,
+                    %error,
+                    %reason,
+                    "AXFR failed"
+                );
+                continue;
+            }
+        };
         match transfer_axfr_from_primary(*primary, &plan.origin, plan.qclass, qid, axfr_timeout)
             .await
         {
@@ -1174,8 +1187,8 @@ mod tests {
     use super::{
         NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker, RefreshRequest, Runtime,
         TcpServerSettings, TransferPlan, ZoneRefreshRegistry, handle_tcp_connection,
-        jitter_interval, serial_after, serve_refresh_requests, serve_scheduled_refreshes,
-        serve_tcp, transfer_axfr_from_primary,
+        jitter_interval, query_id_from_random_bytes, serial_after, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, transfer_axfr_from_primary, transfer_query_id,
     };
 
     #[test]
@@ -1278,6 +1291,17 @@ mod tests {
         assert!(!serial_after(1, 1));
         assert!(!serial_after(1, 2));
         assert!(!serial_after(0x8000_0001, 1));
+    }
+
+    #[test]
+    fn transfer_query_id_uses_full_sixteen_bit_range() {
+        assert_eq!(query_id_from_random_bytes([0x00, 0x00]), 0);
+        assert_eq!(query_id_from_random_bytes([0xff, 0xff]), u16::MAX);
+    }
+
+    #[test]
+    fn transfer_query_id_reads_os_randomness() {
+        transfer_query_id().expect("random query id");
     }
 
     #[test]

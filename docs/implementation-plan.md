@@ -113,6 +113,7 @@ Slice 2 has an in-memory zone snapshot model with atomic publication through the
 Slice 5 is in progress:
 
 - AXFR query construction is implemented only for TCP framing;
+- runtime AXFR query IDs are drawn from the operating system CSPRNG and sample the full 16-bit QID space;
 - AXFR response parsing validates QID, OPCODE, RCODE, initial and terminating SOA, class, bailiwick, and reserved RR types;
 - successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
 - the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
