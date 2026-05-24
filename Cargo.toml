@@ -5,6 +5,7 @@ members = [
   "crates/oxidedns-server",
   "crates/oxidedns-cli",
 ]
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2024"

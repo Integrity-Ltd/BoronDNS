@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+/fuzz/target/
 
 # Editor and tool backups
 *~
@@ -15,4 +16,3 @@
 # Logs and runtime scratch output
 *.log
 /tmp/
-
