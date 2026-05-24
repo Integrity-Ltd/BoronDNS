@@ -49,6 +49,9 @@ pub enum AxfrError {
     #[error("AXFR response contained invalid RDATA for a known RR type")]
     InvalidRdata,
 
+    #[error("AXFR response final zone did not contain exactly one apex SOA")]
+    InvalidZoneSoa,
+
     #[error("AXFR response did not contain an apex NS RRset")]
     MissingApexNs,
 
@@ -853,9 +856,25 @@ fn validate_zone_record_set(
     zone_apex: &DomainName,
     records: &[ResourceRecord],
 ) -> Result<(), AxfrError> {
+    validate_exact_apex_soa(zone_apex, records)?;
     validate_apex_ns(zone_apex, records)?;
     validate_cname_and_dname_coexistence(records)?;
     Ok(())
+}
+
+fn validate_exact_apex_soa(
+    zone_apex: &DomainName,
+    records: &[ResourceRecord],
+) -> Result<(), AxfrError> {
+    let soa_records = records
+        .iter()
+        .filter(|record| record.rr_type == RecordType::Soa as u16)
+        .collect::<Vec<_>>();
+    if soa_records.len() == 1 && soa_records[0].owner == *zone_apex {
+        Ok(())
+    } else {
+        Err(AxfrError::InvalidZoneSoa)
+    }
 }
 
 fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Result<(), AxfrError> {
@@ -1526,6 +1545,56 @@ mod tests {
         .expect_err("IXFR final zone missing apex NS");
 
         assert_eq!(error, IxfrError::Axfr(AxfrError::MissingApexNs));
+    }
+
+    #[test]
+    fn rejects_ixfr_mode1_final_zone_with_non_apex_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let non_apex_soa = record("child.example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), non_apex_soa]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(0x1234, vec![new_soa.clone(), current_soa, new_soa])],
+        )
+        .expect_err("IXFR final zone with non-apex SOA");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::InvalidZoneSoa));
+    }
+
+    #[test]
+    fn rejects_ixfr_mode1_final_zone_with_multiple_apex_soas() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let extra_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(99),
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), extra_soa]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(0x1234, vec![new_soa.clone(), current_soa, new_soa])],
+        )
+        .expect_err("IXFR final zone with multiple apex SOAs");
+
+        assert_eq!(error, IxfrError::Axfr(AxfrError::InvalidZoneSoa));
     }
 
     #[test]
