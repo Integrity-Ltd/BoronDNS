@@ -23,6 +23,14 @@ use tokio::{
     sync::{Semaphore, mpsc, oneshot},
     task::JoinSet,
 };
+use tokio_rustls::{
+    TlsConnector,
+    client::TlsStream,
+    rustls::{
+        ClientConfig, RootCertStore,
+        pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject},
+    },
+};
 use tracing::{debug, info, warn};
 use oxidedns_core::{
     ServerConfig,
@@ -111,6 +119,24 @@ pub enum TransferError {
 
     #[error("failed to sign transfer query with TSIG: {0}")]
     Tsig(#[from] TsigError),
+
+    #[error("XoT TLS configuration for primary {addr} is invalid: {message}")]
+    XotConfig { addr: SocketAddr, message: String },
+
+    #[error("failed to read XoT TLS file {path}: {source}")]
+    ReadTlsFile {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[error("failed XoT TLS handshake with primary {addr}: {source}")]
+    TlsHandshake {
+        addr: SocketAddr,
+        source: std::io::Error,
+    },
+
+    #[error("XoT primary {addr} did not negotiate ALPN dot")]
+    XotAlpn { addr: SocketAddr },
 }
 
 #[derive(Debug)]
@@ -531,6 +557,19 @@ async fn transfer_axfr_from_primary_with_tsig(
     tsig_key: Option<&TsigKey>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
+    let target = TransferPrimaryConfig::tcp(primary);
+    transfer_axfr_from_target_with_tsig(&target, zone_apex, qclass, qid, tsig_key, timeout_duration)
+        .await
+}
+
+async fn transfer_axfr_from_target_with_tsig(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig_key: Option<&TsigKey>,
+    timeout_duration: Duration,
+) -> Result<ZoneSnapshot, TransferError> {
     tokio::time::timeout(timeout_duration, async {
         transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, tsig_key).await
     })
@@ -623,6 +662,196 @@ async fn poll_soa_from_primary_inner(
     }
 }
 
+enum TransferStream {
+    Tcp(TcpStream),
+    Xot(Box<TlsStream<TcpStream>>),
+}
+
+impl TransferStream {
+    async fn write_all(&mut self, buffer: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.write_all(buffer).await,
+            Self::Xot(stream) => stream.write_all(buffer).await,
+        }
+    }
+
+    async fn read_exact(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.read_exact(buffer).await,
+            Self::Xot(stream) => stream.read_exact(buffer).await,
+        }
+    }
+}
+
+async fn connect_transfer_stream(
+    primary: &TransferPrimaryConfig,
+) -> Result<TransferStream, TransferError> {
+    match primary.transport {
+        TransferTransportConfig::Tcp => {
+            let tcp = TcpStream::connect(primary.addr).await.map_err(|source| {
+                TransferError::ConnectTcp {
+                    addr: primary.addr,
+                    source,
+                }
+            })?;
+            Ok(TransferStream::Tcp(tcp))
+        }
+        TransferTransportConfig::Xot => connect_xot_stream(primary).await,
+    }
+}
+
+async fn connect_xot_stream(
+    primary: &TransferPrimaryConfig,
+) -> Result<TransferStream, TransferError> {
+    let server_name = primary
+        .server_name
+        .as_deref()
+        .ok_or_else(|| TransferError::XotConfig {
+            addr: primary.addr,
+            message: "missing server_name".to_owned(),
+        })?;
+    let server_name =
+        ServerName::try_from(server_name.to_owned()).map_err(|error| TransferError::XotConfig {
+            addr: primary.addr,
+            message: format!("invalid server_name {server_name:?}: {error}"),
+        })?;
+
+    let mut client_config = build_xot_client_config(primary)?;
+    client_config.alpn_protocols = vec![b"dot".to_vec()];
+    let tcp =
+        TcpStream::connect(primary.addr)
+            .await
+            .map_err(|source| TransferError::ConnectTcp {
+                addr: primary.addr,
+                source,
+            })?;
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let stream = connector
+        .connect(server_name, tcp)
+        .await
+        .map_err(|source| TransferError::TlsHandshake {
+            addr: primary.addr,
+            source,
+        })?;
+    if stream.get_ref().1.alpn_protocol() != Some(b"dot".as_slice()) {
+        return Err(TransferError::XotAlpn { addr: primary.addr });
+    }
+    Ok(TransferStream::Xot(Box::new(stream)))
+}
+
+fn build_xot_client_config(primary: &TransferPrimaryConfig) -> Result<ClientConfig, TransferError> {
+    let mut roots = RootCertStore::empty();
+    for trust_anchor in &primary.trust_anchors {
+        let certs = load_pem_certs_for_primary(primary.addr, trust_anchor)?;
+        if certs.is_empty() {
+            return Err(TransferError::XotConfig {
+                addr: primary.addr,
+                message: format!("trust anchor file {trust_anchor:?} did not contain certificates"),
+            });
+        }
+        for cert in certs {
+            roots.add(cert).map_err(|error| TransferError::XotConfig {
+                addr: primary.addr,
+                message: format!("failed to add trust anchor {trust_anchor:?}: {error}"),
+            })?;
+        }
+    }
+    if roots.is_empty() {
+        return Err(TransferError::XotConfig {
+            addr: primary.addr,
+            message: "at least one trust anchor is required".to_owned(),
+        });
+    }
+
+    let builder = ClientConfig::builder().with_root_certificates(roots);
+    match (&primary.client_cert, &primary.client_key) {
+        (Some(cert_path), Some(key_path)) => {
+            validate_private_key_file_mode(primary.addr, key_path)?;
+            let certs = load_pem_certs(cert_path)?;
+            let key = load_pem_private_key(primary.addr, key_path)?;
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|error| TransferError::XotConfig {
+                    addr: primary.addr,
+                    message: format!("invalid XoT client certificate/key pair: {error}"),
+                })
+        }
+        (None, None) => Ok(builder.with_no_client_auth()),
+        _ => Err(TransferError::XotConfig {
+            addr: primary.addr,
+            message: "client_cert and client_key must be configured together".to_owned(),
+        }),
+    }
+}
+
+fn load_pem_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, TransferError> {
+    let pem = std::fs::read(path).map_err(|source| TransferError::ReadTlsFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    CertificateDer::pem_slice_iter(&pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| TransferError::XotConfig {
+            addr: "0.0.0.0:0"
+                .parse()
+                .expect("hard-coded placeholder socket address is valid"),
+            message: format!("failed to parse certificate PEM file {path:?}: {error}"),
+        })
+}
+
+fn load_pem_private_key(
+    addr: SocketAddr,
+    path: &str,
+) -> Result<PrivateKeyDer<'static>, TransferError> {
+    let pem = std::fs::read(path).map_err(|source| TransferError::ReadTlsFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    PrivateKeyDer::from_pem_slice(&pem).map_err(|error| TransferError::XotConfig {
+        addr,
+        message: format!("failed to parse private key PEM file {path:?}: {error}"),
+    })
+}
+
+fn load_pem_certs_for_primary(
+    addr: SocketAddr,
+    path: &str,
+) -> Result<Vec<CertificateDer<'static>>, TransferError> {
+    let certs = load_pem_certs(path).map_err(|error| match error {
+        TransferError::XotConfig { message, .. } => TransferError::XotConfig { addr, message },
+        other => other,
+    })?;
+    if certs.is_empty() {
+        return Err(TransferError::XotConfig {
+            addr,
+            message: format!("certificate file {path:?} did not contain certificates"),
+        });
+    }
+    Ok(certs)
+}
+
+#[cfg(unix)]
+fn validate_private_key_file_mode(addr: SocketAddr, path: &str) -> Result<(), TransferError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::metadata(path).map_err(|source| TransferError::ReadTlsFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    if metadata.permissions().mode() & 0o007 != 0 {
+        return Err(TransferError::XotConfig {
+            addr,
+            message: format!("private key file {path:?} must not be readable by other users"),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_private_key_file_mode(_addr: SocketAddr, _path: &str) -> Result<(), TransferError> {
+    Ok(())
+}
+
 pub async fn transfer_ixfr_from_primary(
     primary: SocketAddr,
     zone_apex: &DomainName,
@@ -652,6 +881,28 @@ async fn transfer_ixfr_from_primary_with_tsig(
     tsig_key: Option<&TsigKey>,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
+    let target = TransferPrimaryConfig::tcp(primary);
+    transfer_ixfr_from_target_with_tsig(
+        &target,
+        zone_apex,
+        qclass,
+        qid,
+        current_zone,
+        tsig_key,
+        timeout_duration,
+    )
+    .await
+}
+
+async fn transfer_ixfr_from_target_with_tsig(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    current_zone: &ZoneSnapshot,
+    tsig_key: Option<&TsigKey>,
+    timeout_duration: Duration,
+) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
         transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, tsig_key)
             .await
@@ -663,20 +914,14 @@ async fn transfer_ixfr_from_primary_with_tsig(
 }
 
 async fn transfer_ixfr_from_primary_inner(
-    primary: SocketAddr,
+    primary: &TransferPrimaryConfig,
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
     tsig_key: Option<&TsigKey>,
 ) -> Result<IxfrResponse, TransferError> {
-    let mut stream =
-        TcpStream::connect(primary)
-            .await
-            .map_err(|source| TransferError::ConnectTcp {
-                addr: primary,
-                source,
-            })?;
+    let mut stream = connect_transfer_stream(primary).await?;
 
     let current_soa = current_zone
         .soa_record(qclass)
@@ -690,7 +935,7 @@ async fn transfer_ixfr_from_primary_inner(
         .write_all(&framed_query)
         .await
         .map_err(|source| TransferError::Io {
-            addr: primary,
+            addr: primary.addr,
             source,
         })?;
 
@@ -716,7 +961,7 @@ async fn transfer_ixfr_from_primary_inner(
             }
             Err(source) => {
                 return Err(TransferError::Io {
-                    addr: primary,
+                    addr: primary.addr,
                     source,
                 });
             }
@@ -729,7 +974,7 @@ async fn transfer_ixfr_from_primary_inner(
                 TransferError::Ixfr(axfr::IxfrError::IncompleteResponse)
             } else {
                 TransferError::Io {
-                    addr: primary,
+                    addr: primary.addr,
                     source,
                 }
             }
@@ -837,19 +1082,13 @@ fn unix_timestamp_seconds() -> u64 {
 }
 
 async fn transfer_axfr_from_primary_inner(
-    primary: SocketAddr,
+    primary: &TransferPrimaryConfig,
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
     tsig_key: Option<&TsigKey>,
 ) -> Result<ZoneSnapshot, TransferError> {
-    let mut stream =
-        TcpStream::connect(primary)
-            .await
-            .map_err(|source| TransferError::ConnectTcp {
-                addr: primary,
-                source,
-            })?;
+    let mut stream = connect_transfer_stream(primary).await?;
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig_key)?;
@@ -858,7 +1097,7 @@ async fn transfer_axfr_from_primary_inner(
         .write_all(&framed_query)
         .await
         .map_err(|source| TransferError::Io {
-            addr: primary,
+            addr: primary.addr,
             source,
         })?;
 
@@ -878,7 +1117,7 @@ async fn transfer_axfr_from_primary_inner(
             }
             Err(source) => {
                 return Err(TransferError::Io {
-                    addr: primary,
+                    addr: primary.addr,
                     source,
                 });
             }
@@ -891,7 +1130,7 @@ async fn transfer_axfr_from_primary_inner(
                 TransferError::Axfr(AxfrError::MissingTerminatingSoa)
             } else {
                 TransferError::Io {
-                    addr: primary,
+                    addr: primary.addr,
                     source,
                 }
             }
@@ -3379,18 +3618,9 @@ async fn refresh_zone_from_primaries(
 
     for primary_target in &plan.primaries {
         let primary = primary_target.addr;
-        if primary_target.transport == TransferTransportConfig::Xot {
-            warn!(
-                zone = %plan.origin,
-                %primary,
-                server_name = ?primary_target.server_name,
-                reason = %context.reason,
-                "XoT transfer target configured but TLS transport is not implemented"
-            );
-            continue;
-        }
 
-        if primary_serial_hint.is_none()
+        if primary_target.transport == TransferTransportConfig::Tcp
+            && primary_serial_hint.is_none()
             && let (Some(snapshot), Some(current_serial)) = (&current_snapshot, current_serial)
         {
             let qid = match transfer_query_id() {
@@ -3473,8 +3703,8 @@ async fn refresh_zone_from_primaries(
                     }
                 };
                 context.metrics.record_ixfr_started();
-                match transfer_ixfr_from_primary_with_tsig(
-                    primary,
+                match transfer_ixfr_from_target_with_tsig(
+                    primary_target,
                     &plan.origin,
                     plan.qclass,
                     qid,
@@ -3541,8 +3771,8 @@ async fn refresh_zone_from_primaries(
             }
         };
         context.metrics.record_axfr_started();
-        match transfer_axfr_from_primary_with_tsig(
-            primary,
+        match transfer_axfr_from_target_with_tsig(
+            primary_target,
             &plan.origin,
             plan.qclass,
             qid,
@@ -3783,14 +4013,14 @@ mod tests {
         RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime,
         RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
         UdpServerSettings, ZoneRefreshRegistry, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
-        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
-        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-        transfer_query_id, write_tcp_message,
+        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        response_category, response_opt_record, response_question_end, rrl_truncated_response,
+        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -5832,15 +6062,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_refuses_xot_target_without_cleartext_fallback() {
+    async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
-        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let (accepted_tx, mut accepted_rx) = mpsc::channel(2);
         let accept_task = tokio::spawn(async move {
-            if listener.accept().await.is_ok() {
-                let _ = accepted_tx.send(());
+            for _ in 0..2 {
+                if listener.accept().await.is_ok() {
+                    let _ = accepted_tx.send(()).await;
+                }
             }
         });
+        let (trust_anchor, _key_path) = write_self_signed_xot_cert_files();
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
@@ -5854,8 +6087,9 @@ mod tests {
                 addr = "{primary}"
                 transport = "xot"
                 server_name = "primary.example.test"
-                trust_anchors = ["/etc/oxidedns/ca.pem"]
-            "#
+                trust_anchors = ["{}"]
+            "#,
+            trust_anchor.display()
         ))
         .expect("valid config");
         let transfer_plan = TransferPlan::from_config(&config);
@@ -5881,13 +6115,77 @@ mod tests {
         .await;
 
         assert!(snapshot.is_none());
+        accepted_rx
+            .recv()
+            .await
+            .expect("XoT should attempt one TLS connection");
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), accepted_rx)
+            tokio::time::timeout(std::time::Duration::from_millis(50), accepted_rx.recv())
                 .await
                 .is_err(),
-            "XoT target must not be retried as cleartext TCP"
+            "XoT failure must not be retried as cleartext TCP"
         );
         accept_task.abort();
+    }
+
+    #[tokio::test]
+    async fn refresh_axfr_uses_xot_tls_transport() {
+        let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
+        )
+        .await
+        .expect("XoT AXFR should publish a snapshot");
+
+        assert_eq!(snapshot.serial, Some(1));
+        assert!(
+            zones
+                .get("example.test.")
+                .expect("published XoT zone")
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .iter()
+                .any(|answer| answer.rdata == vec![192, 0, 2, 10])
+        );
+        assert_eq!(metrics.snapshot().axfr_succeeded, 1);
     }
 
     #[tokio::test]
@@ -6481,6 +6779,75 @@ mod tests {
 
     async fn spawn_axfr_primary() -> std::net::SocketAddr {
         spawn_axfr_primary_with_serial(1).await
+    }
+
+    async fn spawn_xot_axfr_primary_with_serial(serial: u32) -> (std::net::SocketAddr, String) {
+        let (cert_path, key_path) = write_self_signed_xot_cert_files();
+
+        let certs = load_pem_certs(cert_path.to_str().expect("utf-8 cert path"))
+            .expect("load generated cert");
+        let key = load_pem_private_key(
+            "127.0.0.1:0".parse().unwrap(),
+            key_path.to_str().expect("utf-8 key path"),
+        )
+        .expect("load generated key");
+        let mut config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server tls config");
+        config.alpn_protocols = vec![b"dot".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = acceptor.accept(stream).await.unwrap();
+            let mut length_prefix = [0u8; 2];
+            stream.read_exact(&mut length_prefix).await.unwrap();
+            let query_len = u16::from_be_bytes(length_prefix) as usize;
+            let mut query = vec![0u8; query_len];
+            stream.read_exact(&mut query).await.unwrap();
+
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+            let response = axfr_response(header.id, serial);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+
+        (addr, cert_path.display().to_string())
+    }
+
+    fn write_self_signed_xot_cert_files() -> (std::path::PathBuf, std::path::PathBuf) {
+        let cert = rcgen::generate_simple_self_signed(vec!["primary.example.test".to_owned()])
+            .expect("self-signed certificate");
+        let cert_pem = cert.cert.pem();
+        let key_pem = cert.signing_key.serialize_pem();
+        let cert_path = unique_test_path("xot-primary", "pem");
+        let key_path = unique_test_path("xot-primary-key", "pem");
+        std::fs::write(&cert_path, cert_pem.as_bytes()).expect("write cert pem");
+        std::fs::write(&key_path, key_pem.as_bytes()).expect("write key pem");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                .expect("secure key mode");
+        }
+        (cert_path, key_path)
+    }
+
+    fn unique_test_path(prefix: &str, extension: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{nanos}.{extension}",
+            std::process::id()
+        ))
     }
 
     async fn spawn_axfr_primary_with_serial(serial: u32) -> std::net::SocketAddr {

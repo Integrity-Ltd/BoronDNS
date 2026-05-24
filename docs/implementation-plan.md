@@ -231,7 +231,9 @@ XoT foundations are started:
 - legacy `primaries = ["addr"]` remains the plain TCP transfer shorthand for existing deployments and test harnesses;
 - explicit `[[zones.transfer_primaries]]` entries can select `transport = "tcp"` or `transport = "xot"` per primary, and cannot be mixed with the legacy shorthand inside one zone;
 - XoT transfer targets require SNI-style `server_name`, at least one configured trust anchor, and paired optional client certificate/key references;
-- runtime transfer planning preserves each target's transport mode and refuses XoT targets with an explicit warning until the TLS transport implementation lands, preventing accidental cleartext fallback.
+- runtime transfer planning preserves each target's transport mode and uses Rustls/Tokio-Rustls for XoT AXFR and IXFR TCP framing;
+- XoT client connections load configured PEM trust anchors, send the configured server name as SNI, require ALPN `dot`, support optional client certificate/key material, and do not fall back to cleartext TCP after TLS failure;
+- focused in-process tests cover successful XoT AXFR and TLS-handshake failure without cleartext retry. Real-primary XoT interop and the full TLS fault matrix remain pending.
 
 Interop harness foundations:
 
@@ -247,5 +249,5 @@ Open near-term work:
 
 - extend NSD and Knot coverage beyond AXFR/TSIG to NOTIFY paths;
 - broaden IXFR fault and interop coverage, including real-primary fallback behavior where supported;
-- implement XoT TLS transport and interop after the configuration/selection foundation;
+- add real-primary XoT interop and the remaining TLS fault matrix;
 - add remaining parser fuzz targets and start collecting long-run evidence for MVP verification.

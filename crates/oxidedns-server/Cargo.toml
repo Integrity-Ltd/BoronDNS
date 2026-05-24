@@ -10,8 +10,12 @@ axum.workspace = true
 getrandom.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
 oxidedns-core = { path = "../oxidedns-core", version = "0.1.0" }
+
+[dev-dependencies]
+rcgen.workspace = true
 
 [lints]
 workspace = true
