@@ -227,6 +227,7 @@ impl Runtime {
             let notify_authority = notify_authority.clone();
             let notify_refresh = notify_refresh.clone();
             let notify_refresh_tx = notify_refresh_tx.clone();
+            let metrics = metrics.clone();
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
@@ -235,6 +236,7 @@ impl Runtime {
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
+                metrics,
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
@@ -268,6 +270,7 @@ impl Runtime {
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
+                metrics: metrics.clone(),
                 active_connections: tcp_connections,
             };
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
@@ -906,6 +909,7 @@ async fn serve_udp(
             debug!(%peer, bytes = len, "discarded DNS datagram");
             continue;
         };
+        record_query_metric(&prepared.packet, &zones, &settings.metrics);
         match answer_message_with_notify_hooks(
             &prepared.packet,
             &zones,
@@ -956,6 +960,22 @@ async fn serve_udp(
     }
 }
 
+fn record_query_metric(packet: &[u8], zones: &ZoneStore, metrics: &RuntimeMetrics) {
+    let Ok(header) = Header::parse(packet) else {
+        return;
+    };
+    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount != 1 {
+        return;
+    }
+    let Ok(question) = Question::parse(packet) else {
+        return;
+    };
+    let Some(zone) = zones.find_zone(&question.qname) else {
+        return;
+    };
+    metrics.record_zone_query(&zone.origin);
+}
+
 #[derive(Clone)]
 struct UdpServerSettings {
     max_udp_payload: u16,
@@ -965,6 +985,7 @@ struct UdpServerSettings {
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    metrics: RuntimeMetrics,
 }
 
 async fn serve_tcp(
@@ -1008,6 +1029,7 @@ async fn serve_tcp(
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
+                settings.metrics,
                 peer.ip(),
             )
             .await
@@ -1105,6 +1127,7 @@ fn metrics_body(
     );
     append_zone_status_metrics(&mut body, zones);
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
+    append_zone_query_metrics(&mut body, zones, metrics);
     body
 }
 
@@ -1188,6 +1211,22 @@ fn append_zone_scheduler_metrics(
             .map_or(0, |status| status.failures_since_success);
         body.push_str(&format!(
             "oxidedns_zone_refresh_failures_since_success{{zone=\"{zone}\"}} {failures}\n"
+        ));
+    }
+}
+
+fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &RuntimeMetrics) {
+    let query_counts = metrics.zone_query_counts();
+    body.push_str(
+        "# HELP oxidedns_zone_queries_total Queries received for each configured zone.\n\
+         # TYPE oxidedns_zone_queries_total counter\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone_key = snapshot.origin.canonical_key();
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let count = query_counts.get(&zone_key).copied().unwrap_or_default();
+        body.push_str(&format!(
+            "oxidedns_zone_queries_total{{zone=\"{zone}\"}} {count}\n"
         ));
     }
 }
@@ -1286,6 +1325,7 @@ struct RuntimeMetricsInner {
     ixfr_started: AtomicU64,
     ixfr_succeeded: AtomicU64,
     ixfr_failed: AtomicU64,
+    zone_queries: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1329,6 +1369,24 @@ impl RuntimeMetrics {
         self.inner.ixfr_failed.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_zone_query(&self, zone: &DomainName) {
+        let mut query_counts = self
+            .inner
+            .zone_queries
+            .lock()
+            .expect("runtime metrics query counter lock poisoned");
+        let counter = query_counts.entry(zone.canonical_key()).or_default();
+        *counter = counter.saturating_add(1);
+    }
+
+    fn zone_query_counts(&self) -> HashMap<String, u64> {
+        self.inner
+            .zone_queries
+            .lock()
+            .expect("runtime metrics query counter lock poisoned")
+            .clone()
+    }
+
     fn snapshot(&self) -> RuntimeMetricsSnapshot {
         RuntimeMetricsSnapshot {
             axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
@@ -1354,6 +1412,7 @@ struct TcpServerSettings {
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    metrics: RuntimeMetrics,
     active_connections: Arc<AtomicUsize>,
 }
 
@@ -2510,6 +2569,7 @@ async fn handle_tcp_connection(
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    metrics: RuntimeMetrics,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
@@ -2517,6 +2577,7 @@ async fn handle_tcp_connection(
             debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
             continue;
         };
+        record_query_metric(&prepared.packet, &zones, &metrics);
         match answer_message_with_notify_hooks(
             &prepared.packet,
             &zones,
@@ -2651,10 +2712,10 @@ mod tests {
         Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan,
         ZoneRefreshRegistry, drain_task_set, drain_tcp_connections, handle_tcp_connection,
         jitter_interval, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, query_id_from_random_bytes, refresh_zone_from_primaries,
-        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        sign_notify_response, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-        transfer_query_id, write_tcp_message,
+        prepare_notify_packet, query_id_from_random_bytes, record_query_metric,
+        refresh_zone_from_primaries, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, sign_notify_response, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, write_tcp_message,
     };
 
     #[test]
@@ -2768,6 +2829,8 @@ mod tests {
         let metrics_state = RuntimeMetrics::new();
         metrics_state.record_axfr_started();
         metrics_state.record_axfr_succeeded();
+        metrics_state.record_zone_query(&active_origin);
+        metrics_state.record_zone_query(&active_origin);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -2837,6 +2900,8 @@ mod tests {
         assert!(
             metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"loading.test.\"} 1")
         );
+        assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"example.test.\"} 2"));
+        assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"loading.test.\"} 0"));
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
@@ -3333,6 +3398,42 @@ mod tests {
     #[test]
     fn transfer_query_id_reads_os_randomness() {
         transfer_query_id().expect("random query id");
+    }
+
+    #[test]
+    fn query_metrics_count_configured_zone_queries_only() {
+        let zones = ZoneStore::new();
+        let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(active_origin, Some(1), Vec::new()));
+        zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
+        let metrics = RuntimeMetrics::new();
+
+        record_query_metric(
+            &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+        );
+        record_query_metric(
+            &query(b"\x03www\x07loading\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+        );
+        record_query_metric(
+            &query(b"\x07outside\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+        );
+        let response = {
+            let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+            packet[2] |= 0x80;
+            packet
+        };
+        record_query_metric(&response, &zones, &metrics);
+
+        let counts = metrics.zone_query_counts();
+        assert_eq!(counts.get("example.test."), Some(&1));
+        assert_eq!(counts.get("loading.test."), Some(&1));
+        assert!(!counts.contains_key("outside.test."));
     }
 
     #[test]
@@ -4124,6 +4225,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -4200,6 +4302,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -4251,6 +4354,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -4288,6 +4392,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -4339,6 +4444,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -4378,6 +4484,7 @@ mod tests {
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
+                metrics: RuntimeMetrics::new(),
                 active_connections: active.clone(),
             },
         ));
