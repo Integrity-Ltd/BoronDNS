@@ -17,6 +17,9 @@ pub enum AxfrError {
     #[error("AXFR response QID does not match query QID")]
     MismatchedQid,
 
+    #[error("AXFR response was not marked as a response")]
+    NotResponse,
+
     #[error("AXFR response opcode is not QUERY")]
     MismatchedOpcode,
 
@@ -118,6 +121,9 @@ pub enum IxfrError {
 
     #[error("IXFR response QID does not match query QID")]
     MismatchedQid,
+
+    #[error("IXFR response was not marked as a response")]
+    NotResponse,
 
     #[error("IXFR response opcode is not QUERY")]
     MismatchedOpcode,
@@ -229,6 +235,9 @@ pub fn parse_axfr_response(
         let header = Header::parse(message).map_err(|_| AxfrError::MalformedMessage)?;
         if header.id != qid {
             return Err(AxfrError::MismatchedQid);
+        }
+        if !header.is_response() {
+            return Err(AxfrError::NotResponse);
         }
         if header.opcode_value() != 0 {
             return Err(AxfrError::MismatchedOpcode);
@@ -343,6 +352,9 @@ pub fn parse_ixfr_response(
         let header = Header::parse(message).map_err(|_| IxfrError::MalformedMessage)?;
         if header.id != qid {
             return Err(IxfrError::MismatchedQid);
+        }
+        if !header.is_response() {
+            return Err(IxfrError::NotResponse);
         }
         if header.opcode_value() != 0 {
             return Err(IxfrError::MismatchedOpcode);
@@ -1562,6 +1574,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_axfr_message_not_marked_as_response() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut response = message(0x1234, vec![soa.clone(), apex_ns(), soa]);
+        response[2] &= !0x80;
+
+        let error = parse_axfr_response(0x1234, &apex, 1, &[response])
+            .expect_err("AXFR envelope without QR response bit");
+
+        assert_eq!(error, AxfrError::NotResponse);
+    }
+
+    #[test]
     fn parses_valid_soa_response_serial() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -1631,6 +1656,20 @@ mod tests {
         .expect_err("mismatched IXFR qid");
 
         assert_eq!(error, IxfrError::MismatchedQid);
+    }
+
+    #[test]
+    fn rejects_ixfr_message_not_marked_as_response() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let mut response = message(0x1234, vec![current_soa]);
+        response[2] &= !0x80;
+
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("IXFR envelope without QR response bit");
+
+        assert_eq!(error, IxfrError::NotResponse);
     }
 
     #[test]
