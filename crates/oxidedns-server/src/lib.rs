@@ -4020,6 +4020,7 @@ mod tests {
         net::{TcpListener, TcpStream, UdpSocket},
         sync::{mpsc, oneshot},
     };
+    use tokio_rustls::rustls::{RootCertStore, server::WebPkiClientVerifier};
     use tracing::{
         Event, Metadata, Subscriber,
         field::{Field, Visit},
@@ -6327,6 +6328,119 @@ mod tests {
         assert_eq!(metrics.snapshot().axfr_failed, 1);
     }
 
+    #[tokio::test]
+    async fn refresh_xot_uses_configured_client_certificate() {
+        let (client_cert, client_key) =
+            write_self_signed_xot_cert_files_for_name("oxidedns-client.example.test");
+        let (primary, trust_anchor, mut query_seen) =
+            spawn_xot_mtls_axfr_primary_with_serial(1, &client_cert).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+                client_cert = "{}"
+                client_key = "{}"
+            "#,
+            client_cert.display(),
+            client_key.display()
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_secs(5),
+                axfr_timeout: std::time::Duration::from_secs(5),
+                reason: "test",
+            },
+        )
+        .await
+        .expect("mTLS XoT AXFR should publish a snapshot");
+
+        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), query_seen.recv()).await,
+            Ok(Some(()))
+        );
+        assert_eq!(metrics.snapshot().axfr_succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_xot_rejects_missing_client_certificate_before_query() {
+        let (client_cert, _client_key) =
+            write_self_signed_xot_cert_files_for_name("oxidedns-client.example.test");
+        let (primary, trust_anchor, mut query_seen) =
+            spawn_xot_mtls_axfr_primary_with_serial(1, &client_cert).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(100),
+                axfr_timeout: std::time::Duration::from_millis(100),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        let query_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+        assert!(
+            !matches!(query_result, Ok(Some(()))),
+            "missing XoT client certificate must abort before sending a DNS transfer query"
+        );
+        assert_eq!(metrics.snapshot().axfr_failed, 1);
+    }
+
     #[test]
     fn runtime_config_validation_accepts_valid_xot_files() {
         let (trust_anchor, _key_path) = write_self_signed_xot_cert_files();
@@ -7187,6 +7301,69 @@ mod tests {
         });
 
         (addr, cert_path.display().to_string(), observed_query)
+    }
+
+    async fn spawn_xot_mtls_axfr_primary_with_serial(
+        serial: u32,
+        client_trust_anchor: &std::path::Path,
+    ) -> (std::net::SocketAddr, String, mpsc::Receiver<()>) {
+        let (cert_path, key_path) = write_self_signed_xot_cert_files();
+
+        let certs = load_pem_certs(cert_path.to_str().expect("utf-8 cert path"))
+            .expect("load generated cert");
+        let key = load_pem_private_key(
+            "127.0.0.1:0".parse().unwrap(),
+            key_path.to_str().expect("utf-8 key path"),
+        )
+        .expect("load generated key");
+        let mut client_roots = RootCertStore::empty();
+        for cert in load_pem_certs(
+            client_trust_anchor
+                .to_str()
+                .expect("utf-8 client cert path"),
+        )
+        .expect("load generated client cert")
+        {
+            client_roots.add(cert).expect("add client trust anchor");
+        }
+        let client_verifier = WebPkiClientVerifier::builder(Arc::new(client_roots))
+            .build()
+            .expect("client certificate verifier");
+        let mut config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_client_cert_verifier(client_verifier)
+            .with_single_cert(certs, key)
+            .expect("server tls config");
+        config.alpn_protocols = vec![b"dot".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (query_seen_tx, query_seen_rx) = mpsc::channel(1);
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut stream) = acceptor.accept(stream).await else {
+                return;
+            };
+            let mut length_prefix = [0u8; 2];
+            if stream.read_exact(&mut length_prefix).await.is_err() {
+                return;
+            }
+            let query_len = u16::from_be_bytes(length_prefix) as usize;
+            let mut query = vec![0u8; query_len];
+            if stream.read_exact(&mut query).await.is_err() {
+                return;
+            }
+
+            let header = Header::parse(&query).unwrap();
+            assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+            let _ = query_seen_tx.send(()).await;
+            let response = axfr_response(header.id, serial);
+            let _ = stream.write_all(&frame_tcp_message(&response)).await;
+        });
+
+        (addr, cert_path.display().to_string(), query_seen_rx)
     }
 
     async fn spawn_xot_primary_detecting_query(

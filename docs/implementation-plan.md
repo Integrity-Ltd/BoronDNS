@@ -235,7 +235,7 @@ XoT foundations are started:
 - `oxidedns check-config` and runtime startup validate XoT TLS file readability, trust-anchor parseability, client certificate/key parseability, and client private-key file mode before listeners bind;
 - runtime transfer planning preserves each target's transport mode and uses Rustls/Tokio-Rustls for XoT AXFR and IXFR TCP framing;
 - XoT client connections load configured PEM trust anchors, send the configured server name as SNI, require ALPN `dot`, support optional client certificate/key material, and do not fall back to cleartext TCP after TLS failure;
-- focused in-process tests cover successful XoT AXFR, XoT+TSIG AXFR, TLS-handshake failure without cleartext retry, certificate name mismatch before DNS query emission, and missing ALPN `dot` before DNS query emission. Real-primary XoT interop and the remaining TLS fault matrix are still tracked toward MVP.
+- focused in-process tests cover successful XoT AXFR, XoT+TSIG AXFR, XoT mutual TLS with client certificate/key material, TLS-handshake failure without cleartext retry, certificate name mismatch before DNS query emission, missing ALPN `dot` before DNS query emission, and missing required client certificate before DNS query emission. Real-primary XoT interop and the remaining TLS fault matrix are still tracked toward MVP.
 - `scripts/interop-knot-xot-docker.sh` covers a real Knot DNS XoT primary path with generated local CA/server certificates, ALPN `dot`, OxideDNS XoT transfer configuration, readiness, served data, and transfer metrics. Broader real-primary XoT matrix coverage remains pending.
 
 Interop harness foundations:
