@@ -70,6 +70,7 @@ IN = 1
 A = 1
 NS = 2
 SOA = 6
+TXT = 16
 RRSIG = 46
 NSEC = 47
 DNSKEY = 48
@@ -171,6 +172,10 @@ def zone_records():
         rr(ZONE, NS, name_wire("ns1.alpha.test.")),
         rr("ns1.alpha.test.", A, bytes([127, 0, 0, 1])),
         rr("www.alpha.test.", A, bytes([192, 0, 2, 10])),
+        *[
+            rr("large.alpha.test.", TXT, bytes([120]) + bytes([65 + (index % 26)]) * 120)
+            for index in range(8)
+        ],
         rr(ZONE, DNSKEY, dnskey_rdata()),
         rr(ZONE, NSEC, nsec_rdata("www.alpha.test.", [NS, SOA, RRSIG, NSEC, DNSKEY])),
         rr("www.alpha.test.", NSEC, nsec_rdata("alpha.test.", [A, RRSIG, NSEC])),
@@ -239,6 +244,7 @@ LOG_PATH = sys.argv[3]
 
 A = 1
 SOA = 6
+TXT = 16
 RRSIG = 46
 NSEC = 47
 DNSKEY = 48
@@ -385,6 +391,12 @@ if RRSIG in truncated["answer_types"] and (not truncated["opt_ttls"] or truncate
     raise AssertionError(f"truncated response kept DNSSEC records but cleared DO bit: {truncated}")
 if RRSIG not in truncated["answer_types"] and truncated["opt_ttls"] and truncated["opt_ttls"][0] & 0x8000:
     raise AssertionError(f"truncated response removed DNSSEC records but kept DO bit: {truncated}")
+
+non_edns_truncated = exchange(0xD006, "large.alpha.test.", TXT, payload=None, do=False)
+if not non_edns_truncated["tc"] or non_edns_truncated["size"] > 512:
+    raise AssertionError(f"non-EDNS response did not truncate to 512 octets: {non_edns_truncated}")
+if OPT in non_edns_truncated["additional_types"] or non_edns_truncated["opt_ttls"]:
+    raise AssertionError(f"non-EDNS truncated response unexpectedly included OPT: {non_edns_truncated}")
 
 print("DNSSEC serve runtime interop passed")
 PY

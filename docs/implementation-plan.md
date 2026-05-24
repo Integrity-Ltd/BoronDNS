@@ -246,7 +246,7 @@ EDNS/query-size work is partially started:
 - responses include OPT only when the request included OPT;
 - EDNS TCP keepalive requests are recognized on TCP and the response advertises the configured TCP idle timeout in 100ms units; UDP keepalive requests are silently ignored;
 - EDNS padding requests are recognized, and `[limits].edns_padding_block_size` controls default-off zero-padding of response OPT RDATA when the padded response fits the applicable UDP ceiling;
-- UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum, defaulting to 1232.
+- UDP response truncation applies the lesser of the client-advertised EDNS payload and configured server maximum for EDNS clients, defaulting to 1232; non-EDNS UDP responses use the RFC 1035 512-octet ceiling and do not include response OPT.
 - response OPT TTL handling clears the DNSSEC DO bit until DNSSEC augmentation records are actually included, and BADVERS responses preserve only the extended RCODE bits.
 - truncated UDP responses recompute the response OPT DO bit from the DNSSEC augmentation records that remain after size-driven record removal.
 
@@ -316,7 +316,7 @@ Interop harness foundations:
 - `scripts/interop-knot-dnssec-docker.sh` starts Knot DNS inside Docker with automatic ECDSAP256SHA256 NSEC3 signing, verifies primary AXFR carries DNSKEY, RRSIG, NSEC3, and NSEC3PARAM, then starts OxideDNS and verifies DO-sensitive positive, NXDOMAIN, NODATA, direct DNSKEY/NSEC3, non-DO suppression, and metrics behavior from the signed transfer, including an SRV fixture that makes Knot emit an empty-non-terminal NSEC3 record.
 - `scripts/interop-rrl-udp.sh` starts a fake AXFR primary and verifies runtime UDP RRL drop/slip behavior for all response categories plus Prometheus RRL counters.
 - `scripts/rrl-evidence-campaign.sh` wraps the RRL UDP interop script for repeated retained runs, with dry-run and list-config modes for reviewable campaign setup.
-- `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, and NSEC records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, and handles DNSSEC UDP truncation/response-DO semantics.
+- `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC, and large TXT records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, handles DNSSEC UDP truncation/response-DO semantics, and proves non-EDNS UDP truncation stays within 512 octets without adding a response OPT.
 - `scripts/interop-dnssec-nsec3-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC3, and NSEC3PARAM records, verifies direct NSEC3/NSEC3PARAM serving, and verifies DO-sensitive NXDOMAIN NSEC3 proof material with covering RRSIGs.
 
 Non-functional evidence foundations:
@@ -324,7 +324,7 @@ Non-functional evidence foundations:
 - `scripts/perf-smoke.sh` starts a synthetic 1,000-record fake AXFR primary, measures startup-to-ready time after launching OxideDNS, confirms transfer metrics and SOA serial publication, and runs a small UDP direct-hit latency sample against the transferred zone. This is a repeatable smoke harness for performance evidence collection, not final ODS-NFR-PERF conformance.
 - `scripts/audit-invariants.sh` records repeatable static inspection evidence for the SRS v0.7 architectural invariants: secondary-only scope, memory-resident query path, atomic zone snapshot publication, no persistent operational writes, static configuration/control surface, first-party safe-Rust discipline, authoritative-only response composition, single-process operation, and static composition with no runtime code loading.
 - `crates/oxidedns-core/src/dns.rs` test `concurrent_snapshot_replacement_answers_from_one_zone_version` stress-checks CNAME-chain query responses while `ZoneStore` swaps complete snapshots, proving observed answers come from one published zone version.
-- `crates/oxidedns-core/src/dns.rs` NSID tests cover configured NSID EDNS option responses, default-empty suppression, and non-empty query OPTION-DATA treated as a request per SRS v0.7 `ODS-FR-EDNS-016..017`.
+- `crates/oxidedns-core/src/dns.rs` NSID tests cover configured NSID EDNS option responses, default-empty suppression, and non-empty query OPTION-DATA treated as a request per SRS v0.7 `ODS-FR-EDNS-016..017`; `non_edns_udp_response_over_512_octets_is_truncated_without_opt` covers the `ODS-FR-EDNS-015` no-OPT 512-octet ceiling path.
 - `scripts/engineering-mvp-evidence.sh` captures the narrow Engineering MVP gate: repository checks, parser fuzz compile, invariant audit, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh interop logs under `target/evidence/engineering-mvp/<timestamp>/`.
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.

@@ -5618,7 +5618,7 @@ mod tests {
     }
 
     #[test]
-    fn udp_response_over_ceiling_is_truncated() {
+    fn non_edns_udp_response_over_512_octets_is_truncated_without_opt() {
         let store = ZoneStore::new();
         let rdatas = (0..20).map(|_| vec![60; 50]).collect::<Vec<_>>();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -5634,11 +5634,12 @@ mod tests {
         ));
 
         let packet = query(b"\x03www\x07example\x04test\x00", RecordType::Txt as u16, 1);
-        let response = store_response_with_options(&packet, &store, AnswerOptions::udp(512));
+        let response = store_response_with_options(&packet, &store, AnswerOptions::udp(1232));
         let flags = u16::from_be_bytes([response[2], response[3]]);
 
         assert!(response.len() <= 512);
         assert_eq!(flags & 0x0200, 0x0200);
+        assert_eq!(response_additional_types(&response), Vec::<u16>::new());
     }
 
     #[test]
