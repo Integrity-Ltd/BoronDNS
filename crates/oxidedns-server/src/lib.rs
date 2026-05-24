@@ -6221,6 +6221,112 @@ mod tests {
         accept_task.abort();
     }
 
+    #[tokio::test]
+    async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
+        let (primary, trust_anchor, mut query_seen) =
+            spawn_xot_primary_detecting_query("other.example.test", true).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(100),
+                axfr_timeout: std::time::Duration::from_millis(100),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        let query_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+        assert!(
+            !matches!(query_result, Ok(Some(()))),
+            "certificate name mismatch must abort before sending a DNS transfer query"
+        );
+        assert_eq!(metrics.snapshot().axfr_failed, 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
+        let (primary, trust_anchor, mut query_seen) =
+            spawn_xot_primary_detecting_query("primary.example.test", false).await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+        ))
+        .expect("valid config");
+        let transfer_plan = TransferPlan::from_config(&config);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+        let zones = ZoneStore::new();
+        zones.insert_loading(apex);
+        let metrics = RuntimeMetrics::new();
+        let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+        let snapshot = refresh_zone_from_primaries(
+            &zones,
+            &plan,
+            None,
+            RefreshAttemptContext {
+                ixfr_cooldowns: &ixfr_cooldowns,
+                metrics: &metrics,
+                ixfr_timeout: std::time::Duration::from_millis(100),
+                axfr_timeout: std::time::Duration::from_millis(100),
+                reason: "test",
+            },
+        )
+        .await;
+
+        assert!(snapshot.is_none());
+        let query_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+        assert!(
+            !matches!(query_result, Ok(Some(()))),
+            "missing ALPN dot must abort before sending a DNS transfer query"
+        );
+        assert_eq!(metrics.snapshot().axfr_failed, 1);
+    }
+
     #[test]
     fn runtime_config_validation_accepts_valid_xot_files() {
         let (trust_anchor, _key_path) = write_self_signed_xot_cert_files();
@@ -7083,8 +7189,62 @@ mod tests {
         (addr, cert_path.display().to_string(), observed_query)
     }
 
+    async fn spawn_xot_primary_detecting_query(
+        cert_dns_name: &str,
+        negotiate_dot_alpn: bool,
+    ) -> (std::net::SocketAddr, String, mpsc::Receiver<()>) {
+        let (cert_path, key_path) = write_self_signed_xot_cert_files_for_name(cert_dns_name);
+
+        let certs = load_pem_certs(cert_path.to_str().expect("utf-8 cert path"))
+            .expect("load generated cert");
+        let key = load_pem_private_key(
+            "127.0.0.1:0".parse().unwrap(),
+            key_path.to_str().expect("utf-8 key path"),
+        )
+        .expect("load generated key");
+        let mut config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server tls config");
+        if negotiate_dot_alpn {
+            config.alpn_protocols = vec![b"dot".to_vec()];
+        }
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (query_seen_tx, query_seen_rx) = mpsc::channel(1);
+
+        tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut stream) = acceptor.accept(stream).await else {
+                return;
+            };
+            let mut length_prefix = [0u8; 2];
+            if matches!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(250),
+                    stream.read_exact(&mut length_prefix),
+                )
+                .await,
+                Ok(Ok(_))
+            ) {
+                let _ = query_seen_tx.send(()).await;
+            }
+        });
+
+        (addr, cert_path.display().to_string(), query_seen_rx)
+    }
+
     fn write_self_signed_xot_cert_files() -> (std::path::PathBuf, std::path::PathBuf) {
-        let cert = rcgen::generate_simple_self_signed(vec!["primary.example.test".to_owned()])
+        write_self_signed_xot_cert_files_for_name("primary.example.test")
+    }
+
+    fn write_self_signed_xot_cert_files_for_name(
+        dns_name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let cert = rcgen::generate_simple_self_signed(vec![dns_name.to_owned()])
             .expect("self-signed certificate");
         let cert_pem = cert.cert.pem();
         let key_pem = cert.signing_key.serialize_pem();
