@@ -32,7 +32,7 @@ use oxidedns_core::{
         DomainName, Header, Opcode, Question, Transport, answer_message_with_notify_hooks,
     },
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
-    zone::{SoaTimers, ZoneSnapshot, ZoneStore},
+    zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
 
 #[derive(Debug, Error)]
@@ -1066,7 +1066,7 @@ async fn metrics(State(state): State<HealthEndpointState>) -> Response {
 
 fn metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
     let snapshot = metrics.snapshot();
-    format!(
+    let mut body = format!(
         "# HELP oxidedns_zones_total Configured zones.\n\
          # TYPE oxidedns_zones_total gauge\n\
          oxidedns_zones_total {}\n\
@@ -1093,7 +1093,58 @@ fn metrics_body(zones: &ZoneStore, metrics: &RuntimeMetrics) -> String {
         snapshot.ixfr_succeeded,
         snapshot.axfr_failed,
         snapshot.ixfr_failed,
-    )
+    );
+    append_zone_status_metrics(&mut body, zones);
+    body
+}
+
+fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
+    body.push_str(
+        "# HELP oxidedns_zone_state Zone state, exposed as 1 for the current state and 0 for other states.\n\
+         # TYPE oxidedns_zone_state gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        for (state, value) in zone_state_samples(snapshot.state) {
+            body.push_str(&format!(
+                "oxidedns_zone_state{{zone=\"{zone}\",state=\"{state}\"}} {value}\n"
+            ));
+        }
+    }
+
+    body.push_str(
+        "# HELP oxidedns_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
+         # TYPE oxidedns_zone_soa_serial gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        if let Some(serial) = snapshot.serial {
+            let zone = prometheus_label_value(&snapshot.origin.to_string());
+            body.push_str(&format!(
+                "oxidedns_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
+            ));
+        }
+    }
+}
+
+fn zone_state_samples(state: ZoneState) -> [(&'static str, u8); 3] {
+    [
+        ("loading", u8::from(state == ZoneState::Loading)),
+        ("active", u8::from(state == ZoneState::Active)),
+        ("expired", u8::from(state == ZoneState::Expired)),
+    ]
+}
+
+fn prometheus_label_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn plain_text(status: StatusCode, body: &'static str) -> Response {
@@ -2581,6 +2632,7 @@ mod tests {
             Some(1),
             Vec::new(),
         ));
+        zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
         let metrics_state = RuntimeMetrics::new();
         metrics_state.record_axfr_started();
         metrics_state.record_axfr_succeeded();
@@ -2602,12 +2654,17 @@ mod tests {
         let metrics = http_request(addr, "GET", "/metrics").await;
         assert!(metrics.starts_with("HTTP/1.1 200 OK"));
         assert!(metrics.contains("content-type: text/plain; version=0.0.4; charset=utf-8"));
-        assert!(metrics.contains("oxidedns_zones_total 1"));
+        assert!(metrics.contains("oxidedns_zones_total 2"));
         assert!(metrics.contains("oxidedns_zones_active 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_failed_total{protocol=\"axfr\"} 0"));
+        assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"active\"} 1"));
+        assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0"));
+        assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
+        assert!(!metrics.contains("oxidedns_zone_soa_serial{zone=\"loading.test.\"}"));
+        assert!(metrics.contains("oxidedns_zone_soa_serial{zone=\"example.test.\"} 1"));
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));

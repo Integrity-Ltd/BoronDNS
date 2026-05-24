@@ -698,6 +698,18 @@ impl ZoneStore {
             .cloned()
     }
 
+    pub fn snapshots(&self) -> Vec<Arc<ZoneSnapshot>> {
+        let mut snapshots = self
+            .zones
+            .read()
+            .expect("zone store lock poisoned")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        snapshots.sort_by_key(|snapshot| snapshot.origin.canonical_key());
+        snapshots
+    }
+
     pub fn len(&self) -> usize {
         self.zones.read().expect("zone store lock poisoned").len()
     }
@@ -864,6 +876,21 @@ mod tests {
         assert!(store.expire_zone(&active));
         assert_eq!(store.active_count(), 0);
         assert!(!store.has_active_zone());
+    }
+
+    #[test]
+    fn snapshots_returns_zones_in_stable_order() {
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("z.test.").unwrap());
+        store.insert_loading(DomainName::from_absolute_str("a.test.").unwrap());
+
+        let origins = store
+            .snapshots()
+            .into_iter()
+            .map(|snapshot| snapshot.origin.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(origins, vec!["a.test.", "z.test."]);
     }
 
     fn soa_rdata() -> Vec<u8> {
