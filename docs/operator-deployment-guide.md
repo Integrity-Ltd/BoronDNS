@@ -230,8 +230,8 @@ scripts/engineering-mvp-evidence.sh
 
 `scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
 under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
-fuzz compile, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh
-interop logs.
+fuzz compile, invariant audit, performance smoke, and BIND AXFR, TSIG AXFR, and
+NOTIFY refresh interop logs.
 
 `scripts/release-evidence-snapshot.sh` writes command logs under
 `target/evidence/<timestamp>/`. By default it captures the repo check, fuzz

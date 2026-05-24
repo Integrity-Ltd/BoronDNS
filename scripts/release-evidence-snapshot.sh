@@ -74,6 +74,7 @@ record_version python3 python3 --version
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
+run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"
 run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit-maintainability.sh"
 

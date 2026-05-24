@@ -31,6 +31,7 @@ compliance.
 
 | Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
+| Architectural Invariants | `scripts/audit-invariants.sh` records static inspection evidence for secondary-only scope, memory-resident query path, atomic snapshot publication, no persistent operational writes, static configuration/control surface, and first-party safe Rust | Add behavioral UPDATE rejection evidence, concurrent refresh/query atomicity stress evidence, and read-only root filesystem runtime evidence |
 | Fuzzing | `dns_datagram`, `transfer_stream`, `tsig_message`, and `notify_edns_datagram` compile checks; `scripts/fuzz-campaign.sh` and optional release-snapshot fuzz campaign capture | 24-hour campaigns per parser target with retained logs/artifacts |
 | Safe Rust Audit | Workspace `unsafe_code = "forbid"` lint; `scripts/audit-safe-rust.sh` first-party unsafe construct scan | Release-review transitive dependency unsafe enumeration, for example with `cargo geiger` or equivalent |
 | Maintainability Evidence | `scripts/audit-maintainability.sh` records first-party Rust source line count, module map, and the current ODS-NFR-MAINT-001 over-target status | Architecture/release-note justification or refactor plan for the line-count target, plus reproducible-build and in-code requirement-reference evidence |
@@ -52,6 +53,7 @@ Broader SRS acceptance evidence commands:
 
 ```sh
 ./scripts/check.sh
+scripts/audit-invariants.sh
 scripts/audit-safe-rust.sh
 scripts/audit-maintainability.sh
 cargo check --manifest-path fuzz/Cargo.toml

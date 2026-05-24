@@ -39,6 +39,7 @@ git -C "$repo_root" diff --check >"$snapshot_dir/git-diff-check.txt"
 cat >"$snapshot_dir/commands.txt" <<'EOF'
 ./scripts/check.sh
 cargo check --manifest-path fuzz/Cargo.toml
+scripts/audit-invariants.sh
 scripts/perf-smoke.sh
 scripts/interop-bind-axfr.sh
 scripts/interop-bind-tsig-axfr.sh
@@ -47,6 +48,7 @@ EOF
 
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
+run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && scripts/perf-smoke.sh"
 run_and_capture interop-bind-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-axfr.sh"
 run_and_capture interop-bind-tsig-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-tsig-axfr.sh"

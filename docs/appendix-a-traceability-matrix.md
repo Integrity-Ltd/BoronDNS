@@ -27,7 +27,7 @@ drift.
 
 | Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
-| ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/check.sh`; `docs/verification-ledger.md` | Add explicit inspection artifacts for secondary-only state flow, memory-resident serving, atomic publication, no persistent state, static configuration, and safe-Rust discipline. |
+| ODS-INV-001..ODS-INV-006 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/audit-invariants.sh`; `scripts/check.sh`; `docs/verification-ledger.md` | Static invariant inspection evidence exists; add behavioral UPDATE rejection evidence, concurrent refresh/query atomicity stress evidence, and read-only root filesystem runtime evidence before acceptance review. |
 
 ## Functional Requirements
 
