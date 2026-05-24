@@ -418,6 +418,10 @@ fn apply_ixfr_incremental(
 
     while index < answers.len() {
         let old_soa = &answers[index];
+        if old_soa == outer_soa && expected_old_soa == *outer_soa {
+            index += 1;
+            break;
+        }
         if old_soa.rr_type != RecordType::Soa as u16 || old_soa != &expected_old_soa {
             return Err(IxfrError::BrokenSoaChain);
         }
@@ -443,6 +447,9 @@ fn apply_ixfr_incremental(
             add_record(&mut records, answers[index].clone())?;
             index += 1;
         }
+    }
+    if index != answers.len() {
+        return Err(IxfrError::BrokenSoaChain);
     }
 
     let final_applied_serial =
@@ -1793,6 +1800,61 @@ mod tests {
                 .answers
                 .is_empty()
         );
+        assert_eq!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("new.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers,
+            vec![new_a]
+        );
+    }
+
+    #[test]
+    fn parses_ixfr_mode1_incremental_diff_with_final_soa_terminator() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), apex_ns(), old_a.clone()]);
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[message(
+                0x1234,
+                vec![
+                    new_soa.clone(),
+                    current_soa,
+                    old_a,
+                    new_soa.clone(),
+                    new_a.clone(),
+                    new_soa.clone(),
+                ],
+            )],
+        )
+        .expect("mode 1 diff with final SOA terminator");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.serial, Some(2));
         assert_eq!(
             snapshot
                 .lookup(

@@ -4010,6 +4010,8 @@ fn frame_dns_tcp_message(message: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -7443,8 +7445,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "{prefix}-{}-{nanos}.{extension}",
+            "{prefix}-{}-{counter}-{nanos}.{extension}",
             std::process::id()
         ))
     }
