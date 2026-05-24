@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::{Semaphore, mpsc},
+    sync::{Semaphore, mpsc, oneshot},
     task::JoinSet,
 };
 use tracing::{debug, info, warn};
@@ -214,10 +214,13 @@ impl Runtime {
             notify_refresh_tx.clone(),
             ZSM_SCHEDULER_TICK,
         ));
+        let mut health_shutdown = None;
         if let Some(addr) = self.config.server.health {
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|source| RuntimeError::BindHealth { addr, source })?;
+            let (health_shutdown_tx, health_shutdown_rx) = oneshot::channel();
+            health_shutdown = Some(health_shutdown_tx);
             health_listeners.spawn(serve_health(
                 listener,
                 HealthEndpointState {
@@ -225,6 +228,9 @@ impl Runtime {
                     runtime_status: runtime_status.clone(),
                     metrics: metrics.clone(),
                     refresh_registry: refresh_registry.clone(),
+                },
+                async move {
+                    let _ = health_shutdown_rx.await;
                 },
             ));
         }
@@ -328,7 +334,17 @@ impl Runtime {
                     } else {
                         warn!("shutdown grace period elapsed with active refresh transfers");
                     }
-                    abort_task_set(&mut health_listeners, "health listener").await;
+                    if let Some(health_shutdown) = health_shutdown.take() {
+                        let _ = health_shutdown.send(());
+                    }
+                    let health_drained =
+                        drain_task_set(&mut health_listeners, shutdown_grace, "health listener")
+                            .await;
+                    if health_drained {
+                        info!("health listener drain completed");
+                    } else {
+                        warn!("shutdown grace period elapsed with active health connections");
+                    }
                     break;
                 }
                 result = listeners.join_next(), if !listeners.is_empty() => {
@@ -1584,11 +1600,13 @@ async fn serve_tcp(
 async fn serve_health(
     listener: TcpListener,
     state: HealthEndpointState,
+    shutdown_signal: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RuntimeError> {
     let local_addr = listener.local_addr().map_err(RuntimeError::Health)?;
     info!(%local_addr, "health listener bound");
 
     axum::serve(listener, health_router(state))
+        .with_graceful_shutdown(shutdown_signal)
         .await
         .map_err(RuntimeError::Health)
 }
@@ -3845,7 +3863,11 @@ mod tests {
         let zones = ZoneStore::new();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(serve_health(listener, health_state(zones.clone())));
+        let server = tokio::spawn(serve_health(
+            listener,
+            health_state(zones.clone()),
+            std::future::pending(),
+        ));
 
         let starting = http_request(addr, "GET", "/healthz").await;
         assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
@@ -3862,6 +3884,33 @@ mod tests {
         assert!(ready.ends_with("ready\n"));
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_exits_on_graceful_shutdown_signal() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_health(listener, health_state(zones), async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        let ready = http_request(addr, "GET", "/healthz").await;
+        assert!(ready.starts_with("HTTP/1.1 200 OK"));
+        assert!(ready.ends_with("ready\n"));
+
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), server)
+            .await
+            .expect("health listener did not stop after graceful shutdown signal")
+            .expect("health listener task panicked")
+            .expect("health listener returned an error");
     }
 
     #[tokio::test]
@@ -3933,6 +3982,7 @@ mod tests {
                 metrics: metrics_state,
                 refresh_registry,
             },
+            std::future::pending(),
         ));
 
         let ready = http_request(addr, "GET", "/readyz").await;
@@ -4027,6 +4077,7 @@ mod tests {
                     std::time::Duration::from_secs(3600),
                 ),
             },
+            std::future::pending(),
         ));
 
         runtime_status.mark_draining();
