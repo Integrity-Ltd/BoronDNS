@@ -22,6 +22,11 @@ REQUIRED_CURRENT = {
     "posix-rlimit": "crates/oxidedns-server/src/resource_limits.rs",
 }
 
+CURRENT_SOURCE_SHAPE = {
+    "posix-signal-disposition": "libc::signal(signal, libc::SIG_IGN)",
+    "posix-rlimit": "libc::getrlimit(libc::RLIMIT_NOFILE",
+}
+
 REQUIRED_DEFERRED = {
     "xdp-af-xdp",
     "io-uring-packet-io",
@@ -146,6 +151,18 @@ def assert_safety_comments(repo_root: Path, relative_path: str) -> None:
             )
 
 
+def assert_current_source_shape(repo_root: Path, row_id: str, relative_path: str) -> None:
+    required = CURRENT_SOURCE_SHAPE.get(row_id)
+    if required is None:
+        return
+    text = (repo_root / relative_path).read_text(encoding="utf-8")
+    if required not in text:
+        fail(
+            f"{relative_path}: current unsafe boundary {row_id} no longer contains "
+            f"expected source shape: {required}"
+        )
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     registry_path = repo_root / "docs" / "unsafe-boundaries.tsv"
@@ -187,6 +204,7 @@ def main() -> None:
                 "and SAFETY-rationale evidence"
             )
         assert_safety_comments(repo_root, relative_path)
+        assert_current_source_shape(repo_root, row_id, relative_path)
 
     for row_id, relative_path in REQUIRED_CURRENT.items():
         row = registry[row_id]

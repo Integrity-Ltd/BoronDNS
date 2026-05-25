@@ -32,8 +32,6 @@ PY
 python3 "$repo_root/scripts/check-unsafe-boundaries.py"
 python3 "$repo_root/scripts/check-unsafe-prone-dependencies.py"
 
-process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
-resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
 mapfile -t current_unsafe_adapter_paths < <(
   python3 - "$unsafe_boundary_registry" <<'PY'
 import csv
@@ -91,16 +89,6 @@ unsafe_matches="$(
 
 if [[ -n "$unsafe_matches" ]]; then
   printf 'first-party unsafe construct candidates found:\n%s\n' "$unsafe_matches" >&2
-  exit 1
-fi
-
-if ! rg --quiet 'libc::signal\(signal, libc::SIG_IGN\)' "$process_signals_exception"; then
-  echo "signal disposition unsafe exception changed unexpectedly: $process_signals_exception" >&2
-  exit 1
-fi
-
-if ! rg --quiet 'libc::getrlimit\(libc::RLIMIT_NOFILE' "$resource_limits_exception"; then
-  echo "resource-limit unsafe exception changed unexpectedly: $resource_limits_exception" >&2
   exit 1
 fi
 
