@@ -341,7 +341,7 @@ The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
 process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
 zones. It is intended for alerts around zones that have not completed initial
 transfer after startup. The scheduler also emits repeated
-`category=zone_state`, `event=zone_loading_threshold_exceeded` warning logs at
+`category=transfer`, `event=zone_loading_threshold_exceeded` warning logs at
 `[limits].zsm_loading_warning_threshold_secs` while a zone remains in LOADING.
 
 Basic checks:

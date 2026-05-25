@@ -29,7 +29,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/audit-log-fields.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | `cargo test --workspace` | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |

@@ -321,6 +321,7 @@ impl Runtime {
             DnsCookieSecretStore::new(dns_cookie_secret, dns_cookie.secret_rotation_interval);
         if dns_cookie.policy.is_some() {
             info!(
+                category = "cookie",
                 secret_fingerprint = %dns_cookie_secret_fingerprint(&dns_cookie_secret),
                 rotation_interval_secs = dns_cookie.secret_rotation_interval.map(|duration| duration.as_secs()).unwrap_or(0),
                 "DNS Cookie server secret generated"
@@ -1235,7 +1236,7 @@ async fn connect_xot_stream(
                 primary = %primary.addr,
                 peer_ip = %primary.addr.ip(),
                 sni = %sni,
-                failure_cause = %source,
+                error = %source,
                 "XoT TLS handshake failed"
             );
             return Err(TransferError::TlsHandshake {
@@ -1251,7 +1252,7 @@ async fn connect_xot_stream(
             primary = %primary.addr,
             peer_ip = %primary.addr.ip(),
             sni = %sni,
-            failure_cause = "missing negotiated dot ALPN",
+            error = "missing negotiated dot ALPN",
             "XoT ALPN negotiation failed"
         );
         return Err(TransferError::XotAlpn { addr: primary.addr });
@@ -1869,12 +1870,14 @@ impl DnsCookieSecretStore {
                     state.current = secret;
                     state.generated_at = Instant::now();
                     info!(
+                        category = "cookie",
                         secret_fingerprint = %dns_cookie_secret_fingerprint(&state.current),
                         "DNS Cookie server secret rotated"
                     );
                 }
                 Err(error) => {
                     warn!(
+                        category = "cookie",
                         %error,
                         "DNS Cookie server secret rotation failed; retaining previous secret"
                     );
@@ -2576,7 +2579,13 @@ async fn serve_udp(
             &settings.metrics,
             &settings.notify_log_limiter,
         ) else {
-            debug!(%peer, bytes = len, "discarded DNS datagram");
+            debug!(
+                peer_ip = %peer.ip(),
+                peer_port = peer.port(),
+                transport = "udp",
+                bytes = len,
+                "discarded DNS datagram"
+            );
             continue;
         };
         let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
@@ -2643,13 +2652,25 @@ async fn serve_udp(
             },
         ) {
             DatagramAction::Discard => {
-                debug!(%peer, bytes = len, "discarded DNS datagram");
+                debug!(
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
+                    transport = "udp",
+                    bytes = len,
+                    "discarded DNS datagram"
+                );
             }
             DatagramAction::Respond(response) => {
                 let response = match sign_tsig_response(response, prepared.response_tsig) {
                     Ok(response) => response,
                     Err(error) => {
-                        warn!(%peer, %error, "failed to sign TSIG response");
+                        warn!(
+                            peer_ip = %peer.ip(),
+                            peer_port = peer.port(),
+                            transport = "udp",
+                            %error,
+                            "failed to sign TSIG response"
+                        );
                         continue;
                     }
                 };
@@ -2767,6 +2788,7 @@ fn record_dns_cookie_badcookie_if_emitted(
     metrics.record_dns_cookie_badcookie();
     metrics.record_dns_cookie_badcookie_for_source(peer_ip, prefix_settings);
     debug!(
+        category = "cookie",
         %peer_ip,
         reason = ?reason,
         "DNS Cookie BADCOOKIE response emitted"
@@ -2952,7 +2974,9 @@ async fn serve_tcp(
             settings.max_connections,
         ) else {
             warn!(
-                %peer,
+                peer_ip = %peer.ip(),
+                peer_port = peer.port(),
+                transport = "tcp",
                 active_connections = settings.active_connections.load(Ordering::Relaxed),
                 limit = settings.max_connections,
                 "TCP connection limit reached; closing accepted connection"
@@ -2990,7 +3014,13 @@ async fn serve_tcp(
             )
             .await
             {
-                warn!(%peer, %error, "TCP connection failed");
+                warn!(
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
+                    transport = "tcp",
+                    %error,
+                    "TCP connection failed"
+                );
             }
         });
     }
@@ -6167,11 +6197,11 @@ async fn serve_scheduled_refreshes(
 
 fn log_loading_warning(warning: LoadingWarning) {
     warn!(
-        category = "zone_state",
+        category = "transfer",
         event = "zone_loading_threshold_exceeded",
         zone = %warning.zone,
         elapsed_loading_secs = warning.elapsed_loading_secs,
-        last_failure_cause = %warning.last_failure_cause,
+        error = %warning.last_failure_cause,
         next_retry_unix_secs = ?warning.next_retry_unix_secs,
         "zone remains in LOADING state beyond configured threshold"
     );
@@ -6524,6 +6554,7 @@ async fn handle_tcp_connection(
                 Err(_) => {
                     info!(
                         %peer_ip,
+                        transport = "tcp",
                         limit = max_inflight_queries_per_connection,
                         timeout_secs = inflight_limit_timeout.as_secs(),
                         "TCP connection remained at in-flight query limit; closing connection"
@@ -6629,7 +6660,12 @@ async fn handle_tcp_packet(
         &metrics,
         &notify_log_limiter,
     ) else {
-        debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
+        debug!(
+            %peer_ip,
+            transport = "tcp",
+            bytes = packet.len(),
+            "discarded DNS-over-TCP message"
+        );
         return;
     };
     let prepared = prepare_query_tsig_packet(prepared, &notify_authority);
@@ -6689,7 +6725,12 @@ async fn handle_tcp_packet(
         |lookup| record_query_termination_metric(&query_metrics, lookup, &metrics),
     ) {
         DatagramAction::Discard => {
-            debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
+            debug!(
+                %peer_ip,
+                transport = "tcp",
+                bytes = packet.len(),
+                "discarded DNS-over-TCP message"
+            );
         }
         DatagramAction::Respond(response) => {
             record_dns_cookie_badcookie_if_emitted(
@@ -6703,7 +6744,12 @@ async fn handle_tcp_packet(
             let response = match sign_tsig_response(response, prepared.response_tsig) {
                 Ok(response) => response,
                 Err(error) => {
-                    warn!(%peer_ip, %error, "failed to sign TSIG response");
+                    warn!(
+                        %peer_ip,
+                        transport = "tcp",
+                        %error,
+                        "failed to sign TSIG response"
+                    );
                     return;
                 }
             };
@@ -10014,11 +10060,11 @@ mod tests {
         assert!(
             captured.contains_all(&[
                 "zone remains in LOADING state beyond configured threshold",
-                "category=\"zone_state\"",
+                "category=\"transfer\"",
                 "event=\"zone_loading_threshold_exceeded\"",
                 "zone=example.test.",
                 "elapsed_loading_secs=3600",
-                "last_failure_cause=AXFR failed for primary 192.0.2.53:53: timed out",
+                "error=AXFR failed for primary 192.0.2.53:53: timed out",
                 "next_retry_unix_secs=Some(1700003600)",
             ]),
             "{:?}",
@@ -10717,7 +10763,7 @@ mod tests {
             &format!("primary={primary}"),
             "peer_ip=127.0.0.1",
             "sni=primary.example.test",
-            "failure_cause=\"missing negotiated dot ALPN\"",
+            "error=\"missing negotiated dot ALPN\"",
         ]));
     }
 
