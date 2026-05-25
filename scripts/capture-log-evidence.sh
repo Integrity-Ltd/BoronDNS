@@ -18,7 +18,7 @@ run_runtime_capture() {
   local name="$1"
   local format="$2"
   local max_entry_length_bytes="${3:-}"
-  local ready_needle="${4:-zone remains in LOADING state}"
+  local ready_needle="${4:-zone remains in LOADING state beyond configured threshold}"
   local config="$evidence_dir/runtime-$name.toml"
   local stdout="$evidence_dir/runtime-$name.stdout"
   local stderr="$evidence_dir/runtime-$name.stderr"
@@ -50,6 +50,9 @@ EOF
 [limits]
 axfr_timeout_secs = 1
 graceful_shutdown_secs = 1
+zsm_initial_retry_secs = 1
+zsm_initial_retry_max_secs = 2
+zsm_loading_warning_threshold_secs = 1
 
 [[zones]]
 name = "example.test."
@@ -105,6 +108,11 @@ require_text "$evidence_dir/runtime-json.stderr" '"tcp_listeners":1'
 require_text "$evidence_dir/runtime-json.stderr" '"message":"AXFR failed"'
 require_text "$evidence_dir/runtime-json.stderr" '"zone":"example.test."'
 require_text "$evidence_dir/runtime-json.stderr" '"primary":"127.0.0.1:9"'
+require_text "$evidence_dir/runtime-json.stderr" '"message":"zone remains in LOADING state beyond configured threshold"'
+require_text "$evidence_dir/runtime-json.stderr" '"category":"transfer"'
+require_text "$evidence_dir/runtime-json.stderr" '"event":"zone_loading_threshold_exceeded"'
+require_text "$evidence_dir/runtime-json.stderr" '"elapsed_loading_secs":'
+require_text "$evidence_dir/runtime-json.stderr" '"next_retry_unix_secs":'
 require_text "$evidence_dir/runtime-json.stderr" '"signal":"SIGTERM"'
 
 grep '^timestamp=' "$evidence_dir/runtime-logfmt.stderr" >"$evidence_dir/runtime-logfmt.records"
@@ -115,6 +123,11 @@ require_text "$evidence_dir/runtime-logfmt.stderr" 'tcp_listeners=1'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'message="AXFR failed"'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'zone=example.test.'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'primary=127.0.0.1:9'
+require_text "$evidence_dir/runtime-logfmt.stderr" 'message="zone remains in LOADING state beyond configured threshold"'
+require_text "$evidence_dir/runtime-logfmt.stderr" 'category=transfer'
+require_text "$evidence_dir/runtime-logfmt.stderr" 'event=zone_loading_threshold_exceeded'
+require_text "$evidence_dir/runtime-logfmt.stderr" 'elapsed_loading_secs='
+require_text "$evidence_dir/runtime-logfmt.stderr" 'next_retry_unix_secs='
 require_text "$evidence_dir/runtime-logfmt.stderr" 'signal=SIGTERM'
 
 grep -E '^(timestamp=|message=)' "$evidence_dir/runtime-logfmt-limited.stderr" \
@@ -134,6 +147,8 @@ Captured short runtime sessions for SRS structured logging requirements:
 
 - JSON runtime logs with canonical startup, listener, transfer-failure, zone, and signal fields.
 - logfmt runtime logs with canonical `timestamp`, `level`, `target`, `message`, and event fields.
+- Running-service long-LOADING threshold warning logs with transfer category,
+  event name, zone, elapsed duration, last failure cause, and next retry fields.
 - bounded logfmt runtime logs proving configured end-to-end truncation remains parseable and within `logging.max_entry_length_bytes`.
 - Bootstrap records remain JSON before the configured runtime logger is applied.
 
