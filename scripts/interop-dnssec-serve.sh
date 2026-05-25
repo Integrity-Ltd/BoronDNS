@@ -197,6 +197,7 @@ def zone_records():
         rr(ZONE, RRSIG, rrsig_rdata(NSEC, 2)),
         rr("www.alpha.test.", RRSIG, rrsig_rdata(A, 3)),
         rr("www.alpha.test.", RRSIG, rrsig_rdata(NSEC, 3)),
+        rr("sig.alpha.test.", RRSIG, rrsig_rdata(A, 3)),
         rr("child.alpha.test.", RRSIG, rrsig_rdata(NS, 3)),
         rr("child.alpha.test.", RRSIG, rrsig_rdata(DS, 3)),
         soa,
@@ -421,6 +422,18 @@ dnskey = exchange(0xD004, "alpha.test.", DNSKEY, payload=4096, do=False)
 if dnskey["answer_types"] != [DNSKEY]:
     raise AssertionError(f"direct DNSKEY query did not serve transferred DNSKEY: {dnskey}")
 
+rrsig_non_do = exchange(0xD00B, "sig.alpha.test.", RRSIG, payload=4096, do=False)
+if rrsig_non_do["rcode"] != 0 or rrsig_non_do["tc"] or rrsig_non_do["answer_types"] != [RRSIG]:
+    raise AssertionError(f"direct non-DO RRSIG query did not serve only transferred RRSIG records: {rrsig_non_do}")
+if rrsig_non_do["opt_ttls"] and rrsig_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"direct non-DO RRSIG query set response DO bit: {rrsig_non_do}")
+
+nsec_non_do = exchange(0xD00C, "www.alpha.test.", NSEC, payload=4096, do=False)
+if nsec_non_do["rcode"] != 0 or nsec_non_do["answer_types"] != [NSEC]:
+    raise AssertionError(f"direct non-DO NSEC query did not serve only transferred NSEC records: {nsec_non_do}")
+if nsec_non_do["opt_ttls"] and nsec_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"direct non-DO NSEC query set response DO bit: {nsec_non_do}")
+
 ds_do = exchange(0xD009, "child.alpha.test.", DS, payload=4096, do=True)
 if ds_do["rcode"] != 0 or ds_do["answer_types"] != [DS, RRSIG]:
     raise AssertionError(f"direct DS DO query did not serve transferred DS plus covering RRSIG: {ds_do}")
@@ -550,6 +563,8 @@ positive_do_rrsig=1
 positive_non_do_suppresses_rrsig=1
 nxdomain_do_nsec_rrsig=1
 direct_dnskey_served=1
+direct_rrsig_non_do_served=1
+direct_nsec_non_do_served=1
 direct_ds_do_rrsig=1
 signed_child_referral_ds_rrsig=1
 dnssec_truncation_checked=1
