@@ -57,7 +57,7 @@ cat >"$snapshot_dir/README.md" <<EOF
 - Branch: $(git -C "$repo_root" branch --show-current)
 
 This directory contains command logs captured for release review, including
-safe-Rust, maintainability, and canonical log-field audit output. It is an evidence collection
+safe-Rust, maintainability, canonical log-field, and lazy log-formatting audit output. It is an evidence collection
 artifact, not a substitute for the SRS traceability matrix, 24-hour fuzzing
 campaigns, soak testing, or production benchmark reports.
 
@@ -100,6 +100,7 @@ run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_REA
 run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"
 run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit-maintainability.sh"
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
+run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
 run_and_capture audit-xot-revocation bash -lc "cd '$repo_root' && scripts/audit-xot-revocation.sh"
 run_and_capture audit-dnssec-passive bash -lc "cd '$repo_root' && scripts/audit-dnssec-passive.sh"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"

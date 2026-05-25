@@ -57,6 +57,7 @@ cargo check --manifest-path fuzz/Cargo.toml
 scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh
 scripts/audit-log-fields.py
+scripts/audit-log-lazy-formatting.py
 scripts/capture-log-evidence.sh
 scripts/capture-signal-evidence.sh
 scripts/capture-health-metrics-evidence.sh
@@ -75,6 +76,7 @@ run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --mani
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' scripts/audit-readonly-runtime.sh"
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
+run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' scripts/perf-smoke.sh"
 run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
 run_and_capture interop-bind-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-axfr.sh"
