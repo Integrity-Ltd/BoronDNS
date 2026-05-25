@@ -143,7 +143,8 @@ def zone_records():
 
 def axfr_response(qid):
     answers = zone_records()
-    return struct.pack("!HHHHHH", qid, 0x8000, 0, len(answers), 0, 0) + b"".join(answers)
+    question = name_wire(ZONE) + struct.pack("!HH", AXFR, IN)
+    return struct.pack("!HHHHHH", qid, 0x8000, 1, len(answers), 0, 0) + question + b"".join(answers)
 
 
 def read_exact(conn, size):
