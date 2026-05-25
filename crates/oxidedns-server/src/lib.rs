@@ -6,6 +6,7 @@ use std::{
     future::Future,
     io::Write,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
@@ -4724,6 +4725,9 @@ struct TcpConnectionPermit {
     active: Arc<AtomicUsize>,
 }
 
+type TcpQueryHook =
+    Arc<dyn Fn(u16) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> + Send + Sync + 'static>;
+
 #[derive(Debug, Clone)]
 struct ZoneTransferPlan {
     origin: DomainName,
@@ -6538,6 +6542,58 @@ async fn handle_tcp_connection(
     metrics: RuntimeMetrics,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
+    handle_tcp_connection_with_query_hook(
+        stream,
+        zones,
+        idle_timeout,
+        max_udp_payload,
+        max_cname_chain,
+        read_timeout,
+        write_timeout,
+        max_inflight_queries_per_connection,
+        inflight_limit_timeout,
+        edns_padding_block_size,
+        any_response,
+        nsid,
+        dns_cookie_secrets,
+        dns_cookie,
+        cookie_prefix_metrics,
+        notify_authority,
+        notify_refresh,
+        notify_refresh_tx,
+        notify_log_limiter,
+        metrics,
+        peer_ip,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tcp_connection_with_query_hook(
+    stream: TcpStream,
+    zones: ZoneStore,
+    idle_timeout: Duration,
+    max_udp_payload: u16,
+    max_cname_chain: usize,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    max_inflight_queries_per_connection: usize,
+    inflight_limit_timeout: Duration,
+    edns_padding_block_size: u16,
+    any_response: AnyResponseMode,
+    nsid: Vec<u8>,
+    dns_cookie_secrets: DnsCookieSecretStore,
+    dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
+    notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
+    metrics: RuntimeMetrics,
+    peer_ip: IpAddr,
+    query_hook: Option<TcpQueryHook>,
+) -> Result<(), RuntimeError> {
     let (mut reader, writer) = stream.into_split();
     let inflight = Arc::new(Semaphore::new(max_inflight_queries_per_connection));
     let (response_tx, response_rx) = mpsc::channel(max_inflight_queries_per_connection);
@@ -6588,6 +6644,7 @@ async fn handle_tcp_connection(
             peer_ip,
             response_tx.clone(),
             permit,
+            query_hook.clone(),
         ));
 
         while let Some(join_result) = query_tasks.try_join_next() {
@@ -6652,7 +6709,10 @@ async fn handle_tcp_packet(
     peer_ip: IpAddr,
     response_tx: mpsc::Sender<TcpResponse>,
     permit: OwnedSemaphorePermit,
+    query_hook: Option<TcpQueryHook>,
 ) {
+    let query_id = Header::parse(&packet).ok().map(|header| header.id);
+
     let Some(prepared) = prepare_notify_packet_with_metrics(
         &packet,
         &notify_authority,
@@ -6670,6 +6730,9 @@ async fn handle_tcp_packet(
     };
     let prepared = prepare_query_tsig_packet(prepared, &notify_authority);
     if let Some(response) = prepared.immediate_response {
+        if let (Some(hook), Some(query_id)) = (&query_hook, query_id) {
+            hook(query_id).await;
+        }
         let _ = response_tx.send(TcpResponse { response, permit }).await;
         return;
     }
@@ -6753,6 +6816,9 @@ async fn handle_tcp_packet(
                     return;
                 }
             };
+            if let (Some(hook), Some(query_id)) = (&query_hook, query_id) {
+                hook(query_id).await;
+            }
             let _ = response_tx.send(TcpResponse { response, permit }).await;
         }
     }
@@ -6876,18 +6942,19 @@ mod tests {
         RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError,
         TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
         dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
-        response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
-        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
-        sign_tsig_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
-        validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
+        handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
+        load_pem_certs, load_pem_private_key, log_loading_warning, log_notify_log_summary,
+        log_rrl_summary, metrics_body, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        prepare_query_tsig_packet, query_id_from_random_bytes, record_query_response_metric,
+        record_query_termination_metric, refresh_zone_from_primaries,
+        required_file_descriptor_limit, response_category, response_opt_record,
+        response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
+        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_tsig_response, signal_notify_refresh,
+        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
+        uniform_index_from_u64, validate_file_descriptor_limit_value, validate_runtime_config,
+        write_tcp_message,
     };
 
     #[test]
@@ -11692,6 +11759,89 @@ mod tests {
         );
         assert_eq!(
             u16::from_be_bytes([second_response[6], second_response[7]]),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_connection_processes_later_query_while_first_response_is_delayed() {
+        let zones = active_example_zone();
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let query_hook: super::TcpQueryHook = {
+            let first_started = first_started.clone();
+            let release_first = release_first.clone();
+            Arc::new(move |query_id| {
+                let first_started = first_started.clone();
+                let release_first = release_first.clone();
+                Box::pin(async move {
+                    if query_id == 0x1234 {
+                        first_started.notify_one();
+                        release_first.notified().await;
+                    }
+                })
+            })
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_tcp_connection_with_query_hook(
+                stream,
+                zones,
+                std::time::Duration::from_secs(5),
+                1232,
+                8,
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(5),
+                64,
+                std::time::Duration::from_secs(5),
+                0,
+                AnyResponseMode::Minimal,
+                Vec::new(),
+                dns_cookie_secret_store_for_test(),
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
+                NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
+                notify_log_limiter_for_test(),
+                RuntimeMetrics::new(),
+                "127.0.0.1".parse().unwrap(),
+                Some(query_hook),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let first = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let mut second = first.clone();
+        second[0..2].copy_from_slice(&0x5678u16.to_be_bytes());
+        let mut pipelined = frame_tcp_message(&first);
+        pipelined.extend_from_slice(&frame_tcp_message(&second));
+        client.write_all(&pipelined).await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), first_started.notified())
+            .await
+            .expect("first TCP query should reach the test pause");
+
+        let first_available_response = read_framed_tcp_response(&mut client).await;
+        assert_eq!(Header::parse(&first_available_response).unwrap().id, 0x5678);
+        assert_eq!(
+            u16::from_be_bytes([first_available_response[6], first_available_response[7]]),
+            1
+        );
+
+        release_first.notify_one();
+        let delayed_response = read_framed_tcp_response(&mut client).await;
+        drop(client);
+        server.await.unwrap();
+
+        assert_eq!(Header::parse(&delayed_response).unwrap().id, 0x1234);
+        assert_eq!(
+            u16::from_be_bytes([delayed_response[6], delayed_response[7]]),
             1
         );
     }
