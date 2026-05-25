@@ -17,6 +17,7 @@ and update companion documents afterward.
 - `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary.
 - `devops-getting-started.md`: clone, build, validate, and first local run guide.
 - `operator-deployment-guide.md`: practical MVP deployment and operations guide.
+- `dns-client-benchmark.md`: bounded local UDP client benchmark guide.
 - `architecture.md`: architecture and release-governance scaffold for current MVP decisions.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
