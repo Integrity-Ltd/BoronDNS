@@ -1,69 +1,59 @@
 # OxideDNS
 
-OxideDNS is the working Rust project for the secondary-only authoritative DNS server described by Tibor's OxideDNS-Secondary SRS package.
+OxideDNS is a secondary-only authoritative DNS server. It loads zone data from
+configured primary DNS servers over AXFR or IXFR, keeps the active zone state in
+memory, and serves authoritative DNS answers over UDP and TCP.
+It uses separate DNS, transfer, and management interface roles. OxideDNS accepts authorized NOTIFY on the DNS listeners.
 
-The implementation is targeting the local Engineering MVP: a deployable
-secondary-authoritative DNS server with deterministic local checks, short
-runtime evidence, and explicit separation from later SRS release-acceptance
-evidence.
+The project is currently aimed at an Engineering MVP: a working, testable
+secondary server with clear operating boundaries. It is not yet a final SRS
+release-acceptance build.
 
-## Source Documents
+## Start Here
 
-Normative order:
+- New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
+- Detailed operations reference: [Operator deployment guide](docs/operator-deployment-guide.md)
+- Current implementation target: [Engineering MVP scope](docs/engineering-mvp-scope.md)
+- Verification status: [Verification ledger](docs/verification-ledger.md)
+- Full requirements: [OxideDNS Secondary SRS v0.7](docs/OxideDNS-Secondary-SRS-v0.7.md)
 
-1. [Software Requirements Specification v0.7](docs/OxideDNS-Secondary-SRS-v0.7.md)
-2. [Software Development Specification / SBVR rules](docs/OxideDNS-Secondary-SBVR-v0.1.md)
-3. [Executive Summary v0.1](docs/OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md)
-4. Raw mailbox messages and attachment exports are intentionally not versioned in this repository.
-
-Implementation planning:
-
-- [Engineering MVP and SRS acceptance implementation plan](docs/implementation-plan.md)
-- [Engineering MVP scope](docs/engineering-mvp-scope.md)
-- [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md)
-- [Verification ledger](docs/verification-ledger.md)
-- [Test Plan](docs/test-plan.md)
-- [Architecture and release governance scaffold](docs/architecture.md)
-- [Security policy](SECURITY.md)
-
-## Workspace
-
-- `oxidedns-core`: configuration, DNS wire parsing, EDNS handling, AXFR parsing, and in-memory zone-state foundations.
-- `oxidedns-server`: runtime for loading configuration, initial AXFR, and UDP/TCP authoritative DNS serving.
-- `oxidedns-cli`: command-line entrypoint.
-
-## Current Commands
+## Quick Local Commands
 
 ```bash
 cargo run -p oxidedns-cli -- --validate-config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- --dump-config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- --example-config
-cargo run -p oxidedns-cli -- check-config --config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 ./scripts/check.sh
-./scripts/perf-smoke.sh
 ```
 
-When the config path is omitted, `oxidedns` uses `/etc/oxidedns-secondary/config.toml`; `OXIDEDNS_CONFIG` can override that path for `--validate-config`, `--dump-config`, `check-config`, and `serve`.
+The checked-in example uses high DNS ports so it can run without root. For a real
+deployment, copy it and replace the example primary addresses, zone names, TSIG
+keys, XoT files, listener addresses, and management bind address.
 
-The workspace targets Rust 1.95 with the Rust 2024 edition and Cargo resolver 3.
+When no config path is supplied, `oxidedns` reads
+`/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path
+for validation, config dumping, `check-config`, and `serve`.
 
-The `serve` command validates configuration, performs AXFR and IXFR refresh
-attempts from configured primaries using OS-random query IDs, binds configured
-UDP/TCP DNS listeners and management listeners, and parses DNS queries. It
-accepts authorized NOTIFY on the DNS listeners and emits authoritative responses
-from active in-memory zone snapshots. The current Engineering MVP path includes
-EDNS0
-OPT handling, NSID responses, RFC 9018 DNS Cookie behavior, UDP truncation, TCP
-keepalive advertisement, default-off response padding, configurable ANY-query
-minimisation, authorized NOTIFY-triggered refresh, SOA REFRESH/RETRY/EXPIRE
-scheduling foundations, TSIG-signed transfer and NOTIFY paths, DNSSEC serving of
-transferred records, UDP response-rate limiting, and XoT TLS transport.
+## Workspace
 
-Long-running fuzz campaigns, Reference Hardware/Profile benchmarks, 30-day soak
-execution, production-depth log profiling, external operator acceptance,
-independent reproducible-build comparison, and signed release artifacts are
-later SRS acceptance work, not Engineering MVP requirements.
+- `oxidedns-core`: configuration, DNS wire parsing, AXFR/IXFR parsing, TSIG, and
+  in-memory zone state.
+- `oxidedns-server`: runtime, listeners, transfers, health, metrics, RRL, XoT,
+  and graceful shutdown.
+- `oxidedns-cli`: command-line entrypoint.
+
+The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
+
+## Documentation Map
+
+- [Architecture](docs/architecture.md)
+- [Test plan](docs/test-plan.md)
+- [Implementation plan](docs/implementation-plan.md)
+- [MVP gap register](docs/mvp-gap-register.md)
+- [Security policy](SECURITY.md)
+- [Release notes template](docs/release-notes-template.md)
+- [Specification document index](docs/README.md)
 
 ## License
 

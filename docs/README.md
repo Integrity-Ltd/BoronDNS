@@ -15,6 +15,7 @@ and update companion documents afterward.
 - `OxideDNS-Secondary-SRS-v0.1.md`: previous SRS baseline retained for history.
 - `OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion specification.
 - `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary.
+- `devops-getting-started.md`: clone, build, validate, and first local run guide.
 - `operator-deployment-guide.md`: practical MVP deployment and operations guide.
 - `architecture.md`: architecture and release-governance scaffold for current MVP decisions.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
@@ -29,9 +30,6 @@ and update companion documents afterward.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
 - `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.
 - `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance assertion register.
-
-
-Raw mailbox messages and exported attachments are intentionally not tracked in this repository.
 
 The planning and evidence documents are companion working artifacts. They remain
 subordinate to SRS v0.7 when scope or behavioral wording differs.
