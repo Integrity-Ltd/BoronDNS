@@ -55,6 +55,7 @@ client="$workdir/client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/negative-response-summary.tsv"
+traceability_tsv="$workdir/negative-response-traceability.tsv"
 oxidedns_conf="$workdir/oxidedns.toml"
 
 cat >"$fake_primary" <<'PY'
@@ -110,7 +111,7 @@ def parse_question(packet):
     qname, name_len = parse_name(packet, 12)
     offset = 12 + name_len
     qtype, qclass = struct.unpack("!HH", packet[offset:offset + 4])
-    return qname, qtype, qclass
+    return qname, qtype, qclass, packet[12:offset + 4]
 
 
 def rr(owner, rrtype, rdata, ttl=300):
@@ -137,6 +138,7 @@ def zone_records():
         rr("ns1.negative.test.", A, bytes([127, 0, 0, 1])),
         rr("www.negative.test.", A, bytes([192, 0, 2, 10])),
         rr("alias.negative.test.", CNAME, name_wire("missing.negative.test.")),
+        rr("alias-nodata.negative.test.", CNAME, name_wire("www.negative.test.")),
         rr("deleg.negative.test.", DNAME, name_wire("target.other.test.")),
         rr("child.foo.negative.test.", A, bytes([192, 0, 2, 20])),
         soa,
@@ -164,12 +166,12 @@ def handle_tcp(conn):
         length = struct.unpack("!H", read_exact(conn, 2))[0]
         query = read_exact(conn, length)
         qid = struct.unpack("!H", query[:2])[0]
-        qname, qtype, qclass = parse_question(query)
+        qname, qtype, qclass, question = parse_question(query)
         if qname.lower() != ZONE or qtype != AXFR or qclass != IN:
-            response = struct.pack("!HHHHHH", qid, 0x8004, 0, 0, 0, 0)
+            response = struct.pack("!HHHHHH", qid, 0x8004, 1, 0, 0, 0) + question
         else:
             log(f"TCP AXFR served records={len(zone_records())}")
-            response = axfr_response(qid)
+            response = struct.pack("!HHHHHH", qid, 0x8000, 1, len(zone_records()), 0, 0) + question + b"".join(zone_records())
         conn.sendall(struct.pack("!H", len(response)) + response)
 
 
@@ -198,6 +200,7 @@ HOST = "127.0.0.1"
 PORT = int(sys.argv[1])
 LOG_PATH = sys.argv[2]
 SUMMARY_PATH = sys.argv[3]
+TRACEABILITY_PATH = sys.argv[4]
 IN = 1
 A = 1
 CNAME = 5
@@ -284,6 +287,7 @@ def parse_response(packet):
         "nscount": nscount,
         "arcount": arcount,
         "answer_types": [record[0] for record in answers],
+        "answer_soa_ttls": [record[2] for record in answers if record[0] == SOA],
         "authority_types": [record[0] for record in authority],
         "authority_soa_ttls": [record[2] for record in authority if record[0] == SOA],
         "additional_types": [record[0] for record in additional],
@@ -305,67 +309,104 @@ def type_names(values):
 cases = [
     {
         "name": "nxdomain",
+        "requirements": "ODS-FR-CORE-023,ODS-FR-NRESP-001",
         "qname": "missing.negative.test.",
         "qtype": A,
         "rcode": 3,
         "aa": 1,
         "answers": [],
+        "answer_soa_ttls": [],
         "authority": [SOA],
         "soa_ttls": [300],
     },
     {
         "name": "nodata",
+        "requirements": "ODS-FR-CORE-022,ODS-FR-NRESP-001",
         "qname": "www.negative.test.",
         "qtype": AAAA,
         "rcode": 0,
         "aa": 1,
         "answers": [],
+        "answer_soa_ttls": [],
         "authority": [SOA],
         "soa_ttls": [300],
     },
     {
         "name": "empty_non_terminal",
+        "requirements": "ODS-FR-QRY-016,ODS-FR-NRESP-003,ODS-FR-CORE-022,ODS-FR-NRESP-001",
         "qname": "foo.negative.test.",
         "qtype": A,
         "rcode": 0,
         "aa": 1,
         "answers": [],
+        "answer_soa_ttls": [],
         "authority": [SOA],
         "soa_ttls": [300],
     },
     {
         "name": "cname_negative_terminal",
+        "requirements": "ODS-FR-NRESP-004,ODS-FR-NRESP-001",
         "qname": "alias.negative.test.",
         "qtype": A,
         "rcode": 3,
         "aa": 1,
         "answers": [CNAME],
+        "answer_soa_ttls": [],
+        "authority": [SOA],
+        "soa_ttls": [300],
+    },
+    {
+        "name": "cname_nodata_terminal",
+        "requirements": "ODS-FR-NRESP-005,ODS-FR-NRESP-001",
+        "qname": "alias-nodata.negative.test.",
+        "qtype": AAAA,
+        "rcode": 0,
+        "aa": 1,
+        "answers": [CNAME],
+        "answer_soa_ttls": [],
         "authority": [SOA],
         "soa_ttls": [300],
     },
     {
         "name": "dname_out_of_zone_terminal",
+        "requirements": "ODS-FR-NRESP-006",
         "qname": "www.deleg.negative.test.",
         "qtype": A,
         "rcode": 0,
         "aa": 1,
         "answers": [DNAME, CNAME],
+        "answer_soa_ttls": [],
         "authority": [],
         "soa_ttls": [],
     },
     {
         "name": "outside_served_zone",
+        "requirements": "ODS-FR-CORE-019",
         "qname": "outside.example.",
         "qtype": A,
         "rcode": 5,
         "aa": 0,
         "answers": [],
+        "answer_soa_ttls": [],
+        "authority": [],
+        "soa_ttls": [],
+    },
+    {
+        "name": "direct_soa_ttl",
+        "requirements": "ODS-FR-NRESP-002",
+        "qname": "negative.test.",
+        "qtype": SOA,
+        "rcode": 0,
+        "aa": 1,
+        "answers": [SOA],
+        "answer_soa_ttls": [3600],
         "authority": [],
         "soa_ttls": [],
     },
 ]
 
 rows = ["case\tqname\tqtype\trcode\taa\tanswers\tauthority\tsoa_ttls"]
+traceability = ["requirement_ids\tcase\tevidence_status\tevidence_summary\tartifact"]
 for index, case in enumerate(cases, start=1):
     response = response_for(0x7000 + index, case["qname"], case["qtype"])
     if response["rcode"] != case["rcode"]:
@@ -374,6 +415,8 @@ for index, case in enumerate(cases, start=1):
         raise AssertionError(f"{case['name']} AA {response['aa']} != {case['aa']}")
     if response["answer_types"] != case["answers"]:
         raise AssertionError(f"{case['name']} answer types {response['answer_types']} != {case['answers']}")
+    if response["answer_soa_ttls"] != case["answer_soa_ttls"]:
+        raise AssertionError(f"{case['name']} answer SOA TTLs {response['answer_soa_ttls']} != {case['answer_soa_ttls']}")
     if response["authority_types"] != case["authority"]:
         raise AssertionError(f"{case['name']} authority types {response['authority_types']} != {case['authority']}")
     if response["authority_soa_ttls"] != case["soa_ttls"]:
@@ -389,10 +432,21 @@ for index, case in enumerate(cases, start=1):
         ",".join(str(ttl) for ttl in response["authority_soa_ttls"]) or "-",
     ])
     rows.append(row)
+    traceability.append(
+        "\t".join([
+            case["requirements"],
+            case["name"],
+            "verified",
+            f"rcode={RCODES.get(response['rcode'], response['rcode'])};aa={response['aa']};answers={type_names(response['answer_types'])};authority={type_names(response['authority_types'])};authority_soa_ttls={','.join(str(ttl) for ttl in response['authority_soa_ttls']) or '-'};answer_soa_ttls={','.join(str(ttl) for ttl in response['answer_soa_ttls']) or '-'}",
+            "negative-response-summary.tsv",
+        ])
+    )
     log(row)
 
 with open(SUMMARY_PATH, "w", encoding="utf-8") as handle:
     print("\n".join(rows), file=handle)
+with open(TRACEABILITY_PATH, "w", encoding="utf-8") as handle:
+    print("\n".join(traceability), file=handle)
 
 print(f"negative_response_cases={len(cases)}")
 PY
@@ -454,12 +508,12 @@ if (( ready != 1 )); then
   exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary_tsv")"
+client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_secondary_queries_total{zone="negative.test."} 5' \
-  'oxidedns_secondary_query_responses_total{zone="negative.test.",rcode="NOERROR"} 3' \
+  'oxidedns_secondary_queries_total{zone="negative.test."} 7' \
+  'oxidedns_secondary_query_responses_total{zone="negative.test.",rcode="NOERROR"} 5' \
   'oxidedns_secondary_query_responses_total{zone="negative.test.",rcode="NXDOMAIN"} 2'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected negative-response line: $expected" >&2
@@ -474,6 +528,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
   cp "$summary_tsv" "$artifact_dir/negative-response-summary.tsv"
+  cp "$traceability_tsv" "$artifact_dir/negative-response-traceability.tsv"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
