@@ -112,6 +112,7 @@ done
 
 for security_field in \
   "Dependency audit result" \
+  "Unsafe dependency enumeration and scanner caveats" \
   "Vulnerability disclosure changes" \
   "Vulnerability disclosure policy reviewed" \
   "Release signing mechanism and verification instructions" \

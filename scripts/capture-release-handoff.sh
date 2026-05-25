@@ -180,7 +180,10 @@ Required evidence pointer sources:
 
 The release notes gate rejects `TBD` placeholders and, when a snapshot is
 provided, requires every retained interop primary-version artifact listed in
-`interop-primary-versions/INDEX.tsv` to be referenced.
+`interop-primary-versions/INDEX.tsv` to be referenced. The Security and
+Dependency Review section must also summarize the
+`unsafe-dependency-evidence/geiger-summary.env` completeness status and any
+scanner caveats retained in `geiger-warnings.tsv` or `geiger-not-scanned.tsv`.
 EOF
 
 cat >"$evidence_dir/external-operator-acceptance.md" <<EOF
@@ -213,8 +216,8 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] `scripts/release-evidence-snapshot.sh` captured the candidate evidence.
 - [ ] Release notes contain no placeholders and pass `scripts/check-release-notes.sh`.
 - [ ] Dependency audit and source/license checks reviewed.
-- [ ] Safe-Rust audit, transitive unsafe enumeration, and unsafe exception
-      review attached.
+- [ ] Safe-Rust audit, transitive unsafe enumeration, scanner caveats, and
+      unsafe exception review attached.
 - [ ] Security policy reviewed for this release candidate.
 - [ ] Interop primary versions attached for all real-primary evidence used.
 - [ ] Long-running fuzz evidence completed or delegated with owner and path.

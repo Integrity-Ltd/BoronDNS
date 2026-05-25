@@ -93,6 +93,7 @@ TBD
 ## Security and Dependency Review
 
 - Dependency audit result: TBD
+- Unsafe dependency enumeration and scanner caveats: TBD
 - Vulnerability disclosure changes: TBD
 - Vulnerability disclosure policy reviewed: TBD
 - Release signing mechanism and verification instructions: TBD

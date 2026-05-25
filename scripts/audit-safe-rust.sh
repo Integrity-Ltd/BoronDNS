@@ -124,7 +124,7 @@ PY
 echo "first-party unsafe scan passed: only audited POSIX signal-disposition and rlimit exceptions found"
 
 if command -v cargo-geiger >/dev/null 2>&1; then
-  echo "cargo-geiger available; run cargo geiger for transitive dependency unsafe enumeration"
+  echo "cargo-geiger available; retain transitive unsafe enumeration with scripts/capture-unsafe-dependency-evidence.sh"
 else
-  echo "cargo-geiger not installed; transitive dependency unsafe enumeration remains a release-review task"
+  echo "cargo-geiger not installed; run scripts/capture-unsafe-dependency-evidence.sh after installing cargo-geiger for release-review transitive unsafe enumeration"
 fi
