@@ -186,6 +186,9 @@ PY
 
 cat >"$client" <<'PY'
 #!/usr/bin/env python3
+import base64
+import hashlib
+import hmac
 import socket
 import struct
 import sys
@@ -200,8 +203,14 @@ IN = 1
 A = 1
 SOA = 6
 TSIG = 250
+ANY = 255
+TSIG_TTL = 0
+TSIG_KEY_NAME = "transfer-key."
+TSIG_ALGORITHM = "hmac-sha256."
+TSIG_SECRET = base64.b64decode("dG9wc2VjcmV0")
+TSIG_FUDGE = 300
 RCODES = {0: "NOERROR", 1: "FORMERR", 5: "REFUSED", 9: "NOTAUTH"}
-TSIG_ERRORS = {17: "BADKEY", 18: "BADTIME", 22: "BADTRUNC", 23: "BADALG"}
+TSIG_ERRORS = {0: "NOERROR", 16: "BADSIG", 17: "BADKEY", 18: "BADTIME", 22: "BADTRUNC", 23: "BADALG"}
 
 
 def log(message):
@@ -217,6 +226,60 @@ def name_wire(name):
         out.extend(encoded)
     out.append(0)
     return bytes(out)
+
+
+def canonical_name_wire(name):
+    return name_wire(name.lower())
+
+
+def u48(value):
+    if value < 0 or value >= (1 << 48):
+        raise AssertionError(f"out-of-range TSIG time {value}")
+    return value.to_bytes(6, "big")
+
+
+def tsig_variables(time_signed, fudge, error=0, other_data=b""):
+    return b"".join([
+        canonical_name_wire(TSIG_KEY_NAME),
+        struct.pack("!HI", ANY, TSIG_TTL),
+        canonical_name_wire(TSIG_ALGORITHM),
+        u48(time_signed),
+        struct.pack("!HHH", fudge, error, len(other_data)),
+        other_data,
+    ])
+
+
+def signed_notify_packet(qid, qname, qtype=SOA, serial=None, *, time_signed=None):
+    packet = notify_packet(qid, qname, qtype, serial)
+    if time_signed is None:
+        time_signed = int(time.time())
+    original_id = struct.unpack("!H", packet[:2])[0]
+    arcount = struct.unpack("!H", packet[10:12])[0]
+    mac_input = packet + tsig_variables(time_signed, TSIG_FUDGE)
+    mac = hmac.new(TSIG_SECRET, mac_input, hashlib.sha256).digest()
+    rdata = b"".join([
+        canonical_name_wire(TSIG_ALGORITHM),
+        u48(time_signed),
+        struct.pack("!HH", TSIG_FUDGE, len(mac)),
+        mac,
+        struct.pack("!HHH", original_id, 0, 0),
+    ])
+    tsig_rr = b"".join([
+        canonical_name_wire(TSIG_KEY_NAME),
+        struct.pack("!HHIH", TSIG, ANY, TSIG_TTL, len(rdata)),
+        rdata,
+    ])
+    signed = bytearray(packet)
+    signed[10:12] = struct.pack("!H", arcount + 1)
+    signed.extend(tsig_rr)
+    return bytes(signed)
+
+
+def tamper_tsig_mac(packet):
+    tampered = bytearray(packet)
+    # With no TSIG other-data, the last MAC octet is seven bytes from the end.
+    tampered[-7] ^= 0x01
+    return bytes(tampered)
 
 
 def query_packet(qid, qname, qtype):
@@ -461,6 +524,8 @@ def main():
         ("authorized_duplicate", "udp", notify_packet(0x2004, "notify-negative.test.", SOA, serial=2026052502), 0, None),
         ("tcp_authorized_duplicate", "tcp", notify_packet(0x2007, "notify-negative.test.", SOA, serial=2026052502), 0, None),
         ("missing_required_tsig", "udp", notify_packet(0x2005, "notify-signed.test.", SOA), 9, 17),
+        ("signed_valid_notify", "udp", signed_notify_packet(0x2008, "notify-signed.test.", SOA, serial=2026052503), 0, 0),
+        ("signed_tampered_notify", "udp", tamper_tsig_mac(signed_notify_packet(0x2009, "notify-signed.test.", SOA, serial=2026052504)), 9, 16),
     ]
     rows = ["case\ttransport\trcode\ttsig_error"]
     for case, transport, packet, rcode, tsig_error in cases:
@@ -487,7 +552,7 @@ def main():
 
     with open(SUMMARY_PATH, "w", encoding="utf-8") as handle:
         handle.write("\n".join(rows) + "\n")
-    print("notify_negative_cases=7")
+    print("notify_negative_cases=9")
 
 
 if __name__ == "__main__":
@@ -576,11 +641,13 @@ sleep 0.2
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_notify_messages_received_total 7' \
+  'oxidedns_notify_messages_received_total 9' \
   'oxidedns_notify_messages_unauthorized_total 1' \
-  'oxidedns_notify_refresh_actions_total{action="signalled"} 1' \
+  'oxidedns_notify_refresh_actions_total{action="signalled"} 2' \
   'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
-  'oxidedns_tsig_notify_verifications_total{result="badkey"} 1'; do
+  'oxidedns_tsig_notify_verifications_total{result="ok"} 1' \
+  'oxidedns_tsig_notify_verifications_total{result="badkey"} 1' \
+  'oxidedns_tsig_notify_verifications_total{result="badsig"} 1'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected negative NOTIFY line: $expected" >&2
     exit 1
@@ -590,6 +657,7 @@ done
 for expected_log in \
   'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=refresh_signalled' \
   'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=deduplicated' \
+  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-signed.test. soa_serial="Some(2026052503)" action=refresh_signalled' \
   'event=notify_unauthorized_discard' \
   'event=notify_tsig_failure'; do
   if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
@@ -604,12 +672,12 @@ ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-
 ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
 ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
 ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	An unauthorized source receives no response, increments unauthorized metrics, and emits the warning log.
-ODS-FR-NOTIFY-005	retained-runtime-plus-support	missing_required_tsig	notify-negative-summary.tsv; metrics.txt; oxidedns.log; crates/oxidedns-server/src/lib.rs notify TSIG tests	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; broader TSIG failure classes are covered by focused tests.
-ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages over UDP and TCP receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed.
-ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	The first accepted NOTIFY records action=refresh_signalled and increments the refresh signalled metric.
+ODS-FR-NOTIFY-005	retained-runtime	signed_valid_and_tampered_notify	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; valid signed NOTIFY increments ok and receives signed NOERROR response evidence; tampered signed NOTIFY returns NOTAUTH with BADSIG evidence.
+ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages over UDP and TCP receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed; signed valid NOTIFY responses carry a NOERROR TSIG.
+ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	Unsigned and signed accepted NOTIFY messages record action=refresh_signalled and increment the refresh signalled metric.
 ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; oxidedns.log; crates/oxidedns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
 ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
-ODS-FR-NOTIFY-010	retained-runtime	notify_logging	oxidedns.log	Accepted, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
+ODS-FR-NOTIFY-010	retained-runtime	notify_logging	oxidedns.log	Accepted unsigned, accepted signed, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
 ODS-FR-NOTIFY-011	retained-runtime-plus-support	first_warning_and_rate_limit_foundation	oxidedns.log; crates/oxidedns-server/src/lib.rs::notify_log_limiter_suppresses_repeats_and_summarizes	This harness retains first warning logs for unauthorized and TSIG-failure cases; suppression and periodic aggregate behavior remain covered by focused log-limiter tests.
 EOF
 
