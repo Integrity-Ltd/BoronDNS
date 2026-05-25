@@ -26,7 +26,7 @@ plus already-started MVP protocol work:
 - AXFR initial load and refresh, with IXFR attempted where existing zone state
   permits it and AXFR fallback retained;
 - authorized NOTIFY-triggered refresh;
-- TSIG HMAC-SHA256 for transfer and NOTIFY paths;
+- TSIG HMAC-SHA256 for transfer, NOTIFY, and ordinary signed-query handling;
 - EDNS support including NSID request/response behavior;
 - SRS v0.7 architectural invariants INV-001 through INV-009, including
   authoritative-only response composition, single-process operation, and no
@@ -251,6 +251,8 @@ Slice 7 has TSIG HMAC-SHA foundations:
 - signed SOA poll responses are verified against the stored request MAC, TSIG key name and algorithm, MAC, and time fudge before the unsigned DNS response is parsed.
 - signed TCP AXFR/IXFR response streams are verified before publication, including first-message request-MAC verification, subsequent running-MAC verification, terminal TSIG enforcement, the 99-message unsigned compatibility window, and non-decreasing TSIG times.
 - zones that reference a configured TSIG key require incoming NOTIFY messages to carry a valid TSIG; verified NOTIFY requests are stripped before core processing and the NOTIFY response is signed with the verified request MAC.
+- ordinary UDP and TCP DNS queries bearing a configured TSIG key are verified and stripped before core answer construction, responses are signed with the verified request MAC, and valid TSIG-authenticated UDP query responses bypass RRL accounting.
+- ordinary DNS queries bearing an unknown TSIG key return NOTAUTH; malformed, misplaced, or invalid TSIGs are handled before core answer construction.
 - NOTIFY messages with embedded SOA records accept RFC-compliant compression in SOA MNAME/RNAME RDATA, matching BIND 9 NOTIFY behavior.
 
 EDNS/query-size work is partially started:
@@ -317,7 +319,7 @@ DNS Cookie foundations are started:
 RRL foundations are started:
 
 - RRL is enabled by default under process-wide `[rrl]` configuration, with configurable IPv4/IPv6 source prefix lengths, per-category rates, slip value, maximum tracked accounting keys, and allowlist entries;
-- UDP query responses are accounted by `(source IP prefix, response category)` for positive, NXDOMAIN, NODATA, referral, and error buckets; TCP responses and non-query responses are not subject to this UDP RRL path;
+- UDP query responses are accounted by `(source IP prefix, response category)` for positive, NXDOMAIN, NODATA, referral, and error buckets; TCP responses, non-query responses, valid DNS Cookie responses, and valid TSIG-authenticated query responses are not subject to this UDP RRL path;
 - each accounting key uses a token bucket with capacity/refill equal to the configured per-second rate, applies the configured slip policy by dropping or emitting TC=1 empty-section responses that retain the question and OPT pseudo-RR, and evicts least-recently-used keys at the configured cap;
 - `/metrics` exposes RRL subject, dropped, truncated, currently tracked key, and key-eviction counters.
 - RRL emits the required first rate-limit warning per accounting key and periodic aggregate info summaries at `[rrl].summary_log_interval_secs` intervals, defaulting to 60 seconds, with interval drop/truncation deltas and the current rate-limited key count.

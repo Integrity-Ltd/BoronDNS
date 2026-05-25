@@ -660,6 +660,14 @@ pub fn message_has_tsig(message: &[u8]) -> Result<bool, TsigError> {
     }
 }
 
+pub fn message_tsig_key_name(message: &[u8]) -> Result<Option<DomainName>, TsigError> {
+    match remove_tsig(message) {
+        Ok((_, tsig)) => Ok(Some(tsig.owner)),
+        Err(TsigError::MissingTsig) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 impl TsigAlgorithm {
     fn sign(self, secret: &[u8], message: &[u8]) -> Result<Vec<u8>, TsigError> {
         match self {

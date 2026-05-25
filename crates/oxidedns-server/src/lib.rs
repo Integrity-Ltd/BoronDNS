@@ -58,7 +58,8 @@ use oxidedns_core::{
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
         TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
-        append_unsigned_tsig_error, extract_tsig_mac, sign_tsig_error_response,
+        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key_name,
+        sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
@@ -2494,6 +2495,7 @@ async fn serve_udp(
             debug!(%peer, bytes = len, "discarded DNS datagram");
             continue;
         };
+        let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
         if let Some(response) = prepared.immediate_response {
             socket
                 .send_to(&response, peer)
@@ -2560,14 +2562,14 @@ async fn serve_udp(
                 debug!(%peer, bytes = len, "discarded DNS datagram");
             }
             DatagramAction::Respond(response) => {
-                let response = match sign_notify_response(response, prepared.response_tsig) {
+                let response = match sign_tsig_response(response, prepared.response_tsig) {
                     Ok(response) => response,
                     Err(error) => {
-                        warn!(%peer, %error, "failed to sign NOTIFY response");
+                        warn!(%peer, %error, "failed to sign TSIG response");
                         continue;
                     }
                 };
-                let rrl_decision = if cookie_validated {
+                let rrl_decision = if prepared.tsig_authenticated || cookie_validated {
                     RrlDecision::Send(response)
                 } else {
                     settings.rrl.apply(peer_ip, response)
@@ -5274,6 +5276,7 @@ fn jitter_seed() -> u64 {
 #[derive(Debug, Clone)]
 struct NotifyAuthority {
     sources_by_zone: Arc<HashMap<String, HashSet<IpAddr>>>,
+    tsig_keys_by_name: Arc<HashMap<String, Arc<TsigKey>>>,
     tsig_keys_by_zone: Arc<HashMap<String, Arc<TsigKey>>>,
     tsig_fudge_seconds: u16,
 }
@@ -5282,6 +5285,7 @@ impl Default for NotifyAuthority {
     fn default() -> Self {
         Self {
             sources_by_zone: Arc::new(HashMap::new()),
+            tsig_keys_by_name: Arc::new(HashMap::new()),
             tsig_keys_by_zone: Arc::new(HashMap::new()),
             tsig_fudge_seconds: DEFAULT_TSIG_FUDGE_SECS,
         }
@@ -5324,6 +5328,7 @@ impl NotifyAuthority {
 
         Self {
             sources_by_zone: Arc::new(sources_by_zone),
+            tsig_keys_by_name: Arc::new(tsig_keys),
             tsig_keys_by_zone: Arc::new(tsig_keys_by_zone),
             tsig_fudge_seconds: config.tsig.fudge_seconds,
         }
@@ -5343,12 +5348,19 @@ impl NotifyAuthority {
         }
         self.tsig_keys_by_zone.get(&qname.canonical_key()).cloned()
     }
+
+    fn tsig_key_by_name(&self, key_name: &DomainName) -> Option<Arc<TsigKey>> {
+        self.tsig_keys_by_name
+            .get(&key_name.canonical_key())
+            .cloned()
+    }
 }
 
 struct PreparedDnsMessage {
     packet: Vec<u8>,
     response_tsig: Option<ResponseTsig>,
     immediate_response: Option<Vec<u8>>,
+    tsig_authenticated: bool,
 }
 
 struct ResponseTsig {
@@ -5393,6 +5405,7 @@ fn prepare_notify_packet_with_optional_metrics(
         packet: packet.to_vec(),
         response_tsig: None,
         immediate_response: None,
+        tsig_authenticated: false,
     };
 
     let header = match Header::parse(packet) {
@@ -5431,6 +5444,7 @@ fn prepare_notify_packet_with_optional_metrics(
                     fudge_seconds: notify_authority.tsig_fudge_seconds,
                 }),
                 immediate_response: None,
+                tsig_authenticated: true,
             })
         }
         Err(error) => {
@@ -5463,9 +5477,97 @@ fn prepare_notify_packet_with_optional_metrics(
                 packet: packet.to_vec(),
                 response_tsig: None,
                 immediate_response: Some(response),
+                tsig_authenticated: false,
             })
         }
     }
+}
+
+fn prepare_query_tsig_packet(
+    prepared: PreparedDnsMessage,
+    notify_authority: &NotifyAuthority,
+) -> PreparedDnsMessage {
+    if prepared.immediate_response.is_some() || prepared.response_tsig.is_some() {
+        return prepared;
+    }
+
+    let header = match Header::parse(&prepared.packet) {
+        Ok(header) => header,
+        Err(_) => return prepared,
+    };
+    if header.is_response() || header.opcode() != Some(Opcode::Query) {
+        return prepared;
+    }
+
+    let key_name = match message_tsig_key_name(&prepared.packet) {
+        Ok(Some(key_name)) => key_name,
+        Ok(None) => return prepared,
+        Err(TsigError::MisplacedTsig | TsigError::MalformedTsig) => {
+            return PreparedDnsMessage {
+                immediate_response: basic_error_response(&prepared.packet, &header, Rcode::FormErr),
+                ..prepared
+            };
+        }
+        Err(_) => return prepared,
+    };
+
+    let question = match Question::parse(&prepared.packet) {
+        Ok(question) => question,
+        Err(_) => return prepared,
+    };
+
+    let Some(key) = notify_authority.tsig_key_by_name(&key_name) else {
+        return PreparedDnsMessage {
+            immediate_response: basic_error_response(&prepared.packet, &header, Rcode::NotAuth),
+            ..prepared
+        };
+    };
+
+    match key.verify_request(&prepared.packet, tsig_time_signed()) {
+        Ok(verified) => PreparedDnsMessage {
+            packet: verified.message,
+            response_tsig: Some(ResponseTsig {
+                key,
+                request_mac: verified.mac,
+                fudge_seconds: notify_authority.tsig_fudge_seconds,
+            }),
+            immediate_response: None,
+            tsig_authenticated: true,
+        },
+        Err(error) => PreparedDnsMessage {
+            immediate_response: tsig_error_response(
+                &prepared.packet,
+                &header,
+                &question,
+                &key,
+                &error,
+                notify_authority.tsig_fudge_seconds,
+            ),
+            ..prepared
+        },
+    }
+}
+
+fn basic_error_response(packet: &[u8], header: &Header, rcode: Rcode) -> Option<Vec<u8>> {
+    let question = Question::parse(packet).ok();
+    let mut response = Vec::new();
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(&(0x8000u16 | (header.flags & 0x7800) | rcode as u16).to_be_bytes());
+    if let Some(question) = question {
+        response.extend_from_slice(&1u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&question.qname.to_wire());
+        response.extend_from_slice(&question.qtype.to_be_bytes());
+        response.extend_from_slice(&question.qclass.to_be_bytes());
+    } else {
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+        response.extend_from_slice(&0u16.to_be_bytes());
+    }
+    Some(response)
 }
 
 fn notify_tsig_result(error: &TsigError) -> Option<NotifyTsigResult> {
@@ -5493,7 +5595,7 @@ fn tsig_error_response(
     let mut response = Vec::new();
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
-        &(0x8000u16 | ((Opcode::Notify as u16) << 11) | Rcode::NotAuth as u16).to_be_bytes(),
+        &(0x8000u16 | (header.flags & 0x7800) | Rcode::NotAuth as u16).to_be_bytes(),
     );
     response.extend_from_slice(&1u16.to_be_bytes());
     response.extend_from_slice(&0u16.to_be_bytes());
@@ -5575,7 +5677,7 @@ fn u48_bytes(value: u64) -> Vec<u8> {
     out
 }
 
-fn sign_notify_response(
+fn sign_tsig_response(
     response: Vec<u8>,
     response_tsig: Option<ResponseTsig>,
 ) -> Result<Vec<u8>, TsigError> {
@@ -6396,6 +6498,7 @@ async fn handle_tcp_packet(
         debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
         return;
     };
+    let prepared = prepare_query_tsig_packet(prepared, &notify_authority);
     if let Some(response) = prepared.immediate_response {
         let _ = response_tx.send(TcpResponse { response, permit }).await;
         return;
@@ -6463,10 +6566,10 @@ async fn handle_tcp_packet(
                 cookie_prefix_metrics,
             );
             record_query_response_metric(&query_metrics, &response, &metrics);
-            let response = match sign_notify_response(response, prepared.response_tsig) {
+            let response = match sign_tsig_response(response, prepared.response_tsig) {
                 Ok(response) => response,
                 Err(error) => {
-                    warn!(%peer_ip, %error, "failed to sign NOTIFY response");
+                    warn!(%peer_ip, %error, "failed to sign TSIG response");
                     return;
                 }
             };
@@ -6587,21 +6690,22 @@ mod tests {
         DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
         HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter,
         NotifyAuthority, NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction,
-        NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
-        QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-        RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
-        RuntimeStatus, TcpServerSettings, TransferError, TransferPlan, TransferSession,
-        TransferTsig, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
-        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        load_pem_certs, load_pem_private_key, log_loading_warning, log_notify_log_summary,
-        log_rrl_summary, metrics_body, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage, QueryLatencyCategory,
+        QueryLatencyHistogram, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
+        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
+        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError,
+        TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
+        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
+        log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
         query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
         refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
         response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
         rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
         serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
-        sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        sign_tsig_response, signal_notify_refresh, transfer_axfr_from_primary,
         transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
         validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
     };
@@ -6816,6 +6920,77 @@ mod tests {
         assert_eq!(tsig.original_id, 0x1234);
         assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
         assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn ordinary_query_with_unknown_tsig_key_gets_notauth() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "known-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "known-key."
+            "#,
+        )
+        .expect("valid config");
+        let authority = NotifyAuthority::from_config(&config);
+        let unknown_key =
+            TsigKey::from_base64("unknown-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let signed = unknown_key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+
+        let prepared = prepare_query_tsig_packet(
+            PreparedDnsMessage {
+                packet: signed.message,
+                response_tsig: None,
+                immediate_response: None,
+                tsig_authenticated: false,
+            },
+            &authority,
+        );
+
+        let response = prepared
+            .immediate_response
+            .expect("immediate NOTAUTH response");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+        assert!(!prepared.tsig_authenticated);
+    }
+
+    #[test]
+    fn ordinary_query_with_bad_tsig_mac_gets_badsig_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let signed = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let bad = replace_final_tsig_mac(&signed.message, &[0xaa; 32]);
+
+        let prepared = prepare_query_tsig_packet(
+            PreparedDnsMessage {
+                packet: bad,
+                response_tsig: None,
+                immediate_response: None,
+                tsig_authenticated: false,
+            },
+            &authority,
+        );
+
+        let response = prepared.immediate_response.expect("TSIG error response");
+        assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.error, TSIG_ERROR_BADSIG);
     }
 
     #[tokio::test]
@@ -7635,7 +7810,7 @@ mod tests {
 
         assert_eq!(prepared.packet, packet);
         let response = notify_response(0x1234);
-        let signed_response = sign_notify_response(response.clone(), prepared.response_tsig)
+        let signed_response = sign_tsig_response(response.clone(), prepared.response_tsig)
             .expect("signed NOTIFY response");
         let response_tsig = parse_tsig_response_fields(&signed_response);
         assert_eq!(response_tsig.fudge, 30);
@@ -9004,6 +9179,89 @@ mod tests {
         assert_eq!(snapshot.rrl_dropped, 1);
         assert_eq!(snapshot.rrl_truncated, 1);
         assert_eq!(snapshot.queries_truncated, 1);
+    }
+
+    #[tokio::test]
+    async fn udp_tsig_authenticated_query_bypasses_rrl_and_signs_response() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let rrl_config = RrlConfig {
+            positive_per_second: 0,
+            slip: 0,
+            ..RrlConfig::default()
+        };
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "query-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "query-key."
+            "#,
+        )
+        .unwrap();
+        let key = TsigKey::from_base64("query-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let signed_query = key
+            .sign_request(
+                &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let server_metrics = metrics.clone();
+        let server = tokio::spawn(serve_udp(
+            socket,
+            zones,
+            UdpServerSettings {
+                max_udp_payload: 1232,
+                max_cname_chain: 8,
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: Vec::new(),
+                dns_cookie_secrets: dns_cookie_secret_store_for_test(),
+                dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
+                notify_authority: NotifyAuthority::from_config(&config),
+                notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx: notify_refresh_tx(),
+                notify_log_limiter: notify_log_limiter_for_test(),
+                metrics: server_metrics,
+                rrl: RrlLimiter::from_config(&rrl_config, metrics.clone()),
+            },
+        ));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client
+            .send_to(&signed_query.message, server_addr)
+            .await
+            .unwrap();
+        let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("signed UDP response");
+        server.abort();
+
+        let verified = key
+            .verify_response(&response, &signed_query.mac, current_unix_time())
+            .expect("signed UDP query response verifies");
+        let header = Header::parse(&verified.message).unwrap();
+        assert_eq!(
+            response_rcode(&verified.message, &header),
+            Rcode::NoError as u16
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.queries_received, 1);
+        assert_eq!(snapshot.rrl_subject, 0);
+        assert_eq!(snapshot.rrl_dropped, 0);
     }
 
     #[tokio::test]
