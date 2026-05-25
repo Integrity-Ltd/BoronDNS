@@ -11,6 +11,7 @@ python3 scripts/audit-log-lazy-formatting.py
 bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
 bash -n scripts/capture-health-metrics-evidence.sh
+bash -n scripts/interop-negative-responses.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 cargo fmt --all --check

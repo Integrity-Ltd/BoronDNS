@@ -27,6 +27,7 @@ compliance.
 | --- | --- | --- |
 | AXFR | Unit parser coverage; randomized multi-primary stable-rotation unit evidence; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
 | IXFR | Unit parser/fault coverage; BIND and Knot true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
+| Negative Responses | Unit coverage and retained `scripts/interop-negative-responses.sh` runtime artifacts for NXDOMAIN, NODATA, empty non-terminal, CNAME negative terminal, DNAME out-of-zone terminal, SOA negative TTL, out-of-zone REFUSED, and RCODE metrics | Expand release artifacts into per-requirement traceability before acceptance review |
 | TCP Query Transport | Unit/runtime coverage for DNS-over-TCP framing, idle/read/write timeouts, global connection limits, back-to-back framed queries, delayed-first-response pipelining, configurable per-connection in-flight query caps, and retained `scripts/interop-tcp-truncation-retry.sh` evidence that a question-validated AXFR load produces a large answer that truncates over UDP while TCP returns the complete answer, over-limit TCP connections close, and shutdown enters graceful drain while existing TCP queries complete | Retained release artifacts for delayed-response pipelining beyond the deterministic in-process test |
 | NOTIFY | Unit/runtime coverage for authority, TSIG rejection, refresh signalling/deduplication, metrics, notify-interface handling, and rate-limited unauthorized/TSIG-failure warning logs; BIND, NSD, and Knot NOTIFY refresh interop | Release traceability and broader retained negative interop evidence |
 | XoT | Configuration and startup validation; in-process TLS transport, XoT+TSIG, mTLS client-certificate, certificate-name, untrusted-cert, expired-cert, ALPN-failure, and missing-client-cert tests; structured XoT TLS establishment/ALPN-failure/session-close log tests with negotiated TLS version/cipher and byte counters; no-CRL/no-OCSP revocation-posture audit; Knot XoT AXFR and XoT+TSIG interop scripts | Broader real-primary XoT evidence beyond Knot and retained release log artifacts |
@@ -120,6 +121,7 @@ scripts/rrl-evidence-campaign.sh --iterations 3
 scripts/interop-dns-cookie-dig.sh
 scripts/interop-dnssec-serve.sh
 scripts/interop-dnssec-nsec3-serve.sh
+scripts/interop-negative-responses.sh
 scripts/interop-tcp-truncation-retry.sh
 scripts/perf-smoke.sh
 scripts/release-evidence-snapshot.sh
