@@ -87,6 +87,14 @@ TBD
 - Release signing mechanism and verification instructions: TBD
 - Security audit findings and remediation actions: TBD
 
+## Long-Running Evidence Handoff
+
+- Fuzz campaign handoff or completed artifacts: TBD
+- Reference Hardware/Profile benchmark handoff or completed artifacts: TBD
+- Soak handoff or completed 30-day report: TBD
+- Release/operations owner for delegated long-running evidence: TBD
+- Deferred execution rationale, if any: TBD
+
 ## Verification Responsibility Sign-off
 
 | Role | Responsible person or party | Scope | Sign-off |

@@ -40,7 +40,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 | Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/check-perf-regression.py` for rolling-history comparison; full reference-hardware benchmark execution is a later release/operations activity | retained performance/resource logs and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/mvp-gap-register.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
-| Soak test | Periodic and Gate | Local MVP needs the soak setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak report artifacts |
+| Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
 | Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, deployment/rollback exercise, external operator acceptance | release notes and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
 | External operator acceptance | Gate | Production-representative external deployment and signed scope statement for MVP acceptance | MVP release notes |
@@ -68,7 +68,7 @@ snapshot and release notes.
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` | local MVP needs runnable setup and retained campaign summary format |
 | Performance regression run | Weekly on Reference Hardware Profile | `OXIDEDNS_PERF_SMOKE_METRICS_OUT=<file> scripts/perf-smoke.sh`; `scripts/check-perf-regression.py --candidate <file> --history <history>` | replace smoke-only evidence with SRS NFR benchmark suite and hosted schedule |
-| Soak snapshot | Weekly while later soak execution is active | soak report artifact pending | add soak harness and report template |
+| Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off scaffold | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
 ## Gate Execution
@@ -86,6 +86,12 @@ audit, or external-operator steps as passing evidence for final SRS acceptance.
 For the local project MVP, long-running steps may be marked as delegated when
 the runnable harness, artifact format, and release/operations handoff are
 present.
+
+`scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
+the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
+traceability map, and operator sign-off scaffold for the later ODS-NFR-REL-003
+30-day soak. A generated handoff directory proves the local MVP setup exists; it
+does not prove that the long-running soak has been executed.
 
 When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`

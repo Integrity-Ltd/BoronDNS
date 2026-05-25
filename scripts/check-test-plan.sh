@@ -56,5 +56,6 @@ require_text "A release with an untriaged"
 require_text "regression must not proceed"
 require_text "scripts/check.sh"
 require_text "scripts/release-evidence-snapshot.sh"
+require_text "scripts/capture-soak-handoff.sh"
 
 printf 'Test Plan check passed: %s\n' "$test_plan"

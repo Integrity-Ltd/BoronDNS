@@ -470,7 +470,9 @@ verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. It also retains unused/dead-code audit
 artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
-`coverage-evidence/`. Set
+`coverage-evidence/` and the long-run soak setup/report scaffold under
+`soak-handoff/`. The soak handoff is not completed soak evidence; it is the
+release/operations template set for the later 30-day run. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
 campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
@@ -656,6 +658,13 @@ Back up and version-control:
 - SRS acceptance evidence artifacts: check logs, interop script output, fuzz
   campaign logs, dependency audit results, performance reports, and soak-test
   reports when those later release/operations runs are executed.
+
+Before a release/operations soak begins, run `scripts/capture-soak-handoff.sh`
+or use the `soak-handoff/` directory created by
+`scripts/release-evidence-snapshot.sh`. The handoff directory contains the
+required report template, RSS/file-descriptor/metrics/event TSV schemas,
+weekly summary template, requirement traceability map, and operator sign-off
+scaffold for the later 30-day ODS-NFR-REL-003 run.
 
 Upgrade procedure:
 

@@ -40,6 +40,7 @@ for heading in \
   "## Interop Primary Versions" \
   "## Failed Requirement Decisions" \
   "## RFC Compliance Assertions" \
+  "## Long-Running Evidence Handoff" \
   "## Verification Responsibility Sign-off"; do
   require_text "$heading"
 done
@@ -114,6 +115,15 @@ for security_field in \
   "Release signing mechanism and verification instructions" \
   "Security audit findings and remediation actions"; do
   require_text "$security_field"
+done
+
+for handoff_field in \
+  "Fuzz campaign handoff or completed artifacts" \
+  "Reference Hardware/Profile benchmark handoff or completed artifacts" \
+  "Soak handoff or completed 30-day report" \
+  "Release/operations owner for delegated long-running evidence" \
+  "Deferred execution rationale"; do
+  require_text "$handoff_field"
 done
 
 if grep -F "TBD" "$notes_file" >/dev/null 2>&1; then

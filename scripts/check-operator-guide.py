@@ -27,6 +27,7 @@ REQUIRED_TEXT = [
     "firewall",
     "clock synchronisation",
     "long-LOADING",
+    "soak-handoff",
     "privilege",
     "security@integrity.hu",
     "ODS-FR-XOT-012",
