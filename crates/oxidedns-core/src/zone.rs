@@ -268,11 +268,15 @@ impl ZoneSnapshot {
         remaining: usize,
     ) -> LookupResult {
         if remaining == 0 {
+            let original_qname = visited.first().map(String::as_str).unwrap_or("<unknown>");
             warn!(
-                qname = %current,
-                "CNAME chain limit reached; returning constructed response"
+                qname = %original_qname,
+                zone = %self.origin,
+                reason = "cname_chain_limit",
+                current = %current,
+                "CNAME chain limit reached; returning SERVFAIL with partial chain"
             );
-            return LookupResult::positive_records_with_termination(
+            return LookupResult::servfail_records_with_termination(
                 answers,
                 LookupTermination::CnameChainLimit,
             );
@@ -306,11 +310,15 @@ impl ZoneSnapshot {
 
         let target_key = target.canonical_key();
         if visited.contains(&target_key) {
+            let original_qname = visited.first().map(String::as_str).unwrap_or("<unknown>");
             warn!(
-                qname = %target,
-                "CNAME chain loop detected; returning constructed response"
+                qname = %original_qname,
+                zone = %self.origin,
+                reason = "cname_loop",
+                looping_target = %target,
+                "CNAME chain loop detected; returning SERVFAIL with partial chain"
             );
-            return LookupResult::positive_records_with_termination(
+            return LookupResult::servfail_records_with_termination(
                 answers,
                 LookupTermination::CnameLoop,
             );

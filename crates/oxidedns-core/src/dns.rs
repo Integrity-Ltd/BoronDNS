@@ -1738,6 +1738,20 @@ impl LookupResult {
         }
     }
 
+    pub fn servfail_records_with_termination(
+        answers: Vec<ResourceRecord>,
+        termination: LookupTermination,
+    ) -> Self {
+        Self {
+            rcode: Rcode::ServFail,
+            authoritative: true,
+            answers,
+            authorities: Vec::new(),
+            additionals: Vec::new(),
+            termination: Some(termination),
+        }
+    }
+
     pub fn positive_with_additionals(
         answers: Vec<ResourceRecord>,
         additionals: Vec<ResourceRecord>,
@@ -3691,7 +3705,7 @@ mod tests {
     }
 
     #[test]
-    fn cname_loop_stops_with_constructed_chain() {
+    fn cname_loop_returns_authoritative_servfail_with_partial_chain() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -3717,7 +3731,9 @@ mod tests {
         let packet = query(b"\x01a\x07example\x04test\x00", RecordType::A as u16, 1);
         let response = store_response(&packet, &store);
 
-        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_ne!(response[2] & 0x04, 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
         assert_eq!(
             response_answer_types(&response),
             vec![RecordType::Cname as u16, RecordType::Cname as u16]
@@ -3728,11 +3744,14 @@ mod tests {
             RecordType::A as u16,
             1,
         );
+        assert_eq!(lookup.rcode, Rcode::ServFail);
+        assert!(lookup.authoritative);
+        assert!(lookup.authorities.is_empty());
         assert_eq!(lookup.termination, Some(LookupTermination::CnameLoop));
     }
 
     #[test]
-    fn configured_cname_chain_limit_stops_constructed_response() {
+    fn configured_cname_chain_limit_returns_authoritative_servfail() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -3778,7 +3797,9 @@ mod tests {
             },
         );
 
-        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_ne!(response[2] & 0x04, 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
         assert_eq!(
             response_answer_types(&response),
             vec![RecordType::Cname as u16]
@@ -3791,6 +3812,9 @@ mod tests {
             1,
             AnyResponseMode::Minimal,
         );
+        assert_eq!(lookup.rcode, Rcode::ServFail);
+        assert!(lookup.authoritative);
+        assert!(lookup.authorities.is_empty());
         assert_eq!(lookup.termination, Some(LookupTermination::CnameChainLimit));
     }
 

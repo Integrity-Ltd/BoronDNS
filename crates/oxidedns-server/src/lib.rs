@@ -8789,6 +8789,9 @@ mod tests {
 
     #[tokio::test]
     async fn udp_query_records_cname_chain_limit_metric() {
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
         let zones = ZoneStore::new();
         zones.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -8861,13 +8864,76 @@ mod tests {
         .unwrap();
         server.abort();
 
-        assert_eq!(response[3] & 0x0f, 0);
+        let header = Header::parse(&response[..len]).unwrap();
+        assert_eq!(
+            response_rcode(&response[..len], &header),
+            Rcode::ServFail as u16
+        );
+        assert_ne!(header.flags & 0x0400, 0);
         assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
         assert!(len > 12);
+        assert!(captured.contains_all(&[
+            "CNAME chain limit reached",
+            "qname=a.example.test.",
+            "zone=example.test.",
+            "reason=\"cname_chain_limit\"",
+        ]));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.queries_received, 1);
         assert_eq!(snapshot.queries_cname_chain_limit, 1);
         assert_eq!(snapshot.queries_cname_loop, 0);
+    }
+
+    #[test]
+    fn cname_loop_warning_log_contains_operator_fields() {
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let zone = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("b.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("a.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+            ],
+        );
+
+        let lookup = zone.lookup(
+            &DomainName::from_absolute_str("a.example.test.").unwrap(),
+            RecordType::A as u16,
+            1,
+        );
+
+        assert_eq!(lookup.rcode, Rcode::ServFail);
+        assert_eq!(lookup.termination, Some(LookupTermination::CnameLoop));
+        assert!(captured.contains_all(&[
+            "CNAME chain loop detected",
+            "qname=a.example.test.",
+            "zone=example.test.",
+            "reason=\"cname_loop\"",
+            "looping_target=a.example.test.",
+        ]));
     }
 
     #[tokio::test]

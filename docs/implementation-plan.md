@@ -150,8 +150,8 @@ Slice 1 has a tested UDP query/response foundation:
 - active zones can return positive, NODATA, and NXDOMAIN responses with SOA authority data;
 - SOA records placed in NODATA and NXDOMAIN authority sections use `min(SOA RRset TTL, SOA MINIMUM)`, while direct SOA answers preserve the stored RRset TTL;
 - CNAME queries return CNAME RRsets directly;
-- non-CNAME queries follow in-zone CNAME chains, retain constructed CNAME answers for negative terminal responses, stop when chains leave the served zone, and stop on loops or the configured chain limit;
-- the CNAME chain limit is configurable under `[limits]`, defaults to 8, and loop/limit termination emits warning logs;
+- non-CNAME queries follow in-zone CNAME chains, retain constructed CNAME answers for negative terminal responses, stop when chains leave the served zone, and return authoritative SERVFAIL with the partial CNAME chain and empty authority section on loops or the configured chain limit;
+- the CNAME chain limit is configurable under `[limits]`, defaults to 8, and loop/limit termination emits warning logs with the original QNAME, zone, and truncation reason or looping target;
 - direct DNAME queries return DNAME RRsets directly;
 - queries below a DNAME owner include the DNAME RRset, synthesize the required CNAME, and continue resolution for positive, in-zone negative, and out-of-zone terminal targets;
 - wildcard owner names are stored normally and applied at query time;
