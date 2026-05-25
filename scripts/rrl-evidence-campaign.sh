@@ -27,6 +27,7 @@ die() {
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 interop_script="$repo_root/scripts/interop-rrl-udp.sh"
+threshold_doc="$repo_root/docs/rrl-release-thresholds.md"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 evidence_dir="$repo_root/target/rrl-evidence/$timestamp"
 bash_bin="${BASH_BIN:-${BASH:-bash}}"
@@ -92,6 +93,7 @@ parse_args() {
 resolve_config() {
   [[ "$evidence_dir" == /* ]] || evidence_dir="$repo_root/$evidence_dir"
   [[ -f "$interop_script" ]] || die "missing interop script: $interop_script"
+  [[ -f "$threshold_doc" ]] || die "missing RRL threshold baseline document: $threshold_doc"
   require_positive_integer "--iterations" "$iterations"
   if ((duration_set)); then
     require_positive_integer "--duration" "$duration"
@@ -108,6 +110,7 @@ print_config() {
   fi
   printf 'repo_root=%s\n' "$repo_root"
   printf 'interop_script=%s\n' "$interop_script"
+  printf 'threshold_doc=%s\n' "$threshold_doc"
   printf 'evidence_dir=%s\n' "$evidence_dir"
   printf 'mode=%s\n' "$mode"
   printf 'iterations=%s\n' "$iterations"
@@ -169,13 +172,37 @@ write_readme() {
 - Created UTC: $timestamp
 - Repository: $repo_root
 - Interop script: $interop_script
+- Threshold baseline: $threshold_doc
 
 This retained artifact wraps scripts/interop-rrl-udp.sh and records repeated
 runtime UDP RRL drop/slip evidence. Any failed interop run fails the campaign.
 The campaign also writes aggregate.tsv and aggregate-summary.env so release
 review can inspect per-run and campaign-total RRL evidence without opening each
 raw artifact directory.
+
+threshold-decision.tsv records the current SRS v0.7 RRL baseline used for
+release review. The slip value follows the SRS body default, but Appendix C.5
+confirmation remains pending and must be handled in release notes.
 EOF
+}
+
+write_threshold_decision() {
+  local decision_file="$evidence_dir/threshold-decision.tsv"
+
+  {
+    printf 'setting\tvalue\trequirement\tstatus\tnote\n'
+    printf 'enabled\ttrue\tODS-FR-RRL-001\timplemented-srs-body-default\tRRL is enabled by default\n'
+    printf 'ipv4_prefix_len\t24\tODS-FR-RRL-002\timplemented-srs-body-default\tIPv4 accounting prefix length\n'
+    printf 'ipv6_prefix_len\t56\tODS-FR-RRL-002\timplemented-srs-body-default\tIPv6 accounting prefix length\n'
+    printf 'positive_per_second\t20\tODS-FR-RRL-003\timplemented-srs-body-default\tPositive response rate limit\n'
+    printf 'nxdomain_per_second\t5\tODS-FR-RRL-003\timplemented-srs-body-default\tNXDOMAIN response rate limit\n'
+    printf 'nodata_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tNODATA response rate limit\n'
+    printf 'referral_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tReferral response rate limit\n'
+    printf 'error_per_second\t5\tODS-FR-RRL-003\timplemented-srs-body-default\tError response rate limit\n'
+    printf 'slip\t2\tODS-FR-RRL-005\timplemented-srs-body-default-c5-pending\tAppendix C.5 confirmation remains pending\n'
+    printf 'max_keys\t100000\tODS-FR-RRL-010\timplemented-srs-body-default\tMaximum tracked accounting keys\n'
+    printf 'summary_log_interval_secs\t60\tODS-FR-RRL-011\timplemented-srs-body-default\tAggregate RRL summary interval\n'
+  } >"$decision_file"
 }
 
 run_one() {
@@ -379,6 +406,7 @@ main() {
   record_versions "$evidence_dir/tool-versions.txt"
   write_git_state
   write_readme
+  write_threshold_decision
 
   if ((dry_run)); then
     printf 'DRY RUN: would run RRL evidence campaign with this configuration:\n'

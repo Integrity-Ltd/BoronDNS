@@ -182,9 +182,10 @@ reference. The major sections are:
   A non-zero `secret_rotation_interval_secs` invalidates previously issued
   server cookies when rotation occurs, equivalent to the cookie effect of a
   process restart.
-- `[rrl]`: process-wide UDP Response Rate Limiting configuration.
-  `summary_log_interval_secs` controls aggregate RRL summary logs and defaults
-  to 60 seconds.
+- `[rrl]`: process-wide UDP Response Rate Limiting configuration. The current
+  release-review threshold baseline is documented in
+  `docs/rrl-release-thresholds.md`; `summary_log_interval_secs` controls
+  aggregate RRL summary logs and defaults to 60 seconds.
 - `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
   fudge value.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
@@ -671,8 +672,10 @@ current operator-relevant limitations are:
   coverage for NSEC and NSEC3 paths, and a passive audit covering the
   secondary-only no-signing/no-validation/no-key-management posture; release
   traceability remains pending.
-- RRL has runtime behavior and metrics coverage; release threshold decisions
-  and longer-running evidence remain pending.
+- RRL has runtime behavior, metrics coverage, and a documented current
+  threshold baseline; longer-running retained campaign evidence remains
+  pending, and the SRS Appendix C.5 slip confirmation is still an open release
+  note item.
 - Performance targets, 30-day soak evidence, and 24-hour fuzz campaigns per
   parser target remain SRS acceptance blockers.
 - Container image size and static-binary release packaging are SRS targets; the
