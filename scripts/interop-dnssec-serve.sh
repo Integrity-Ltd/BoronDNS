@@ -75,6 +75,7 @@ A = 1
 NS = 2
 SOA = 6
 TXT = 16
+DS = 43
 RRSIG = 46
 NSEC = 47
 DNSKEY = 48
@@ -157,7 +158,8 @@ def nsec_rdata(next_name, types):
 
 
 def rrsig_rdata(type_covered, labels):
-    signature = bytes((index % 251) + 1 for index in range(720))
+    signature_len = 160 if type_covered in (NS, DS) else 720
+    signature = bytes((index % 251) + 1 for index in range(signature_len))
     return b"".join([
         struct.pack("!HBBIIIH", type_covered, 253, labels, 300, 4102444800, 1704067200, 12345),
         name_wire("alpha.test."),
@@ -169,6 +171,10 @@ def dnskey_rdata():
     return struct.pack("!HBB", 257, 3, 253) + bytes(range(1, 65))
 
 
+def ds_rdata():
+    return struct.pack("!HBB", 12345, 253, 2) + bytes(range(32))
+
+
 def zone_records():
     soa = rr(ZONE, SOA, soa_rdata())
     return [
@@ -176,6 +182,9 @@ def zone_records():
         rr(ZONE, NS, name_wire("ns1.alpha.test.")),
         rr("ns1.alpha.test.", A, bytes([127, 0, 0, 1])),
         rr("www.alpha.test.", A, bytes([192, 0, 2, 10])),
+        rr("child.alpha.test.", NS, name_wire("ns.child.alpha.test.")),
+        rr("ns.child.alpha.test.", A, bytes([192, 0, 2, 53])),
+        rr("child.alpha.test.", DS, ds_rdata()),
         *[
             rr("large.alpha.test.", TXT, bytes([120]) + bytes([65 + (index % 26)]) * 120)
             for index in range(8)
@@ -188,6 +197,8 @@ def zone_records():
         rr(ZONE, RRSIG, rrsig_rdata(NSEC, 2)),
         rr("www.alpha.test.", RRSIG, rrsig_rdata(A, 3)),
         rr("www.alpha.test.", RRSIG, rrsig_rdata(NSEC, 3)),
+        rr("child.alpha.test.", RRSIG, rrsig_rdata(NS, 3)),
+        rr("child.alpha.test.", RRSIG, rrsig_rdata(DS, 3)),
         soa,
     ]
 
@@ -250,6 +261,8 @@ A = 1
 SOA = 6
 TXT = 16
 NSID = 3
+NS = 2
+DS = 43
 RRSIG = 46
 NSEC = 47
 DNSKEY = 48
@@ -408,6 +421,24 @@ dnskey = exchange(0xD004, "alpha.test.", DNSKEY, payload=4096, do=False)
 if dnskey["answer_types"] != [DNSKEY]:
     raise AssertionError(f"direct DNSKEY query did not serve transferred DNSKEY: {dnskey}")
 
+ds_do = exchange(0xD009, "child.alpha.test.", DS, payload=4096, do=True)
+if ds_do["rcode"] != 0 or ds_do["answer_types"] != [DS, RRSIG]:
+    raise AssertionError(f"direct DS DO query did not serve transferred DS plus covering RRSIG: {ds_do}")
+if not ds_do["opt_ttls"] or ds_do["opt_ttls"][0] & 0x8000 == 0:
+    raise AssertionError(f"direct DS DO response did not set response DO bit: {ds_do}")
+if ds_do["ad"] or ds_do["cd"]:
+    raise AssertionError(f"direct DS DO response set AD/CD unexpectedly: {ds_do}")
+
+signed_child_referral_do = exchange(0xD00A, "www.child.alpha.test.", A, payload=4096, do=True)
+if signed_child_referral_do["rcode"] != 0 or signed_child_referral_do["answer_types"]:
+    raise AssertionError(f"signed-child referral DO response was not a referral: {signed_child_referral_do}")
+if signed_child_referral_do["authority_types"] != [NS, DS, RRSIG, RRSIG]:
+    raise AssertionError(f"signed-child referral DO lacked NS/DS/RRSIG authority: {signed_child_referral_do}")
+if not signed_child_referral_do["opt_ttls"] or signed_child_referral_do["opt_ttls"][0] & 0x8000 == 0:
+    raise AssertionError(f"signed-child referral DO response did not set response DO bit: {signed_child_referral_do}")
+if signed_child_referral_do["ad"] or signed_child_referral_do["cd"]:
+    raise AssertionError(f"signed-child referral DO response set AD/CD unexpectedly: {signed_child_referral_do}")
+
 truncated = exchange(0xD005, "www.alpha.test.", A, payload=512, do=True)
 if not truncated["tc"]:
     raise AssertionError(f"small-payload DNSSEC response was not truncated: {truncated}")
@@ -519,6 +550,8 @@ positive_do_rrsig=1
 positive_non_do_suppresses_rrsig=1
 nxdomain_do_nsec_rrsig=1
 direct_dnskey_served=1
+direct_ds_do_rrsig=1
+signed_child_referral_ds_rrsig=1
 dnssec_truncation_checked=1
 non_edns_512_truncation_no_opt=1
 configured_nsid_empty_request=1
