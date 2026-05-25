@@ -1,4 +1,4 @@
-use std::{fmt, hash::Hasher, net::IpAddr};
+use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr};
 
 use siphasher::sip::SipHasher24;
 use subtle::ConstantTimeEq;
@@ -962,6 +962,7 @@ fn build_response_inner(
     options: AnswerOptions,
 ) -> Vec<u8> {
     let mut response = Vec::with_capacity(DNS_HEADER_LEN + question.map_or(0, |q| q.wire().len()));
+    let mut compressor = NameCompressor::default();
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
         &header
@@ -977,10 +978,13 @@ fn build_response_inner(
 
     if let Some(question) = question {
         response.extend_from_slice(question.wire());
+        if question_is_uncompressed_wire(question) {
+            compressor.register_name_at_offset(&question.qname, DNS_HEADER_LEN);
+        }
     }
 
     for record in answers.iter().chain(authorities).chain(additionals) {
-        encode_record(record, &mut response);
+        encode_record(record, &mut response, &mut compressor);
     }
 
     if let Some(edns) = metadata.edns {
@@ -1077,13 +1081,156 @@ fn truncated_dnssec_augmented(
             })
 }
 
-fn encode_record(record: &ResourceRecord, response: &mut Vec<u8>) {
-    response.extend_from_slice(&record.owner.to_wire());
+#[derive(Debug, Default)]
+struct NameCompressor {
+    suffix_offsets: HashMap<Vec<Vec<u8>>, u16>,
+}
+
+impl NameCompressor {
+    fn register_name_at_offset(&mut self, name: &DomainName, start_offset: usize) {
+        let mut offset = start_offset;
+        for index in 0..name.labels.len() {
+            if offset <= 0x3fff {
+                self.suffix_offsets
+                    .entry(name_suffix_key(&name.labels[index..]))
+                    .or_insert(offset as u16);
+            }
+            offset += 1 + name.labels[index].len();
+        }
+    }
+
+    fn write_name(&mut self, name: &DomainName, response: &mut Vec<u8>) {
+        let pointer_suffix = (0..name.labels.len()).find_map(|index| {
+            let suffix = &name.labels[index..];
+            if name_wire_len(suffix) <= 2 {
+                return None;
+            }
+            self.suffix_offsets
+                .get(&name_suffix_key(suffix))
+                .copied()
+                .map(|offset| (index, offset))
+        });
+
+        let pointer_index = pointer_suffix.map(|(index, _)| index);
+        for index in 0..pointer_index.unwrap_or(name.labels.len()) {
+            if response.len() <= 0x3fff {
+                self.suffix_offsets
+                    .entry(name_suffix_key(&name.labels[index..]))
+                    .or_insert(response.len() as u16);
+            }
+            let label = &name.labels[index];
+            response.push(label.len() as u8);
+            response.extend_from_slice(label);
+        }
+
+        if let Some((_, offset)) = pointer_suffix {
+            response.extend_from_slice(&(0xc000 | offset).to_be_bytes());
+        } else {
+            response.push(0);
+        }
+    }
+}
+
+fn question_is_uncompressed_wire(question: &Question) -> bool {
+    let qname_wire = question.qname.to_wire();
+    question.wire.len() == qname_wire.len() + 4 && question.wire.starts_with(&qname_wire)
+}
+
+fn name_suffix_key(labels: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    labels
+        .iter()
+        .map(|label| label.iter().map(u8::to_ascii_lowercase).collect())
+        .collect()
+}
+
+fn name_wire_len(labels: &[Vec<u8>]) -> usize {
+    labels.iter().map(|label| 1 + label.len()).sum::<usize>() + 1
+}
+
+fn encode_record(record: &ResourceRecord, response: &mut Vec<u8>, compressor: &mut NameCompressor) {
+    compressor.write_name(&record.owner, response);
     response.extend_from_slice(&record.rr_type.to_be_bytes());
     response.extend_from_slice(&record.class.to_be_bytes());
     response.extend_from_slice(&record.ttl.to_be_bytes());
-    response.extend_from_slice(&(record.rdata.len() as u16).to_be_bytes());
-    response.extend_from_slice(&record.rdata);
+    let rdlength_offset = response.len();
+    response.extend_from_slice(&0u16.to_be_bytes());
+    let rdata_offset = response.len();
+    encode_record_rdata(record, response, compressor);
+    let rdlength = response.len() - rdata_offset;
+    response[rdlength_offset..rdlength_offset + 2]
+        .copy_from_slice(&(rdlength as u16).to_be_bytes());
+}
+
+fn encode_record_rdata(
+    record: &ResourceRecord,
+    response: &mut Vec<u8>,
+    compressor: &mut NameCompressor,
+) {
+    match record.rr_type {
+        rr_type
+            if rr_type == RecordType::Ns as u16
+                || rr_type == RecordType::Cname as u16
+                || rr_type == RecordType::Ptr as u16 =>
+        {
+            encode_single_name_rdata(&record.rdata, response, compressor)
+        }
+        rr_type if rr_type == RecordType::Soa as u16 => {
+            encode_soa_rdata(&record.rdata, response, compressor)
+        }
+        rr_type if rr_type == RecordType::Mx as u16 => {
+            encode_mx_rdata(&record.rdata, response, compressor)
+        }
+        _ => response.extend_from_slice(&record.rdata),
+    }
+}
+
+fn encode_single_name_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut NameCompressor) {
+    let Ok((name, consumed)) = DomainName::parse(rdata, 0) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    if consumed == rdata.len() {
+        compressor.write_name(&name, response);
+    } else {
+        response.extend_from_slice(rdata);
+    }
+}
+
+fn encode_soa_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut NameCompressor) {
+    let Ok((mname, consumed_mname)) = DomainName::parse(rdata, 0) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    let rname_offset = consumed_mname;
+    let Ok((rname, consumed_rname)) = DomainName::parse(rdata, rname_offset) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    let timers_offset = rname_offset + consumed_rname;
+    if timers_offset + 20 != rdata.len() {
+        response.extend_from_slice(rdata);
+        return;
+    }
+    compressor.write_name(&mname, response);
+    compressor.write_name(&rname, response);
+    response.extend_from_slice(&rdata[timers_offset..]);
+}
+
+fn encode_mx_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut NameCompressor) {
+    if rdata.len() < 3 {
+        response.extend_from_slice(rdata);
+        return;
+    }
+    let Ok((exchange, consumed)) = DomainName::parse(rdata, 2) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    if 2 + consumed == rdata.len() {
+        response.extend_from_slice(&rdata[..2]);
+        compressor.write_name(&exchange, response);
+    } else {
+        response.extend_from_slice(rdata);
+    }
 }
 
 fn encode_opt_record(
@@ -1799,6 +1946,42 @@ mod tests {
         rdatas
     }
 
+    fn response_answer_single_name_rdatas(response: &[u8], expected_type: u16) -> Vec<Vec<u8>> {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+
+        let mut rdatas = Vec::new();
+        for _ in 0..header.ancount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed;
+            let rr_type = u16::from_be_bytes([response[offset], response[offset + 1]]);
+            let rdlength =
+                u16::from_be_bytes([response[offset + 8], response[offset + 9]]) as usize;
+            let rdata_offset = offset + 10;
+            if rr_type == expected_type {
+                let (name, consumed) = DomainName::parse(response, rdata_offset).unwrap();
+                assert_eq!(consumed, rdlength);
+                rdatas.push(name.to_wire());
+            }
+            offset = rdata_offset + rdlength;
+        }
+        rdatas
+    }
+
+    fn first_answer_offset(response: &[u8]) -> usize {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+        offset
+    }
+
     fn response_answers(response: &[u8]) -> Vec<(DomainName, u16)> {
         response_sections(response).0
     }
@@ -2046,7 +2229,7 @@ mod tests {
             vec![RecordType::Cname as u16, RecordType::A as u16]
         );
 
-        let cnames = response_answer_rdatas(response, RecordType::Cname as u16);
+        let cnames = response_answer_single_name_rdatas(response, RecordType::Cname as u16);
         let addrs = response_answer_rdatas(response, RecordType::A as u16);
         let old_cnames = vec![cname_rdata("old-target.example.test.")];
         let old_addrs = vec![[192, 0, 2, 10].to_vec()];
@@ -2663,6 +2846,100 @@ mod tests {
         assert_eq!(
             response_answer_rdatas(&response, UNKNOWN_TYPE),
             vec![Vec::new(), pointer_like_rdata]
+        );
+    }
+
+    #[test]
+    fn response_owner_names_are_compressed_against_question() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let response = store_response(&packet, &store);
+        let answer_offset = first_answer_offset(&response);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(&response[answer_offset..answer_offset + 2], &[0xc0, 0x0c]);
+        assert_eq!(
+            response_answers(&response)[0].0.to_string(),
+            "www.example.test."
+        );
+    }
+
+    #[test]
+    fn permitted_name_rdata_is_compressed_but_unknown_rdata_stays_opaque() {
+        const UNKNOWN_TYPE: u16 = 65_280;
+        let pointer_like_rdata = vec![0xc0, 0x0c, 0, 255];
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    UNKNOWN_TYPE,
+                    1,
+                    300,
+                    vec![pointer_like_rdata.clone()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x05alias\x07example\x04test\x00", DNS_CLASS_ANY, 1);
+        let response = store_response_with_options(
+            &packet,
+            &store,
+            AnswerOptions {
+                any_response: AnyResponseMode::Full,
+                ..AnswerOptions::default()
+            },
+        );
+        let cname_rdatas = response_answer_rdatas(&response, RecordType::Cname as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(cname_rdatas.len(), 1);
+        assert_ne!(cname_rdatas[0], cname_rdata("target.example.test."));
+        assert_eq!(&cname_rdatas[0], b"\x06target\xc0\x12");
+        assert_eq!(
+            response_answer_single_name_rdatas(&response, RecordType::Cname as u16),
+            vec![cname_rdata("target.example.test.")]
+        );
+        assert_eq!(
+            response_answer_rdatas(&response, UNKNOWN_TYPE),
+            vec![pointer_like_rdata]
         );
     }
 

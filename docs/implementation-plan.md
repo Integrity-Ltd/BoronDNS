@@ -168,6 +168,12 @@ Slice 1 has a tested UDP query/response foundation:
 - SRV answers include in-zone target A/AAAA RRsets in the additional section;
 - NAPTR answers include in-zone replacement A/AAAA RRsets in the additional section;
 - SVCB and HTTPS answers include in-zone TargetName A/AAAA RRsets in the additional section.
+- authoritative responses apply RFC 1035 name compression to answer, authority,
+  and additional-section owner names, and to structurally valid embedded names
+  for the currently encoded pre-RFC3597 name-bearing RDATA types NS, CNAME, PTR,
+  SOA, and MX;
+- response serialization preserves all other RDATA opaquely, including
+  unknown-type RDATA with pointer-looking octets.
 
 Slice 2 has an in-memory zone snapshot model with atomic publication through the shared `ZoneStore`.
 
