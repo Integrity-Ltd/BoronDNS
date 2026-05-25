@@ -219,9 +219,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   reads member-zone PTR records below `zones.<catalog-zone>`, and dynamically
   transfers and serves those member zones. Catalog members inherit the catalog
   transfer primaries, transfer transport, TSIG key, NOTIFY source policy,
-  transfer source binding, and transfer limits. `serve_catalog_zone` defaults to
-  `false`, which lets OxideDNS transfer and process the catalog without
-  answering DNS queries for the catalog zone itself.
+  transfer source binding, and transfer limits. `tsig_key` is mandatory for
+  catalog zones. `serve_catalog_zone` defaults to `false`, which lets OxideDNS
+  transfer and process the catalog without answering DNS queries for the catalog
+  zone itself.
 - `[[tsig_keys]]`: static TSIG keys referenced by zones. Each key uses exactly
   one of inline `secret` or filesystem `secret_file`.
 

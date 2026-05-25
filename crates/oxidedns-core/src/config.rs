@@ -289,9 +289,9 @@ impl ServerConfig {
         }
         for catalog_zone in &self.catalog_zones {
             catalog_zone.validate()?;
-            if self.transfer.require_tsig && catalog_zone.tsig_key.is_none() {
+            if catalog_zone.tsig_key.is_none() {
                 return Err(ConfigError::Invalid(format!(
-                    "catalog zone {} requires tsig_key because transfer.require_tsig is true",
+                    "catalog zone {} requires tsig_key because catalog-zone transfers must be TSIG-authenticated",
                     catalog_zone.name
                 )));
             }
@@ -457,22 +457,22 @@ impl ServerConfig {
                     }
                 }
             }
-            for catalog_zone in &self.catalog_zones {
-                if catalog_zone.tsig_key.is_none() {
-                    for primary in catalog_zone.transfer_target_addrs() {
-                        warnings.push(ConfigWarning {
-                            code: "catalog_transfer_unauthenticated",
-                            parameter: format!(
-                                "catalog_zones.{}.primary.{}",
-                                catalog_zone.name, primary
-                            ),
-                            message: format!(
-                                "catalog zone {} transfer from primary {} is not TSIG-authenticated; catalog TSIG is mandatory for production catalog mode",
-                                catalog_zone.name, primary
-                            ),
-                        });
-                    }
-                }
+        }
+
+        for catalog_zone in &self.catalog_zones {
+            if catalog_zone
+                .transfer_targets()
+                .iter()
+                .any(|primary| primary.transport != TransferTransportConfig::Xot)
+            {
+                warnings.push(ConfigWarning {
+                    code: "catalog_transfer_cleartext",
+                    parameter: format!("catalog_zones.{}", catalog_zone.name),
+                    message: format!(
+                        "catalog zone {} has at least one non-XoT primary; TSIG authenticates catalog contents but does not encrypt them",
+                        catalog_zone.name
+                    ),
+                });
             }
         }
 
@@ -1942,10 +1942,16 @@ mod tests {
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
                 [[catalog_zones]]
                 name = "catalog.example."
                 primaries = ["192.0.2.53:53"]
                 notify_sources = ["192.0.2.53"]
+                tsig_key = "catalog-key."
             "#,
         )
         .expect("valid catalog-only config");
@@ -1956,6 +1962,28 @@ mod tests {
         assert_eq!(
             config.catalog_zones[0].transfer_target_addrs(),
             vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
+        );
+    }
+
+    #[test]
+    fn rejects_catalog_zone_without_tsig_key() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("catalog TSIG is mandatory");
+
+        assert!(
+            error
+                .to_string()
+                .contains("catalog-zone transfers must be TSIG-authenticated")
         );
     }
 

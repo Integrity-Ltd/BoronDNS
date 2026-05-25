@@ -61,6 +61,8 @@ PY
 )
 
 rndc_secret="Y2F0YWxvZy1pbnRlcm9wLXNlY3JldA=="
+tsig_name="transfer-key."
+tsig_secret="dG9wc2VjcmV0"
 catalog_zone="$workdir/catalog.example.zone"
 member_zone="$workdir/member.example.zone"
 named_conf="$workdir/named.conf"
@@ -129,6 +131,11 @@ key "rndc-key" {
     secret "$rndc_secret";
 };
 
+key "$tsig_name" {
+    algorithm hmac-sha256;
+    secret "$tsig_secret";
+};
+
 controls {
     inet 127.0.0.1 port $rndc_port allow { 127.0.0.1; } keys { "rndc-key"; };
 };
@@ -147,7 +154,7 @@ zone "catalog.example." IN {
     type primary;
     file "/work/catalog.example.zone";
     allow-query { any; };
-    allow-transfer { any; };
+    allow-transfer { key "$tsig_name"; };
     notify no;
 };
 
@@ -155,7 +162,7 @@ zone "member.example." IN {
     type primary;
     file "/work/member.example.zone";
     allow-query { any; };
-    allow-transfer { any; };
+    allow-transfer { key "$tsig_name"; };
     notify no;
 };
 EOF
@@ -236,7 +243,13 @@ name = "catalog.example."
 class = "IN"
 primaries = ["127.0.0.1:$bind_port"]
 notify_sources = ["127.0.0.1"]
+tsig_key = "$tsig_name"
 serve_catalog_zone = false
+
+[[tsig_keys]]
+name = "$tsig_name"
+algorithm = "hmac-sha256"
+secret = "$tsig_secret"
 EOF
 
 cargo build -p oxidedns-cli >/dev/null

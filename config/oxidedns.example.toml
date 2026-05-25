@@ -192,6 +192,7 @@ notify_sources = ["192.0.2.53"]
 #class = "IN"
 #primaries = ["192.0.2.53:53"]
 #notify_sources = ["192.0.2.53"]
+# Catalog transfers must be TSIG-authenticated.
 #tsig_key = "transfer-key."
 # Default: false. Transfer and process the catalog but do not serve the catalog
 # zone itself on the public DNS query interface.

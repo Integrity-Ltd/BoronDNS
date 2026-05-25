@@ -32,7 +32,7 @@ compliance.
 
 | v0.9 area | Current Evidence | Remaining Gap |
 | --- | --- | --- |
-| Zone provisioning and RFC 9432 catalog mode | `docs/catalog-zone-mvp-rfc9432.md`; `[[catalog_zones]]` config; internal catalog consumption; `catalog_member_added` / `catalog_member_removed` logs; `oxidedns_catalog_member_info` metric | Decide and document whether the v0.9 `[zone_source]` schema replaces or complements `[[catalog_zones]]`; add explicit mandatory catalog TSIG posture, `require_tsig` semantics, and member-zone cap if retained from the v0.9 draft |
+| Zone provisioning and RFC 9432 catalog mode | `docs/catalog-zone-mvp-rfc9432.md`; `[[catalog_zones]]` config; mandatory catalog `tsig_key`; `[transfer].require_tsig`; internal catalog consumption; `catalog_member_added` / `catalog_member_removed` logs; `oxidedns_catalog_member_info` metric | Decide and document whether the v0.9 `[zone_source]` schema replaces or complements `[[catalog_zones]]`; add explicit member-zone cap if retained from the v0.9 draft |
 | DNAME synthesis overflow | Query path returns YXDOMAIN with the DNAME and without synthesized CNAME when DNAME substitution would overflow | Add the v0.9 requirement identifier to the next traceability matrix refresh |
 | DNAME multiplicity in transfers | AXFR validation rejects multiple DNAME records at the same owner with `MultipleDnameRecords` | Add the v0.9 requirement identifier to the next traceability matrix refresh |
 | NSEC3 iteration cap | Existing DNSSEC/NSEC3 code parses and serves transferred NSEC3 data only | Implement configurable cap with default 100, startup/config warning, runtime `dnssec` warning, and an `oxidedns_*` Prometheus counter aligned with the v0.9 draft |

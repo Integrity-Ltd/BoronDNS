@@ -70,10 +70,11 @@ member-zone refresh requests are queued. Member zones start in LOADING, become
 ACTIVE after a successful transfer, and follow the same SOA-driven refresh and
 expiry rules as statically configured zones.
 
-Operators should secure catalog transfers at least as strongly as ordinary
-zone transfers. A catalog producer controls the set of zones an OxideDNS
-instance serves, so TSIG or XoT plus tight source-address allowlisting is
-expected for production use.
+Catalog transfers must be TSIG-authenticated. A catalog producer controls the
+set of zones an OxideDNS instance serves, so OxideDNS rejects `[[catalog_zones]]`
+entries without `tsig_key`. XoT plus tight source-address allowlisting should
+be used where catalog confidentiality is also required; TSIG authenticates the
+transfer but does not encrypt the catalog contents.
 
 For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
 startup validation for missing `tsig_key` references. The v0.9 SRS draft used
