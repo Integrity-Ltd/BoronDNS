@@ -299,8 +299,9 @@ Notes:
   strict service sandboxes are expected deployment shapes. Ensure configured
   config, TSIG, and TLS files remain readable by the service user. The
   `scripts/audit-readonly-runtime.sh` evidence harness runs the service with a
-  non-writable `TMPDIR` and can retain optional syscall tracing artifacts when
-  `strace` is installed.
+  non-writable `TMPDIR`, confirms it does not spawn child processes, records
+  thread count, and can retain optional syscall tracing artifacts when `strace`
+  is installed.
 
 ## Health and Metrics
 

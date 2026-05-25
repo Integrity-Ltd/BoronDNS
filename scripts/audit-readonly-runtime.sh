@@ -2,7 +2,7 @@
 set -euo pipefail
 
 missing=()
-for tool in python3 cargo curl; do
+for tool in python3 cargo curl awk find; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     missing+=("$tool")
   fi
@@ -57,6 +57,7 @@ client="$workdir/client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+proc_status="$workdir/proc-status.txt"
 readonly_tmp="$workdir/readonly-tmp"
 mkdir "$readonly_tmp"
 chmod 0555 "$readonly_tmp"
@@ -289,6 +290,37 @@ if (( ready != 1 )); then
   exit 1
 fi
 
+if [[ ! -d "/proc/$oxidedns_pid/task" ]]; then
+  echo "OxideDNS /proc task view is unavailable during read-only runtime audit" >&2
+  exit 1
+fi
+thread_count="$(find "/proc/$oxidedns_pid/task" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+
+child_pids=()
+if [[ -d /proc ]]; then
+  while IFS= read -r status_file; do
+    pid="$(awk '/^Pid:/ { print $2 }' "$status_file" 2>/dev/null || true)"
+    ppid="$(awk '/^PPid:/ { print $2 }' "$status_file" 2>/dev/null || true)"
+    if [[ -n "$pid" && "$ppid" == "$oxidedns_pid" ]]; then
+      child_pids+=("$pid")
+    fi
+  done < <(find /proc -mindepth 2 -maxdepth 2 -path '/proc/[0-9]*/status' -print 2>/dev/null)
+fi
+child_process_count="${#child_pids[@]}"
+{
+  printf 'oxidedns_pid=%s\n' "$oxidedns_pid"
+  printf 'thread_count=%s\n' "$thread_count"
+  printf 'child_process_count=%s\n' "$child_process_count"
+  for child_pid in "${child_pids[@]}"; do
+    printf 'child_pid=%s\n' "$child_pid"
+  done
+} >"$proc_status"
+if (( child_process_count > 0 )); then
+  echo "OxideDNS spawned child processes during read-only runtime audit" >&2
+  cat "$proc_status" >&2
+  exit 1
+fi
+
 client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
@@ -313,7 +345,7 @@ if [[ "$trace_status" == "captured" ]]; then
   fi
 fi
 
-summary="readonly_tmp=1 readyz=1 ${client_summary} strace=${trace_status} write_intent_findings=${write_intent_findings}"
+summary="readonly_tmp=1 readyz=1 ${client_summary} child_processes=${child_process_count} thread_count=${thread_count} strace=${trace_status} write_intent_findings=${write_intent_findings}"
 printf '%s\n' "$summary"
 
 if [[ -n "$artifact_dir" ]]; then
@@ -321,6 +353,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$primary_log" "$artifact_dir/fake-primary.log"
   cp "$client_log" "$artifact_dir/client.log"
   cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$proc_status" "$artifact_dir/proc-status.txt"
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
   printf '%s\n' "$summary" >"$artifact_dir/readonly-runtime-summary.env"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
