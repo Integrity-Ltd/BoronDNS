@@ -37,3 +37,8 @@ are not Engineering MVP deliverables and are not Engineering MVP evidence.
 `scripts/check.sh` is the local Engineering MVP quality gate. It may validate
 script syntax and dry-run campaign wiring, but it must not execute the
 long-running activities or generate long-running handoff evidence listed above.
+
+`scripts/engineering-mvp-evidence.sh` is the bounded local evidence snapshot for
+the Engineering MVP profile. By default it runs only the narrow local evidence
+commands listed in the gap register, applies a per-command timeout, and records
+broader release/operations commands as deferred rather than executing them.

@@ -47,6 +47,32 @@ REQUIRED_EVIDENCE_COMMANDS = [
     "scripts/check-functional-requirement-references.py",
 ]
 
+FORBIDDEN_EVIDENCE_RUN_COMMANDS = [
+    "./scripts/check.sh",
+    "cargo check --manifest-path fuzz/Cargo.toml",
+    "scripts/audit-invariants.sh",
+    "scripts/audit-readonly-runtime.sh",
+    "scripts/audit-spoof-evidence.py",
+    "scripts/audit-log-fields.py",
+    "scripts/audit-log-lazy-formatting.py",
+    "scripts/perf-smoke.sh",
+    "scripts/interop-negative-responses.sh",
+    "scripts/interop-notify-negative.sh",
+    "scripts/interop-tcp-truncation-retry.sh",
+    "scripts/interop-edns-behavior.sh",
+    "scripts/interop-dns-cookie-dig.sh",
+    "scripts/interop-ixfr-notimp-fallback.sh",
+    "scripts/interop-unknown-rr.sh",
+    "scripts/interop-unknown-rr-bad-transfer.sh",
+    "scripts/interop-bind-ixfr-refresh.sh",
+    "scripts/interop-dnssec-serve.sh",
+    "scripts/interop-dnssec-nsec3-serve.sh",
+    "scripts/interop-rrl-udp.sh",
+    "scripts/interop-bind-axfr.sh",
+    "scripts/interop-bind-tsig-axfr.sh",
+    "scripts/interop-bind-notify-refresh.sh",
+]
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -98,6 +124,25 @@ def main() -> None:
             command in evidence,
             f"{EVIDENCE}: Engineering MVP evidence profile must include {command}",
         )
+    require(
+        "timeout --preserve-status" in evidence,
+        f"{EVIDENCE}: Engineering MVP evidence commands must have a timeout guard",
+    )
+    require(
+        "deferred-not-run.txt" in evidence,
+        f"{EVIDENCE}: broader release/operations commands must be recorded as deferred",
+    )
+    run_lines = [
+        line.strip()
+        for line in evidence.splitlines()
+        if line.strip().startswith("run_and_capture ")
+    ]
+    for command in FORBIDDEN_EVIDENCE_RUN_COMMANDS:
+        for line in run_lines:
+            require(
+                command not in line,
+                f"{EVIDENCE}: Engineering MVP evidence profile must not run {command}",
+            )
 
     print("engineering_mvp_scope_check=passed")
 

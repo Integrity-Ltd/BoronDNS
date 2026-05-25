@@ -90,6 +90,10 @@ scripts/audit-unused-code.sh
 scripts/check-functional-requirement-references.py
 ```
 
+`scripts/engineering-mvp-evidence.sh` runs only this narrow profile by default,
+with a per-command timeout, and writes broader release/operations commands to a
+deferred list instead of executing them.
+
 Broader SRS acceptance evidence commands:
 
 ```sh
