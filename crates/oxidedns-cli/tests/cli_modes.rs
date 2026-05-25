@@ -81,6 +81,60 @@ fn validate_config_counts_dns_interface_listeners() {
 }
 
 #[test]
+fn oxidedns_config_env_supplies_default_config_path_for_validation_modes() {
+    let config = write_config(
+        "oxidedns-config-env",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .env("OXIDEDNS_CONFIG", &config)
+        .output()
+        .expect("run oxidedns --validate-config with OXIDEDNS_CONFIG");
+    assert!(
+        validate.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    assert!(String::from_utf8_lossy(&validate.stdout).contains("configuration ok"));
+
+    let dump = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--dump-config")
+        .env("OXIDEDNS_CONFIG", &config)
+        .output()
+        .expect("run oxidedns --dump-config with OXIDEDNS_CONFIG");
+    assert!(
+        dump.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&dump.stderr)
+    );
+    assert!(String::from_utf8_lossy(&dump.stdout).contains("[[zones]]"));
+
+    let check_config = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("check-config")
+        .env("OXIDEDNS_CONFIG", &config)
+        .output()
+        .expect("run oxidedns check-config with OXIDEDNS_CONFIG");
+    assert!(
+        check_config.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&check_config.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check_config.stdout).contains("configuration ok"));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn validate_config_emits_json_bootstrap_logs_before_configured_logging() {
     let config = write_config(
         "bootstrap-logs",
@@ -666,6 +720,53 @@ fn example_config_flag_prints_valid_configuration_without_reading_input() {
 }
 
 #[test]
+fn checked_in_example_config_validates_and_preserves_three_interface_shape() {
+    let config = checked_in_example_config_path();
+    let contents = fs::read_to_string(&config).expect("read checked-in example config");
+    assert!(contents.contains("[interfaces]"));
+    assert!(contents.contains("dns = ["));
+    assert!(contents.contains("mgmt = ["));
+    assert!(contents.contains("transfer = ["));
+    assert!(!contents.contains("interfaces.notify"));
+    assert!(!contents.contains("interfaces.xot"));
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("validate checked-in example config");
+    assert!(
+        validate.status.success(),
+        "checked-in example config should validate, stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let dump = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--dump-config")
+        .arg(&config)
+        .output()
+        .expect("dump checked-in example config");
+    assert!(
+        dump.status.success(),
+        "checked-in example config should dump, stderr={}",
+        String::from_utf8_lossy(&dump.stderr)
+    );
+    assert!(String::from_utf8_lossy(&dump.stdout).contains("[interfaces]"));
+
+    let check = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("check-config")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("check checked-in example config");
+    assert!(
+        check.status.success(),
+        "checked-in example config should pass check-config, stderr={}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
 fn serve_health_bind_failure_exits_with_cantcreat() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("bind occupied health port");
     let occupied_addr = occupied.local_addr().expect("occupied health address");
@@ -782,6 +883,10 @@ fn write_config(label: &str, contents: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("oxidedns-{label}-{unique}.toml"));
     fs::write(&path, contents).expect("write test config");
     path
+}
+
+fn checked_in_example_config_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/oxidedns.example.toml")
 }
 
 fn write_secret_file(label: &str, contents: &str, mode: u32) -> PathBuf {

@@ -2,7 +2,10 @@
 
 OxideDNS is the working Rust project for the secondary-only authoritative DNS server described by Tibor's OxideDNS-Secondary SRS package.
 
-The implementation is currently in early Alpha work: it establishes the workspace, configuration surface, zone-state model, CLI entrypoints, documentation layout, and initial DNS protocol behavior.
+The implementation is targeting the local Engineering MVP: a deployable
+secondary-authoritative DNS server with deterministic local checks, short
+runtime evidence, and explicit separation from later SRS release-acceptance
+evidence.
 
 ## Source Documents
 
@@ -39,14 +42,28 @@ cargo run -p oxidedns-cli -- check-config --config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 ./scripts/check.sh
 ./scripts/perf-smoke.sh
-./scripts/release-evidence-snapshot.sh
 ```
 
 When the config path is omitted, `oxidedns` uses `/etc/oxidedns-secondary/config.toml`; `OXIDEDNS_CONFIG` can override that path for `--validate-config`, `--dump-config`, `check-config`, and `serve`.
 
 The workspace targets Rust 1.95 with the Rust 2024 edition and Cargo resolver 3.
 
-The `serve` command currently validates configuration, performs AXFR and IXFR refresh attempts from configured primaries using OS-random query IDs, binds configured UDP/TCP DNS listeners and management listeners, parses DNS queries, accepts authorized NOTIFY on the DNS listeners, and emits authoritative responses from active in-memory zone snapshots. EDNS0 OPT parsing, NSID responses, RFC 9018 DNS Cookie learning/validation with lenient or strict policy, UDP truncation, TCP keepalive advertisement, default-off response padding, configurable ANY-query minimisation, authorized NOTIFY-triggered refresh, preliminary SOA REFRESH/RETRY/EXPIRE scheduling, TSIG-signed transfer and NOTIFY paths, DNSSEC augmentation for served records, UDP response-rate limiting, and initial XoT TLS transport are partially implemented. SRS v0.7 adds immediate Alpha/MVP pressure for complete DNS Cookies, expanded interface/CLI behavior, stronger verification governance, and additional NFR evidence; `--validate-config`, redacted `--dump-config`, `--example-config`, initial sysexits-style CLI exit mapping, and real-primary interop version/configuration artifacts are now implemented, while the remaining gaps are tracked before further MVP claims.
+The `serve` command validates configuration, performs AXFR and IXFR refresh
+attempts from configured primaries using OS-random query IDs, binds configured
+UDP/TCP DNS listeners and management listeners, and parses DNS queries. It
+accepts authorized NOTIFY on the DNS listeners and emits authoritative responses
+from active in-memory zone snapshots. The current Engineering MVP path includes
+EDNS0
+OPT handling, NSID responses, RFC 9018 DNS Cookie behavior, UDP truncation, TCP
+keepalive advertisement, default-off response padding, configurable ANY-query
+minimisation, authorized NOTIFY-triggered refresh, SOA REFRESH/RETRY/EXPIRE
+scheduling foundations, TSIG-signed transfer and NOTIFY paths, DNSSEC serving of
+transferred records, UDP response-rate limiting, and XoT TLS transport.
+
+Long-running fuzz campaigns, Reference Hardware/Profile benchmarks, 30-day soak
+execution, production-depth log profiling, external operator acceptance,
+independent reproducible-build comparison, and signed release artifacts are
+later SRS acceptance work, not Engineering MVP requirements.
 
 ## License
 

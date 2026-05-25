@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCOPE = ROOT / "docs" / "engineering-mvp-scope.md"
 CHECK = ROOT / "scripts" / "check.sh"
+EVIDENCE = ROOT / "scripts" / "engineering-mvp-evidence.sh"
 PLAN = ROOT / "docs" / "implementation-plan.md"
 GAPS = ROOT / "docs" / "mvp-gap-register.md"
 LEDGER = ROOT / "docs" / "verification-ledger.md"
@@ -63,12 +64,14 @@ def main() -> None:
         f"{LEDGER}: missing Engineering MVP long-running evidence note",
     )
 
+    for path in [CHECK, EVIDENCE]:
+        script = path.read_text(encoding="utf-8")
+        for command in FORBIDDEN_CHECK_COMMANDS:
+            require(
+                command not in script,
+                f"{path}: Engineering MVP profile must not run {command}",
+            )
     check = CHECK.read_text(encoding="utf-8")
-    for command in FORBIDDEN_CHECK_COMMANDS:
-        require(
-            command not in check,
-            f"{CHECK}: Engineering MVP check profile must not run {command}",
-        )
     require(
         "scripts/fuzz-campaign.sh --dry-run" in check,
         f"{CHECK}: expected only dry-run fuzz campaign wiring in local checks",
