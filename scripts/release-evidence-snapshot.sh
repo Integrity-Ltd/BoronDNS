@@ -95,11 +95,12 @@ output, plus retained unsafe dependency enumeration. It is an evidence
 collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
 production benchmark reports. The default `info-verbosity-handoff/`,
-`benchmark-handoff/`, `soak-handoff/`, and `release-handoff/` artifacts are
-release/operations setup scaffolds for later production-depth info-verbosity
-profile, Reference Hardware/Profile benchmark, long-duration soak,
-scheduled-CI, signing, release-note, and external-operator execution; they are
-not completed profile, benchmark, soak, or release-acceptance results.
+`benchmark-handoff/`, `soak-handoff/`, `reproducible-build-handoff/`, and
+`release-handoff/` artifacts are release/operations setup scaffolds for later
+production-depth info-verbosity profile, Reference Hardware/Profile benchmark,
+long-duration soak, independent reproducible-build comparison, scheduled-CI,
+signing, release-note, and external-operator execution; they are not completed
+profile, benchmark, soak, reproducible-build, or release-acceptance results.
 
 Successful real-primary interop runs copy their primary-version artifacts to
 interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
@@ -144,11 +145,13 @@ run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && OXIDEDNS
 run_and_capture info-verbosity-handoff bash -lc "cd '$repo_root' && OXIDEDNS_INFO_VERBOSITY_HANDOFF_DIR='$snapshot_dir/info-verbosity-handoff' scripts/capture-info-verbosity-handoff.sh"
 run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
 run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
+run_and_capture reproducible-build-handoff bash -lc "cd '$repo_root' && OXIDEDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR='$snapshot_dir/reproducible-build-handoff' scripts/capture-reproducible-build-handoff.sh"
 run_and_capture release-handoff bash -lc "cd '$repo_root' && OXIDEDNS_RELEASE_HANDOFF_DIR='$snapshot_dir/release-handoff' scripts/capture-release-handoff.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
 run_and_capture unsafe-boundary-registry bash -lc "cd '$repo_root' && scripts/check-unsafe-boundaries.py"
+run_and_capture unsafe-prone-dependency-gate bash -lc "cd '$repo_root' && scripts/check-unsafe-prone-dependencies.py"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' OXIDEDNS_READONLY_RUNTIME_CONTAINER=\"\${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"
 run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"

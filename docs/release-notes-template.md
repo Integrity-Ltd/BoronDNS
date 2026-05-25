@@ -89,6 +89,7 @@ TBD
 - First-party Rust source line count: TBD
 - Rationale for exceeding LOC target: TBD
 - Coverage summary: TBD
+- Reproducible-build handoff or completed bit-identical comparison: TBD
 
 ## Security and Dependency Review
 

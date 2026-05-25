@@ -30,7 +30,7 @@ REQUIRED_DEFERRED = {
 }
 
 ALLOW_UNSAFE_RE = re.compile(r"#!?\[allow\(unsafe_code\)\]")
-UNSAFE_BLOCK_RE = re.compile(r"\bunsafe\s*\{")
+UNSAFE_CONSTRUCT_RE = re.compile(r"\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)")
 
 
 def fail(message: str) -> None:
@@ -73,11 +73,14 @@ def assert_safety_comments(repo_root: Path, relative_path: str) -> None:
     path = repo_root / relative_path
     lines = path.read_text(encoding="utf-8").splitlines()
     for index, line in enumerate(lines):
-        if not UNSAFE_BLOCK_RE.search(line):
+        if not UNSAFE_CONSTRUCT_RE.search(line):
             continue
-        context = "\n".join(lines[max(0, index - 5) : index])
-        if "SAFETY:" not in context:
-            fail(f"{relative_path}:{index + 1}: unsafe block lacks preceding SAFETY rationale")
+        context = "\n".join(lines[max(0, index - 8) : index])
+        if "SAFETY:" not in context and "# Safety" not in context:
+            fail(
+                f"{relative_path}:{index + 1}: unsafe construct lacks "
+                "preceding SAFETY rationale or # Safety docs"
+            )
 
 
 def main() -> None:
@@ -105,15 +108,27 @@ def main() -> None:
             f"source={sorted(source_allowlist)} registry={sorted(registry_allowlist)}"
         )
 
+    for row_id, row in registry.items():
+        if row["status"] != "current":
+            continue
+        relative_path = row["path"]
+        if relative_path.startswith("future:"):
+            fail(f"{registry_path}: {row_id} current row must point at a live source path")
+        if not (repo_root / relative_path).is_file():
+            fail(f"{registry_path}: {row_id} current row path does not exist: {relative_path}")
+        if "test" not in row["required_tests"].lower():
+            fail(f"{registry_path}: {row_id} must name adapter tests")
+        if "scripts/" not in row["evidence"] or "SAFETY" not in row["evidence"]:
+            fail(
+                f"{registry_path}: {row_id} must name retained script evidence "
+                "and SAFETY-rationale evidence"
+            )
+        assert_safety_comments(repo_root, relative_path)
+
     for row_id, relative_path in REQUIRED_CURRENT.items():
         row = registry[row_id]
         if row["status"] != "current" or row["path"] != relative_path:
             fail(f"{registry_path}: {row_id} must be current at {relative_path}")
-        if "test" not in row["required_tests"].lower():
-            fail(f"{registry_path}: {row_id} must name adapter tests")
-        if "SAFETY" not in row["evidence"]:
-            fail(f"{registry_path}: {row_id} must name SAFETY-rationale evidence")
-        assert_safety_comments(repo_root, relative_path)
 
     for row_id in REQUIRED_DEFERRED:
         row = registry[row_id]

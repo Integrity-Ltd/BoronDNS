@@ -30,6 +30,7 @@ print("workspace lint check passed: unsafe_code = \"forbid\"")
 PY
 
 python3 "$repo_root/scripts/check-unsafe-boundaries.py"
+python3 "$repo_root/scripts/check-unsafe-prone-dependencies.py"
 
 process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
 resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
@@ -109,18 +110,23 @@ for adapter_path in "${current_unsafe_adapter_paths[@]}"; do
 done
 python3 - "${adapter_absolute_paths[@]}" <<'PY'
 import sys
+import re
 from pathlib import Path
 
 failures = []
+unsafe_construct = re.compile(r"\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)")
 for filename in sys.argv[1:]:
     path = Path(filename)
     lines = path.read_text().splitlines()
     for index, line in enumerate(lines):
-        if "unsafe {" not in line:
+        if not unsafe_construct.search(line):
             continue
-        context = "\n".join(lines[max(0, index - 4):index])
-        if "SAFETY:" not in context:
-            failures.append(f"{path}:{index + 1}: unsafe block lacks preceding SAFETY rationale")
+        context = "\n".join(lines[max(0, index - 8):index])
+        if "SAFETY:" not in context and "# Safety" not in context:
+            failures.append(
+                f"{path}:{index + 1}: unsafe construct lacks preceding "
+                "SAFETY rationale or # Safety docs"
+            )
 
 if failures:
     raise SystemExit("\n".join(failures))

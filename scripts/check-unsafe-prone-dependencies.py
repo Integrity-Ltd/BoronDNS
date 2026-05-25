@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import csv
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError as exc:
+    raise SystemExit("python tomllib is required to inspect Cargo.lock") from exc
+
+
+HEADER = ["package", "boundary_ids", "status", "rationale"]
+
+
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def read_tsv(path: Path) -> dict[str, dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if reader.fieldnames != HEADER:
+            fail(f"{path} must use TSV header: {HEADER}")
+        rows = list(reader)
+
+    packages: dict[str, dict[str, str]] = {}
+    for row_number, row in enumerate(rows, start=2):
+        package = row["package"]
+        if not package:
+            fail(f"{path}:{row_number}: package is required")
+        if package in packages:
+            fail(f"{path}:{row_number}: duplicate package {package}")
+        if row["status"] not in {"current", "deferred"}:
+            fail(f"{path}:{row_number}: status must be current or deferred")
+        for field in HEADER:
+            if not row[field]:
+                fail(f"{path}:{row_number}: {field} is required")
+        packages[package] = row
+    return packages
+
+
+def read_boundary_statuses(path: Path) -> dict[str, str]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return {
+            row["id"]: row["status"]
+            for row in csv.DictReader(handle, delimiter="\t")
+        }
+
+
+def locked_packages(path: Path) -> set[str]:
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    return {package["name"] for package in data.get("package", [])}
+
+
+def main() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    trigger_path = repo_root / "docs" / "unsafe-prone-dependencies.tsv"
+    boundary_path = repo_root / "docs" / "unsafe-boundaries.tsv"
+    lock_path = repo_root / "Cargo.lock"
+
+    triggers = read_tsv(trigger_path)
+    boundary_statuses = read_boundary_statuses(boundary_path)
+    present = locked_packages(lock_path)
+
+    for package, row in sorted(triggers.items()):
+        boundary_ids = [item for item in row["boundary_ids"].split(";") if item]
+        missing_boundaries = [
+            boundary_id for boundary_id in boundary_ids if boundary_id not in boundary_statuses
+        ]
+        if missing_boundaries:
+            fail(
+                f"{trigger_path}: {package} references unknown unsafe boundary ids: "
+                f"{missing_boundaries}"
+            )
+        if package not in present:
+            continue
+        if row["status"] != "current":
+            fail(
+                f"unsafe-prone dependency {package!r} is present in Cargo.lock but "
+                f"docs/unsafe-prone-dependencies.tsv marks it {row['status']}; "
+                "promote the dependency and its unsafe-boundary row only with "
+                "architecture, test-plan, and adapter evidence updates"
+            )
+        inactive_boundaries = [
+            boundary_id
+            for boundary_id in boundary_ids
+            if boundary_statuses[boundary_id] != "current"
+        ]
+        if inactive_boundaries:
+            fail(
+                f"unsafe-prone dependency {package!r} is current but mapped to "
+                f"non-current unsafe boundary rows: {inactive_boundaries}"
+            )
+
+    print("unsafe_prone_dependency_gate=passed")
+
+
+if __name__ == "__main__":
+    main()

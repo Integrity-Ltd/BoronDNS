@@ -6,8 +6,9 @@ This document records architecture and governance decisions that the SRS expects
 to be retained before MVP acceptance. It currently covers module organisation
 for `ODS-NFR-MAINT-002`, the release-signing choice for
 `ODS-NFR-MAINT-008`, and verification responsibility allocation for
-`ODS-VER-015`. Broader architecture content, reproducible-build proof,
-signed release artifacts remain tracked as MVP gaps in `docs/mvp-gap-register.md`.
+`ODS-VER-015`. Broader architecture content, completed reproducible-build
+proof, and signed release artifacts remain tracked as MVP gaps in
+`docs/mvp-gap-register.md`.
 
 ## Module Organisation
 
@@ -51,7 +52,7 @@ source-line target.
 | TSIG constant-time comparison | MAC verification uses the `subtle` crate's constant-time equality path through `ct_eq`. | `ODS-FR-TSIG-008`, `ODS-NFR-SEC-001` |
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
 | Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
-| Reproducible build posture | `cargo build --locked` is the baseline command; bit-identical independent build evidence is still required before MVP acceptance. | `ODS-NFR-MAINT-005` |
+| Reproducible build posture | `cargo build --locked` with fixed `OXIDEDNS_BUILD_*` values is the baseline command; `scripts/capture-reproducible-build-handoff.sh` records the runbook and schemas, while bit-identical independent build evidence is still required before MVP acceptance. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
 | Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
 | Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
@@ -83,15 +84,20 @@ POSIX signal-disposition and file-descriptor limit wrappers in
 registry is `docs/unsafe-boundaries.tsv`; `scripts/check-unsafe-boundaries.py`
 keeps that registry synchronized with live `#![allow(unsafe_code)]` source
 files and with the deferred optimization tracks below.
+`docs/unsafe-prone-dependencies.tsv` and
+`scripts/check-unsafe-prone-dependencies.py` gate adoption of known low-level
+dependencies so XDP/eBPF, io_uring, packed-store, or response-cache crates
+cannot enter `Cargo.lock` without an active boundary record.
 
 Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
 are expected to require `unsafe` or unsafe-heavy dependencies. They must remain
 outside the safe DNS parser, transfer parser, TSIG, and response-composition
 core. Any first-party `unsafe` must be confined to a dedicated adapter module or
-crate with local `#![allow(unsafe_code)]`, each unsafe block must carry a
-`SAFETY:` comment explaining the soundness invariants, and release evidence
-must include static unsafe enumeration plus targeted adapter tests before the
-backend can be enabled.
+crate with local `#![allow(unsafe_code)]`, each unsafe block, function, impl,
+trait, or extern block must carry a `SAFETY:` rationale or `# Safety` docs
+explaining the soundness invariants, and release evidence must include static
+unsafe enumeration plus targeted adapter tests before the backend can be
+enabled.
 
 The current MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed arena, or
 hot response-cache backend. Those features are post-MVP optimization tracks,
@@ -103,19 +109,30 @@ entry gate is:
 - no `unsafe` in DNS wire parsing, transfer parsing, TSIG verification, or
   response-composition modules;
 - an explicit `scripts/audit-safe-rust.sh` allowlist entry for the adapter file
-  or crate, with the architecture document and `docs/unsafe-boundaries.tsv`
-  updated in the same change;
+  or crate, with the architecture document, `docs/unsafe-boundaries.tsv`, and
+  `docs/unsafe-prone-dependencies.tsv` updated in the same change;
 - unit and integration tests proving the adapter's safe API preserves buffer
   ownership, lifetime, bounds, concurrency, and fallback behavior;
 - retained release evidence from `scripts/check-unsafe-boundaries.py`,
-  `scripts/audit-safe-rust.sh`, transitive unsafe enumeration, and
-  backend-specific fault tests before enabling the backend in production
-  configuration.
+  `scripts/check-unsafe-prone-dependencies.py`, `scripts/audit-safe-rust.sh`,
+  transitive unsafe enumeration, and backend-specific fault tests before
+  enabling the backend in production configuration.
 
 For eBPF specifically, runtime loading of operator-supplied programs remains
 forbidden by `ODS-INV-009`. Any future kernel-side program must be built as a
 project artifact, versioned with the server release, and attached only through
 the audited adapter path.
+
+Future XDP/eBPF also needs a separate privileged deployment profile. The MVP
+profile must not require privileges beyond the documented Linux/POSIX baseline;
+an XDP profile would need explicit capability, memlock, attach/detach,
+fallback, and no-XDP-default tests before it can be offered to operators.
+
+The deferred response-cache track means an authoritative-only prebuilt response
+cache. It does not relax the invariant that OxideDNS has no recursive,
+upstream-sourced, or non-authoritative cache. Any future response cache must
+prove zone-refresh invalidation, DO-bit keying, TTL decay, DNSSEC signature
+expiry floors, and fallback behavior before production enablement.
 
 ## Release Signing Decision
 

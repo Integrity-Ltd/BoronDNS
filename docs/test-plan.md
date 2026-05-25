@@ -30,7 +30,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | `cargo test --workspace`; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |
@@ -69,6 +69,7 @@ snapshot and release notes.
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
 | Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off scaffold; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
+| Reproducible-build comparison | Gate before MVP/public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off scaffold; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
 | Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off scaffold | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
@@ -114,6 +115,14 @@ the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
 traceability map, and operator sign-off scaffold for the later ODS-NFR-REL-003
 30-day soak. A generated handoff directory proves the local MVP setup exists; it
 does not prove that the long-running soak has been executed.
+
+`scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
+artifact. It creates fixed build inputs, a runbook, artifact-manifest and
+comparison TSV schemas, requirement traceability, release-note snippet, and
+release-engineer sign-off scaffold for the later independent bit-identical build
+comparison. A generated handoff directory proves the local MVP setup exists; it
+does not prove ODS-NFR-MAINT-005 until completed manifests from two independent
+builders match.
 
 When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`

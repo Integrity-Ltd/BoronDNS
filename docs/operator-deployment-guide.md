@@ -68,8 +68,13 @@ Install prerequisites for a source build:
 Build the release binary:
 
 ```sh
-cargo build --release -p oxidedns-cli
+cargo build --locked --release -p oxidedns-cli
 ```
+
+Release builds use `--locked` so the checked-in lockfile is part of the build
+input. This is necessary input for reproducible-build evidence, but it is not
+proof of bit-identical reproducibility by itself; release/operations must fill
+the reproducible-build handoff after two independent clean builds match.
 
 Install it to a host path managed by the operator:
 
@@ -471,13 +476,14 @@ artifacts under `unused-code-audit/` and resource smoke artifacts under
 `unsafe-dependency-evidence/`, the production-depth info verbosity profile
 setup under `info-verbosity-handoff/`, the Reference Hardware/Profile
 benchmark setup/report scaffold under `benchmark-handoff/`, the long-run soak
-setup/report scaffold under `soak-handoff/`, and the release-governance setup
-under `release-handoff/`. The unsafe dependency evidence records scanner
-caveats and must be reviewed before it is treated as complete. The info
-verbosity, benchmark, soak, and
-release-governance handoffs are not completed profile, benchmark, soak, or
-release-acceptance evidence; they are release/operations template sets for the
-later delegated runs. Set
+setup/report scaffold under `soak-handoff/`, the reproducible-build setup
+under `reproducible-build-handoff/`, and the release-governance setup under
+`release-handoff/`. The unsafe dependency evidence records scanner caveats and
+must be reviewed before it is treated as complete. The info verbosity,
+benchmark, soak, reproducible-build, and release-governance handoffs are not
+completed profile, benchmark, soak, bit-identical build, or release-acceptance
+evidence; they are release/operations template sets for the later delegated
+runs. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
 and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence

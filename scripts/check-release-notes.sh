@@ -113,7 +113,8 @@ done
 for maintainability_field in \
   "First-party Rust source line count" \
   "Rationale for exceeding LOC target" \
-  "Coverage summary"; do
+  "Coverage summary" \
+  "Reproducible-build handoff or completed bit-identical comparison"; do
   require_text "$maintainability_field"
 done
 
