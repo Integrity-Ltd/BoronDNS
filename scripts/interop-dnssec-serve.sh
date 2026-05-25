@@ -245,6 +245,7 @@ LOG_PATH = sys.argv[3]
 A = 1
 SOA = 6
 TXT = 16
+NSID = 3
 RRSIG = 46
 NSEC = 47
 DNSKEY = 48
@@ -266,15 +267,16 @@ def name_wire(name):
     return bytes(out)
 
 
-def query(qid, qname, qtype, payload=None, do=False):
+def query(qid, qname, qtype, payload=None, do=False, edns_options=b""):
     packet = bytearray()
-    packet.extend(struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 1 if payload else 0))
+    packet.extend(struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 1 if payload is not None else 0))
     packet.extend(name_wire(qname))
     packet.extend(struct.pack("!HH", qtype, 1))
-    if payload:
+    if payload is not None:
         ttl = 0x8000 if do else 0
         packet.extend(b"\x00")
-        packet.extend(struct.pack("!HHIH", OPT, payload, ttl, 0))
+        packet.extend(struct.pack("!HHIH", OPT, payload, ttl, len(edns_options)))
+        packet.extend(edns_options)
     return bytes(packet)
 
 
@@ -326,10 +328,27 @@ def parse_records(packet, offset, count):
     return records, offset
 
 
-def exchange(qid, qname, qtype, payload=None, do=False, timeout=1.0):
+def edns_option_data(additionals, option_code):
+    found = []
+    for record in additionals:
+        if record["type"] != OPT:
+            continue
+        offset = 0
+        rdata = record["rdata"]
+        while offset + 4 <= len(rdata):
+            code, length = struct.unpack("!HH", rdata[offset:offset + 4])
+            offset += 4
+            data = rdata[offset:offset + length]
+            offset += length
+            if code == option_code:
+                found.append(data)
+    return found
+
+
+def exchange(qid, qname, qtype, payload=None, do=False, edns_options=b"", timeout=1.0):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
-    sock.sendto(query(qid, qname, qtype, payload=payload, do=do), (HOST, PORT))
+    sock.sendto(query(qid, qname, qtype, payload=payload, do=do, edns_options=edns_options), (HOST, PORT))
     packet, _ = sock.recvfrom(4096)
     header = struct.unpack("!HHHHHH", packet[:12])
     rid, flags, qdcount, ancount, nscount, arcount = header
@@ -350,6 +369,7 @@ def exchange(qid, qname, qtype, payload=None, do=False, timeout=1.0):
         "authority_types": [record["type"] for record in authorities],
         "additional_types": [record["type"] for record in additionals],
         "opt_ttls": opt_ttls,
+        "nsid_options": edns_option_data(additionals, NSID),
         "size": len(packet),
     }
     log(f"{qname} type={qtype} do={int(do)} payload={payload} summary={summary}")
@@ -398,6 +418,20 @@ if not non_edns_truncated["tc"] or non_edns_truncated["size"] > 512:
 if OPT in non_edns_truncated["additional_types"] or non_edns_truncated["opt_ttls"]:
     raise AssertionError(f"non-EDNS truncated response unexpectedly included OPT: {non_edns_truncated}")
 
+nsid = exchange(0xD007, "www.alpha.test.", A, payload=4096, edns_options=struct.pack("!HH", NSID, 0))
+if nsid["rcode"] != 0 or nsid["nsid_options"] != [b"oxidedns-runtime"]:
+    raise AssertionError(f"configured NSID response missing expected identifier: {nsid}")
+
+nsid_nonzero = exchange(
+    0xD008,
+    "www.alpha.test.",
+    A,
+    payload=4096,
+    edns_options=struct.pack("!HH", NSID, 3) + b"bad",
+)
+if nsid_nonzero["rcode"] != 0 or nsid_nonzero["nsid_options"] != [b"oxidedns-runtime"]:
+    raise AssertionError(f"non-zero NSID request data was not treated as a request: {nsid_nonzero}")
+
 print("DNSSEC serve runtime interop passed")
 PY
 
@@ -407,6 +441,7 @@ listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
 listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
 health = "127.0.0.1:$oxidedns_health_port"
 log_level = "info"
+nsid = "oxidedns-runtime"
 
 [rrl]
 enabled = false
@@ -444,12 +479,12 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after fake-primary DNSSEC AXFR" >&2
   exit 1
 fi
