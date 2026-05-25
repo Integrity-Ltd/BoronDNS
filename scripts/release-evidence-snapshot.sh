@@ -109,6 +109,7 @@ run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METR
 run_and_capture negative-responses bash -lc "cd '$repo_root' && OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR='$snapshot_dir/negative-response-artifacts' scripts/interop-negative-responses.sh"
 run_and_capture notify-negative bash -lc "cd '$repo_root' && OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR='$snapshot_dir/notify-negative-artifacts' scripts/interop-notify-negative.sh"
 run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
+run_and_capture edns-behavior bash -lc "cd '$repo_root' && OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR='$snapshot_dir/edns-behavior-artifacts' scripts/interop-edns-behavior.sh"
 run_and_capture dns-cookie-dig bash -lc "cd '$repo_root' && OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR='$snapshot_dir/dns-cookie-artifacts' scripts/interop-dns-cookie-dig.sh"
 run_and_capture ixfr-notimp-fallback bash -lc "cd '$repo_root' && OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR='$snapshot_dir/ixfr-fallback-artifacts' scripts/interop-ixfr-notimp-fallback.sh"
 run_and_capture dnssec-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR='$snapshot_dir/dnssec-serve-artifacts' scripts/interop-dnssec-serve.sh"

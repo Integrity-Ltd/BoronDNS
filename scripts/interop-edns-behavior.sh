@@ -398,6 +398,19 @@ def record(rows, case, summary, detail):
     )
 
 
+def assert_payload_boundary(rows, qid, advertised_payload, expected_ceiling, case):
+    summary = response_summary(udp_exchange(query_packet(qid, "large.edns.test.", payload=advertised_payload)))
+    require(summary["rcode"] == 0 and summary["tc"], summary)
+    require(summary["bytes"] <= expected_ceiling, summary)
+    require(summary["opt"] is not None, f"{case} response missed OPT")
+    record(
+        rows,
+        case,
+        summary,
+        f"advertised={advertised_payload} applied_ceiling<={expected_ceiling}",
+    )
+
+
 def main():
     wait_active()
     rows = ["case\trcode\ttc\tresponse_bytes\topt_present\tdetail"]
@@ -427,26 +440,21 @@ def main():
     require(do_cleared["opt"]["ttl"] & 0x8000 == 0, do_cleared)
     record(rows, "do_query_without_dnssec_aug_clears_response_do", do_cleared, "response_do=0")
 
-    floor = response_summary(udp_exchange(query_packet(0x4104, "large.edns.test.", payload=256)))
-    require(floor["rcode"] == 0 and floor["tc"], floor)
-    require(floor["bytes"] <= 512, floor)
-    require(floor["opt"] is not None, "EDNS floor truncation response missed OPT")
-    record(rows, "payload_floor_512", floor, "advertised=256 applied_ceiling<=512")
+    assert_payload_boundary(rows, 0x4104, 256, 512, "payload_floor_512")
+    assert_payload_boundary(rows, 0x4105, 512, 512, "payload_exact_floor_512")
+    assert_payload_boundary(rows, 0x4106, 699, 699, "payload_below_server_max_699")
+    assert_payload_boundary(rows, 0x4107, 700, SERVER_MAX_UDP_PAYLOAD, "payload_exact_server_max_700")
+    assert_payload_boundary(rows, 0x4108, 701, SERVER_MAX_UDP_PAYLOAD, "payload_above_server_max_701")
+    assert_payload_boundary(rows, 0x4109, 4096, SERVER_MAX_UDP_PAYLOAD, "payload_large_server_max_700")
 
-    server_max = response_summary(udp_exchange(query_packet(0x4105, "large.edns.test.", payload=4096)))
-    require(server_max["rcode"] == 0 and server_max["tc"], server_max)
-    require(server_max["bytes"] <= SERVER_MAX_UDP_PAYLOAD, server_max)
-    require(server_max["opt"] is not None, "server max truncation response missed OPT")
-    record(rows, "payload_server_max_700", server_max, "advertised=4096 applied_ceiling<=700")
-
-    no_edns = response_summary(udp_exchange(query_packet(0x4106, "large.edns.test.")))
+    no_edns = response_summary(udp_exchange(query_packet(0x4110, "large.edns.test.")))
     require(no_edns["rcode"] == 0 and no_edns["tc"], no_edns)
     require(no_edns["bytes"] <= 512, no_edns)
     require(no_edns["opt"] is None, no_edns)
     record(rows, "non_edns_512_no_opt", no_edns, "response_opt=0")
 
     udp_keepalive = response_summary(udp_exchange(query_packet(
-        0x4107,
+        0x4111,
         "www.edns.test.",
         payload=4096,
         options=option(EDNS_TCP_KEEPALIVE),
@@ -456,7 +464,7 @@ def main():
     record(rows, "udp_keepalive_ignored", udp_keepalive, "keepalive_option_echoed=0")
 
     tcp_keepalive = response_summary(tcp_exchange(query_packet(
-        0x4108,
+        0x4112,
         "www.edns.test.",
         payload=4096,
         options=option(EDNS_TCP_KEEPALIVE),
@@ -467,7 +475,7 @@ def main():
     record(rows, "tcp_keepalive_advertised", tcp_keepalive, "timeout_100ms_units=50")
 
     padding = response_summary(udp_exchange(query_packet(
-        0x4109,
+        0x4113,
         "www.edns.test.",
         payload=4096,
         options=option(EDNS_PADDING),
@@ -478,7 +486,7 @@ def main():
     record(rows, "configured_padding_aligns", padding, "block_size=32")
 
     nsid_empty = response_summary(udp_exchange(query_packet(
-        0x4110,
+        0x4114,
         "www.edns.test.",
         payload=4096,
         options=option(EDNS_NSID),
@@ -487,7 +495,7 @@ def main():
     record(rows, "nsid_empty_request", nsid_empty, "nsid=edns-node")
 
     nsid_nonempty = response_summary(udp_exchange(query_packet(
-        0x4111,
+        0x4115,
         "www.edns.test.",
         payload=4096,
         options=option(EDNS_NSID, b"bad"),
@@ -496,7 +504,7 @@ def main():
     record(rows, "nsid_nonempty_request", nsid_nonempty, "nsid=edns-node")
 
     malformed = response_summary(udp_exchange(query_packet(
-        0x4112,
+        0x4116,
         "www.edns.test.",
         payload=4096,
         options=struct.pack("!HH", UNKNOWN_OPTION, 4) + b"x",
@@ -505,7 +513,7 @@ def main():
     record(rows, "malformed_option_formerr", malformed, "rcode=FORMERR")
 
     duplicate = response_summary(udp_exchange(query_packet(
-        0x4113,
+        0x4117,
         "www.edns.test.",
         payload=4096,
         duplicate_opt=True,
@@ -514,7 +522,7 @@ def main():
     record(rows, "duplicate_opt_formerr", duplicate, "rcode=FORMERR")
 
     misplaced = response_summary(udp_exchange(query_packet(
-        0x4114,
+        0x4118,
         "www.edns.test.",
         payload=4096,
         opt_in_answer=True,
@@ -530,8 +538,8 @@ ODS-FR-EDNS-001\tretained-runtime\tvalid_edns_unknown_option; malformed_option_f
 ODS-FR-EDNS-002\tretained-runtime\tduplicate_opt_formerr\tedns-summary.tsv; client.log\tA query carrying two OPT records returns FORMERR.
 ODS-FR-EDNS-003\tretained-runtime\tanswer_section_opt_formerr\tedns-summary.tsv; client.log\tAn OPT record outside the additional section returns FORMERR.
 ODS-FR-EDNS-004\tretained-runtime\tbadvers_version_1\tedns-summary.tsv; client.log\tEDNS VERSION=1 returns extended RCODE BADVERS with response VERSION=0.
-ODS-FR-EDNS-005\tretained-runtime\tpayload_floor_512\tedns-summary.tsv; client.log\tAn advertised UDP payload below 512 is treated as a 512-octet ceiling and truncates the large response within that size.
-ODS-FR-EDNS-006\tretained-runtime\tpayload_server_max_700\tedns-summary.tsv; oxidedns.toml\tAn advertised 4096-octet payload is bounded by configured max_udp_payload=700 and truncates within that ceiling.
+ODS-FR-EDNS-005\tretained-runtime\tpayload_floor_512; payload_exact_floor_512\tedns-summary.tsv; client.log\tAdvertised UDP payload sizes below or equal to 512 are bounded to the 512-octet floor and truncate the large response within that size.
+ODS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; oxidedns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
 ODS-FR-EDNS-007\tretained-runtime\tvalid_edns_unknown_option; non_edns_512_no_opt\tedns-summary.tsv; client.log\tResponses include OPT only when the query contained OPT.
 ODS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; oxidedns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
 ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_clears_response_do\tedns-summary.tsv; crates/oxidedns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=0; DNSSEC-augmented DO behavior remains covered by DNSSEC unit/runtime evidence.
@@ -616,7 +624,7 @@ client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_queries_truncated_total 3'; do
+  'oxidedns_queries_truncated_total 7'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected EDNS behavior line: $expected" >&2
     exit 1
