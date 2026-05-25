@@ -289,6 +289,12 @@ Slice 8 has health endpoint foundations:
 - `--version` and `-V` print multi-line SRS build metadata from the same embedded build constants used by `oxidedns_secondary_build_info`, including version, build commit, RFC 3339 build timestamp, and Rust compiler version; `--help` and `-h` print usage, flag descriptions, default configuration path, Operator Deployment Guide pointer, and project pointer; `--example-config` prints the checked-in example TOML without reading a configuration file and that output validates successfully through `--validate-config`;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
 
+DNS Cookie foundations are started:
+
+- DNS Cookies default to lenient RFC 9018 version-1 server-cookie behavior, can be disabled or made strict under `[cookie]`, and use a random 128-bit server secret generated at startup without disk persistence;
+- `[cookie].secret_rotation_interval_secs` defaults to `0`, preserving the SRS default of one secret per process lifetime, and non-zero values enable in-process periodic regeneration with redacted fingerprint logs; a rotation invalidates cookies issued under the previous secret like a process restart, and the server continues with the prior secret if a rotation attempt cannot obtain fresh randomness;
+- UDP and TCP query paths fetch the current in-memory cookie secret for each query, so rotated secrets apply consistently across ordinary DNS and NOTIFY-capable listener sockets.
+
 RRL foundations are started:
 
 - RRL is enabled by default under process-wide `[rrl]` configuration, with configurable IPv4/IPv6 source prefix lengths, per-category rates, slip value, maximum tracked accounting keys, and allowlist entries;

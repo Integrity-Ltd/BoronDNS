@@ -273,9 +273,12 @@ impl Runtime {
             ipv6_prefix_len: self.config.rrl.ipv6_prefix_len,
         };
         let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
+        let dns_cookie_secrets =
+            DnsCookieSecretStore::new(dns_cookie_secret, dns_cookie.secret_rotation_interval);
         if dns_cookie.policy.is_some() {
             info!(
                 secret_fingerprint = %dns_cookie_secret_fingerprint(&dns_cookie_secret),
+                rotation_interval_secs = dns_cookie.secret_rotation_interval.map(|duration| duration.as_secs()).unwrap_or(0),
                 "DNS Cookie server secret generated"
             );
         }
@@ -358,7 +361,7 @@ impl Runtime {
                 edns_padding_block_size,
                 any_response,
                 nsid,
-                dns_cookie_secret,
+                dns_cookie_secrets: dns_cookie_secrets.clone(),
                 dns_cookie,
                 cookie_prefix_metrics,
                 notify_authority,
@@ -394,7 +397,7 @@ impl Runtime {
                 edns_padding_block_size,
                 any_response,
                 nsid,
-                dns_cookie_secret,
+                dns_cookie_secrets: dns_cookie_secrets.clone(),
                 dns_cookie,
                 cookie_prefix_metrics,
                 notify_authority: notify_authority.clone(),
@@ -1557,6 +1560,73 @@ fn dns_cookie_secret_fingerprint(secret: &[u8; 16]) -> String {
     lower_hex(&digest[..8])
 }
 
+#[derive(Clone)]
+struct DnsCookieSecretStore {
+    inner: Arc<Mutex<DnsCookieSecretState>>,
+    rotation_interval: Option<Duration>,
+}
+
+struct DnsCookieSecretState {
+    current: [u8; 16],
+    generated_at: Instant,
+}
+
+impl DnsCookieSecretStore {
+    fn new(current: [u8; 16], rotation_interval: Option<Duration>) -> Self {
+        Self::new_at(current, rotation_interval, Instant::now())
+    }
+
+    fn new_at(
+        current: [u8; 16],
+        rotation_interval: Option<Duration>,
+        generated_at: Instant,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DnsCookieSecretState {
+                current,
+                generated_at,
+            })),
+            rotation_interval,
+        }
+    }
+
+    fn current(&self) -> [u8; 16] {
+        self.current_with_generator(dns_cookie_secret)
+    }
+
+    fn current_with_generator(
+        &self,
+        generate_secret: impl FnOnce() -> Result<[u8; 16], getrandom::Error>,
+    ) -> [u8; 16] {
+        let mut state = self
+            .inner
+            .lock()
+            .expect("DNS Cookie secret store lock poisoned");
+        if self
+            .rotation_interval
+            .is_some_and(|interval| state.generated_at.elapsed() >= interval)
+        {
+            match generate_secret() {
+                Ok(secret) => {
+                    state.current = secret;
+                    state.generated_at = Instant::now();
+                    info!(
+                        secret_fingerprint = %dns_cookie_secret_fingerprint(&state.current),
+                        "DNS Cookie server secret rotated"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        %error,
+                        "DNS Cookie server secret rotation failed; retaining previous secret"
+                    );
+                }
+            }
+        }
+        state.current
+    }
+}
+
 fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1579,6 +1649,7 @@ struct DnsCookieRuntimeSettings {
     policy: Option<DnsCookiePolicy>,
     past_window_secs: u32,
     future_window_secs: u32,
+    secret_rotation_interval: Option<Duration>,
 }
 
 #[derive(Clone, Copy)]
@@ -1597,6 +1668,8 @@ fn dns_cookie_settings(config: &CookieConfig) -> DnsCookieRuntimeSettings {
         policy,
         past_window_secs: config.timestamp_past_tolerance_seconds,
         future_window_secs: config.timestamp_future_tolerance_seconds,
+        secret_rotation_interval: (config.secret_rotation_interval_secs > 0)
+            .then(|| Duration::from_secs(config.secret_rotation_interval_secs)),
     }
 }
 
@@ -2052,8 +2125,8 @@ async fn serve_udp(
                 .map_err(RuntimeError::Udp)?;
             continue;
         }
-        let dns_cookie =
-            dns_cookie_context(peer_ip, &settings.dns_cookie_secret, settings.dns_cookie);
+        let dns_cookie_secret = settings.dns_cookie_secrets.current();
+        let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, settings.dns_cookie);
         let cookie_validated = dns_cookie
             .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
         let query_metrics = observe_query_metrics(
@@ -2383,7 +2456,7 @@ struct UdpServerSettings {
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
-    dns_cookie_secret: [u8; 16],
+    dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
@@ -2432,7 +2505,7 @@ async fn serve_tcp(
                 settings.edns_padding_block_size,
                 settings.any_response,
                 settings.nsid,
-                settings.dns_cookie_secret,
+                settings.dns_cookie_secrets,
                 settings.dns_cookie,
                 settings.cookie_prefix_metrics,
                 settings.notify_authority,
@@ -3964,7 +4037,7 @@ struct TcpServerSettings {
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
-    dns_cookie_secret: [u8; 16],
+    dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
@@ -5370,7 +5443,7 @@ async fn handle_tcp_connection(
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
-    dns_cookie_secret: [u8; 16],
+    dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
     notify_authority: NotifyAuthority,
@@ -5392,6 +5465,7 @@ async fn handle_tcp_connection(
             }
             continue;
         }
+        let dns_cookie_secret = dns_cookie_secrets.current();
         let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
         let cookie_validated = dns_cookie
             .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
@@ -5573,20 +5647,21 @@ mod tests {
     };
 
     use super::{
-        CookiePrefixMetricSettings, DnsCookieRuntimeSettings, HealthEndpointState,
-        IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority, NotifyRefreshAction,
-        NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
-        QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-        RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
-        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
-        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
-        load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
-        response_rcode, rrl_truncated_response, runtime_config_warnings_at, serial_after,
-        serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
+        CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore,
+        HealthEndpointState, IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority,
+        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory,
+        QueryLatencyHistogram, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
+        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError,
+        RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError, TransferPlan,
+        TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
+        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        response_category, response_opt_record, response_question_end, response_rcode,
+        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
         sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
         transfer_ixfr_from_primary, transfer_query_id, validate_runtime_config, write_tcp_message,
     };
@@ -7158,6 +7233,32 @@ mod tests {
     }
 
     #[test]
+    fn dns_cookie_secret_store_rotates_only_after_configured_interval() {
+        let generated_at = std::time::Instant::now() - std::time::Duration::from_secs(61);
+        let rotating = DnsCookieSecretStore::new_at(
+            [1; 16],
+            Some(std::time::Duration::from_secs(60)),
+            generated_at,
+        );
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let rotated = rotating.current_with_generator(|| Ok([2; 16]));
+        let retained = rotating.current_with_generator(|| -> Result<[u8; 16], getrandom::Error> {
+            panic!("secret generator should not be called before the next interval")
+        });
+        let disabled = DnsCookieSecretStore::new_at([3; 16], None, generated_at);
+
+        assert_eq!(rotated, [2; 16]);
+        assert_eq!(retained, [2; 16]);
+        assert_eq!(disabled.current_with_generator(|| Ok([4; 16])), [3; 16]);
+        assert!(
+            captured.contains_all(&["DNS Cookie server secret rotated", "secret_fingerprint=",])
+        );
+    }
+
+    #[test]
     fn query_metrics_count_configured_zone_queries_only() {
         let zones = ZoneStore::new();
         let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
@@ -7482,7 +7583,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
-                dns_cookie_secret: [7; 16],
+                dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
@@ -7552,7 +7653,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
-                dns_cookie_secret: [7; 16],
+                dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
@@ -9375,7 +9476,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
-                [7; 16],
+                dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
@@ -9456,7 +9557,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
-                [7; 16],
+                dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
@@ -9512,7 +9613,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
-                [7; 16],
+                dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
@@ -9554,7 +9655,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
-                [7; 16],
+                dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
@@ -9610,7 +9711,7 @@ mod tests {
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
-                [7; 16],
+                dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
                 NotifyAuthority::default(),
@@ -9654,7 +9755,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
-                dns_cookie_secret: [7; 16],
+                dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
                 notify_authority: NotifyAuthority::default(),
@@ -10840,7 +10941,7 @@ mod tests {
             edns_padding_block_size: 0,
             any_response: AnyResponseMode::Minimal,
             nsid: Vec::new(),
-            dns_cookie_secret: [7; 16],
+            dns_cookie_secrets: dns_cookie_secret_store_for_test(),
             dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
             cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
             notify_authority: NotifyAuthority::default(),
@@ -10856,7 +10957,12 @@ mod tests {
             policy: Some(policy),
             past_window_secs: 3600,
             future_window_secs: 300,
+            secret_rotation_interval: None,
         }
+    }
+
+    fn dns_cookie_secret_store_for_test() -> DnsCookieSecretStore {
+        DnsCookieSecretStore::new([7; 16], None)
     }
 
     fn cookie_prefix_metrics_for_test() -> CookiePrefixMetricSettings {

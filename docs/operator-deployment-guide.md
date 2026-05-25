@@ -166,8 +166,11 @@ reference. The major sections are:
   normally. Notify addresses must not overlap `[server].listen_udp` or
   `[server].listen_tcp`.
 - `[query]`: query response policy, including QTYPE ANY behavior.
-- `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`) and
-  timestamp tolerance windows.
+- `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
+  timestamp tolerance windows, and optional in-process server-secret rotation.
+  A non-zero `secret_rotation_interval_secs` invalidates previously issued
+  server cookies when rotation occurs, equivalent to the cookie effect of a
+  process restart.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration.
 - `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
   fudge value.
@@ -538,10 +541,11 @@ current operator-relevant limitations are:
   pending.
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
   validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
-  valid-cookie RRL exemption. Startup and BADCOOKIE logs plus bounded global and
-  per-source-prefix cookie counters are implemented. `scripts/interop-dns-cookie-dig.sh`
-  verifies BIND `dig +cookie` client behavior; optional rotation and broader
-  deployment interop artifacts remain open before MVP acceptance.
+  valid-cookie RRL exemption. Startup, rotation, and BADCOOKIE logs plus
+  bounded global and per-source-prefix cookie counters are implemented.
+  `scripts/interop-dns-cookie-dig.sh` verifies BIND `dig +cookie` client
+  behavior; broader deployment interop artifacts remain open before MVP
+  acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.

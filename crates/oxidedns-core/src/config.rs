@@ -476,6 +476,8 @@ pub struct CookieConfig {
     pub timestamp_past_tolerance_seconds: u32,
     #[serde(default = "default_cookie_timestamp_future_tolerance_seconds")]
     pub timestamp_future_tolerance_seconds: u32,
+    #[serde(default)]
+    pub secret_rotation_interval_secs: u64,
 }
 
 impl Default for CookieConfig {
@@ -484,6 +486,7 @@ impl Default for CookieConfig {
             policy: CookiePolicyConfig::Lenient,
             timestamp_past_tolerance_seconds: default_cookie_timestamp_past_tolerance_seconds(),
             timestamp_future_tolerance_seconds: default_cookie_timestamp_future_tolerance_seconds(),
+            secret_rotation_interval_secs: 0,
         }
     }
 }
@@ -1761,6 +1764,7 @@ mod tests {
                 policy = "strict"
                 timestamp_past_tolerance_seconds = 1800
                 timestamp_future_tolerance_seconds = 60
+                secret_rotation_interval_secs = 86400
 
                 [[zones]]
                 name = "example.test."
@@ -1772,6 +1776,7 @@ mod tests {
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Strict);
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 1800);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 60);
+        assert_eq!(config.cookie.secret_rotation_interval_secs, 86400);
     }
 
     #[test]

@@ -36,6 +36,9 @@ any_response = "minimal"
 policy = "lenient"
 timestamp_past_tolerance_seconds = 3600
 timestamp_future_tolerance_seconds = 300
+# 0 keeps the secret for the process lifetime; non-zero enables in-process
+# periodic regeneration without persisting secret material.
+secret_rotation_interval_secs = 0
 
 [rrl]
 # Enable UDP response-rate limiting. Default: true.
