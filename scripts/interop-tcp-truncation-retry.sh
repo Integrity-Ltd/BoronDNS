@@ -58,6 +58,7 @@ client_log="$workdir/client.log"
 oxidedns_conf="$workdir/oxidedns.toml"
 limit_summary_path="$workdir/tcp-limit-summary.env"
 pipeline_summary_path="$workdir/tcp-pipeline-summary.env"
+timeout_summary_path="$workdir/tcp-timeout-summary.env"
 drain_summary_path="$workdir/graceful-drain-summary.env"
 readyz_draining_path="$workdir/readyz-draining.txt"
 traceability_path="$workdir/tcp-transport-traceability.tsv"
@@ -203,6 +204,7 @@ PORT = int(sys.argv[1])
 LOG_PATH = sys.argv[2]
 LIMIT_SUMMARY_PATH = sys.argv[3]
 PIPELINE_SUMMARY_PATH = sys.argv[4]
+TIMEOUT_SUMMARY_PATH = sys.argv[5]
 LARGE_QNAME = "large.tcp.test."
 SMALL_QNAME = "ns1.tcp.test."
 A = 1
@@ -252,6 +254,19 @@ def frame(packet):
 
 def response_id(packet):
     return struct.unpack("!H", packet[:2])[0]
+
+
+def expect_close(tcp, label, timeout=3.0):
+    tcp.settimeout(timeout)
+    started = time.monotonic()
+    try:
+        data = tcp.recv(1)
+    except ConnectionResetError:
+        data = b""
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    if data:
+        raise AssertionError(f"{label} returned data instead of closing")
+    return elapsed_ms
 
 
 def skip_name(packet, offset):
@@ -320,6 +335,25 @@ if tcp_answers < 80:
     raise AssertionError(f"TCP response returned too few A answers: {tcp_answers}")
 tcp.close()
 
+idle_probe = socket.create_connection((HOST, PORT), timeout=2.0)
+idle_close_ms = expect_close(idle_probe, "idle TCP timeout")
+idle_probe.close()
+
+read_probe = socket.create_connection((HOST, PORT), timeout=2.0)
+read_probe.sendall(struct.pack("!H", 32))
+read_close_ms = expect_close(read_probe, "partial-frame TCP read timeout")
+read_probe.close()
+
+timeout_summary = (
+    "idle_timeout_closed=1 "
+    f"idle_timeout_close_ms={idle_close_ms} "
+    "partial_frame_read_timeout_closed=1 "
+    f"partial_frame_read_timeout_close_ms={read_close_ms}"
+)
+with open(TIMEOUT_SUMMARY_PATH, "w", encoding="utf-8") as handle:
+    print(timeout_summary, file=handle)
+log(timeout_summary)
+
 pipeline = socket.create_connection((HOST, PORT), timeout=2.0)
 pipeline_queries = [
     query(0x6101, LARGE_QNAME),
@@ -387,7 +421,7 @@ log(limit_summary)
 summary = (
     f"udp_truncated=1 udp_response_bytes={len(udp_response)} "
     f"tcp_truncated=0 tcp_response_bytes={len(tcp_response)} tcp_a_answers={tcp_answers} "
-    f"{pipeline_summary} {limit_summary}"
+    f"{timeout_summary} {pipeline_summary} {limit_summary}"
 )
 log(summary)
 print(summary)
@@ -519,8 +553,10 @@ max_udp_payload = 512
 max_concurrent_transfers = 1
 max_tcp_connections = 1
 max_tcp_inflight_queries_per_connection = 64
-tcp_inflight_limit_timeout_secs = 5
-tcp_idle_timeout_secs = 5
+tcp_inflight_limit_timeout_secs = 1
+tcp_idle_timeout_secs = 1
+tcp_read_timeout_secs = 1
+tcp_write_timeout_secs = 5
 graceful_shutdown_secs = 2
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
@@ -563,7 +599,7 @@ if (( ready != 1 )); then
   exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path" "$pipeline_summary_path")"
+client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path" "$pipeline_summary_path" "$timeout_summary_path")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
@@ -594,8 +630,8 @@ cat >"$traceability_path" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
 ODS-FR-TCP-001	retained-runtime	tcp_framing_and_multi_message_exchange	client-summary.env; tcp-pipeline-summary.env; fake-primary.log	TCP client and fake primary exchange DNS messages using the two-octet length prefix; one connection carries multiple independently framed queries.
 ODS-FR-TCP-002	retained-runtime	tcp_persistence_until_shutdown	tcp-pipeline-summary.env; graceful-drain-summary.env; readyz-draining.txt; oxidedns.log	The pipelined connection remains open for subsequent queries, and an accepted TCP query completes after SIGTERM while new TCP traffic is rejected or closed.
-ODS-FR-TCP-003	supporting-unit	not_exercised_by_runtime_harness	oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout; crates/oxidedns-core/src/config.rs::parses_custom_tcp_idle_timeout	The retained config applies a five-second idle timeout, but this harness does not wait out idle closure; focused unit/config tests cover the timeout behavior.
-ODS-FR-TCP-004	supporting-unit	not_exercised_by_runtime_harness	oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/oxidedns-server/src/lib.rs::tcp_write_times_out_when_backpressured; crates/oxidedns-core/src/config.rs::rejects_zero_tcp_read_or_write_timeout	Read/write timeout enforcement is covered by focused tests; this successful interop run does not induce read or write timeout failure.
+ODS-FR-TCP-003	retained-runtime	idle_timeout_close	tcp-timeout-summary.env; oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout	The retained config applies a one-second idle timeout, and the harness records server-side closure of a TCP connection that sends no data.
+ODS-FR-TCP-004	retained-runtime-plus-support	partial_frame_read_timeout_close	tcp-timeout-summary.env; oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/oxidedns-server/src/lib.rs::tcp_write_times_out_when_backpressured	The runtime harness records closure of a connection stalled after the two-octet length prefix; focused unit tests cover both read-timeout and write-timeout failure paths.
 ODS-FR-TCP-005	retained-runtime	over_limit_connection_close	tcp-limit-summary.env; oxidedns.toml; oxidedns.log	The retained config sets max_tcp_connections=1; a second accepted connection is promptly closed and the expected warning log is present.
 ODS-FR-TCP-006	supporting-policy	not_configured_in_runtime_harness	docs/implementation-plan.md; config/oxidedns.example.toml	The SRS makes per-source TCP connection limits optional with default no per-source cap; this harness does not configure a per-source cap.
 ODS-FR-TCP-007	retained-runtime	pipelined_large_then_small_out_of_order	tcp-pipeline-summary.env; client.log	Two in-flight queries on one TCP connection return matching QIDs, and the intentionally smaller second query is answered before the larger first query.
@@ -614,6 +650,7 @@ if [[ -n "$artifact_dir" ]]; then
   printf '%s\n' "$client_summary" >"$artifact_dir/client-summary.env"
   cp "$limit_summary_path" "$artifact_dir/tcp-limit-summary.env"
   cp "$pipeline_summary_path" "$artifact_dir/tcp-pipeline-summary.env"
+  cp "$timeout_summary_path" "$artifact_dir/tcp-timeout-summary.env"
   cp "$drain_summary_path" "$artifact_dir/graceful-drain-summary.env"
   cp "$readyz_draining_path" "$artifact_dir/readyz-draining.txt"
   cp "$traceability_path" "$artifact_dir/tcp-transport-traceability.tsv"

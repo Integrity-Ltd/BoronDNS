@@ -99,11 +99,11 @@ Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
 are expected to require `unsafe` or unsafe-heavy dependencies. They must remain
 outside the safe DNS parser, transfer parser, TSIG, and response-composition
 core. Any first-party `unsafe` must be confined to a dedicated adapter module or
-crate with local `#![allow(unsafe_code)]`, each unsafe block, function, impl,
-trait, or extern block must carry a `SAFETY:` rationale or `# Safety` docs
-explaining the soundness invariants, and release evidence must include static
-unsafe enumeration plus targeted adapter tests before the backend can be
-enabled.
+crate with local `#![allow(unsafe_code)]`; unsafe public or private APIs must
+carry `/// # Safety` documentation; unsafe blocks, impls, traits, or extern
+blocks must carry a local `// SAFETY:` rationale explaining the soundness
+invariants; and release evidence must include static unsafe enumeration plus
+targeted adapter tests before the backend can be enabled.
 
 The current MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed arena, or
 hot response-cache backend. Those features are post-MVP optimization tracks,

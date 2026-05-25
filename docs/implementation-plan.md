@@ -451,8 +451,8 @@ Open near-term work:
 - preserve the Appendix C.6 future-optimization boundaries: PacketIo-style network
   adapter for XDP/eBPF and io_uring backends, substitutable zone-store boundary
   for NSD-style packed arenas, response-assembly/send separation for
-  authoritative-only hot response caches, isolated `SAFETY:`/`# Safety`
-  documented unsafe adapters, unsafe-prone dependency gates, and a separate
-  privileged deployment profile for any future XDP/eBPF path;
+  authoritative-only hot response caches, isolated `/// # Safety` API docs plus
+  `// SAFETY:` unsafe-block rationales, unsafe-prone dependency gates, and a
+  separate privileged deployment profile for any future XDP/eBPF path;
 - keep the long-run performance, fuzz, interop, and soak harnesses ready for
   later SRS acceptance execution by release or operations owners.

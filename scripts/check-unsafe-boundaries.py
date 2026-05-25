@@ -29,6 +29,49 @@ REQUIRED_DEFERRED = {
     "response-cache",
 }
 
+DEFERRED_REQUIRED_TERMS = {
+    "xdp-af-xdp": {
+        "adapter",
+        "test",
+        "unsafe",
+        "safety",
+        "privileged",
+        "no-xdp-default",
+        "no runtime",
+        "loading",
+    },
+    "io-uring-packet-io": {
+        "adapter",
+        "test",
+        "unsafe",
+        "safety",
+        "cancellation",
+        "buffer lifetime",
+        "buffer reuse",
+        "fallback",
+    },
+    "nsd-packed-zone-store": {
+        "adapter",
+        "test",
+        "unsafe",
+        "safety",
+        "alignment",
+        "bounds",
+        "atomic",
+        "publication",
+    },
+    "response-cache": {
+        "adapter",
+        "test",
+        "unsafe",
+        "safety",
+        "ttl",
+        "invalidation",
+        "dnssec",
+        "zone-refresh",
+    },
+}
+
 ALLOW_UNSAFE_RE = re.compile(r"#!?\[allow\(unsafe_code\)\]")
 UNSAFE_CONSTRUCT_RE = re.compile(r"\bunsafe\s*(\{|fn\b|impl\b|trait\b|extern\b)")
 
@@ -137,7 +180,7 @@ def main() -> None:
         if not row["path"].startswith("future:"):
             fail(f"{registry_path}: {row_id} must not point at a live source path while deferred")
         joined = " ".join(row.values()).lower()
-        for term in ("adapter", "test", "unsafe", "safety"):
+        for term in sorted(DEFERRED_REQUIRED_TERMS[row_id]):
             if term not in joined:
                 fail(f"{registry_path}: {row_id} must document {term} expectations")
 
