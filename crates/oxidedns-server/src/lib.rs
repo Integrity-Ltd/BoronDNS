@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpSocket, TcpStream, UdpSocket},
     sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task::JoinSet,
 };
@@ -133,6 +133,13 @@ pub enum TransferError {
     #[error("failed to connect to TCP primary {addr}: {source}")]
     ConnectTcp {
         addr: SocketAddr,
+        source: std::io::Error,
+    },
+
+    #[error("failed to bind outbound TCP socket {source_addr} for primary {addr}: {source}")]
+    BindTcp {
+        addr: SocketAddr,
+        source_addr: SocketAddr,
         source: std::io::Error,
     },
 
@@ -926,6 +933,28 @@ async fn transfer_axfr_from_target_with_tsig(
     session: TransferSession<'_>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
+    transfer_axfr_from_target_with_tsig_and_source(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        session,
+        None,
+        timeout_duration,
+    )
+    .await
+}
+
+async fn transfer_axfr_from_target_with_tsig_and_source(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    session: TransferSession<'_>,
+    transfer_source: Option<SocketAddr>,
+    timeout_duration: Duration,
+) -> Result<ZoneSnapshot, TransferError> {
+    let session = session.with_transfer_source(transfer_source);
     tokio::time::timeout(timeout_duration, async {
         transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, session).await
     })
@@ -961,8 +990,29 @@ async fn poll_soa_from_primary_with_tsig(
     tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<u32, TransferError> {
+    poll_soa_from_primary_with_tsig_and_source(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        tsig,
+        None,
+        timeout_duration,
+    )
+    .await
+}
+
+async fn poll_soa_from_primary_with_tsig_and_source(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig: TransferTsig<'_>,
+    transfer_source: Option<SocketAddr>,
+    timeout_duration: Duration,
+) -> Result<u32, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig).await
+        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig, transfer_source).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -976,8 +1026,9 @@ async fn poll_soa_from_primary_inner(
     qclass: u16,
     qid: u16,
     tsig: TransferTsig<'_>,
+    transfer_source: Option<SocketAddr>,
 ) -> Result<u32, TransferError> {
-    let socket = UdpSocket::bind(outbound_udp_bind_addr(primary))
+    let socket = UdpSocket::bind(outbound_udp_bind_addr(primary, transfer_source))
         .await
         .map_err(|source| TransferError::BindUdp {
             addr: primary,
@@ -1106,25 +1157,56 @@ impl Drop for XotSessionLog {
     }
 }
 
+async fn connect_tcp_stream(
+    primary: SocketAddr,
+    transfer_source: Option<SocketAddr>,
+) -> Result<TcpStream, TransferError> {
+    let socket = match primary {
+        SocketAddr::V4(_) => TcpSocket::new_v4(),
+        SocketAddr::V6(_) => TcpSocket::new_v6(),
+    }
+    .map_err(|source| TransferError::ConnectTcp {
+        addr: primary,
+        source,
+    })?;
+
+    if let Some(source_addr) =
+        transfer_source.filter(|source| source.is_ipv4() == primary.is_ipv4())
+    {
+        socket
+            .bind(source_addr)
+            .map_err(|source| TransferError::BindTcp {
+                addr: primary,
+                source_addr,
+                source,
+            })?;
+    }
+
+    socket
+        .connect(primary)
+        .await
+        .map_err(|source| TransferError::ConnectTcp {
+            addr: primary,
+            source,
+        })
+}
+
 async fn connect_transfer_stream(
     primary: &TransferPrimaryConfig,
+    transfer_source: Option<SocketAddr>,
 ) -> Result<TransferStream, TransferError> {
     match primary.transport {
         TransferTransportConfig::Tcp => {
-            let tcp = TcpStream::connect(primary.addr).await.map_err(|source| {
-                TransferError::ConnectTcp {
-                    addr: primary.addr,
-                    source,
-                }
-            })?;
+            let tcp = connect_tcp_stream(primary.addr, transfer_source).await?;
             Ok(TransferStream::Tcp(tcp))
         }
-        TransferTransportConfig::Xot => connect_xot_stream(primary).await,
+        TransferTransportConfig::Xot => connect_xot_stream(primary, transfer_source).await,
     }
 }
 
 async fn connect_xot_stream(
     primary: &TransferPrimaryConfig,
+    transfer_source: Option<SocketAddr>,
 ) -> Result<TransferStream, TransferError> {
     let sni = primary
         .server_name
@@ -1142,13 +1224,7 @@ async fn connect_xot_stream(
 
     let mut client_config = build_xot_client_config(primary)?;
     client_config.alpn_protocols = vec![b"dot".to_vec()];
-    let tcp =
-        TcpStream::connect(primary.addr)
-            .await
-            .map_err(|source| TransferError::ConnectTcp {
-                addr: primary.addr,
-                source,
-            })?;
+    let tcp = connect_tcp_stream(primary.addr, transfer_source).await?;
     let connector = TlsConnector::from(Arc::new(client_config));
     let stream = match connector.connect(server_name, tcp).await {
         Ok(stream) => stream,
@@ -1395,7 +1471,7 @@ async fn transfer_ixfr_from_primary_inner(
     current_zone: &ZoneSnapshot,
     session: TransferSession<'_>,
 ) -> Result<IxfrResponse, TransferError> {
-    let mut stream = connect_transfer_stream(primary).await?;
+    let mut stream = connect_transfer_stream(primary, session.transfer_source).await?;
 
     let current_soa = current_zone
         .soa_record(qclass)
@@ -1485,15 +1561,17 @@ async fn transfer_ixfr_from_primary_inner(
     }
 }
 
-fn outbound_udp_bind_addr(primary: SocketAddr) -> SocketAddr {
-    match primary {
-        SocketAddr::V4(_) => "0.0.0.0:0"
-            .parse()
-            .expect("hard-coded IPv4 wildcard socket address is valid"),
-        SocketAddr::V6(_) => "[::]:0"
-            .parse()
-            .expect("hard-coded IPv6 wildcard socket address is valid"),
-    }
+fn outbound_udp_bind_addr(primary: SocketAddr, transfer_source: Option<SocketAddr>) -> SocketAddr {
+    transfer_source
+        .filter(|source| source.is_ipv4() == primary.is_ipv4())
+        .unwrap_or_else(|| match primary {
+            SocketAddr::V4(_) => "0.0.0.0:0"
+                .parse()
+                .expect("hard-coded IPv4 wildcard socket address is valid"),
+            SocketAddr::V6(_) => "[::]:0"
+                .parse()
+                .expect("hard-coded IPv6 wildcard socket address is valid"),
+        })
 }
 
 struct TransferQuery {
@@ -1521,6 +1599,7 @@ impl<'a> TransferTsig<'a> {
 struct TransferSession<'a> {
     tsig: TransferTsig<'a>,
     max_ingest_bytes: u64,
+    transfer_source: Option<SocketAddr>,
 }
 
 impl<'a> TransferSession<'a> {
@@ -1528,11 +1607,17 @@ impl<'a> TransferSession<'a> {
         Self {
             tsig,
             max_ingest_bytes,
+            transfer_source: None,
         }
     }
 
     fn default_unsigned() -> Self {
         Self::new(TransferTsig::unsigned(), default_transfer_ingest_bytes())
+    }
+
+    fn with_transfer_source(mut self, transfer_source: Option<SocketAddr>) -> Self {
+        self.transfer_source = transfer_source;
+        self
     }
 }
 
@@ -1635,7 +1720,7 @@ async fn transfer_axfr_from_primary_inner(
     qid: u16,
     session: TransferSession<'_>,
 ) -> Result<ZoneSnapshot, TransferError> {
-    let mut stream = connect_transfer_stream(primary).await?;
+    let mut stream = connect_transfer_stream(primary, session.transfer_source).await?;
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), session.tsig)?;
@@ -4617,6 +4702,16 @@ struct ZoneTransferPlan {
     tsig_key: Option<Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    transfer_sources: Vec<SocketAddr>,
+}
+
+impl ZoneTransferPlan {
+    fn transfer_source_for(&self, primary: SocketAddr) -> Option<SocketAddr> {
+        self.transfer_sources
+            .iter()
+            .copied()
+            .find(|source| source.is_ipv4() == primary.is_ipv4())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4669,6 +4764,7 @@ impl TransferPlan {
                         tsig_key,
                         tsig_fudge_seconds: config.tsig.fudge_seconds,
                         max_transfer_ingest_bytes: config.limits.max_transfer_ingest_bytes,
+                        transfer_sources: config.interfaces.transfer.clone(),
                     },
                 ))
             })
@@ -6157,6 +6253,7 @@ async fn refresh_zone_from_primaries_with_outcome(
 
     for primary_target in &plan.primaries {
         let primary = primary_target.addr;
+        let transfer_source = plan.transfer_source_for(primary);
 
         if primary_target.transport == TransferTransportConfig::Tcp
             && primary_serial_hint.is_none()
@@ -6177,12 +6274,13 @@ async fn refresh_zone_from_primaries_with_outcome(
                     continue;
                 }
             };
-            match poll_soa_from_primary_with_tsig(
+            match poll_soa_from_primary_with_tsig_and_source(
                 primary,
                 &plan.origin,
                 plan.qclass,
                 qid,
                 TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                transfer_source,
                 context.axfr_timeout,
             )
             .await
@@ -6258,7 +6356,8 @@ async fn refresh_zone_from_primaries_with_outcome(
                     TransferSession::new(
                         TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                         plan.max_transfer_ingest_bytes,
-                    ),
+                    )
+                    .with_transfer_source(transfer_source),
                     context.ixfr_timeout,
                 )
                 .await
@@ -6323,7 +6422,7 @@ async fn refresh_zone_from_primaries_with_outcome(
             }
         };
         context.metrics.record_axfr_started();
-        match transfer_axfr_from_target_with_tsig(
+        match transfer_axfr_from_target_with_tsig_and_source(
             primary_target,
             &plan.origin,
             plan.qclass,
@@ -6332,6 +6431,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                 TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 plan.max_transfer_ingest_bytes,
             ),
+            transfer_source,
             context.axfr_timeout,
         )
         .await
@@ -8535,6 +8635,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn soa_poll_binds_configured_transfer_source() {
+        let (primary, peer_rx) = spawn_soa_primary_recording_peer(7).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let transfer_source = "127.0.0.2:0".parse::<std::net::SocketAddr>().unwrap();
+
+        let serial = super::poll_soa_from_primary_with_tsig_and_source(
+            primary,
+            &apex,
+            1,
+            0x1234,
+            TransferTsig::unsigned(),
+            Some(transfer_source),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("SOA poll");
+        let peer = tokio::time::timeout(std::time::Duration::from_secs(1), peer_rx)
+            .await
+            .expect("primary should observe SOA poll peer")
+            .expect("SOA primary should send peer address");
+        let expected_ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
+
+        assert_eq!(serial, 7);
+        assert_eq!(peer.ip(), expected_ip);
+        assert_ne!(peer.port(), 0);
+    }
+
+    #[tokio::test]
     async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
         let primary = spawn_soa_primary_with_serial(7).await;
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
@@ -8555,6 +8683,35 @@ mod tests {
             error,
             super::TransferError::Tsig(oxidedns_core::tsig::TsigError::MissingTsig)
         ));
+    }
+
+    #[tokio::test]
+    async fn axfr_binds_configured_transfer_source() {
+        let (primary, peer_rx) = spawn_axfr_primary_recording_peer(7).await;
+        let target = TransferPrimaryConfig::tcp(primary);
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let transfer_source = "127.0.0.2:0".parse::<std::net::SocketAddr>().unwrap();
+
+        let snapshot = super::transfer_axfr_from_target_with_tsig_and_source(
+            &target,
+            &apex,
+            1,
+            0x1234,
+            TransferSession::default_unsigned(),
+            Some(transfer_source),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("AXFR transfer");
+        let peer = tokio::time::timeout(std::time::Duration::from_secs(1), peer_rx)
+            .await
+            .expect("primary should observe AXFR peer")
+            .expect("AXFR primary should send peer address");
+        let expected_ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
+
+        assert_eq!(snapshot.serial, Some(7));
+        assert_eq!(peer.ip(), expected_ip);
+        assert_ne!(peer.port(), 0);
     }
 
     #[test]
@@ -10134,12 +10291,15 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
-        let primary = spawn_soa_primary_with_serial(2).await;
+        let (primary, peer_rx) = spawn_soa_primary_recording_peer(2).await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+
+                [interfaces]
+                transfer = ["127.0.0.2:0"]
 
                 [[zones]]
                 name = "example.test."
@@ -10181,8 +10341,14 @@ mod tests {
         )
         .await
         .expect("refresh success");
+        let peer = tokio::time::timeout(std::time::Duration::from_secs(1), peer_rx)
+            .await
+            .expect("primary should observe SOA poll peer")
+            .expect("SOA primary should send peer address");
+        let expected_ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
 
         assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(peer.ip(), expected_ip);
         assert!(
             zones
                 .get("example.test.")
@@ -12070,6 +12236,29 @@ mod tests {
         (addr, observed_query)
     }
 
+    async fn spawn_axfr_primary_recording_peer(
+        serial: u32,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Receiver<std::net::SocketAddr>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, peer) = listener.accept().await.unwrap();
+            let _ = peer_tx.send(peer);
+            let query = read_primary_query(&mut stream).await;
+            let header = Header::parse(&query).unwrap();
+            let response = axfr_response(header.id, serial);
+            stream
+                .write_all(&frame_tcp_message(&response))
+                .await
+                .unwrap();
+        });
+        (addr, peer_rx)
+    }
+
     async fn spawn_ixfr_mode2_primary_with_serial(serial: u32) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -12213,6 +12402,30 @@ mod tests {
             socket.send_to(&response, peer).await.unwrap();
         });
         addr
+    }
+
+    async fn spawn_soa_primary_recording_peer(
+        serial: u32,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Receiver<std::net::SocketAddr>,
+    ) {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 512];
+            let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+            let _ = peer_tx.send(peer);
+            let query = &buffer[..len];
+            let header = Header::parse(query).unwrap();
+            assert_eq!(header.qdcount, 1);
+            assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+            let response = soa_response(header.id, serial);
+            socket.send_to(&response, peer).await.unwrap();
+        });
+        (addr, peer_rx)
     }
 
     async fn spawn_soa_primary_with_spoofed_malformed_packet(serial: u32) -> std::net::SocketAddr {

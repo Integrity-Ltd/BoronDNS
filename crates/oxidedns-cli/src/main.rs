@@ -495,7 +495,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
             return match transfer_error {
                 TransferError::ReadTlsFile { .. } => EX_IOERR,
                 TransferError::XotConfig { .. } => EX_CONFIG_INVALID,
-                TransferError::BindUdp { .. } => EX_CANTCREAT,
+                TransferError::BindUdp { .. } | TransferError::BindTcp { .. } => EX_CANTCREAT,
                 TransferError::Io { .. } => EX_IOERR,
                 TransferError::ConnectTcp { .. }
                 | TransferError::Timeout { .. }

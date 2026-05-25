@@ -169,8 +169,9 @@ reference. The major sections are:
   legacy DNS listener lists and is used for both UDP and TCP DNS service;
   `interfaces.mgmt` activates the health/metrics endpoint at
   `health.default_port` unless an explicit health bind override is configured;
-  `interfaces.transfer` records outbound transfer source sockets and currently
-  validates that their ports are `0` for ephemeral source-port selection; and
+  `interfaces.transfer` binds outbound SOA polling, AXFR, IXFR, and XoT TCP
+  sockets to configured same-family source sockets and requires port `0` for
+  ephemeral source-port selection; and
   `interfaces.notify` adds UDP/TCP sockets for primary-originated NOTIFY
   traffic. Ordinary DNS queries received on notify sockets are still answered
   normally. Notify addresses must not overlap the effective DNS listener

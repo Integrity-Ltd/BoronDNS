@@ -239,6 +239,7 @@ impl ServerConfig {
                 }
             }
         }
+        self.validate_transfer_sources_cover_targets()?;
 
         Ok(())
     }
@@ -398,6 +399,45 @@ impl ServerConfig {
             }
         }
         Ok(names)
+    }
+
+    fn validate_transfer_sources_cover_targets(&self) -> Result<(), ConfigError> {
+        if self.interfaces.transfer.is_empty() {
+            return Ok(());
+        }
+
+        let has_ipv4 = self
+            .interfaces
+            .transfer
+            .iter()
+            .any(|source| source.is_ipv4());
+        let has_ipv6 = self
+            .interfaces
+            .transfer
+            .iter()
+            .any(|source| source.is_ipv6());
+
+        for zone in &self.zones {
+            for primary in zone.transfer_targets() {
+                match primary.addr {
+                    SocketAddr::V4(_) if !has_ipv4 => {
+                        return Err(ConfigError::Invalid(format!(
+                            "interfaces.transfer is configured but zone {} primary {} has no IPv4 transfer source",
+                            zone.name, primary.addr
+                        )));
+                    }
+                    SocketAddr::V6(_) if !has_ipv6 => {
+                        return Err(ConfigError::Invalid(format!(
+                            "interfaces.transfer is configured but zone {} primary {} has no IPv6 transfer source",
+                            zone.name, primary.addr
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1671,6 +1711,21 @@ mod tests {
                     primaries = ["192.0.2.53:53"]
                 "#,
                 "health.bind_address and health.bind_port must be configured together",
+            ),
+            (
+                "transfer family mismatch",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    transfer = ["127.0.0.2:0"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["[2001:db8::53]:53"]
+                "#,
+                "has no IPv6 transfer source",
             ),
         ] {
             let error = ServerConfig::from_toml_str(config).expect_err(label);
