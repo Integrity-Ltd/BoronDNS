@@ -141,6 +141,12 @@ impl ServerConfig {
                 "limits.max_tcp_connections must be at least 1".to_owned(),
             ));
         }
+        if self.limits.max_tcp_connections_per_source == Some(0) {
+            return Err(ConfigError::Invalid(
+                "limits.max_tcp_connections_per_source must be at least 1 when configured"
+                    .to_owned(),
+            ));
+        }
         if self.limits.max_tcp_inflight_queries_per_connection == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_tcp_inflight_queries_per_connection must be at least 1".to_owned(),
@@ -958,6 +964,8 @@ pub struct Limits {
     pub tcp_connect_timeout_secs: u64,
     #[serde(default = "default_max_tcp_connections")]
     pub max_tcp_connections: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tcp_connections_per_source: Option<usize>,
     #[serde(default = "default_max_tcp_inflight_queries_per_connection")]
     pub max_tcp_inflight_queries_per_connection: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1002,6 +1010,7 @@ impl Default for Limits {
             tcp_write_timeout_secs: default_tcp_write_timeout_secs(),
             tcp_connect_timeout_secs: default_tcp_connect_timeout_secs(),
             max_tcp_connections: default_max_tcp_connections(),
+            max_tcp_connections_per_source: None,
             max_tcp_inflight_queries_per_connection:
                 default_max_tcp_inflight_queries_per_connection(),
             tcp_inflight_limit_timeout_secs: None,
@@ -1552,6 +1561,7 @@ mod tests {
         assert_eq!(config.limits.tcp_write_timeout_secs, 30);
         assert_eq!(config.limits.tcp_connect_timeout_secs, 10);
         assert_eq!(config.limits.max_tcp_connections, 1024);
+        assert_eq!(config.limits.max_tcp_connections_per_source, None);
         assert_eq!(config.limits.max_tcp_inflight_queries_per_connection, 64);
         assert_eq!(config.limits.tcp_inflight_limit_timeout_secs, None);
         assert_eq!(config.limits.graceful_shutdown_secs, 30);
@@ -2977,6 +2987,7 @@ mod tests {
 
                 [limits]
                 max_tcp_connections = 16
+                max_tcp_connections_per_source = 2
                 max_tcp_inflight_queries_per_connection = 4
                 tcp_inflight_limit_timeout_secs = 9
 
@@ -2988,6 +2999,7 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.limits.max_tcp_connections, 16);
+        assert_eq!(config.limits.max_tcp_connections_per_source, Some(2));
         assert_eq!(config.limits.max_tcp_inflight_queries_per_connection, 4);
         assert_eq!(config.limits.tcp_inflight_limit_timeout_secs, Some(9));
     }
@@ -2996,6 +3008,10 @@ mod tests {
     fn rejects_zero_tcp_connection_limit() {
         for (key, expected) in [
             ("max_tcp_connections", "max_tcp_connections"),
+            (
+                "max_tcp_connections_per_source",
+                "max_tcp_connections_per_source",
+            ),
             (
                 "max_tcp_inflight_queries_per_connection",
                 "max_tcp_inflight_queries_per_connection",

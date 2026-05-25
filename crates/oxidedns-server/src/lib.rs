@@ -310,6 +310,7 @@ impl Runtime {
         let mut refresh_workers = JoinSet::new();
         let mut background_tasks = JoinSet::new();
         let tcp_connections = Arc::new(AtomicUsize::new(0));
+        let tcp_source_connections = Arc::new(Mutex::new(HashMap::new()));
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let runtime_status = RuntimeStatus::new();
         let notify_authority = NotifyAuthority::from_config(&self.config);
@@ -456,6 +457,7 @@ impl Runtime {
             let tcp_read_timeout = Duration::from_secs(self.config.limits.tcp_read_timeout_secs);
             let tcp_write_timeout = Duration::from_secs(self.config.limits.tcp_write_timeout_secs);
             let max_tcp_connections = self.config.limits.max_tcp_connections;
+            let max_tcp_connections_per_source = self.config.limits.max_tcp_connections_per_source;
             let max_tcp_inflight_queries_per_connection =
                 self.config.limits.max_tcp_inflight_queries_per_connection;
             let tcp_inflight_limit_timeout = Duration::from_secs(
@@ -468,6 +470,7 @@ impl Runtime {
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
             let tcp_connections = tcp_connections.clone();
+            let tcp_source_connections = tcp_source_connections.clone();
             let tcp_settings = TcpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
@@ -475,6 +478,7 @@ impl Runtime {
                 read_timeout: tcp_read_timeout,
                 write_timeout: tcp_write_timeout,
                 max_connections: max_tcp_connections,
+                max_connections_per_source: max_tcp_connections_per_source,
                 max_inflight_queries_per_connection: max_tcp_inflight_queries_per_connection,
                 inflight_limit_timeout: tcp_inflight_limit_timeout,
                 edns_padding_block_size,
@@ -489,6 +493,7 @@ impl Runtime {
                 notify_log_limiter: notify_log_limiter.clone(),
                 metrics: metrics.clone(),
                 active_connections: tcp_connections,
+                active_connections_by_source: tcp_source_connections,
             };
             listeners.spawn(async move { serve_tcp(listener, zones, tcp_settings).await });
         }
@@ -3035,20 +3040,38 @@ async fn serve_tcp(
 
     loop {
         let (stream, peer) = listener.accept().await.map_err(RuntimeError::Tcp)?;
-        let Some(connection_permit) = try_acquire_tcp_connection_slot(
+        let connection_permit = match try_acquire_tcp_connection_slot(
             settings.active_connections.clone(),
+            settings.active_connections_by_source.clone(),
+            peer.ip(),
             settings.max_connections,
-        ) else {
-            warn!(
-                peer_ip = %peer.ip(),
-                peer_port = peer.port(),
-                transport = "tcp",
-                active_connections = settings.active_connections.load(Ordering::Relaxed),
-                limit = settings.max_connections,
-                "TCP connection limit reached; closing accepted connection"
-            );
-            drop(stream);
-            continue;
+            settings.max_connections_per_source,
+        ) {
+            Ok(permit) => permit,
+            Err(TcpConnectionLimitExceeded::Global) => {
+                warn!(
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
+                    transport = "tcp",
+                    active_connections = settings.active_connections.load(Ordering::Relaxed),
+                    limit = settings.max_connections,
+                    "TCP connection limit reached; closing accepted connection"
+                );
+                drop(stream);
+                continue;
+            }
+            Err(TcpConnectionLimitExceeded::Source { active, limit }) => {
+                info!(
+                    peer_ip = %peer.ip(),
+                    peer_port = peer.port(),
+                    transport = "tcp",
+                    source_active_connections = active,
+                    limit,
+                    "TCP per-source connection limit reached; closing accepted connection"
+                );
+                drop(stream);
+                continue;
+            }
         };
 
         let zones = zones.clone();
@@ -4770,6 +4793,7 @@ struct TcpServerSettings {
     read_timeout: Duration,
     write_timeout: Duration,
     max_connections: usize,
+    max_connections_per_source: Option<usize>,
     max_inflight_queries_per_connection: usize,
     inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
@@ -4784,10 +4808,21 @@ struct TcpServerSettings {
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     active_connections: Arc<AtomicUsize>,
+    active_connections_by_source: TcpSourceConnectionCounts,
 }
 
 struct TcpConnectionPermit {
     active: Arc<AtomicUsize>,
+    source_counts: Option<TcpSourceConnectionCounts>,
+    peer_ip: IpAddr,
+}
+
+type TcpSourceConnectionCounts = Arc<Mutex<HashMap<IpAddr, usize>>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TcpConnectionLimitExceeded {
+    Global,
+    Source { active: usize, limit: usize },
 }
 
 type TcpQueryHook =
@@ -6601,19 +6636,60 @@ async fn refresh_zone_from_primaries_with_outcome(
 impl Drop for TcpConnectionPermit {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::Release);
+        let Some(source_counts) = &self.source_counts else {
+            return;
+        };
+        let mut counts = source_counts
+            .lock()
+            .expect("TCP source connection counter lock poisoned");
+        if let Some(count) = counts.get_mut(&self.peer_ip) {
+            if *count <= 1 {
+                counts.remove(&self.peer_ip);
+            } else {
+                *count -= 1;
+            }
+        }
     }
 }
 
 fn try_acquire_tcp_connection_slot(
     active: Arc<AtomicUsize>,
+    source_counts: TcpSourceConnectionCounts,
+    peer_ip: IpAddr,
     limit: usize,
-) -> Option<TcpConnectionPermit> {
+    source_limit: Option<usize>,
+) -> Result<TcpConnectionPermit, TcpConnectionLimitExceeded> {
     active
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             (current < limit).then_some(current + 1)
         })
-        .ok()
-        .map(|_| TcpConnectionPermit { active })
+        .map_err(|_| TcpConnectionLimitExceeded::Global)?;
+
+    if let Some(source_limit) = source_limit {
+        let mut counts = source_counts
+            .lock()
+            .expect("TCP source connection counter lock poisoned");
+        let source_active = counts.get(&peer_ip).copied().unwrap_or(0);
+        if source_active >= source_limit {
+            active.fetch_sub(1, Ordering::Release);
+            return Err(TcpConnectionLimitExceeded::Source {
+                active: source_active,
+                limit: source_limit,
+            });
+        }
+        counts.insert(peer_ip, source_active + 1);
+        Ok(TcpConnectionPermit {
+            active,
+            source_counts: Some(source_counts.clone()),
+            peer_ip,
+        })
+    } else {
+        Ok(TcpConnectionPermit {
+            active,
+            source_counts: None,
+            peer_ip,
+        })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6997,9 +7073,13 @@ fn frame_dns_tcp_message(message: &[u8]) -> Vec<u8> {
 mod tests {
     static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        collections::HashMap,
+        net::IpAddr,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use tokio::{
@@ -12305,6 +12385,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let active = Arc::new(AtomicUsize::new(0));
+        let source_counts = Arc::new(Mutex::new(HashMap::new()));
         let server = tokio::spawn(serve_tcp(
             listener,
             zones,
@@ -12315,6 +12396,7 @@ mod tests {
                 read_timeout: std::time::Duration::from_secs(30),
                 write_timeout: std::time::Duration::from_secs(30),
                 max_connections: 1,
+                max_connections_per_source: None,
                 max_inflight_queries_per_connection: 64,
                 inflight_limit_timeout: std::time::Duration::from_secs(30),
                 edns_padding_block_size: 0,
@@ -12329,6 +12411,7 @@ mod tests {
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: RuntimeMetrics::new(),
                 active_connections: active.clone(),
+                active_connections_by_source: source_counts.clone(),
             },
         ));
 
@@ -12351,6 +12434,94 @@ mod tests {
         assert_eq!(read, 0);
         assert_eq!(active.load(Ordering::Acquire), 1);
         drop(first);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn tcp_listener_closes_connections_over_per_source_limit() {
+        let zones = ZoneStore::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let active = Arc::new(AtomicUsize::new(0));
+        let source_counts = Arc::new(Mutex::new(HashMap::new()));
+        let server = tokio::spawn(serve_tcp(
+            listener,
+            zones,
+            TcpServerSettings {
+                max_udp_payload: 1232,
+                max_cname_chain: 8,
+                idle_timeout: std::time::Duration::from_secs(30),
+                read_timeout: std::time::Duration::from_secs(30),
+                write_timeout: std::time::Duration::from_secs(30),
+                max_connections: 8,
+                max_connections_per_source: Some(1),
+                max_inflight_queries_per_connection: 64,
+                inflight_limit_timeout: std::time::Duration::from_secs(30),
+                edns_padding_block_size: 0,
+                any_response: AnyResponseMode::Minimal,
+                nsid: Vec::new(),
+                dns_cookie_secrets: dns_cookie_secret_store_for_test(),
+                dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
+                notify_authority: NotifyAuthority::default(),
+                notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx: notify_refresh_tx(),
+                notify_log_limiter: notify_log_limiter_for_test(),
+                metrics: RuntimeMetrics::new(),
+                active_connections: active.clone(),
+                active_connections_by_source: source_counts.clone(),
+            },
+        ));
+
+        let first = TcpStream::connect(addr).await.unwrap();
+        let loopback = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        for _ in 0..100 {
+            if active.load(Ordering::Acquire) == 1
+                && source_counts.lock().unwrap().get(&loopback).copied() == Some(1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(active.load(Ordering::Acquire), 1);
+
+        let mut second = TcpStream::connect(addr).await.unwrap();
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(std::time::Duration::from_secs(1), second.read(&mut byte))
+            .await
+            .expect("per-source over-limit connection should close promptly")
+            .unwrap();
+
+        assert_eq!(read, 0);
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        assert_eq!(
+            source_counts.lock().unwrap().get(&loopback).copied(),
+            Some(1)
+        );
+        drop(first);
+
+        for _ in 0..100 {
+            if active.load(Ordering::Acquire) == 0
+                && !source_counts.lock().unwrap().contains_key(&loopback)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(!source_counts.lock().unwrap().contains_key(&loopback));
+
+        let third = TcpStream::connect(addr).await.unwrap();
+        for _ in 0..100 {
+            if active.load(Ordering::Acquire) == 1
+                && source_counts.lock().unwrap().get(&loopback).copied() == Some(1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        drop(third);
         server.abort();
     }
 

@@ -8,6 +8,7 @@ configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	L
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
 configuration	[limits].max_tcp_connections	stable	0.1	config/oxidedns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
+configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/oxidedns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
 configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.
