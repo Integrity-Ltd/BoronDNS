@@ -12,6 +12,7 @@ python3 -m py_compile scripts/check-unsafe-boundaries.py
 python3 -m py_compile scripts/check-unsafe-prone-dependencies.py
 python3 -m py_compile scripts/check-interface-compatibility.py
 python3 -m py_compile scripts/check-functional-requirement-references.py
+python3 -m py_compile scripts/check-ci-workflow.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
@@ -19,6 +20,7 @@ python3 scripts/check-unsafe-boundaries.py
 python3 scripts/check-unsafe-prone-dependencies.py
 python3 scripts/check-interface-compatibility.py
 python3 scripts/check-functional-requirement-references.py
+python3 scripts/check-ci-workflow.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
@@ -62,6 +64,7 @@ bash -n scripts/interop-rrl-udp.sh
 bash -n scripts/rrl-evidence-campaign.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
+scripts/capture-unsafe-dependency-evidence.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh

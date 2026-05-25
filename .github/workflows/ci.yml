@@ -1,0 +1,58 @@
+name: OxideDNS CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Continuous verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup component add llvm-tools-preview
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install verification tools
+        run: |
+          cargo install cargo-deny --locked || true
+          cargo install cargo-bloat --locked || true
+          cargo install cargo-machete --locked || true
+          cargo install cargo-llvm-cov --locked || true
+          cargo install cargo-geiger --locked || true
+          cargo deny --version
+          cargo bloat --version
+          cargo machete --version
+          cargo llvm-cov --version
+          cargo geiger --version
+
+      - name: Run continuous project checks
+        run: ./scripts/check.sh
