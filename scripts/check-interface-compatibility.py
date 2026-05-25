@@ -105,6 +105,36 @@ def check_current_baseline(path: Path, baseline: dict[tuple[str, str], dict[str,
     missing_elements = REQUIRED_ELEMENTS - set(baseline)
     if missing_elements:
         fail(f"{path} missing required interface elements: {sorted(missing_elements)}")
+    forbidden_elements = {
+        ("configuration", "[interfaces].notify"),
+        ("configuration", "[interface].notify"),
+        ("network-role", "notify"),
+    }
+    present_forbidden = forbidden_elements & set(baseline)
+    if present_forbidden:
+        fail(f"{path} exposes forbidden MVP interface roles: {sorted(present_forbidden)}")
+
+
+def check_three_role_docs(repo_root: Path) -> None:
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    if "[interfaces].notify" in readme:
+        fail("README.md must not describe [interfaces].notify as a supported listener")
+    if "accepts authorized NOTIFY on the DNS listeners" not in readme:
+        fail("README.md must state that NOTIFY is accepted on DNS listeners")
+
+    srs = (repo_root / "docs" / "OxideDNS-Secondary-SRS-v0.7.md").read_text(
+        encoding="utf-8"
+    )
+    if "with `dns`, `mgmt`, `transfer`, and `notify` sub-keys" in srs:
+        fail("SRS v0.7 still exposes notify as an active [interfaces] sub-key")
+    if "ODS-IF-NET-008 (optional `interface.notify`)" in srs:
+        fail("SRS v0.7 still describes ODS-IF-NET-008 as optional interface.notify")
+    if "new `interface.notify`" in srs:
+        fail("SRS v0.7 audit history still claims interface.notify was added")
+    if "Add optional `interface.notify`" in srs:
+        fail("SRS v0.7 C.5 still asks to add optional interface.notify")
+    if "MUST NOT expose a fourth `notify` role" not in srs:
+        fail("SRS v0.7 must preserve the ODS-IF-NET-008 three-role clarification")
 
 
 def check_previous_diff(
@@ -156,6 +186,7 @@ def main() -> None:
     current = read_baseline(baseline_path)
     check_policy(policy_path)
     check_current_baseline(baseline_path, current)
+    check_three_role_docs(repo_root)
 
     if args.previous:
         import os
