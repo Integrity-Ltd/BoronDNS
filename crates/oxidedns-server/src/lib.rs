@@ -11985,6 +11985,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tcp_connection_closes_when_inflight_limit_stays_saturated() {
+        let zones = active_example_zone();
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let query_hook: super::TcpQueryHook = {
+            let first_started = first_started.clone();
+            let release_first = release_first.clone();
+            Arc::new(move |query_id| {
+                let first_started = first_started.clone();
+                let release_first = release_first.clone();
+                Box::pin(async move {
+                    if query_id == 0x1234 {
+                        first_started.notify_one();
+                        release_first.notified().await;
+                    }
+                })
+            })
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_tcp_connection_with_query_hook(
+                stream,
+                zones,
+                std::time::Duration::from_secs(5),
+                1232,
+                8,
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(5),
+                1,
+                std::time::Duration::from_millis(25),
+                0,
+                AnyResponseMode::Minimal,
+                Vec::new(),
+                dns_cookie_secret_store_for_test(),
+                dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+                cookie_prefix_metrics_for_test(),
+                NotifyAuthority::default(),
+                NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+                notify_refresh_tx(),
+                notify_log_limiter_for_test(),
+                RuntimeMetrics::new(),
+                "127.0.0.1".parse().unwrap(),
+                Some(query_hook),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let first = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let mut second = first.clone();
+        second[0..2].copy_from_slice(&0x5678u16.to_be_bytes());
+        let mut pipelined = frame_tcp_message(&first);
+        pipelined.extend_from_slice(&frame_tcp_message(&second));
+        client.write_all(&pipelined).await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), first_started.notified())
+            .await
+            .expect("first TCP query should hold the only in-flight permit");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        release_first.notify_one();
+
+        let first_response = read_framed_tcp_response(&mut client).await;
+        assert_eq!(Header::parse(&first_response).unwrap().id, 0x1234);
+
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut byte))
+            .await
+            .expect("saturated TCP connection should close without answering the queued query")
+            .unwrap();
+        assert_eq!(read, 0);
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn tcp_connection_closes_after_idle_timeout() {
         let zones = ZoneStore::new();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
