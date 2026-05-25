@@ -2553,7 +2553,7 @@ async fn serve_udp(
                 )
             },
             |lookup| {
-                record_query_termination_metric(query_metrics, lookup, &settings.metrics);
+                record_query_termination_metric(&query_metrics, lookup, &settings.metrics);
             },
         ) {
             DatagramAction::Discard => {
@@ -2581,7 +2581,7 @@ async fn serve_udp(
                             peer_ip,
                             settings.cookie_prefix_metrics,
                         );
-                        record_query_response_metric(query_metrics, &response, &settings.metrics);
+                        record_query_response_metric(&query_metrics, &response, &settings.metrics);
                         socket
                             .send_to(&response, peer)
                             .await
@@ -2594,12 +2594,13 @@ async fn serve_udp(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 struct QueryMetricObservation {
     is_query: bool,
     transport: Transport,
     started_at: Instant,
     cookie_validated: bool,
+    zone_key: Option<String>,
 }
 
 fn observe_query_metrics(
@@ -2614,12 +2615,14 @@ fn observe_query_metrics(
         transport,
         started_at: Instant::now(),
         cookie_validated: false,
+        zone_key: None,
     };
-    let observed_query = || QueryMetricObservation {
+    let observed_query = |zone_key| QueryMetricObservation {
         is_query: true,
         transport,
         started_at: Instant::now(),
         cookie_validated,
+        zone_key,
     };
     let Ok(header) = Header::parse(packet) else {
         return not_query();
@@ -2630,15 +2633,16 @@ fn observe_query_metrics(
 
     metrics.record_query_received();
     if header.qdcount != 1 {
-        return observed_query();
+        return observed_query(None);
     }
     let Ok(question) = Question::parse(packet) else {
-        return observed_query();
+        return observed_query(None);
     };
     if let Some(zone) = zones.find_zone(&question.qname) {
         metrics.record_zone_query(&zone.origin);
+        return observed_query(Some(zone.origin.canonical_key()));
     }
-    observed_query()
+    observed_query(None)
 }
 
 fn observe_dns_cookie_metrics(
@@ -2684,7 +2688,7 @@ fn record_dns_cookie_badcookie_if_emitted(
 }
 
 fn record_query_response_metric(
-    observation: QueryMetricObservation,
+    observation: &QueryMetricObservation,
     response: &[u8],
     metrics: &RuntimeMetrics,
 ) {
@@ -2697,7 +2701,11 @@ fn record_query_response_metric(
     if header.flags & 0x0200 != 0 {
         metrics.record_query_truncated();
     }
-    metrics.record_query_response_rcode(response_rcode(response, &header));
+    let rcode = response_rcode(response, &header);
+    metrics.record_query_response_rcode(rcode);
+    if let Some(zone_key) = &observation.zone_key {
+        metrics.record_zone_query_response_rcode(zone_key, rcode);
+    }
     metrics.record_query_latency(
         query_latency_category(observation, response, &header),
         observation.started_at.elapsed(),
@@ -2705,7 +2713,7 @@ fn record_query_response_metric(
 }
 
 fn query_latency_category(
-    observation: QueryMetricObservation,
+    observation: &QueryMetricObservation,
     response: &[u8],
     header: &Header,
 ) -> QueryLatencyCategory {
@@ -2756,7 +2764,7 @@ fn response_answer_contains_type(response: &[u8], header: &Header, types: &[u16]
 }
 
 fn record_query_termination_metric(
-    observation: QueryMetricObservation,
+    observation: &QueryMetricObservation,
     lookup: &LookupResult,
     metrics: &RuntimeMetrics,
 ) {
@@ -3168,13 +3176,18 @@ fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
     let rcode_counts = metrics.query_rcode_counts();
     body.push_str(
         "# HELP oxidedns_query_responses_total Query responses by DNS RCODE.\n\
-         # TYPE oxidedns_query_responses_total counter\n",
+         # TYPE oxidedns_query_responses_total counter\n\
+         # HELP oxidedns_secondary_query_responses_total Query responses by DNS RCODE.\n\
+         # TYPE oxidedns_secondary_query_responses_total counter\n",
     );
     for rcode in known_rcodes() {
         let count = rcode_counts.get(rcode).copied().unwrap_or_default();
+        let label = rcode_label(*rcode);
         body.push_str(&format!(
-            "oxidedns_query_responses_total{{rcode=\"{}\"}} {count}\n",
-            rcode_label(*rcode)
+            "oxidedns_query_responses_total{{rcode=\"{label}\"}} {count}\n"
+        ));
+        body.push_str(&format!(
+            "oxidedns_secondary_query_responses_total{{rcode=\"{label}\"}} {count}\n"
         ));
     }
 
@@ -3188,6 +3201,9 @@ fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
         let count = rcode_counts.get(&rcode).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_query_responses_total{{rcode=\"{rcode}\"}} {count}\n"
+        ));
+        body.push_str(&format!(
+            "oxidedns_secondary_query_responses_total{{rcode=\"{rcode}\"}} {count}\n"
         ));
     }
 }
@@ -3592,6 +3608,7 @@ fn append_zone_scheduler_metrics(
 
 fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &RuntimeMetrics) {
     let query_counts = metrics.zone_query_counts();
+    let rcode_counts = metrics.zone_query_rcode_counts();
     body.push_str(
         "# HELP oxidedns_zone_queries_total Queries received for each configured zone.\n\
          # TYPE oxidedns_zone_queries_total counter\n",
@@ -3615,6 +3632,65 @@ fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &Run
         let count = query_counts.get(&zone_key).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_secondary_queries_total{{zone=\"{zone}\"}} {count}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_zone_query_responses_total Query responses by configured zone and DNS RCODE.\n\
+         # TYPE oxidedns_zone_query_responses_total counter\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone_key = snapshot.origin.canonical_key();
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        append_zone_rcode_metrics(
+            body,
+            "oxidedns_zone_query_responses_total",
+            &zone_key,
+            &zone,
+            &rcode_counts,
+        );
+        append_zone_rcode_metrics(
+            body,
+            "oxidedns_secondary_query_responses_total",
+            &zone_key,
+            &zone,
+            &rcode_counts,
+        );
+    }
+}
+
+fn append_zone_rcode_metrics(
+    body: &mut String,
+    metric: &str,
+    zone_key: &str,
+    zone: &str,
+    rcode_counts: &HashMap<(String, u16), u64>,
+) {
+    for rcode in known_rcodes() {
+        let count = rcode_counts
+            .get(&(zone_key.to_owned(), *rcode))
+            .copied()
+            .unwrap_or_default();
+        body.push_str(&format!(
+            "{metric}{{zone=\"{zone}\",rcode=\"{}\"}} {count}\n",
+            rcode_label(*rcode)
+        ));
+    }
+
+    let mut other_rcodes = rcode_counts
+        .keys()
+        .filter_map(|(sample_zone, rcode)| {
+            (sample_zone == zone_key && !known_rcodes().contains(rcode)).then_some(*rcode)
+        })
+        .collect::<Vec<_>>();
+    other_rcodes.sort_unstable();
+    for rcode in other_rcodes {
+        let count = rcode_counts
+            .get(&(zone_key.to_owned(), rcode))
+            .copied()
+            .unwrap_or_default();
+        body.push_str(&format!(
+            "{metric}{{zone=\"{zone}\",rcode=\"{rcode}\"}} {count}\n"
         ));
     }
 }
@@ -3968,6 +4044,7 @@ struct RuntimeMetricsInner {
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
+    zone_query_rcodes: Mutex<HashMap<(String, u16), u64>>,
     latency_buckets: Vec<f64>,
     query_latency: Mutex<HashMap<QueryLatencyCategory, QueryLatencyHistogram>>,
 }
@@ -4358,6 +4435,16 @@ impl RuntimeMetrics {
         *counter = counter.saturating_add(1);
     }
 
+    fn record_zone_query_response_rcode(&self, zone_key: &str, rcode: u16) {
+        let mut rcodes = self
+            .inner
+            .zone_query_rcodes
+            .lock()
+            .expect("runtime metrics per-zone RCODE counter lock poisoned");
+        let counter = rcodes.entry((zone_key.to_owned(), rcode)).or_default();
+        *counter = counter.saturating_add(1);
+    }
+
     fn record_query_latency(&self, category: QueryLatencyCategory, duration: Duration) {
         let latency_buckets = self.inner.latency_buckets.as_slice();
         let mut histograms = self
@@ -4376,6 +4463,14 @@ impl RuntimeMetrics {
             .query_rcodes
             .lock()
             .expect("runtime metrics RCODE counter lock poisoned")
+            .clone()
+    }
+
+    fn zone_query_rcode_counts(&self) -> HashMap<(String, u16), u64> {
+        self.inner
+            .zone_query_rcodes
+            .lock()
+            .expect("runtime metrics per-zone RCODE counter lock poisoned")
             .clone()
     }
 
@@ -6354,7 +6449,7 @@ async fn handle_tcp_packet(
                 serial,
             )
         },
-        |lookup| record_query_termination_metric(query_metrics, lookup, &metrics),
+        |lookup| record_query_termination_metric(&query_metrics, lookup, &metrics),
     ) {
         DatagramAction::Discard => {
             debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
@@ -6367,7 +6462,7 @@ async fn handle_tcp_packet(
                 peer_ip,
                 cookie_prefix_metrics,
             );
-            record_query_response_metric(query_metrics, &response, &metrics);
+            record_query_response_metric(&query_metrics, &response, &metrics);
             let response = match sign_notify_response(response, prepared.response_tsig) {
                 Ok(response) => response,
                 Err(error) => {
@@ -6858,6 +6953,8 @@ mod tests {
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
         metrics_state.record_query_response_rcode(23);
+        metrics_state.record_zone_query_response_rcode(&active_origin.canonical_key(), 0);
+        metrics_state.record_zone_query_response_rcode(&active_origin.canonical_key(), 3);
         metrics_state.record_query_latency(
             QueryLatencyCategory::UdpDirect,
             std::time::Duration::from_micros(250),
@@ -6960,6 +7057,8 @@ mod tests {
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"SERVFAIL\"} 0"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
+        assert!(metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"NOERROR\"} 1"));
+        assert!(metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
         assert!(metrics.contains("oxidedns_secondary_build_info{version=\"0.1.0\",commit=\""));
         assert!(metrics.contains("rust_version=\"rustc "));
         assert!(metrics.contains(
@@ -7083,6 +7182,18 @@ mod tests {
         assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"loading.test.\"} 0"));
         assert!(metrics.contains("oxidedns_secondary_queries_total{zone=\"example.test.\"} 2"));
         assert!(metrics.contains("oxidedns_secondary_queries_total{zone=\"loading.test.\"} 0"));
+        assert!(metrics.contains(
+            "oxidedns_zone_query_responses_total{zone=\"example.test.\",rcode=\"NOERROR\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_query_responses_total{zone=\"example.test.\",rcode=\"NXDOMAIN\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_responses_total{zone=\"example.test.\",rcode=\"NOERROR\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_responses_total{zone=\"loading.test.\",rcode=\"NOERROR\"} 0"
+        ));
 
         let compressed_metrics =
             http_request_with_headers(addr, "GET", "/metrics", &[("Accept-Encoding", "gzip")])
@@ -8286,11 +8397,11 @@ mod tests {
         badvers[11] = 1;
         badvers.extend_from_slice(&[0, 0, 41, 4, 208, 1, 0, 0, 0, 0, 0]);
 
-        record_query_response_metric(observation, &noerror, &metrics);
-        record_query_response_metric(observation, &nxdomain, &metrics);
-        record_query_response_metric(observation, &truncated, &metrics);
-        record_query_response_metric(observation, &badvers, &metrics);
-        record_query_response_metric(non_query_observation, &truncated, &metrics);
+        record_query_response_metric(&observation, &noerror, &metrics);
+        record_query_response_metric(&observation, &nxdomain, &metrics);
+        record_query_response_metric(&observation, &truncated, &metrics);
+        record_query_response_metric(&observation, &badvers, &metrics);
+        record_query_response_metric(&non_query_observation, &truncated, &metrics);
 
         assert_eq!(metrics.snapshot().queries_truncated, 1);
         let rcodes = metrics.query_rcode_counts();
@@ -8304,6 +8415,44 @@ mod tests {
                 .map(QueryLatencyHistogram::count),
             Some(4)
         );
+    }
+
+    #[test]
+    fn query_metrics_count_zone_response_rcodes_for_configured_zone_only() {
+        let zones = ZoneStore::new();
+        let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(active_origin, Some(1), Vec::new()));
+        let metrics = RuntimeMetrics::new();
+        let in_zone = observe_query_metrics(
+            &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+            Transport::Udp,
+            false,
+        );
+        let outside = observe_query_metrics(
+            &query(b"\x07outside\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+            Transport::Udp,
+            false,
+        );
+        let mut noerror = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        noerror[2] |= 0x80;
+        let mut nxdomain = noerror.clone();
+        nxdomain[3] |= 3;
+
+        record_query_response_metric(&in_zone, &noerror, &metrics);
+        record_query_response_metric(&in_zone, &nxdomain, &metrics);
+        record_query_response_metric(&outside, &noerror, &metrics);
+
+        let zone_rcodes = metrics.zone_query_rcode_counts();
+        let zone_key = DomainName::from_absolute_str("example.test.")
+            .unwrap()
+            .canonical_key();
+        assert_eq!(zone_rcodes.get(&(zone_key.clone(), 0)), Some(&1));
+        assert_eq!(zone_rcodes.get(&(zone_key.clone(), 3)), Some(&1));
+        assert!(!zone_rcodes.contains_key(&("outside.test.".to_owned(), 0)));
     }
 
     #[test]
@@ -8339,12 +8488,14 @@ mod tests {
             transport: Transport::Udp,
             started_at: std::time::Instant::now(),
             cookie_validated: false,
+            zone_key: None,
         };
         let non_query_observation = QueryMetricObservation {
             is_query: false,
             transport: Transport::Udp,
             started_at: std::time::Instant::now(),
             cookie_validated: false,
+            zone_key: None,
         };
         let chain_limit = oxidedns_core::dns::LookupResult::positive_records_with_termination(
             Vec::new(),
@@ -8355,9 +8506,9 @@ mod tests {
             LookupTermination::CnameLoop,
         );
 
-        record_query_termination_metric(observation, &chain_limit, &metrics);
-        record_query_termination_metric(observation, &loop_detected, &metrics);
-        record_query_termination_metric(non_query_observation, &chain_limit, &metrics);
+        record_query_termination_metric(&observation, &chain_limit, &metrics);
+        record_query_termination_metric(&observation, &loop_detected, &metrics);
+        record_query_termination_metric(&non_query_observation, &chain_limit, &metrics);
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.queries_cname_chain_limit, 1);

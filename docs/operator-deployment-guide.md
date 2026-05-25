@@ -341,7 +341,10 @@ per-zone status series (`oxidedns_secondary_zone_state`,
 `oxidedns_secondary_zone_next_refresh_seconds`,
 `oxidedns_secondary_zone_refresh_failures`, and
 `oxidedns_secondary_queries_total{zone="..."}`), transfer counters, query
-counters, RCODE counters, truncation counters, CNAME limit/loop counters,
+counters, global and per-zone RCODE counters
+(`oxidedns_secondary_query_responses_total{rcode="..."}` and
+`oxidedns_secondary_query_responses_total{zone="...",rcode="..."}`),
+truncation counters, CNAME limit/loop counters,
 NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
 per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, and the

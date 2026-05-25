@@ -961,7 +961,7 @@ fn build_response_inner(
     metadata: &RequestMetadata,
     options: AnswerOptions,
 ) -> Vec<u8> {
-    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question.map_or(0, |q| q.wire().len()));
+    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question.map_or(0, question_wire_len));
     let mut compressor = NameCompressor::default();
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
@@ -977,10 +977,8 @@ fn build_response_inner(
     );
 
     if let Some(question) = question {
-        response.extend_from_slice(question.wire());
-        if question_is_uncompressed_wire(question) {
-            compressor.register_name_at_offset(&question.qname, DNS_HEADER_LEN);
-        }
+        encode_question(question, &mut response);
+        compressor.register_name_at_offset(&question.qname, DNS_HEADER_LEN);
     }
 
     for record in answers.iter().chain(authorities).chain(additionals) {
@@ -1131,9 +1129,14 @@ impl NameCompressor {
     }
 }
 
-fn question_is_uncompressed_wire(question: &Question) -> bool {
-    let qname_wire = question.qname.to_wire();
-    question.wire.len() == qname_wire.len() + 4 && question.wire.starts_with(&qname_wire)
+fn question_wire_len(question: &Question) -> usize {
+    question.qname.to_wire().len() + 4
+}
+
+fn encode_question(question: &Question, response: &mut Vec<u8>) {
+    response.extend_from_slice(&question.qname.to_wire());
+    response.extend_from_slice(&question.qtype.to_be_bytes());
+    response.extend_from_slice(&question.qclass.to_be_bytes());
 }
 
 fn name_suffix_key(labels: &[Vec<u8>]) -> Vec<Vec<u8>> {
@@ -2883,6 +2886,64 @@ mod tests {
             response_answers(&response)[0].0.to_string(),
             "www.example.test."
         );
+    }
+
+    #[test]
+    fn compressed_qname_is_reencoded_before_response_compression() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("www.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        ));
+        let mut packet = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        packet.extend_from_slice(b"\x03www\xc0\x04");
+        packet.extend_from_slice(&(RecordType::A as u16).to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        let parsed_question = Question::parse(&packet).unwrap();
+        assert_eq!(parsed_question.qname.to_string(), "www.");
+        assert_eq!(parsed_question.qtype, RecordType::A as u16);
+        assert_eq!(
+            parsed_question.qname.canonical_key(),
+            DomainName::from_absolute_str("www.")
+                .unwrap()
+                .canonical_key()
+        );
+        assert!(
+            parsed_question
+                .qname
+                .is_equal_or_subdomain_of(&DomainName::from_absolute_str("www.").unwrap())
+        );
+        assert!(store.find_zone(&parsed_question.qname).is_some());
+
+        let response = store_response(&packet, &store);
+        let answer_offset = first_answer_offset(&response);
+        let (question_name, consumed) = DomainName::parse(&response, DNS_HEADER_LEN).unwrap();
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(question_name.to_string(), "www.");
+        assert_eq!(
+            &response[DNS_HEADER_LEN..DNS_HEADER_LEN + consumed],
+            b"\x03www\x00"
+        );
+        assert_eq!(&response[answer_offset..answer_offset + 2], &[0xc0, 0x0c]);
     }
 
     #[test]
