@@ -105,6 +105,23 @@ confirms that adding a member PTR makes OxideDNS transfer and serve
 `member.example.`, and that removing the PTR makes OxideDNS stop serving that
 catalog-managed member.
 
+## PowerDNS PostgreSQL Catalog Check
+
+The production-shape catalog check uses PowerDNS Authoritative with the gpgsql
+backend and a PostgreSQL container:
+
+```bash
+OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR=target/evidence/manual-powerdns-catalog \
+  scripts/interop-powerdns-postgres-catalog-tsig-docker.sh
+```
+
+This script creates a PowerDNS RFC 9432 producer catalog with `pdnsutil`, keeps
+zone data in PostgreSQL, enables TSIG-only AXFR for both the catalog and member
+zone, starts OxideDNS with only `[[catalog_zones]]`, and then changes the
+PowerDNS catalog assignment live. It verifies unsigned catalog AXFR is denied,
+TSIG-signed catalog transfer succeeds, catalog queries stay hidden, member add
+starts serving, and member removal stops serving while OxideDNS remains running.
+
 ## RRL And Source-IP Rotation
 
 Docker is sufficient for the AXFR and basic query smoke above. It is not the
