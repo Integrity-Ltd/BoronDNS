@@ -87,6 +87,7 @@ record_version python3 python3 --version
 } >"$snapshot_dir/verification-commands.md"
 
 run_and_capture test-plan-check bash -lc "cd '$repo_root' && scripts/check-test-plan.sh"
+run_and_capture security-policy-check bash -lc "cd '$repo_root' && scripts/check-security-policy.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"

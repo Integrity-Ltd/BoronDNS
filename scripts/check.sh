@@ -2,6 +2,7 @@
 set -euo pipefail
 
 scripts/check-test-plan.sh
+scripts/check-security-policy.sh
 python3 -m py_compile scripts/check-perf-regression.py
 python3 scripts/check-verification-ledger.py
 scripts/audit-xot-revocation.sh

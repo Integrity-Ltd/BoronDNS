@@ -16,6 +16,7 @@ and update companion documents afterward.
 - `OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion specification.
 - `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary.
 - `operator-deployment-guide.md`: practical MVP deployment and operations guide.
+- `architecture.md`: architecture and release-governance scaffold for current MVP decisions.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
 

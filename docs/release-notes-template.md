@@ -77,6 +77,8 @@ TBD
 
 - Dependency audit result: TBD
 - Vulnerability disclosure changes: TBD
+- Vulnerability disclosure policy reviewed: TBD
+- Release signing mechanism and verification instructions: TBD
 - Security audit findings and remediation actions: TBD
 
 ## Verification Responsibility Sign-off

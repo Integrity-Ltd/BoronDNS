@@ -66,6 +66,15 @@ for regression_field in \
   require_text "$regression_field"
 done
 
+for security_field in \
+  "Dependency audit result" \
+  "Vulnerability disclosure changes" \
+  "Vulnerability disclosure policy reviewed" \
+  "Release signing mechanism and verification instructions" \
+  "Security audit findings and remediation actions"; do
+  require_text "$security_field"
+done
+
 if grep -F "TBD" "$notes_file" >/dev/null 2>&1; then
   printf 'release notes still contain TBD placeholders\n' >&2
   exit 1

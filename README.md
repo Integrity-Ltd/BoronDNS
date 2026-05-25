@@ -19,6 +19,8 @@ Implementation planning:
 - [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md)
 - [Verification ledger](docs/verification-ledger.md)
 - [Test Plan](docs/test-plan.md)
+- [Architecture and release governance scaffold](docs/architecture.md)
+- [Security policy](SECURITY.md)
 
 ## Workspace
 
