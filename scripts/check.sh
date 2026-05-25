@@ -11,6 +11,7 @@ python3 -m py_compile scripts/check-operator-guide.py
 python3 -m py_compile scripts/check-unsafe-boundaries.py
 python3 -m py_compile scripts/check-unsafe-prone-dependencies.py
 python3 -m py_compile scripts/check-interface-compatibility.py
+python3 -m py_compile scripts/check-dnssec-conformance-matrix.py
 python3 -m py_compile scripts/check-functional-requirement-references.py
 python3 -m py_compile scripts/check-ci-workflow.py
 python3 scripts/check-operator-guide.py
@@ -19,6 +20,7 @@ python3 scripts/check-appendix-a-traceability.py
 python3 scripts/check-unsafe-boundaries.py
 python3 scripts/check-unsafe-prone-dependencies.py
 python3 scripts/check-interface-compatibility.py
+python3 scripts/check-dnssec-conformance-matrix.py
 python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-ci-workflow.py
 python3 scripts/audit-spoof-evidence.py
