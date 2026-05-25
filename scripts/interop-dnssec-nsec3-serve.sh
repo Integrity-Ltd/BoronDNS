@@ -15,6 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/dnssec-nsec3-serve-$$"
+artifact_dir="${OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -32,6 +33,8 @@ cleanup() {
     [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -120 "$workdir/fake-primary.stderr" >&2; }
     [[ -f "$workdir/nsec3-client.log" ]] && { echo "---- nsec3-client.log ----" >&2; tail -120 "$workdir/nsec3-client.log" >&2; }
     [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
+    [[ -f "$workdir/client-summary.out" ]] && { echo "---- client-summary.out ----" >&2; cat "$workdir/client-summary.out" >&2; }
+    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -120 "$workdir/metrics.txt" >&2; }
   fi
   rm -rf "$workdir"
 }
@@ -54,6 +57,7 @@ fake_primary="$workdir/fake-primary.py"
 nsec3_client="$workdir/nsec3-client.py"
 primary_log="$workdir/fake-primary.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+summary_env="$workdir/dnssec-nsec3-summary.env"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -132,7 +136,7 @@ def parse_question(packet):
     qname, name_len = parse_name(packet, 12)
     offset = 12 + name_len
     qtype, qclass = struct.unpack("!HH", packet[offset:offset + 4])
-    return qname, qtype, qclass
+    return qname, qtype, qclass, packet[12:offset + 4]
 
 
 def rr(owner, rrtype, rdata, ttl=300):
@@ -220,9 +224,9 @@ def zone_records():
     ]
 
 
-def axfr_response(qid):
+def axfr_response(qid, question):
     answers = zone_records()
-    return struct.pack("!HHHHHH", qid, 0x8000, 0, len(answers), 0, 0) + b"".join(answers)
+    return struct.pack("!HHHHHH", qid, 0x8000, 1, len(answers), 0, 0) + question + b"".join(answers)
 
 
 def read_exact(conn, size):
@@ -240,12 +244,12 @@ def handle_tcp(conn):
         length = struct.unpack("!H", read_exact(conn, 2))[0]
         query = read_exact(conn, length)
         qid = struct.unpack("!H", query[:2])[0]
-        qname, qtype, qclass = parse_question(query)
+        qname, qtype, qclass, question = parse_question(query)
         if qname.lower() != ZONE or qtype != AXFR or qclass != IN:
-            response = struct.pack("!HHHHHH", qid, 0x8004, 0, 0, 0, 0)
+            response = struct.pack("!HHHHHH", qid, 0x8004, 1, 0, 0, 0) + question
         else:
             log("TCP AXFR with DNSSEC NSEC3 records served")
-            response = axfr_response(qid)
+            response = axfr_response(qid, question)
         conn.sendall(struct.pack("!H", len(response)) + response)
 
 
@@ -488,20 +492,22 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after fake-primary DNSSEC NSEC3 AXFR" >&2
   exit 1
 fi
 
 client_summary="$(python3 "$nsec3_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/nsec3-client.log")"
+printf '%s\n' "$client_summary" >"$workdir/client-summary.out"
 echo "$client_summary"
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052403'; do
@@ -514,4 +520,28 @@ done
 if ! grep -F "TCP AXFR with DNSSEC NSEC3 records served" "$primary_log" >/dev/null 2>&1; then
   echo "fake DNSSEC NSEC3 primary did not serve the initial AXFR" >&2
   exit 1
+fi
+
+cat >"$summary_env" <<'EOF'
+dnssec_nsec3_runtime_interop=1
+direct_nsec3_do_rrsig=1
+direct_nsec3_non_do_suppresses_rrsig=1
+direct_nsec3param_do_rrsig=1
+direct_dnskey_served=1
+nxdomain_do_nsec3_rrsig=1
+ad_cd_cleared_on_representative_nsec3=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$primary_log" "$artifact_dir/fake-primary.log"
+  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+  cp "$fake_primary" "$artifact_dir/fake-primary.py"
+  cp "$nsec3_client" "$artifact_dir/nsec3-client.py"
+  cp "$workdir/nsec3-client.log" "$artifact_dir/nsec3-client.log"
+  cp "$workdir/client-summary.out" "$artifact_dir/client-summary.out"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$summary_env" "$artifact_dir/dnssec-nsec3-summary.env"
 fi

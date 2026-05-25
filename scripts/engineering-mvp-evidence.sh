@@ -67,6 +67,8 @@ scripts/interop-notify-negative.sh
 scripts/interop-tcp-truncation-retry.sh
 scripts/interop-dns-cookie-dig.sh
 scripts/interop-ixfr-notimp-fallback.sh
+scripts/interop-dnssec-serve.sh
+scripts/interop-dnssec-nsec3-serve.sh
 scripts/interop-bind-axfr.sh
 scripts/interop-bind-tsig-axfr.sh
 scripts/interop-bind-notify-refresh.sh
@@ -88,6 +90,8 @@ run_and_capture notify-negative bash -lc "cd '$repo_root' && OXIDEDNS_NOTIFY_NEG
 run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
 run_and_capture dns-cookie-dig bash -lc "cd '$repo_root' && OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR='$snapshot_dir/dns-cookie-artifacts' scripts/interop-dns-cookie-dig.sh"
 run_and_capture ixfr-notimp-fallback bash -lc "cd '$repo_root' && OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR='$snapshot_dir/ixfr-fallback-artifacts' scripts/interop-ixfr-notimp-fallback.sh"
+run_and_capture dnssec-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR='$snapshot_dir/dnssec-serve-artifacts' scripts/interop-dnssec-serve.sh"
+run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR='$snapshot_dir/dnssec-nsec3-artifacts' scripts/interop-dnssec-nsec3-serve.sh"
 run_and_capture interop-bind-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-axfr.sh"
 run_and_capture interop-bind-tsig-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-tsig-axfr.sh"
 run_and_capture interop-bind-notify-refresh bash -lc "cd '$repo_root' && scripts/interop-bind-notify-refresh.sh"

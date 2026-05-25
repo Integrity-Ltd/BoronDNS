@@ -15,6 +15,8 @@ bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh
+bash -n scripts/interop-dnssec-serve.sh
+bash -n scripts/interop-dnssec-nsec3-serve.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 cargo fmt --all --check
