@@ -19,6 +19,12 @@ and update companion documents afterward.
 - `architecture.md`: architecture and release-governance scaffold for current MVP decisions.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
+- `implementation-plan.md`: Engineering MVP and SRS acceptance implementation plan.
+- `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
+- `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.
 
 
 Raw mailbox messages and exported attachments are intentionally not tracked in this repository.
+
+The planning and evidence documents are companion working artifacts. They remain
+subordinate to SRS v0.7 when scope or behavioral wording differs.

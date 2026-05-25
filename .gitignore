@@ -16,3 +16,7 @@
 # Logs and runtime scratch output
 *.log
 /tmp/
+
+# Python helper cache
+__pycache__/
+**/__pycache__/

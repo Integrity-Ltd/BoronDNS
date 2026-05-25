@@ -58,8 +58,7 @@ use oxidedns_core::{
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
         TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
-        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key_name,
-        sign_tsig_error_response,
+        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
@@ -2931,16 +2930,42 @@ async fn serve_health(
 
 fn health_router(state: HealthEndpointState) -> Router {
     Router::new()
-        .route("/livez", get(livez).head(health_method_not_allowed))
-        .route("/healthz", get(healthz).head(health_method_not_allowed))
-        .route("/readyz", get(readyz).head(health_method_not_allowed))
-        .route("/metrics", get(metrics).head(health_method_not_allowed))
+        .route(
+            "/livez",
+            get(livez)
+                .head(health_method_not_allowed)
+                .fallback(health_method_not_allowed),
+        )
+        .route(
+            "/healthz",
+            get(healthz)
+                .head(health_method_not_allowed)
+                .fallback(health_method_not_allowed),
+        )
+        .route(
+            "/readyz",
+            get(readyz)
+                .head(health_method_not_allowed)
+                .fallback(health_method_not_allowed),
+        )
+        .route(
+            "/metrics",
+            get(metrics)
+                .head(health_method_not_allowed)
+                .fallback(health_method_not_allowed),
+        )
         .fallback(health_not_found)
         .with_state(state)
 }
 
-async fn health_method_not_allowed() -> StatusCode {
-    StatusCode::METHOD_NOT_ALLOWED
+async fn health_method_not_allowed(uri: Uri) -> Response {
+    json_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        format!(
+            "{{\"error\":\"method_not_allowed\",\"path\":\"{}\"}}",
+            json_string(uri.path())
+        ),
+    )
 }
 
 async fn health_not_found(uri: Uri) -> Response {
@@ -3256,11 +3281,11 @@ fn latency_bucket_label(bucket: f64) -> String {
 
 fn append_configuration_warning_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
     body.push_str(
-        "# HELP oxidedns_configuration_warnings_total Suspicious but valid configuration warnings detected at startup.\n\
-         # TYPE oxidedns_configuration_warnings_total gauge\n",
+        "# HELP oxidedns_secondary_configuration_warnings_total Suspicious but valid configuration warnings detected at startup.\n\
+         # TYPE oxidedns_secondary_configuration_warnings_total gauge\n",
     );
     body.push_str(&format!(
-        "oxidedns_configuration_warnings_total {}\n",
+        "oxidedns_secondary_configuration_warnings_total {}\n",
         snapshot.configuration_warnings
     ));
 }
@@ -5499,8 +5524,8 @@ fn prepare_query_tsig_packet(
         return prepared;
     }
 
-    let key_name = match message_tsig_key_name(&prepared.packet) {
-        Ok(Some(key_name)) => key_name,
+    let message_key = match message_tsig_key(&prepared.packet) {
+        Ok(Some(message_key)) => message_key,
         Ok(None) => return prepared,
         Err(TsigError::MisplacedTsig | TsigError::MalformedTsig) => {
             return PreparedDnsMessage {
@@ -5516,9 +5541,18 @@ fn prepare_query_tsig_packet(
         Err(_) => return prepared,
     };
 
-    let Some(key) = notify_authority.tsig_key_by_name(&key_name) else {
+    let Some(key) = notify_authority.tsig_key_by_name(&message_key.name) else {
+        let unsigned_error_key =
+            TsigKey::for_unsigned_error(message_key.name, message_key.algorithm);
         return PreparedDnsMessage {
-            immediate_response: basic_error_response(&prepared.packet, &header, Rcode::NotAuth),
+            immediate_response: tsig_error_response(
+                &prepared.packet,
+                &header,
+                &question,
+                &unsigned_error_key,
+                &TsigError::KeyMismatch,
+                notify_authority.tsig_fudge_seconds,
+            ),
             ..prepared
         };
     };
@@ -6923,7 +6957,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_query_with_unknown_tsig_key_gets_notauth() {
+    fn ordinary_query_with_unknown_tsig_key_gets_badkey_response() {
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -6962,9 +6996,14 @@ mod tests {
 
         let response = prepared
             .immediate_response
-            .expect("immediate NOTAUTH response");
+            .expect("immediate BADKEY response");
         let header = Header::parse(&response).unwrap();
         assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.original_id, 0x1234);
+        assert_eq!(tsig.error, TSIG_ERROR_BADKEY);
+        assert!(tsig.other_data.is_empty());
         assert!(!prepared.tsig_authenticated);
     }
 
@@ -7271,7 +7310,7 @@ mod tests {
         assert!(metrics.contains(
             "oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix=\"192.0.2.0/24\"} 1"
         ));
-        assert!(metrics.contains("oxidedns_configuration_warnings_total 4"));
+        assert!(metrics.contains("oxidedns_secondary_configuration_warnings_total 4"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
@@ -7406,6 +7445,12 @@ mod tests {
             for path in ["/livez", "/healthz", "/readyz", "/metrics"] {
                 let method_not_allowed = http_request(addr, method, path).await;
                 assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
+                assert!(method_not_allowed.contains("content-type: application/json"));
+                if method == "POST" {
+                    assert!(method_not_allowed.ends_with(&format!(
+                        r#"{{"error":"method_not_allowed","path":"{path}"}}"#
+                    )));
+                }
             }
         }
 

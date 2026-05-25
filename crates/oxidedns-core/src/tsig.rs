@@ -142,6 +142,12 @@ pub struct VerifiedMessage {
     pub time_signed: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsigMessageKey {
+    pub name: DomainName,
+    pub algorithm: TsigAlgorithm,
+}
+
 struct TsigRecordFields<'a> {
     time_signed: u64,
     fudge: u16,
@@ -188,6 +194,14 @@ impl TsigKey {
             algorithm,
             secret: Zeroizing::new(secret),
         })
+    }
+
+    pub fn for_unsigned_error(name: DomainName, algorithm: TsigAlgorithm) -> Self {
+        Self {
+            name,
+            algorithm,
+            secret: Zeroizing::new(Vec::new()),
+        }
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, TsigError> {
@@ -661,8 +675,15 @@ pub fn message_has_tsig(message: &[u8]) -> Result<bool, TsigError> {
 }
 
 pub fn message_tsig_key_name(message: &[u8]) -> Result<Option<DomainName>, TsigError> {
+    Ok(message_tsig_key(message)?.map(|key| key.name))
+}
+
+pub fn message_tsig_key(message: &[u8]) -> Result<Option<TsigMessageKey>, TsigError> {
     match remove_tsig(message) {
-        Ok((_, tsig)) => Ok(Some(tsig.owner)),
+        Ok((_, tsig)) => Ok(Some(TsigMessageKey {
+            name: tsig.owner,
+            algorithm: tsig.algorithm,
+        })),
         Err(TsigError::MissingTsig) => Ok(None),
         Err(error) => Err(error),
     }

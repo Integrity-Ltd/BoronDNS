@@ -121,4 +121,6 @@ release-note gate checks that the release notes include:
 - retained primary version/configuration artifact paths for interop evidence;
 - failed-requirement project decisions and remediation targets;
 - RFC compliance assertions;
-- verification responsibility sign-off.
+- verification responsibility sign-off;
+- for the MVP gate, external operator acceptance signature, accepting operator
+  identity, and accepted scope statement.

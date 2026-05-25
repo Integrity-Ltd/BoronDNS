@@ -74,7 +74,7 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 - a TSIG HMAC-SHA256 interop subset;
 - network, configuration, logging, health, signal, and process/CLI interfaces,
   including `--version`, `--help`, `--dump-config`, `--validate-config`, and
-  `--example-config`;
+  the ODS-IF-PROC-001 exit-code convention;
 - selected reliability, maintainability, portability, observability, and
   resource NFRs, including per-zone status metrics;
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary,
@@ -86,6 +86,23 @@ XoT, DNSSEC serving, RRL, full DNS Cookies, expanded RR catalogue, `/livez` and
 requirements, performance NFR conformance, full security/maintainability
 verification, reliability/resource/observability extensions, and second and
 third primary interop.
+
+`--example-config` is implemented and retained in release CLI evidence, but SRS
+v0.7 makes ODS-IF-PROC-004 a MAY-level command. It is therefore useful for the
+Engineering MVP workflow without being an Alpha or MVP acceptance blocker.
+
+## Pending C.5 Decision Overlay
+
+Appendix C.5 of SRS v0.7 still marks several defaults and policy choices as
+pending confirmation. Implementation may follow the current SRS body defaults so
+the server is testable, but release notes and acceptance review must not treat
+those values as final project decisions until C.5 is resolved. The active overlay
+includes health default port and metrics rate-limit defaults, log entry length,
+configuration-warning catalogue contents, sysexits choices, external operator
+acceptance, strict ANY default, transfer/session/concurrency defaults, SIGTERM
+grace, clock-skew tolerances, histogram buckets, DNS Cookie default policy, NSID
+default behavior, JSON-vs-logfmt default, TOML format, and multi-primary
+randomized initial selection.
 
 ## Implementation Slices
 
@@ -299,16 +316,16 @@ Slice 8 has health endpoint foundations:
 - focused tests cover `/livez` and `/readyz` responses within the SRS 100 ms health-probe bound under starting and draining states.
 - CLI config-loading paths emit pre-config JSON bootstrap logs for process start, configuration read, and validation success/failure before applying the configured log format and level;
 - CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
-- `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
+- `[server].log_format` selects `json` or the current `plain` local-debug format, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values. Full SRS logfmt conformance for the non-JSON format remains an ODS-IF-LOG-002 evidence gap unless `plain` is promoted to canonical logfmt or replaced by a `logfmt` selector;
 - logging output is level-routed through bounded writers: warning/error entries go to stderr, lower levels go to stdout, and `[logging].max_entry_length_bytes` defaults to 16384, rejects values too small to preserve a parseable truncated record, can be overridden with `ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES`, and bounds `tracing-subscriber` JSON/plain formatted log entries by replacing oversized events with a parseable structured truncation record containing `...<truncated>` and `truncated=true`;
 - `ODS_<SECTION>_<KEY>` environment overrides cover the current scalar server/health/logging/limits/TSIG subset (`server.health`, log level/format, NSID, health metrics rate-limit knobs, `logging.max_entry_length_bytes`, `limits.max_transfer_ingest_bytes`, `limits.zsm_max_interval_secs`, `limits.zsm_loading_warning_threshold_secs`, and `tsig.fudge_seconds`), take precedence before runtime validation, are reflected by `--dump-config`, and emit non-fatal `configuration_warning` stderr messages for unrecognised `ODS_*` variables;
-- the current suspicious-configuration warning catalogue covers DNS Cookies disabled, RRL allowlist entries `0.0.0.0/0` and `::/0`, TSIG fudge values above 60 seconds, TSIG keys using HMAC-SHA1, TCP idle timeouts above 120 seconds, AXFR/IXFR transfer ingestion caps below 100 MiB, XoT trust anchors expiring within 30 days, and transferred SOA REFRESH/RETRY values at or above 90% of `[limits].zsm_max_interval_secs`; warnings are non-fatal and use `category=configuration_warning`; static warnings are emitted by CLI validation/dump modes and as structured startup logs during `serve`, transferred-SOA warnings are emitted when zone snapshots are accepted, and the startup warning count is exposed by `oxidedns_configuration_warnings_total`;
+- the current suspicious-configuration warning catalogue covers DNS Cookies disabled, RRL allowlist entries `0.0.0.0/0` and `::/0`, TSIG fudge values above 60 seconds, TSIG keys using HMAC-SHA1, TCP idle timeouts above 120 seconds, AXFR/IXFR transfer ingestion caps below 100 MiB, XoT trust anchors expiring within 30 days, and transferred SOA REFRESH/RETRY values at or above 90% of `[limits].zsm_max_interval_secs`; warnings are non-fatal and use `category=configuration_warning`; static warnings are emitted by CLI validation/dump modes and as structured startup logs during `serve`, transferred-SOA warnings are emitted when zone snapshots are accepted, and the startup warning count is exposed by `oxidedns_secondary_configuration_warnings_total`;
 - `[tsig].fudge_seconds` defaults to 300 seconds, is validated as non-zero, is exposed through `ODS_TSIG_FUDGE_SECONDS`, is reflected in `--dump-config`, and is used for TSIG-signed transfer queries plus NOTIFY TSIG responses and error responses;
 - `[limits].max_transfer_ingest_bytes` defaults to 4 GiB, is validated as non-zero, is exposed through `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`, is reflected in `--dump-config`, and aborts AXFR/IXFR sessions when cumulative received DNS transfer message payload octets exceed the configured cap before a new transfer snapshot is published;
 - process exit-code mapping follows the SRS v0.7 table for tested CLI/config and startup paths: usage errors exit 64, semantically invalid configuration and XoT runtime-configuration validation errors exit 2, unreadable/unparseable configuration exits 78, UDP/TCP/health bind failures exit 73 (`EX_CANTCREAT`), unreadable XoT TLS files exit 74 (`EX_IOERR`), and OS startup failures such as signal setup or randomness failures map to 71 (`EX_OSERR`);
 - process startup installs explicit SIGHUP and SIGPIPE `SIG_IGN` dispositions before Tokio worker threads start; binary-level signal tests cover graceful SIGTERM/SIGINT exit, continued operation after SIGHUP, survival after stdout/stderr consumers close, Linux `/proc/<pid>/status` `SigIgn` evidence for SIGHUP and SIGPIPE, and `SigCgt` evidence that SIGHUP, SIGPIPE, SIGQUIT, SIGUSR1, and SIGUSR2 have no installed handlers;
 - `--version` and `-V` print multi-line SRS build metadata from the same embedded build constants used by `oxidedns_secondary_build_info`, including version, build commit, RFC 3339 build timestamp, and Rust compiler version; `--help` and `-h` print usage, flag descriptions, default configuration path, Operator Deployment Guide pointer, and project pointer; `--example-config` prints the checked-in example TOML without reading a configuration file and that output validates successfully through `--validate-config`;
-- JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
+- JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter and remain outside the final JSON/logfmt acceptance claim until the non-JSON format is made logfmt-compatible.
 
 DNS Cookie foundations are started:
 

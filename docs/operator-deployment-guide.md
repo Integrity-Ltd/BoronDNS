@@ -152,7 +152,7 @@ implemented warning catalogue is:
 emits static configuration warnings as structured startup logs, and emits the
 SOA timer warning when a transferred zone snapshot supplies the relevant SOA
 fields. The `/metrics` endpoint exposes the startup warning count as
-`oxidedns_configuration_warnings_total`.
+`oxidedns_secondary_configuration_warnings_total`.
 
 ## Configuration
 
@@ -162,13 +162,15 @@ reference. The major sections are:
 - `[server]`: UDP/TCP DNS listeners, optional health endpoint, log level, and
   log format.
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
-  16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
+  16384 and causes oversized JSON/plain entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
-- `[interfaces]`: optional additional listener roles. Currently
-  `interfaces.notify` opens extra UDP/TCP sockets for primary-originated NOTIFY
-  traffic; ordinary DNS queries received on those sockets are still answered
-  normally. Notify addresses must not overlap `[server].listen_udp` or
-  `[server].listen_tcp`.
+- `[interfaces]`: optional additional listener roles. Current implementation
+  supports `interfaces.notify` for extra UDP/TCP sockets carrying
+  primary-originated NOTIFY traffic; ordinary DNS queries received on those
+  sockets are still answered normally. Notify addresses must not overlap
+  `[server].listen_udp` or `[server].listen_tcp`. Full SRS v0.7
+  `interfaces.dns`, `interfaces.mgmt`, and `interfaces.transfer` support is the
+  next interface-alignment implementation slice.
 - `[query]`: query response policy, including QTYPE ANY behavior.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
   timestamp tolerance windows, and optional in-process server-secret rotation.
@@ -417,6 +419,10 @@ Set `OXIDEDNS_PERF_BASELINE` to a whitespace-delimited history file with rows sh
 as `release metric value` to compare retained `perf-smoke-metrics.env` values
 against the rolling baseline. `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the
 default 10 percent regression threshold.
+
+For the MVP gate, release notes must also include the external operator
+acceptance signature, accepting operator identity, and accepted scope statement
+required by `ODS-VER-008` and `ODS-VER-015`.
 
 Primary AXFR coverage:
 
