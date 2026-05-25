@@ -41,7 +41,7 @@ fn serve_ignores_sighup() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn serve_installs_required_ignore_dispositions() {
+fn serve_installs_only_required_signal_dispositions_and_handlers() {
     let config_path = write_test_config();
     let mut child = spawn_server(&config_path);
 
@@ -51,6 +51,15 @@ fn serve_installs_required_ignore_dispositions() {
     let ignored = sig_ign_mask(&status);
     assert_signal_ignored(ignored, 1, "SIGHUP");
     assert_signal_ignored(ignored, 13, "SIGPIPE");
+
+    let caught = sig_cgt_mask(&status);
+    assert_signal_caught(caught, 2, "SIGINT");
+    assert_signal_caught(caught, 15, "SIGTERM");
+    assert_signal_not_caught(caught, 1, "SIGHUP");
+    assert_signal_not_caught(caught, 3, "SIGQUIT");
+    assert_signal_not_caught(caught, 10, "SIGUSR1");
+    assert_signal_not_caught(caught, 12, "SIGUSR2");
+    assert_signal_not_caught(caught, 13, "SIGPIPE");
 
     send_signal("-TERM", child.id());
     let status = wait_for_exit(
@@ -130,12 +139,22 @@ fn write_test_config() -> std::path::PathBuf {
 
 #[cfg(target_os = "linux")]
 fn sig_ign_mask(status: &str) -> u128 {
+    signal_mask(status, "SigIgn:")
+}
+
+#[cfg(target_os = "linux")]
+fn sig_cgt_mask(status: &str) -> u128 {
+    signal_mask(status, "SigCgt:")
+}
+
+#[cfg(target_os = "linux")]
+fn signal_mask(status: &str, prefix: &str) -> u128 {
     let value = status
         .lines()
-        .find_map(|line| line.strip_prefix("SigIgn:"))
-        .expect("SigIgn status line")
+        .find_map(|line| line.strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("{prefix} status line"))
         .trim();
-    u128::from_str_radix(value, 16).expect("parse SigIgn mask")
+    u128::from_str_radix(value, 16).unwrap_or_else(|_| panic!("parse {prefix} mask"))
 }
 
 #[cfg(target_os = "linux")]
@@ -144,6 +163,24 @@ fn assert_signal_ignored(mask: u128, signal_number: u32, name: &str) {
     assert!(
         mask & bit != 0,
         "{name} should be ignored in SigIgn mask {mask:#x}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_signal_caught(mask: u128, signal_number: u32, name: &str) {
+    let bit = 1_u128 << (signal_number - 1);
+    assert!(
+        mask & bit != 0,
+        "{name} should be caught in SigCgt mask {mask:#x}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_signal_not_caught(mask: u128, signal_number: u32, name: &str) {
+    let bit = 1_u128 << (signal_number - 1);
+    assert!(
+        mask & bit == 0,
+        "{name} should not be caught in SigCgt mask {mask:#x}"
     );
 }
 
