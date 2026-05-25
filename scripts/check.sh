@@ -27,6 +27,7 @@ bash -n scripts/interop-knot-tsig-axfr-docker.sh
 bash -n scripts/interop-bind-ixfr-refresh.sh
 bash -n scripts/interop-knot-ixfr-refresh-docker.sh
 bash -n scripts/interop-unknown-rr.sh
+bash -n scripts/interop-unknown-rr-bad-transfer.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-dns-cookie-dig.sh
