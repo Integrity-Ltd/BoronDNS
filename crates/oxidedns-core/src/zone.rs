@@ -11,6 +11,10 @@ use crate::dns::{
     RecordType,
 };
 
+// ODS-NFR-MAINT-004 principal functional requirement references for the
+// in-memory authoritative zone store:
+// - ODS-FR-ZONE-001 ODS-FR-ZONE-002 ODS-FR-ZONE-003
+// - ODS-FR-ZONE-004 ODS-FR-ZONE-005 ODS-FR-ZONE-006
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneState {
     Loading,

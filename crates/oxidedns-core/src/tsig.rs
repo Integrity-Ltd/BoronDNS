@@ -10,6 +10,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::dns::DomainName;
 
+// ODS-NFR-MAINT-004 principal functional requirement references for TSIG
+// key, MAC, TCP stream, and error-response handling:
+// - ODS-FR-TSIG-001 ODS-FR-TSIG-002 ODS-FR-TSIG-003
+// - ODS-FR-TSIG-004 ODS-FR-TSIG-005 ODS-FR-TSIG-006
+// - ODS-FR-TSIG-007 ODS-FR-TSIG-008 ODS-FR-TSIG-009
+// - ODS-FR-TSIG-010 ODS-FR-TSIG-011 ODS-FR-TSIG-012
+// - ODS-FR-TSIG-013 ODS-FR-TSIG-014 ODS-FR-TSIG-015
+// - ODS-FR-TSIG-016 ODS-FR-TSIG-017
 pub const DEFAULT_TSIG_FUDGE_SECS: u16 = 300;
 const DNS_HEADER_ARCOUNT_OFFSET: usize = 10;
 const DNS_HEADER_ID_OFFSET: usize = 0;

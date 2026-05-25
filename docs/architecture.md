@@ -5,7 +5,8 @@ Status: working MVP architecture document, not final MVP acceptance evidence.
 This document records architecture and governance decisions that the SRS expects
 to be retained before MVP acceptance. It currently covers module organisation
 for `ODS-NFR-MAINT-002`, the release-signing choice for
-`ODS-NFR-MAINT-008`, and verification responsibility allocation for
+`ODS-NFR-MAINT-008`, source-level functional requirement references for
+`ODS-NFR-MAINT-004`, and verification responsibility allocation for
 `ODS-VER-015`. Broader architecture content, completed reproducible-build
 proof, and signed release artifacts remain tracked as MVP gaps in
 `docs/mvp-gap-register.md`.
@@ -54,6 +55,7 @@ source-line target.
 | Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Interface compatibility posture | Externally observable configuration, CLI, exit-code, environment, signal, metric, log-field, health, and network-role surfaces are tracked in `docs/interface-stability-baseline.tsv` under the policy in `docs/interface-compatibility-policy.md`; `scripts/check-interface-compatibility.py` checks the current baseline and can compare a previous release baseline. | `ODS-NFR-MAINT-006`, `ODS-IF-CONF-002` |
 | Reproducible build posture | `cargo build --locked` with fixed `OXIDEDNS_BUILD_*` values is the baseline command; `scripts/capture-reproducible-build-handoff.sh` records the runbook and schemas, while bit-identical independent build evidence is still required before MVP acceptance. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
+| Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
 | Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
 | Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |

@@ -90,8 +90,9 @@ cat >"$snapshot_dir/README.md" <<EOF
 - Branch: $(git -C "$repo_root" branch --show-current)
 
 This directory contains command logs captured for release review, including
-safe-Rust, maintainability, interface-compatibility, canonical log-field, and
-lazy log-formatting audit output, plus retained unsafe dependency enumeration.
+safe-Rust, maintainability, source requirement-reference,
+interface-compatibility, canonical log-field, and lazy log-formatting audit
+output, plus retained unsafe dependency enumeration.
 It is an evidence collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
 production benchmark reports. The default `info-verbosity-handoff/`,
@@ -155,6 +156,7 @@ run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --mani
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
 run_and_capture unsafe-boundary-registry bash -lc "cd '$repo_root' && scripts/check-unsafe-boundaries.py"
 run_and_capture unsafe-prone-dependency-gate bash -lc "cd '$repo_root' && scripts/check-unsafe-prone-dependencies.py"
+run_and_capture functional-requirement-references bash -lc "cd '$repo_root' && scripts/check-functional-requirement-references.py"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' OXIDEDNS_READONLY_RUNTIME_CONTAINER=\"\${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"
 run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"
