@@ -1069,6 +1069,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_non_bind_errors_map_to_srs_exit_codes() {
+        let io = || std::io::Error::other("runtime I/O failed");
+
+        let udp = anyhow!(RuntimeError::Udp(io())).context("running runtime");
+        assert_eq!(exit_code_for_error(&udp), EX_GENERAL);
+
+        let tcp = anyhow!(RuntimeError::Tcp(io())).context("running runtime");
+        assert_eq!(exit_code_for_error(&tcp), EX_GENERAL);
+
+        let health = anyhow!(RuntimeError::Health(io())).context("running runtime");
+        assert_eq!(exit_code_for_error(&health), EX_GENERAL);
+
+        let dns_cookie_secret =
+            anyhow!(RuntimeError::DnsCookieSecret(getrandom::Error::UNSUPPORTED))
+                .context("starting runtime");
+        assert_eq!(exit_code_for_error(&dns_cookie_secret), EX_OSERR);
+
+        let file_descriptor_limit =
+            anyhow!(RuntimeError::FileDescriptorLimit(io())).context("starting runtime");
+        assert_eq!(exit_code_for_error(&file_descriptor_limit), EX_OSERR);
+    }
+
+    #[test]
     fn startup_runtime_validation_errors_map_to_srs_exit_codes() {
         let addr = "127.0.0.1:5300".parse().expect("socket address");
 
@@ -1104,6 +1127,84 @@ mod tests {
         })
         .context("starting runtime");
         assert_eq!(exit_code_for_error(&insufficient_rlimit), EX_OSERR);
+    }
+
+    #[test]
+    fn transfer_runtime_errors_map_to_srs_exit_codes() {
+        let addr = "127.0.0.1:5300".parse().expect("socket address");
+        let source_addr = "127.0.0.1:0".parse().expect("source socket address");
+        let io = || std::io::Error::other("transfer I/O failed");
+
+        let bind_udp =
+            anyhow!(TransferError::BindUdp { addr, source: io() }).context("running transfer");
+        assert_eq!(exit_code_for_error(&bind_udp), EX_CANTCREAT);
+
+        let bind_tcp = anyhow!(TransferError::BindTcp {
+            addr,
+            source_addr,
+            source: io(),
+        })
+        .context("running transfer");
+        assert_eq!(exit_code_for_error(&bind_tcp), EX_CANTCREAT);
+
+        let transfer_io =
+            anyhow!(TransferError::Io { addr, source: io() }).context("running transfer");
+        assert_eq!(exit_code_for_error(&transfer_io), EX_IOERR);
+
+        let read_tls = anyhow!(TransferError::ReadTlsFile {
+            path: "/missing/trust-anchor.pem".to_owned(),
+            source: io(),
+        })
+        .context("validating runtime configuration");
+        assert_eq!(exit_code_for_error(&read_tls), EX_IOERR);
+
+        let xot_config = anyhow!(TransferError::XotConfig {
+            addr,
+            message: "server_name is required".to_owned(),
+        })
+        .context("validating runtime configuration");
+        assert_eq!(exit_code_for_error(&xot_config), EX_CONFIG_INVALID);
+    }
+
+    #[test]
+    fn transfer_protocol_errors_default_to_general() {
+        let addr = "127.0.0.1:5300".parse().expect("socket address");
+        let protocol_errors = [
+            anyhow!(TransferError::ConnectTcp {
+                addr,
+                source: std::io::Error::other("connect failed"),
+            }),
+            anyhow!(TransferError::Timeout { timeout_secs: 30 }),
+            anyhow!(TransferError::Axfr(
+                oxidedns_core::axfr::AxfrError::EmptyResponse
+            )),
+            anyhow!(TransferError::Ixfr(
+                oxidedns_core::axfr::IxfrError::EmptyResponse
+            )),
+            anyhow!(TransferError::Soa(
+                oxidedns_core::axfr::SoaQueryError::MissingSoa
+            )),
+            anyhow!(TransferError::RandomQueryId(getrandom::Error::UNSUPPORTED)),
+            anyhow!(TransferError::Tsig(
+                oxidedns_core::tsig::TsigError::InvalidKeyName
+            )),
+            anyhow!(TransferError::TlsHandshake {
+                addr,
+                source: std::io::Error::other("TLS failed"),
+            }),
+            anyhow!(TransferError::IngestSizeLimit {
+                protocol: "AXFR",
+                addr,
+                received_bytes: 1024,
+                limit_bytes: 512,
+            }),
+            anyhow!(TransferError::XotAlpn { addr }),
+        ];
+
+        for error in protocol_errors {
+            let error = error.context("running transfer");
+            assert_eq!(exit_code_for_error(&error), EX_GENERAL);
+        }
     }
 
     #[test]
