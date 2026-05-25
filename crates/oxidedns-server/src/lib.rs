@@ -8709,6 +8709,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_soa_polls_use_distinct_ephemeral_source_ports() {
+        let (primary, peers_rx) = spawn_soa_primary_recording_two_peers(7).await;
+        let left_apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let right_apex = left_apex.clone();
+
+        let (left, right) = tokio::join!(
+            poll_soa_from_primary(
+                primary,
+                &left_apex,
+                1,
+                0x1234,
+                std::time::Duration::from_secs(5)
+            ),
+            poll_soa_from_primary(
+                primary,
+                &right_apex,
+                1,
+                0x5678,
+                std::time::Duration::from_secs(5)
+            )
+        );
+
+        assert_eq!(left.expect("left SOA poll"), 7);
+        assert_eq!(right.expect("right SOA poll"), 7);
+        let peers = tokio::time::timeout(std::time::Duration::from_secs(1), peers_rx)
+            .await
+            .expect("primary should observe both SOA poll peers")
+            .expect("SOA primary should send peer addresses");
+
+        assert_eq!(peers.len(), 2);
+        assert_eq!(peers[0].ip(), peers[1].ip());
+        assert_ne!(peers[0].port(), 0);
+        assert_ne!(peers[1].port(), 0);
+        assert_ne!(peers[0].port(), peers[1].port());
+    }
+
+    #[tokio::test]
     async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
         let primary = spawn_soa_primary_with_serial(7).await;
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
@@ -12472,6 +12509,34 @@ mod tests {
             socket.send_to(&response, peer).await.unwrap();
         });
         (addr, peer_rx)
+    }
+
+    async fn spawn_soa_primary_recording_two_peers(
+        serial: u32,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Receiver<Vec<std::net::SocketAddr>>,
+    ) {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        let (peers_tx, peers_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 512];
+            let mut peers = Vec::new();
+            for _ in 0..2 {
+                let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+                let query = &buffer[..len];
+                let header = Header::parse(query).unwrap();
+                assert_eq!(header.qdcount, 1);
+                assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+                peers.push(peer);
+                let response = soa_response(header.id, serial);
+                socket.send_to(&response, peer).await.unwrap();
+            }
+            let _ = peers_tx.send(peers);
+        });
+        (addr, peers_rx)
     }
 
     async fn spawn_soa_primary_with_spoofed_malformed_packet(serial: u32) -> std::net::SocketAddr {

@@ -30,6 +30,7 @@ CHECKS = [
             '"[::]:0"',
             "async fn soa_poll_binds_configured_transfer_source()",
             "async fn axfr_binds_configured_transfer_source()",
+            "async fn concurrent_soa_polls_use_distinct_ephemeral_source_ports()",
         ],
     ),
     (
