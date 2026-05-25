@@ -389,7 +389,7 @@ Interop harness foundations:
 - `scripts/rrl-evidence-campaign.sh` wraps the RRL UDP interop script for repeated retained runs, with dry-run and list-config modes for reviewable campaign setup.
 - `scripts/interop-dnssec-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC, and large TXT records, verifies OxideDNS serves DO-sensitive positive and NXDOMAIN DNSSEC augmentation, serves direct DNSKEY queries, clears AD/CD, handles DNSSEC UDP truncation/response-DO semantics, and proves non-EDNS UDP truncation stays within 512 octets without adding a response OPT.
 - `scripts/interop-dnssec-nsec3-serve.sh` starts a fake AXFR primary carrying DNSKEY, RRSIG, NSEC3, and NSEC3PARAM records, verifies direct NSEC3/NSEC3PARAM serving, and verifies DO-sensitive NXDOMAIN NSEC3 proof material with covering RRSIGs.
-- `scripts/interop-tcp-truncation-retry.sh` starts a fake AXFR primary with a large A RRset, verifies a non-EDNS UDP query receives TC=1 at the 512-octet ceiling, verifies the same query over TCP receives the complete untruncated answer, and can retain client, metrics, config, and log artifacts with `OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR`.
+- `scripts/interop-tcp-truncation-retry.sh` starts a fake AXFR primary with a large A RRset and a question-section-preserving AXFR response, verifies a non-EDNS UDP query receives TC=1 at the 512-octet ceiling, verifies the same query over TCP receives the complete untruncated answer, and can retain client, metrics, config, and log artifacts with `OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR`.
 
 Non-functional evidence foundations:
 
