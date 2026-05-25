@@ -16,6 +16,7 @@ bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
 bash -n scripts/capture-health-metrics-evidence.sh
 bash -n scripts/capture-malformed-query-evidence.sh
+bash -n scripts/capture-portability-evidence.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
