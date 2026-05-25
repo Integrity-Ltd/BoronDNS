@@ -110,6 +110,9 @@ pub enum RuntimeError {
     #[error("failed to generate DNS Cookie server secret: {0}")]
     DnsCookieSecret(getrandom::Error),
 
+    #[error("failed to randomize primary rotation: {0}")]
+    PrimaryRotationRandom(getrandom::Error),
+
     #[error(
         "file-descriptor rlimit is insufficient for configured connection limits: current {current}, required {required}"
     )]
@@ -239,7 +242,7 @@ impl Runtime {
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         validate_file_descriptor_limit(&self.config)?;
         tokio::pin!(shutdown_signal);
-        let transfer_plan = TransferPlan::from_config(&self.config);
+        let transfer_plan = TransferPlan::from_config(&self.config)?;
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
             Duration::from_secs(self.config.limits.zsm_max_interval_secs),
@@ -4438,7 +4441,14 @@ struct TransferPlan {
 }
 
 impl TransferPlan {
-    fn from_config(config: &ServerConfig) -> Self {
+    fn from_config(config: &ServerConfig) -> Result<Self, RuntimeError> {
+        Self::from_config_with_primary_start(config, random_primary_start_index)
+    }
+
+    fn from_config_with_primary_start(
+        config: &ServerConfig,
+        primary_start_index: impl Fn(usize) -> Result<usize, getrandom::Error>,
+    ) -> Result<Self, RuntimeError> {
         let tsig_keys = config
             .tsig_keys
             .iter()
@@ -4451,7 +4461,7 @@ impl TransferPlan {
         let zones_by_key = config
             .zones
             .iter()
-            .map(|zone| {
+            .map(|zone| -> Result<(String, ZoneTransferPlan), RuntimeError> {
                 let origin = DomainName::from_absolute_str(&zone.name)
                     .expect("configuration validation rejects invalid zone names");
                 let tsig_key = zone.tsig_key.as_ref().map(|name| {
@@ -4462,28 +4472,88 @@ impl TransferPlan {
                         .expect("configuration validation rejects unknown TSIG key references")
                         .clone()
                 });
-                (
+                let primaries = zone.transfer_targets();
+                let primary_start = primary_start_index(primaries.len())
+                    .map_err(RuntimeError::PrimaryRotationRandom)?;
+                let primaries = rotate_transfer_targets(primaries, primary_start);
+                Ok((
                     origin.canonical_key(),
                     ZoneTransferPlan {
                         origin,
                         qclass: 1,
-                        primaries: zone.transfer_targets(),
+                        primaries,
                         tsig_key,
                         tsig_fudge_seconds: config.tsig.fudge_seconds,
                         max_transfer_ingest_bytes: config.limits.max_transfer_ingest_bytes,
                     },
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<HashMap<_, _>, _>>()?;
 
-        Self {
+        Ok(Self {
             zones_by_key: Arc::new(zones_by_key),
-        }
+        })
     }
 
     fn get(&self, origin: &DomainName) -> Option<ZoneTransferPlan> {
         self.zones_by_key.get(&origin.canonical_key()).cloned()
     }
+}
+
+fn rotate_transfer_targets(
+    primaries: Vec<TransferPrimaryConfig>,
+    start_index: usize,
+) -> Vec<TransferPrimaryConfig> {
+    if primaries.len() <= 1 {
+        return primaries;
+    }
+
+    let start_index = start_index % primaries.len();
+    primaries
+        .iter()
+        .cycle()
+        .skip(start_index)
+        .take(primaries.len())
+        .cloned()
+        .collect()
+}
+
+fn random_primary_start_index(primary_count: usize) -> Result<usize, getrandom::Error> {
+    if primary_count <= 1 {
+        return Ok(0);
+    }
+
+    loop {
+        let sample = random_u64()?;
+        if let Some(index) = uniform_index_from_u64(sample, primary_count) {
+            return Ok(index);
+        }
+    }
+}
+
+fn random_u64() -> Result<u64, getrandom::Error> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes)?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn uniform_index_from_u64(sample: u64, primary_count: usize) -> Option<usize> {
+    if primary_count == 0 {
+        return None;
+    }
+    if primary_count == 1 {
+        return Some(0);
+    }
+
+    let primary_count = primary_count as u128;
+    let sample = u128::from(sample);
+    let sample_space = u128::from(u64::MAX) + 1;
+    let accepted_samples = (sample_space / primary_count) * primary_count;
+    if sample >= accepted_samples {
+        return None;
+    }
+
+    Some((sample % primary_count) as usize)
 }
 
 #[derive(Debug)]
@@ -6170,10 +6240,11 @@ mod tests {
         prepare_notify_packet_with_metrics, query_id_from_random_bytes,
         record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
         required_file_descriptor_limit, response_category, response_opt_record,
-        response_question_end, response_rcode, rrl_truncated_response, runtime_config_warnings_at,
-        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, validate_file_descriptor_limit_value,
+        response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
+        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
+        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
+        transfer_query_id, uniform_index_from_u64, validate_file_descriptor_limit_value,
         validate_runtime_config, write_tcp_message,
     };
 
@@ -6266,6 +6337,7 @@ mod tests {
         assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
 
         let plan = TransferPlan::from_config(&config)
+            .expect("transfer plan")
             .get(&zone)
             .expect("transfer plan");
         assert_eq!(plan.primaries.len(), 1);
@@ -6274,6 +6346,78 @@ mod tests {
             plan.primaries[0].server_name.as_deref(),
             Some("primary.example.test")
         );
+    }
+
+    #[test]
+    fn transfer_plan_rotates_multi_primary_start_once_per_process() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = [
+                    "192.0.2.53:53",
+                    "192.0.2.54:53",
+                    "192.0.2.55:53",
+                ]
+            "#,
+        )
+        .expect("valid config");
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        let plan = TransferPlan::from_config_with_primary_start(&config, |_| Ok(1))
+            .expect("transfer plan")
+            .get(&zone)
+            .expect("zone transfer plan");
+
+        assert_eq!(
+            plan.primaries
+                .iter()
+                .map(|primary| primary.addr)
+                .collect::<Vec<_>>(),
+            vec![
+                "192.0.2.54:53".parse().unwrap(),
+                "192.0.2.55:53".parse().unwrap(),
+                "192.0.2.53:53".parse().unwrap(),
+            ]
+        );
+
+        let retained = plan.clone();
+        assert_eq!(plan.primaries, retained.primaries);
+    }
+
+    #[test]
+    fn transfer_target_rotation_wraps_without_reordering_members() {
+        let primaries = vec![
+            TransferPrimaryConfig::tcp("192.0.2.53:53".parse().unwrap()),
+            TransferPrimaryConfig::tcp("192.0.2.54:53".parse().unwrap()),
+            TransferPrimaryConfig::tcp("192.0.2.55:53".parse().unwrap()),
+        ];
+
+        let rotated = rotate_transfer_targets(primaries, 5);
+
+        assert_eq!(
+            rotated
+                .iter()
+                .map(|primary| primary.addr)
+                .collect::<Vec<_>>(),
+            vec![
+                "192.0.2.55:53".parse().unwrap(),
+                "192.0.2.53:53".parse().unwrap(),
+                "192.0.2.54:53".parse().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn primary_start_index_uses_rejection_sampling_boundary() {
+        assert_eq!(uniform_index_from_u64(0, 3), Some(0));
+        assert_eq!(uniform_index_from_u64(1, 3), Some(1));
+        assert_eq!(uniform_index_from_u64(2, 3), Some(2));
+        assert_eq!(uniform_index_from_u64(u64::MAX - 1, 3), Some(2));
+        assert_eq!(uniform_index_from_u64(u64::MAX, 3), None);
     }
 
     #[test]
@@ -8789,7 +8933,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let zones = ZoneStore::new();
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         zones.insert_snapshot(ZoneSnapshot::active(
@@ -8881,7 +9025,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let zones = ZoneStore::new();
         for zone in ["alpha.test.", "beta.test."] {
             let apex = DomainName::from_absolute_str(zone).unwrap();
@@ -8954,7 +9098,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let plan = transfer_plan
             .get(&DomainName::from_absolute_str("example.test.").unwrap())
             .expect("zone transfer plan");
@@ -9028,7 +9172,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         assert!(plan.tsig_key.is_some());
@@ -9090,7 +9234,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         assert!(plan.tsig_key.is_some());
@@ -9208,7 +9352,7 @@ mod tests {
             trust_anchor.display()
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9265,7 +9409,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9318,7 +9462,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9388,7 +9532,7 @@ mod tests {
             untrusted_anchor.display()
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9444,7 +9588,7 @@ mod tests {
             cert_path.display()
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9503,7 +9647,7 @@ mod tests {
             client_key.display()
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9557,7 +9701,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9788,7 +9932,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         let zones = ZoneStore::new();
@@ -9843,7 +9987,7 @@ mod tests {
             "#
         ))
         .expect("valid config");
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let plan = transfer_plan
             .get(&DomainName::from_absolute_str("example.test.").unwrap())
             .expect("zone transfer plan");
@@ -9986,7 +10130,7 @@ mod tests {
         ))
         .expect("valid config");
 
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let runtime = Runtime::new(config);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::ZERO,
@@ -10053,7 +10197,7 @@ mod tests {
         ))
         .expect("valid config");
 
-        let transfer_plan = TransferPlan::from_config(&config);
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
         let runtime = Runtime::new(config);
         let zones = runtime.zones.clone();
         let refresh_registry = ZoneRefreshRegistry::without_jitter(

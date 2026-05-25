@@ -181,7 +181,10 @@ reference. The major sections are:
   fudge value.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
   limits.
-- `[[zones]]`: served secondary zones and their primary transfer sources.
+- `[[zones]]`: served secondary zones and their primary transfer sources. When
+  multiple primaries are listed, OxideDNS chooses one random initial primary for
+  the zone at process startup and then uses the resulting stable rotation for
+  later transfer attempts.
 - `[[tsig_keys]]`: static TSIG keys referenced by zones.
 
 Set `[server].nsid` to a short opaque identifier when operators need RFC 5001

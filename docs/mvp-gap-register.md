@@ -22,7 +22,7 @@ compliance.
 
 | Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
-| AXFR | Unit parser coverage; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
+| AXFR | Unit parser coverage; randomized multi-primary stable-rotation unit evidence; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
 | IXFR | Unit parser/fault coverage; BIND and Knot true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
 | TCP Query Transport | Unit/runtime coverage for DNS-over-TCP framing, idle/read/write timeouts, global connection limits, back-to-back framed queries, and configurable per-connection in-flight query caps | Retained release artifacts for pipelining under delayed first responses, at-limit close timing/log capture, truncation retry behavior, and graceful drain |
 | NOTIFY | Unit/runtime coverage for authority, TSIG rejection, refresh signalling/deduplication, metrics, notify-interface handling, and rate-limited unauthorized/TSIG-failure warning logs; BIND, NSD, and Knot NOTIFY refresh interop | Release traceability and broader retained negative interop evidence |

@@ -375,6 +375,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 RuntimeError::InvalidRuntimeConfig(_) => EX_CONFIG_INVALID,
                 RuntimeError::ShutdownSignal(_)
                 | RuntimeError::DnsCookieSecret(_)
+                | RuntimeError::PrimaryRotationRandom(_)
                 | RuntimeError::InsufficientFileDescriptorLimit { .. }
                 | RuntimeError::FileDescriptorLimit(_) => EX_OSERR,
                 RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
@@ -768,6 +769,12 @@ mod tests {
         )))
         .context("starting runtime");
         assert_eq!(exit_code_for_error(&startup_os), EX_OSERR);
+
+        let entropy_failure = anyhow!(RuntimeError::PrimaryRotationRandom(
+            getrandom::Error::UNSUPPORTED,
+        ))
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&entropy_failure), EX_OSERR);
 
         let insufficient_rlimit = anyhow!(RuntimeError::InsufficientFileDescriptorLimit {
             current: 128,

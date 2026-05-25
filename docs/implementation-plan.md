@@ -176,7 +176,7 @@ Slice 5 is in progress:
 - transferred RRsets with non-uniform member TTLs are published with the lowest TTL and emit a warning log recording the inconsistency;
 - unknown RR types, including private-use types and zero-length RDATA, are preserved bit-for-bit through AXFR ingestion and emitted unchanged in query responses, without interpreting pointer-looking octets inside opaque RDATA;
 - successful AXFR responses are converted into active zone snapshots with the SOA serial and REFRESH, RETRY, EXPIRE, and MINIMUM fields captured from the initial SOA record;
-- the runtime performs AXFR over TCP from configured primaries in order and publishes the first successful snapshot atomically;
+- the runtime performs AXFR over TCP from configured primaries using a per-process randomized initial primary for each zone, then preserves a stable rotation across later attempts and publishes the first successful snapshot atomically;
 - initial LOADING-zone transfers run in the background after runtime services are bound, so health can report `starting` while first transfers are still in progress;
 - initial LOADING-zone transfers are bounded by `[limits].max_concurrent_transfers`, defaulting to 4;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
