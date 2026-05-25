@@ -7,8 +7,7 @@ to be retained before MVP acceptance. It currently covers module organisation
 for `ODS-NFR-MAINT-002`, the release-signing choice for
 `ODS-NFR-MAINT-008`, and verification responsibility allocation for
 `ODS-VER-015`. Broader architecture content, reproducible-build proof,
-coverage evidence, and signed release artifacts remain tracked as MVP gaps in
-`docs/mvp-gap-register.md`.
+signed release artifacts remain tracked as MVP gaps in `docs/mvp-gap-register.md`.
 
 ## Module Organisation
 

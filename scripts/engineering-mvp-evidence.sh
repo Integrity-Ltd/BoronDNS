@@ -65,6 +65,7 @@ scripts/capture-health-metrics-evidence.sh
 scripts/capture-malformed-query-evidence.sh
 scripts/capture-portability-evidence.sh
 scripts/capture-resource-evidence.sh
+scripts/capture-coverage-evidence.sh
 scripts/perf-smoke.sh
 scripts/interop-negative-responses.sh
 scripts/interop-notify-negative.sh
@@ -90,6 +91,7 @@ run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && OXIDEDNS_HE
 run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
+run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' OXIDEDNS_READONLY_RUNTIME_CONTAINER=\"\${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"

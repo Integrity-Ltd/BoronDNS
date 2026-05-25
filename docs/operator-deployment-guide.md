@@ -456,8 +456,8 @@ evidence, not passing interop evidence.
 `scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
 under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
 fuzz compile, invariant audit, portability inventory/probes, unused/dead-code
-audit, resource smoke evidence, performance smoke, and BIND AXFR, TSIG AXFR,
-and NOTIFY refresh interop logs.
+audit, resource smoke evidence, coverage evidence, performance smoke, and BIND
+AXFR, TSIG AXFR, and NOTIFY refresh interop logs.
 
 `scripts/release-evidence-snapshot.sh` writes command logs under
 `target/evidence/<timestamp>/`. By default it captures the repo check, fuzz
@@ -465,7 +465,8 @@ compile check, cargo-deny output, tool versions, git state, and the current
 verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. It also retains unused/dead-code audit
 artifacts under `unused-code-audit/` and resource smoke artifacts under
-`resource-evidence/`. Set
+`resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
+`coverage-evidence/`. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
 campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the

@@ -19,6 +19,7 @@ bash -n scripts/capture-health-metrics-evidence.sh
 bash -n scripts/capture-malformed-query-evidence.sh
 bash -n scripts/capture-portability-evidence.sh
 bash -n scripts/capture-resource-evidence.sh
+bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
@@ -43,6 +44,7 @@ scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
+scripts/capture-coverage-evidence.sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

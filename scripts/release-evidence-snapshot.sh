@@ -9,6 +9,13 @@ snapshot_dir="$evidence_root/$timestamp"
 mkdir -p "$snapshot_dir/logs" "$snapshot_dir/interop-primary-versions"
 printf 'source_path\tsnapshot_path\n' >"$snapshot_dir/interop-primary-versions/INDEX.tsv"
 
+for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin" /cache/cargo/bin; do
+  if [[ -d "$candidate" ]]; then
+    PATH="$candidate:$PATH"
+  fi
+done
+export PATH
+
 run_and_capture() {
   local name="$1"
   shift
@@ -103,6 +110,7 @@ record_version cargo-deny cargo deny --version
 record_version cargo-fuzz cargo fuzz --version
 record_version cargo-bloat cargo bloat --version
 record_version cargo-machete cargo machete --version
+record_version cargo-llvm-cov cargo llvm-cov --version
 record_version docker docker --version
 record_version dig dig -v
 record_version curl curl --version
@@ -123,6 +131,7 @@ run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && OXIDEDNS_HE
 run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
+run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
