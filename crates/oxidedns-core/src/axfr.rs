@@ -804,6 +804,9 @@ fn is_prohibited_transfer_content_type(rr_type: u16) -> bool {
         || rr_type == RecordType::Tsig as u16
         || rr_type == RecordType::Ixfr as u16
         || rr_type == RecordType::Axfr as u16
+        || rr_type == 253
+        || rr_type == 254
+        || rr_type == 255
 }
 
 fn validate_known_rdata(record: &ResourceRecord) -> Result<(), AxfrError> {
@@ -2469,6 +2472,9 @@ mod tests {
             RecordType::Tsig as u16,
             RecordType::Ixfr as u16,
             RecordType::Axfr as u16,
+            253,
+            254,
+            255,
         ] {
             let apex = DomainName::from_absolute_str("example.test.").unwrap();
             let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -3136,6 +3142,9 @@ mod tests {
             RecordType::Tsig as u16,
             RecordType::Ixfr as u16,
             RecordType::Axfr as u16,
+            253,
+            254,
+            255,
         ] {
             let apex = DomainName::from_absolute_str("example.test.").unwrap();
             let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
