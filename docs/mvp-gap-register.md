@@ -16,6 +16,8 @@ Terminology:
 - **Pending C.5 decisions** in SRS v0.7 remain open even when implementation
   follows the current SRS body defaults. Release notes and acceptance review
   must distinguish implemented defaults from confirmed project decisions.
+  Rows may record implemented defaults before C.5 confirmation; such evidence
+  is not final project-decision approval.
 
 Rows below deliberately separate current evidence from remaining acceptance
 gaps. A row with substantial implementation evidence is not a claim of full SRS
@@ -35,7 +37,7 @@ compliance.
 | RRL | Unit-level token bucket, first rate-limit warning, periodic aggregate summary logging, TSIG-authenticated query exemption, and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
 | EDNS v0.7 Additions | EDNS parsing, OPT response foundations, payload-limit tests, non-EDNS 512-octet truncation/no-OPT unit evidence, configured NSID response tests for `ODS-FR-EDNS-016..017`, and fake-primary runtime evidence in `scripts/interop-dnssec-serve.sh` for non-EDNS truncation plus NSID empty/non-empty request handling exist | Retain per-requirement release artifacts before Alpha signoff |
 | Zone State Machine | Startup LOADING state, AXFR initial load, refresh/retry/expire scheduling, SOA REFRESH/RETRY min/max interval enforcement, jitter, initial-load exponential backoff, IXFR cooldown, NOTIFY refresh deduplication, concurrent transfer limits, per-zone LOADING-duration metrics, repeated long-LOADING structured warning tests, and retained `scripts/capture-log-evidence.sh` JSON/logfmt running-service long-LOADING warning artifacts | Retained release artifacts for broader timing behavior under a running service |
-| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy and in-process secret rotation interval, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, metrics exposition, and retained `scripts/interop-dns-cookie-dig.sh` BIND `dig +cookie` runtime artifacts for client-cookie-only and valid-server-cookie exchanges | Add broader BIND/Knot deployment interop evidence and per-requirement COOKIE traceability |
+| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy and in-process secret rotation interval, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, metrics exposition, and retained `scripts/interop-dns-cookie-dig.sh` BIND `dig` runtime artifacts for no-cookie, client-cookie-only, valid-server-cookie, and invalid-server-cookie lenient exchanges | Add broader BIND/Knot deployment interop evidence and per-requirement COOKIE traceability |
 
 ## Non-Functional Evidence
 
@@ -55,15 +57,11 @@ compliance.
 
 ## Pending SRS C.5 Decision Overlay
 
-These SRS v0.7 Appendix C.5 decisions are treated as active release-review
-risks, even where current code follows the body default: health default port,
-metrics rate-limit default, maximum log-entry length, configuration-warning
-catalogue contents, EX_CONFIG_INVALID/EX_CONFIG choices, external-operator MVP
-acceptance, strict ANY default, transfer/session/concurrency defaults, retry and
-LOADING-warning timers, SIGTERM grace, clock-skew tolerances, coverage targets,
-release-signing mechanism, histogram buckets, DNS Cookie default policy, NSID
-default, JSON-vs-logfmt default, TOML format, multi-primary randomized initial
-selection, and RRL slip default.
+SRS v0.7 Appendix C.5 is the canonical pending-decision list. All C.5 entries
+are treated as active release-review risks, even where current code follows the
+body default or where a row above records current implementation evidence. This
+section is intentionally non-exhaustive; update release notes from the SRS C.5
+table, not from this summary.
 
 ## Current Verification Commands
 

@@ -32,8 +32,10 @@ cleanup() {
     [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -100 "$workdir/fake-primary.log" >&2; }
     [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
     [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
+    [[ -f "$workdir/no-cookie-dig.out" ]] && { echo "---- no-cookie-dig.out ----" >&2; cat "$workdir/no-cookie-dig.out" >&2; }
     [[ -f "$workdir/first-dig.out" ]] && { echo "---- first-dig.out ----" >&2; cat "$workdir/first-dig.out" >&2; }
     [[ -f "$workdir/second-dig.out" ]] && { echo "---- second-dig.out ----" >&2; cat "$workdir/second-dig.out" >&2; }
+    [[ -f "$workdir/invalid-cookie-dig.out" ]] && { echo "---- invalid-cookie-dig.out ----" >&2; cat "$workdir/invalid-cookie-dig.out" >&2; }
   fi
   rm -rf "$workdir"
 }
@@ -231,6 +233,20 @@ if [[ "$ready" != *'"status":"ready"'* ]]; then
   exit 1
 fi
 
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
+  +norecurse +nocookie +noall +comments +answer +time=1 +tries=1 \
+  >"$workdir/no-cookie-dig.out"
+
+if ! grep -q "www.alpha.test." "$workdir/no-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/no-cookie-dig.out"; then
+  echo "dig +nocookie did not receive expected answer from OxideDNS" >&2
+  exit 1
+fi
+
+if grep -q "COOKIE:" "$workdir/no-cookie-dig.out"; then
+  echo "OxideDNS included a COOKIE option in a no-cookie response" >&2
+  exit 1
+fi
+
 client_cookie="0102030405060708"
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
   +norecurse "+cookie=$client_cookie" +noall +comments +answer +time=1 +tries=1 \
@@ -256,12 +272,32 @@ if ! grep -q "www.alpha.test." "$workdir/second-dig.out" || ! grep -q "192.0.2.1
   exit 1
 fi
 
+invalid_response_cookie="${client_cookie}0000000000000000"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
+  +norecurse "+cookie=$invalid_response_cookie" +noall +comments +answer +time=1 +tries=1 \
+  >"$workdir/invalid-cookie-dig.out"
+
+if ! grep -q "www.alpha.test." "$workdir/invalid-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/invalid-cookie-dig.out"; then
+  echo "dig invalid-server-cookie query did not receive expected lenient answer from OxideDNS" >&2
+  exit 1
+fi
+
+invalid_retry_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/invalid-cookie-dig.out")"
+if [[ ! "$invalid_retry_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
+  echo "OxideDNS invalid-server-cookie response did not contain a refreshed RFC9018 server cookie" >&2
+  exit 1
+fi
+
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
+  'oxidedns_dns_cookie_queries_total{case="no_cookie"} 1' \
   'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
   'oxidedns_dns_cookie_queries_total{case="valid_server"} 1' \
+  'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
+  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="no_cookie"} 1' \
   'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="client_only"} 1' \
-  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="valid_server"} 1'
+  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="valid_server"} 1' \
+  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="invalid_server"} 1'
 do
   if [[ "$metrics" != *"$expected"* ]]; then
     printf 'missing expected metric: %s\n' "$expected" >&2
@@ -277,8 +313,10 @@ fi
 cat >"$summary_env" <<EOF
 client_cookie=$client_cookie
 response_cookie_bytes=$((${#response_cookie} / 2))
+no_cookie_response=1
 client_only_cookie_response=1
 valid_server_cookie_response=1
+invalid_server_cookie_lenient_response=1
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
@@ -287,10 +325,12 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
   cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/no-cookie-dig.out" "$artifact_dir/no-cookie-dig.out"
   cp "$workdir/first-dig.out" "$artifact_dir/first-dig.out"
   cp "$workdir/second-dig.out" "$artifact_dir/second-dig.out"
+  cp "$workdir/invalid-cookie-dig.out" "$artifact_dir/invalid-cookie-dig.out"
   cp "$summary_env" "$artifact_dir/dns-cookie-summary.env"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
-printf 'DNS Cookie dig interop passed response_cookie_bytes=%s\n' "$((${#response_cookie} / 2))"
+printf 'DNS Cookie dig interop passed response_cookie_bytes=%s cases=no_cookie,client_only,valid_server,invalid_server\n' "$((${#response_cookie} / 2))"

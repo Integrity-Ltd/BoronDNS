@@ -44,8 +44,8 @@ plus already-started MVP protocol work:
 
 The Engineering MVP may include more than the Alpha subset where implementation
 has already moved ahead, such as IXFR, XoT, DNSSEC serving of transferred data,
-and RRL. Those features still need SRS acceptance evidence before they are
-claimed complete.
+RRL, and DNS Cookies. Those features still need SRS acceptance evidence before
+they are claimed complete.
 
 ## SRS Acceptance Target
 
@@ -80,12 +80,12 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary,
   with the tested primary version recorded per `ODS-VER-013`.
 
-Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG,
-XoT, DNSSEC serving, RRL, full DNS Cookies, expanded RR catalogue, `/livez` and
-`/readyz` split conformance, health response-time and metrics rate-limit
-requirements, performance NFR conformance, full security/maintainability
-verification, reliability/resource/observability extensions, and second and
-third primary interop.
+Deferred from Alpha to the SRS MVP acceptance gate (`ODS-VER-008`) per SRS
+ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, full DNS Cookies,
+expanded RR catalogue, `/livez` and `/readyz` split conformance, health
+response-time and metrics rate-limit requirements, performance NFR conformance,
+full security/maintainability verification, reliability/resource/observability
+extensions, and second and third primary interop.
 
 `--example-config` is implemented and retained in release CLI evidence, but SRS
 v0.7 makes ODS-IF-PROC-004 a MAY-level command. It is therefore useful for the
@@ -93,16 +93,12 @@ Engineering MVP workflow without being an Alpha or MVP acceptance blocker.
 
 ## Pending C.5 Decision Overlay
 
-Appendix C.5 of SRS v0.7 still marks several defaults and policy choices as
-pending confirmation. Implementation may follow the current SRS body defaults so
-the server is testable, but release notes and acceptance review must not treat
-those values as final project decisions until C.5 is resolved. The active overlay
-includes health default port and metrics rate-limit defaults, log entry length,
-configuration-warning catalogue contents, sysexits choices, external operator
-acceptance, strict ANY default, transfer/session/concurrency defaults, SIGTERM
-grace, clock-skew tolerances, histogram buckets, DNS Cookie default policy, NSID
-default behavior, JSON-vs-logfmt default, TOML format, and multi-primary
-randomized initial selection.
+Appendix C.5 of SRS v0.7 still marks defaults, protocol choices, and policy
+choices as pending confirmation. Implementation may follow the current SRS body
+defaults so the server is testable, but release notes and acceptance review must
+not treat those values as final project decisions until C.5 is resolved. The
+items named here are a non-exhaustive release-review overlay; the canonical
+pending-decision list is SRS Appendix C.5.
 
 ## Implementation Slices
 
@@ -393,7 +389,7 @@ Interop harness foundations:
 - `scripts/interop-negative-responses.sh` starts a fake AXFR primary with a representative unsigned zone, verifies retained runtime evidence for NXDOMAIN, NODATA, empty non-terminal, CNAME negative terminal, DNAME out-of-zone terminal, out-of-zone REFUSED, SOA negative TTL, and zone/global RCODE metrics, and can retain client, config, metrics, and log artifacts with `OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR`.
 - `scripts/interop-notify-negative.sh` starts a fake AXFR primary and OxideDNS with a separate NOTIFY interface, verifies malformed NOTIFY FORMERR, unknown-zone REFUSED, accepted refresh signalling/deduplication, unauthorized-source discard, required-TSIG BADKEY, NOTIFY metrics, and warning log events, and can retain client, config, metrics, and log artifacts with `OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR`.
 - `scripts/interop-tcp-truncation-retry.sh` starts a fake AXFR primary with a large A RRset and a question-section-preserving AXFR response, verifies a non-EDNS UDP query receives TC=1 at the 512-octet ceiling, verifies the same query over TCP receives the complete untruncated answer, verifies two back-to-back framed TCP queries on one connection both complete with matching IDs while retaining observed response order, verifies an over-limit TCP connection is closed with log evidence, verifies SIGTERM puts `/readyz` into draining while an accepted TCP query completes, and can retain client, pipeline, metrics, config, timing summaries, readiness, and log artifacts with `OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR`.
-- `scripts/interop-dns-cookie-dig.sh` starts a fake AXFR primary, verifies BIND `dig +cookie` client-cookie-only and valid-server-cookie exchanges against the running UDP server, checks cookie metrics and startup fingerprint logging, and can retain dig output, metrics, config, and log artifacts with `OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR`.
+- `scripts/interop-dns-cookie-dig.sh` starts a fake AXFR primary, verifies BIND `dig` no-cookie, client-cookie-only, valid-server-cookie, and invalid-server-cookie lenient exchanges against the running UDP server, checks cookie metrics and startup fingerprint logging, and can retain dig output, metrics, config, and log artifacts with `OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR`.
 
 Non-functional evidence foundations:
 
