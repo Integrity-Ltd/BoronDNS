@@ -24,6 +24,9 @@ Supported Engineering MVP deployment forms:
   harness.
 - OCI-compatible container managed by Docker, Podman, containerd, Kubernetes,
   or equivalent runtimes.
+- VM image deployments that run the same native process under an image-managed
+  Linux guest. The repository does not yet ship a VM image artifact; MVP
+  acceptance still needs release evidence for any published VM image profile.
 
 Operational network requirements:
 
@@ -35,6 +38,9 @@ Operational network requirements:
 - Outbound TCP access to the configured XoT port when XoT transfer transport is
   used, typically TCP/853.
 - IPv4 and IPv6 are both supported; a deployment does not need to provide both.
+- Firewalls on DNS listener addresses must allow ICMPv4 Fragmentation Needed
+  and ICMPv6 Packet Too Big messages so Path MTU Discovery continues to work
+  for large EDNS UDP responses.
 
 Operational state boundaries:
 
@@ -157,7 +163,9 @@ fields. The `/metrics` endpoint exposes the startup warning count as
 ## Configuration
 
 The example configuration in `config/oxidedns.example.toml` is the current schema
-reference. The major sections are:
+reference. Worked scenarios in this guide and the example configuration cover
+single-zone single-primary, multi-zone multi-primary, TSIG-protected,
+XoT-protected, and DNSSEC-served deployments. The major sections are:
 
 - `[server]`: legacy UDP/TCP DNS listeners, legacy optional health endpoint,
   log level, and log format. New deployments should prefer `[interfaces]` for
@@ -390,6 +398,39 @@ Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at l
 - Unexpected NOTIFY authorization or TSIG verification failures.
 - RRL drops or slips that exceed the operator's normal traffic baseline.
 
+Grafana dashboard skeletons should graph readiness state, active/configured
+zone counts, LOADING duration, zone SOA serials, transfer failures, query and
+RCODE rates, truncation rates, NOTIFY and TSIG failure rates, DNS Cookie
+BADCOOKIE rates, RRL drop/slip rates, and query-latency histogram percentiles.
+Prometheus alert rules should pair those graphs with the alert conditions
+above. Store site-specific thresholds with the deployment configuration so
+external operator acceptance can review them.
+
+## Service Level Objectives
+
+This section is the informative SLO publication required by the current
+Appendix C.5 decision list for `ODS-NFR-MAINT-009`. It is an operator starting
+point, not a full SRS acceptance claim. Release acceptance still depends on the
+retained performance, reliability, soak, and external-operator evidence listed
+in the gap register.
+
+Suggested Engineering MVP SLOs:
+
+| Objective | Suggested target | Evidence source |
+| --- | --- | --- |
+| Authoritative service readiness | `/readyz` is HTTP 200 for at least 99.9% of one-minute probes outside declared maintenance when at least one zone is expected ACTIVE | `GET /readyz`, zone-state metrics, maintenance record |
+| Initial and refresh transfer health | Every configured zone reaches ACTIVE inside the operator's expected transfer window; long-LOADING behavior beyond `[limits].zsm_loading_warning_threshold_secs` is actionable | `/readyz`, `oxidedns_secondary_zone_loading_seconds`, `zone_loading_threshold_exceeded` logs |
+| Direct-hit latency | On the Reference Hardware Profile, keep p99 direct-hit UDP query processing below 1 ms at up to 50% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-002` | release benchmark artifacts; smoke metrics are not enough for acceptance |
+| Near-capacity latency | On the Reference Hardware Profile, keep p99 query processing below 10 ms at up to 90% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-003` | release benchmark artifacts |
+| Memory growth | During the 30-day soak, RSS at day 30 remains within 10% of the 24-hour baseline for stable workload conditions, matching `ODS-NFR-REL-003` | soak report with RSS samples and workload description |
+| Rolling restart drain | After SIGTERM, `/readyz` reports draining and TCP listeners stop accepting new connections within 100 ms, matching `ODS-NFR-REL-005` | signal/rolling-restart artifacts |
+| Clock synchronisation | Host clock drift stays well below the configured TSIG and DNS Cookie tolerance windows; investigate clock synchronisation drift above 1 second for NTP/PTP-managed hosts, matching the operational premise of `ODS-NFR-REL-007` | host time-sync monitoring, TSIG BADTIME and cookie-invalid metrics/logs |
+
+Operators should tune SLO thresholds to their zone count, primary behavior,
+anycast or load-balancer design, and query mix. A release note may publish
+stricter or looser deployment-specific SLOs, but it must not weaken the
+normative SRS acceptance targets.
+
 ## Primary Interoperability Scripts
 
 The repository includes primary interoperability scripts that double as
@@ -531,9 +572,15 @@ Network and process hardening:
 - Restrict outbound transfer access to configured primaries where the platform
   firewall supports it.
 - Run as a non-root user where possible. Use a port capability or high ports
-  instead of full root service where possible.
+  instead of full root service where possible; document the privilege-drop
+  mechanism in the service manifest or container profile.
 - Store TSIG and TLS private key material outside world-readable paths.
 - Prefer read-only filesystems and minimal service capabilities.
+- `ODS-FR-XOT-012` means OxideDNS does not perform real-time XoT revocation
+  checking; use short-lived certificates and automated trust-anchor rotation
+  where that risk matters.
+- Report vulnerabilities to `security@integrity.hu` using the process in
+  `SECURITY.md`.
 
 ## Operational Checks
 

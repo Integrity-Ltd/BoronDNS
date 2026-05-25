@@ -6,6 +6,8 @@ scripts/check-security-policy.sh
 python3 -m py_compile scripts/check-perf-regression.py
 python3 -m py_compile scripts/check-rrl-thresholds.py
 python3 scripts/check-rrl-thresholds.py
+python3 -m py_compile scripts/check-operator-guide.py
+python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
