@@ -266,7 +266,7 @@ Slice 7 has TSIG HMAC-SHA foundations:
 - signed TCP AXFR/IXFR response streams are verified before publication, including first-message request-MAC verification, subsequent running-MAC verification, terminal TSIG enforcement, the 99-message unsigned compatibility window, and non-decreasing TSIG times.
 - zones that reference a configured TSIG key require incoming NOTIFY messages to carry a valid TSIG; verified NOTIFY requests are stripped before core processing and the NOTIFY response is signed with the verified request MAC.
 - ordinary UDP and TCP DNS queries bearing a configured TSIG key are verified and stripped before core answer construction, responses are signed with the verified request MAC, and valid TSIG-authenticated UDP query responses bypass RRL accounting.
-- ordinary DNS queries bearing an unknown TSIG key return NOTAUTH; malformed, misplaced, or invalid TSIGs are handled before core answer construction.
+- ordinary DNS queries bearing an unknown TSIG key return NOTAUTH; unsupported algorithms, too-short truncated MACs, stale timestamps outside the configured fudge, malformed, misplaced, or invalid TSIGs are handled before core answer construction.
 - NOTIFY messages with embedded SOA records accept RFC-compliant compression in SOA MNAME/RNAME RDATA, matching BIND 9 NOTIFY behavior.
 
 EDNS/query-size work is partially started:

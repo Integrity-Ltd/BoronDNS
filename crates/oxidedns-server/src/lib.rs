@@ -59,7 +59,8 @@ use oxidedns_core::{
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
         TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigErrorResponseFields, TsigKey,
-        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, sign_tsig_error_response,
+        append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, message_tsig_owner_name,
+        sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
@@ -5663,6 +5664,30 @@ fn prepare_query_tsig_packet(
                 ..prepared
             };
         }
+        Err(error @ TsigError::UnsupportedAlgorithm(_)) => {
+            let question = match Question::parse(&prepared.packet) {
+                Ok(question) => question,
+                Err(_) => return prepared,
+            };
+            let Some(key) = message_tsig_owner_name(&prepared.packet)
+                .ok()
+                .flatten()
+                .and_then(|key_name| notify_authority.tsig_key_by_name(&key_name))
+            else {
+                return prepared;
+            };
+            return PreparedDnsMessage {
+                immediate_response: tsig_error_response(
+                    &prepared.packet,
+                    &header,
+                    &question,
+                    &key,
+                    &error,
+                    notify_authority.tsig_fudge_seconds,
+                ),
+                ..prepared
+            };
+        }
         Err(_) => return prepared,
     };
 
@@ -7244,6 +7269,90 @@ mod tests {
         assert_eq!(response[3] & 0x0f, Rcode::NotAuth as u8);
         let tsig = parse_tsig_response_fields(&response);
         assert_eq!(tsig.error, TSIG_ERROR_BADSIG);
+    }
+
+    #[test]
+    fn ordinary_query_with_too_short_tsig_mac_gets_badtrunc_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let signed = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let too_short_mac = &signed.mac[..key.algorithm.min_mac_len() - 1];
+        let bad = replace_final_tsig_mac(&signed.message, too_short_mac);
+
+        let prepared = prepare_query_tsig_packet(
+            PreparedDnsMessage {
+                packet: bad,
+                response_tsig: None,
+                immediate_response: None,
+                tsig_authenticated: false,
+            },
+            &authority,
+        );
+
+        let response = prepared.immediate_response.expect("TSIG error response");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.error, TSIG_ERROR_BADTRUNC);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn ordinary_query_with_hmac_md5_tsig_gets_badalg_response() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let signed = key
+            .sign_request(&packet, current_unix_time(), DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let bad = replace_final_tsig_algorithm(&signed.message, "hmac-md5.sig-alg.reg.int.");
+
+        let prepared = prepare_query_tsig_packet(
+            PreparedDnsMessage {
+                packet: bad,
+                response_tsig: None,
+                immediate_response: None,
+                tsig_authenticated: false,
+            },
+            &authority,
+        );
+
+        let response = prepared.immediate_response.expect("TSIG error response");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, 0);
+        assert_eq!(tsig.error, TSIG_ERROR_BADALG);
+        assert!(tsig.other_data.is_empty());
+    }
+
+    #[test]
+    fn ordinary_query_outside_tsig_fudge_gets_badtime_response_with_server_time() {
+        let (authority, key) = tsig_notify_authority();
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let signed = key
+            .sign_request(&packet, 1, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+
+        let prepared = prepare_query_tsig_packet(
+            PreparedDnsMessage {
+                packet: signed.message,
+                response_tsig: None,
+                immediate_response: None,
+                tsig_authenticated: false,
+            },
+            &authority,
+        );
+
+        let response = prepared.immediate_response.expect("TSIG error response");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(response_rcode(&response, &header), Rcode::NotAuth as u16);
+        let tsig = parse_tsig_response_fields(&response);
+        assert_eq!(tsig.mac_len, key.algorithm.mac_len());
+        assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
+        assert_eq!(tsig.other_data.len(), 6);
     }
 
     #[tokio::test]

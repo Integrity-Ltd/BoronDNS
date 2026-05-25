@@ -678,6 +678,13 @@ pub fn message_tsig_key_name(message: &[u8]) -> Result<Option<DomainName>, TsigE
     Ok(message_tsig_key(message)?.map(|key| key.name))
 }
 
+pub fn message_tsig_owner_name(message: &[u8]) -> Result<Option<DomainName>, TsigError> {
+    match final_tsig_record_view(message)? {
+        Some(record) => Ok(Some(record.owner)),
+        None => Ok(None),
+    }
+}
+
 pub fn message_tsig_key(message: &[u8]) -> Result<Option<TsigMessageKey>, TsigError> {
     match remove_tsig(message) {
         Ok((_, tsig)) => Ok(Some(TsigMessageKey {
@@ -791,13 +798,31 @@ fn remove_tsig(message: &[u8]) -> Result<(Vec<u8>, ParsedTsig), TsigError> {
     if message.len() < DNS_HEADER_LEN {
         return Err(TsigError::MalformedMessage);
     }
+    let arcount = u16::from_be_bytes([message[10], message[11]]);
+    let tsig_view = final_tsig_record_view(message)?.ok_or(TsigError::MissingTsig)?;
+    let tsig = parse_tsig_record(&tsig_view)?;
+    let mut unsigned = Vec::with_capacity(message.len() - (tsig_view.end - tsig_view.start));
+    unsigned.extend_from_slice(&message[..tsig_view.start]);
+    unsigned.extend_from_slice(&message[tsig_view.end..]);
+    unsigned[DNS_HEADER_ID_OFFSET..DNS_HEADER_ID_OFFSET + 2]
+        .copy_from_slice(&tsig.original_id.to_be_bytes());
+    unsigned[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
+        .copy_from_slice(&(arcount - 1).to_be_bytes());
+
+    Ok((unsigned, tsig))
+}
+
+fn final_tsig_record_view(message: &[u8]) -> Result<Option<RecordView<'_>>, TsigError> {
+    if message.len() < DNS_HEADER_LEN {
+        return Err(TsigError::MalformedMessage);
+    }
 
     let qdcount = u16::from_be_bytes([message[4], message[5]]);
     let ancount = u16::from_be_bytes([message[6], message[7]]);
     let nscount = u16::from_be_bytes([message[8], message[9]]);
     let arcount = u16::from_be_bytes([message[10], message[11]]);
     if arcount == 0 {
-        return Err(TsigError::MissingTsig);
+        return Ok(None);
     }
 
     let mut offset = skip_questions(message, qdcount)?;
@@ -823,17 +848,7 @@ fn remove_tsig(message: &[u8]) -> Result<(Vec<u8>, ParsedTsig), TsigError> {
         return Err(TsigError::MalformedMessage);
     }
 
-    let tsig_view = tsig_view.ok_or(TsigError::MissingTsig)?;
-    let tsig = parse_tsig_record(&tsig_view)?;
-    let mut unsigned = Vec::with_capacity(message.len() - (tsig_view.end - tsig_view.start));
-    unsigned.extend_from_slice(&message[..tsig_view.start]);
-    unsigned.extend_from_slice(&message[tsig_view.end..]);
-    unsigned[DNS_HEADER_ID_OFFSET..DNS_HEADER_ID_OFFSET + 2]
-        .copy_from_slice(&tsig.original_id.to_be_bytes());
-    unsigned[DNS_HEADER_ARCOUNT_OFFSET..DNS_HEADER_ARCOUNT_OFFSET + 2]
-        .copy_from_slice(&(arcount - 1).to_be_bytes());
-
-    Ok((unsigned, tsig))
+    Ok(tsig_view)
 }
 
 fn parse_tsig_record(record: &RecordView<'_>) -> Result<ParsedTsig, TsigError> {
