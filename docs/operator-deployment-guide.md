@@ -109,6 +109,7 @@ and are included in `--dump-config` output:
 - `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
 - `ODS_TSIG_FUDGE_SECONDS`
+- `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
 
 Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
 `category=configuration_warning` messages and ignored. Variables outside the
@@ -123,6 +124,8 @@ implemented warning catalogue is:
   120.
 - `tsig_fudge_large`: `[tsig] fudge_seconds` is greater than 60.
 - `tsig_hmac_sha1`: a configured TSIG key uses `hmac-sha1`.
+- `transfer_ingest_cap_low`: `[limits] max_transfer_ingest_bytes` is below
+  100 MiB.
 
 `--validate-config` and `--dump-config` print these warnings to stderr. `serve`
 emits them as structured startup logs. The `/metrics` endpoint exposes the

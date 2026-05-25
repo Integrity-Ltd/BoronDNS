@@ -163,6 +163,11 @@ impl ServerConfig {
                 "limits.ixfr_disabled_cooldown_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.max_transfer_ingest_bytes == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_transfer_ingest_bytes must be at least 1".to_owned(),
+            ));
+        }
         self.cookie.validate()?;
         self.health.validate()?;
         self.rrl.validate()?;
@@ -232,6 +237,17 @@ impl ServerConfig {
                 message: format!(
                     "TSIG fudge value {} seconds is larger than the SRS suspicious-configuration threshold of 60 seconds",
                     self.tsig.fudge_seconds
+                ),
+            });
+        }
+
+        if self.limits.max_transfer_ingest_bytes < 100 * 1024 * 1024 {
+            warnings.push(ConfigWarning {
+                code: "transfer_ingest_cap_low",
+                parameter: "limits.max_transfer_ingest_bytes".to_owned(),
+                message: format!(
+                    "AXFR/IXFR ingestion size cap {} bytes is below the SRS suspicious-configuration threshold of 100 MiB",
+                    self.limits.max_transfer_ingest_bytes
                 ),
             });
         }
@@ -521,6 +537,8 @@ pub struct Limits {
     pub ixfr_timeout_secs: u64,
     #[serde(default = "default_ixfr_disabled_cooldown_secs")]
     pub ixfr_disabled_cooldown_secs: u64,
+    #[serde(default = "default_max_transfer_ingest_bytes")]
+    pub max_transfer_ingest_bytes: u64,
     #[serde(default = "default_notify_dedup_secs")]
     pub notify_dedup_secs: u64,
     #[serde(default = "default_max_concurrent_transfers")]
@@ -547,6 +565,7 @@ impl Default for Limits {
             axfr_timeout_secs: default_axfr_timeout_secs(),
             ixfr_timeout_secs: default_ixfr_timeout_secs(),
             ixfr_disabled_cooldown_secs: default_ixfr_disabled_cooldown_secs(),
+            max_transfer_ingest_bytes: default_max_transfer_ingest_bytes(),
             notify_dedup_secs: default_notify_dedup_secs(),
             max_concurrent_transfers: default_max_concurrent_transfers(),
             zsm_min_interval_secs: default_zsm_min_interval_secs(),
@@ -916,6 +935,10 @@ fn default_ixfr_disabled_cooldown_secs() -> u64 {
     3600
 }
 
+fn default_max_transfer_ingest_bytes() -> u64 {
+    4 * 1024 * 1024 * 1024
+}
+
 fn default_notify_dedup_secs() -> u64 {
     1
 }
@@ -1002,6 +1025,10 @@ mod tests {
         assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
         assert_eq!(config.limits.ixfr_disabled_cooldown_secs, 3600);
+        assert_eq!(
+            config.limits.max_transfer_ingest_bytes,
+            4 * 1024 * 1024 * 1024
+        );
         assert_eq!(config.limits.max_concurrent_transfers, 4);
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
@@ -1030,6 +1057,7 @@ mod tests {
 
                 [limits]
                 tcp_idle_timeout_secs = 121
+                max_transfer_ingest_bytes = 1048575
 
                 [tsig]
                 fudge_seconds = 61
@@ -1063,6 +1091,7 @@ mod tests {
         );
         assert!(codes.contains(&"tcp_idle_timeout_large"));
         assert!(codes.contains(&"tsig_fudge_large"));
+        assert!(codes.contains(&"transfer_ingest_cap_low"));
         assert!(codes.contains(&"tsig_hmac_sha1"));
     }
 
@@ -2062,6 +2091,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_custom_transfer_ingest_size_cap() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_ingest_bytes = 104857600
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
+    }
+
+    #[test]
     fn rejects_zero_transfer_concurrency_limit() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -2079,6 +2128,26 @@ mod tests {
         .expect_err("zero transfer concurrency limit must fail");
 
         assert!(error.to_string().contains("max_concurrent_transfers"));
+    }
+
+    #[test]
+    fn rejects_zero_transfer_ingest_size_cap() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_transfer_ingest_bytes = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero transfer ingest size cap must fail");
+
+        assert!(error.to_string().contains("max_transfer_ingest_bytes"));
     }
 
     #[test]

@@ -259,6 +259,10 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
             }
+            "ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
+                let value = env_value_to_string(&name, value)?;
+                config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
+            }
             _ if name.starts_with("ODS_") => {
                 warnings.push(ConfigWarning {
                     code: "unrecognised_rds_environment_variable",
@@ -362,6 +366,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | TransferError::RandomQueryId(_)
                 | TransferError::Tsig(_)
                 | TransferError::TlsHandshake { .. }
+                | TransferError::IngestSizeLimit { .. }
                 | TransferError::XotAlpn { .. } => EX_GENERAL,
             };
         }
@@ -600,6 +605,9 @@ mod tests {
                 metrics_rate_limit_per_minute = 60
                 metrics_rate_limit_idle_seconds = 300
 
+                [limits]
+                max_transfer_ingest_bytes = 4294967296
+
                 [tsig]
                 fudge_seconds = 300
 
@@ -620,6 +628,7 @@ mod tests {
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
+                ("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
             ]
             .into_iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
@@ -638,6 +647,7 @@ mod tests {
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.tsig.fudge_seconds, 30);
+        assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
     }
 
     #[test]

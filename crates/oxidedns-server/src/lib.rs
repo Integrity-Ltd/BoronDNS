@@ -164,6 +164,16 @@ pub enum TransferError {
 
     #[error("XoT primary {addr} did not negotiate ALPN dot")]
     XotAlpn { addr: SocketAddr },
+
+    #[error(
+        "{protocol} session from primary {addr} exceeded configured ingestion size cap at {received_bytes} octets (limit {limit_bytes})"
+    )]
+    IngestSizeLimit {
+        protocol: &'static str,
+        addr: SocketAddr,
+        received_bytes: u64,
+        limit_bytes: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -643,7 +653,7 @@ pub async fn transfer_axfr_from_primary(
         zone_apex,
         qclass,
         qid,
-        TransferTsig::unsigned(),
+        TransferSession::default_unsigned(),
         timeout_duration,
     )
     .await
@@ -654,11 +664,11 @@ async fn transfer_axfr_from_primary_with_tsig(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
     let target = TransferPrimaryConfig::tcp(primary);
-    transfer_axfr_from_target_with_tsig(&target, zone_apex, qclass, qid, tsig, timeout_duration)
+    transfer_axfr_from_target_with_tsig(&target, zone_apex, qclass, qid, session, timeout_duration)
         .await
 }
 
@@ -667,11 +677,11 @@ async fn transfer_axfr_from_target_with_tsig(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, tsig).await
+        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, session).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -974,7 +984,7 @@ pub async fn transfer_ixfr_from_primary(
         qclass,
         qid,
         current_zone,
-        TransferTsig::unsigned(),
+        TransferSession::default_unsigned(),
         timeout_duration,
     )
     .await
@@ -986,7 +996,7 @@ async fn transfer_ixfr_from_primary_with_tsig(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     let target = TransferPrimaryConfig::tcp(primary);
@@ -996,7 +1006,7 @@ async fn transfer_ixfr_from_primary_with_tsig(
         qclass,
         qid,
         current_zone,
-        tsig,
+        session,
         timeout_duration,
     )
     .await
@@ -1008,11 +1018,12 @@ async fn transfer_ixfr_from_target_with_tsig(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, tsig).await
+        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, session)
+            .await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -1026,7 +1037,7 @@ async fn transfer_ixfr_from_primary_inner(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
 ) -> Result<IxfrResponse, TransferError> {
     let mut stream = connect_transfer_stream(primary).await?;
 
@@ -1035,7 +1046,7 @@ async fn transfer_ixfr_from_primary_inner(
         .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
     let query = maybe_sign_transfer_query(
         axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
-        tsig,
+        session.tsig,
     )?;
     let framed_query = axfr::frame_tcp_message(&query.message);
     stream
@@ -1047,6 +1058,7 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
 
     let mut messages = Vec::new();
+    let mut ingest = TransferIngestTracker::new("IXFR", primary.addr, session.max_ingest_bytes);
     loop {
         let mut length_prefix = [0u8; 2];
         match stream.read_exact(&mut length_prefix).await {
@@ -1054,7 +1066,7 @@ async fn transfer_ixfr_from_primary_inner(
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
                 let verified_messages = maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig.key,
+                    session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
                 return axfr::parse_ixfr_response(
@@ -1075,6 +1087,7 @@ async fn transfer_ixfr_from_primary_inner(
         }
 
         let message_len = u16::from_be_bytes(length_prefix) as usize;
+        ingest.record_message(message_len)?;
         let mut message = vec![0u8; message_len];
         stream.read_exact(&mut message).await.map_err(|source| {
             if source.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -1092,7 +1105,7 @@ async fn transfer_ixfr_from_primary_inner(
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig.key,
+                    session.tsig.key,
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
@@ -1145,6 +1158,61 @@ impl<'a> TransferTsig<'a> {
 
     fn unsigned() -> Self {
         Self::new(None, DEFAULT_TSIG_FUDGE_SECS)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TransferSession<'a> {
+    tsig: TransferTsig<'a>,
+    max_ingest_bytes: u64,
+}
+
+impl<'a> TransferSession<'a> {
+    fn new(tsig: TransferTsig<'a>, max_ingest_bytes: u64) -> Self {
+        Self {
+            tsig,
+            max_ingest_bytes,
+        }
+    }
+
+    fn default_unsigned() -> Self {
+        Self::new(TransferTsig::unsigned(), default_transfer_ingest_bytes())
+    }
+}
+
+fn default_transfer_ingest_bytes() -> u64 {
+    4 * 1024 * 1024 * 1024
+}
+
+struct TransferIngestTracker {
+    protocol: &'static str,
+    addr: SocketAddr,
+    limit_bytes: u64,
+    received_bytes: u64,
+}
+
+impl TransferIngestTracker {
+    fn new(protocol: &'static str, addr: SocketAddr, limit_bytes: u64) -> Self {
+        Self {
+            protocol,
+            addr,
+            limit_bytes,
+            received_bytes: 0,
+        }
+    }
+
+    fn record_message(&mut self, message_len: usize) -> Result<(), TransferError> {
+        let next = self.received_bytes.saturating_add(message_len as u64);
+        if next > self.limit_bytes {
+            return Err(TransferError::IngestSizeLimit {
+                protocol: self.protocol,
+                addr: self.addr,
+                received_bytes: next,
+                limit_bytes: self.limit_bytes,
+            });
+        }
+        self.received_bytes = next;
+        Ok(())
     }
 }
 
@@ -1209,11 +1277,12 @@ async fn transfer_axfr_from_primary_inner(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig: TransferTsig<'_>,
+    session: TransferSession<'_>,
 ) -> Result<ZoneSnapshot, TransferError> {
     let mut stream = connect_transfer_stream(primary).await?;
 
-    let query = maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig)?;
+    let query =
+        maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), session.tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message);
     stream
         .write_all(&framed_query)
@@ -1224,6 +1293,7 @@ async fn transfer_axfr_from_primary_inner(
         })?;
 
     let mut messages = Vec::new();
+    let mut ingest = TransferIngestTracker::new("AXFR", primary.addr, session.max_ingest_bytes);
     loop {
         let mut length_prefix = [0u8; 2];
         match stream.read_exact(&mut length_prefix).await {
@@ -1231,7 +1301,7 @@ async fn transfer_axfr_from_primary_inner(
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
                 let verified_messages = maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig.key,
+                    session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
                 return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
@@ -1246,6 +1316,7 @@ async fn transfer_axfr_from_primary_inner(
         }
 
         let message_len = u16::from_be_bytes(length_prefix) as usize;
+        ingest.record_message(message_len)?;
         let mut message = vec![0u8; message_len];
         stream.read_exact(&mut message).await.map_err(|source| {
             if source.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -1263,7 +1334,7 @@ async fn transfer_axfr_from_primary_inner(
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig.key,
+                    session.tsig.key,
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
@@ -3647,6 +3718,7 @@ struct ZoneTransferPlan {
     primaries: Vec<TransferPrimaryConfig>,
     tsig_key: Option<Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
+    max_transfer_ingest_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -3687,6 +3759,7 @@ impl TransferPlan {
                         primaries: zone.transfer_targets(),
                         tsig_key,
                         tsig_fudge_seconds: config.tsig.fudge_seconds,
+                        max_transfer_ingest_bytes: config.limits.max_transfer_ingest_bytes,
                     },
                 )
             })
@@ -4836,7 +4909,10 @@ async fn refresh_zone_from_primaries(
                     plan.qclass,
                     qid,
                     current_snapshot,
-                    TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                    TransferSession::new(
+                        TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                        plan.max_transfer_ingest_bytes,
+                    ),
                     context.ixfr_timeout,
                 )
                 .await
@@ -4903,7 +4979,10 @@ async fn refresh_zone_from_primaries(
             &plan.origin,
             plan.qclass,
             qid,
-            TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+            TransferSession::new(
+                TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                plan.max_transfer_ingest_bytes,
+            ),
             context.axfr_timeout,
         )
         .await
@@ -5157,7 +5236,7 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        config::{HealthConfig, RrlConfig, TransferTransportConfig},
+        config::{HealthConfig, RrlConfig, TransferPrimaryConfig, TransferTransportConfig},
         dns::{
             AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
             LookupTermination, Opcode, Rcode, RecordType, Transport,
@@ -5175,14 +5254,14 @@ mod tests {
         NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
         QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
         RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferPlan, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
-        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        response_category, response_opt_record, response_question_end, response_rcode,
-        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
+        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
+        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
+        load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
+        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
         signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
         transfer_query_id, validate_runtime_config, write_tcp_message,
@@ -6306,6 +6385,25 @@ mod tests {
         tx
     }
 
+    fn current_zone_with_serial(apex: &DomainName, serial: u32) -> ZoneSnapshot {
+        let current_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(serial),
+        );
+        ZoneSnapshot::active(
+            apex.clone(),
+            Some(serial),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                current_soa.ttl,
+                vec![current_soa.rdata],
+            )],
+        )
+    }
+
     #[tokio::test]
     async fn transfer_axfr_from_primary_reads_tcp_messages() {
         let primary = spawn_axfr_primary().await;
@@ -6333,6 +6431,33 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn transfer_axfr_enforces_ingestion_size_cap() {
+        let primary = spawn_axfr_primary().await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let target = TransferPrimaryConfig::tcp(primary);
+
+        let error = super::transfer_axfr_from_target_with_tsig(
+            &target,
+            &apex,
+            1,
+            0x1234,
+            TransferSession::new(TransferTsig::unsigned(), 1),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect_err("AXFR transfer should exceed ingest cap");
+
+        assert!(matches!(
+            error,
+            TransferError::IngestSizeLimit {
+                protocol: "AXFR",
+                limit_bytes: 1,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -6382,6 +6507,35 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn transfer_ixfr_enforces_ingestion_size_cap() {
+        let primary = spawn_ixfr_mode2_primary_with_serial(2).await;
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_zone = current_zone_with_serial(&apex, 1);
+        let target = TransferPrimaryConfig::tcp(primary);
+
+        let error = super::transfer_ixfr_from_target_with_tsig(
+            &target,
+            &apex,
+            1,
+            0x1234,
+            &current_zone,
+            TransferSession::new(TransferTsig::unsigned(), 1),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect_err("IXFR transfer should exceed ingest cap");
+
+        assert!(matches!(
+            error,
+            TransferError::IngestSizeLimit {
+                protocol: "IXFR",
+                limit_bytes: 1,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
