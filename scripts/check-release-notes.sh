@@ -51,6 +51,21 @@ for status in Verified Deferred Failed; do
   require_text "$status"
 done
 
+for regression_field in \
+  "Performance/resource regression threshold" \
+  "regression.performance_threshold_pct" \
+  "Regression baseline window" \
+  "Requirement or metric" \
+  "Baseline value" \
+  "Candidate value" \
+  "Delta percent" \
+  "Root cause" \
+  "Fix or accepted rationale" \
+  "Target remediation release" \
+  "Regression triage status"; do
+  require_text "$regression_field"
+done
+
 if grep -F "TBD" "$notes_file" >/dev/null 2>&1; then
   printf 'release notes still contain TBD placeholders\n' >&2
   exit 1

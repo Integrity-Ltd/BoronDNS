@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+scripts/check-test-plan.sh
 python3 scripts/check-verification-ledger.py
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh

@@ -26,7 +26,15 @@ running `scripts/check-release-notes.sh`.
 - New Deferred results compared to previous same-major release: TBD
 - Performance/resource regression threshold: 10 percent unless overridden by
   `regression.performance_threshold_pct`.
-- Regression triage status: TBD
+- Regression baseline window: last five release measurements on the Reference
+  Hardware Profile, or initial baseline for the first release of a major
+  version.
+
+| Requirement or metric | Baseline value | Candidate value | Delta percent | Status | Root cause | Fix or accepted rationale | Owner | Target remediation release |
+| --- | ---: | ---: | ---: | --- | --- | --- | --- | --- |
+| TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+
+Regression triage status: TBD
 
 ## Interop Primary Versions
 
