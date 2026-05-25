@@ -1691,12 +1691,13 @@ async fn transfer_ixfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_ixfr_response(
+                return axfr::parse_ixfr_response_with_options(
                     qid,
                     zone_apex,
                     qclass,
                     current_zone,
                     &verified_messages,
+                    session.parse_options,
                 )
                 .map_err(TransferError::Ixfr);
             }
@@ -1723,7 +1724,14 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
         messages.push(message);
 
-        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages) {
+        match axfr::parse_ixfr_response_with_options(
+            qid,
+            zone_apex,
+            qclass,
+            current_zone,
+            &messages,
+            session.parse_options,
+        ) {
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
@@ -1731,12 +1739,13 @@ async fn transfer_ixfr_from_primary_inner(
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
-                        return axfr::parse_ixfr_response(
+                        return axfr::parse_ixfr_response_with_options(
                             qid,
                             zone_apex,
                             qclass,
                             current_zone,
                             &verified_messages,
+                            session.parse_options,
                         )
                         .map_err(TransferError::Ixfr);
                     }
@@ -1790,6 +1799,7 @@ struct TransferSession<'a> {
     tsig: TransferTsig<'a>,
     max_ingest_bytes: u64,
     transfer_source: Option<SocketAddr>,
+    parse_options: axfr::TransferParseOptions,
 }
 
 impl<'a> TransferSession<'a> {
@@ -1798,6 +1808,7 @@ impl<'a> TransferSession<'a> {
             tsig,
             max_ingest_bytes,
             transfer_source: None,
+            parse_options: axfr::TransferParseOptions::default(),
         }
     }
 
@@ -1807,6 +1818,11 @@ impl<'a> TransferSession<'a> {
 
     fn with_transfer_source(mut self, transfer_source: Option<SocketAddr>) -> Self {
         self.transfer_source = transfer_source;
+        self
+    }
+
+    fn with_parse_options(mut self, parse_options: axfr::TransferParseOptions) -> Self {
+        self.parse_options = parse_options;
         self
     }
 }
@@ -1937,8 +1953,14 @@ async fn transfer_axfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
-                    .map_err(TransferError::Axfr);
+                return axfr::parse_axfr_response_with_options(
+                    qid,
+                    zone_apex,
+                    qclass,
+                    &verified_messages,
+                    session.parse_options,
+                )
+                .map_err(TransferError::Axfr);
             }
             Err(source) => {
                 return Err(TransferError::Io {
@@ -1963,7 +1985,13 @@ async fn transfer_axfr_from_primary_inner(
         })?;
         messages.push(message);
 
-        match axfr::parse_axfr_response(qid, zone_apex, qclass, &messages) {
+        match axfr::parse_axfr_response_with_options(
+            qid,
+            zone_apex,
+            qclass,
+            &messages,
+            session.parse_options,
+        ) {
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
@@ -1971,11 +1999,12 @@ async fn transfer_axfr_from_primary_inner(
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
-                        return axfr::parse_axfr_response(
+                        return axfr::parse_axfr_response_with_options(
                             qid,
                             zone_apex,
                             qclass,
                             &verified_messages,
+                            session.parse_options,
                         )
                         .map_err(TransferError::Axfr);
                     }
@@ -5390,6 +5419,7 @@ struct ZoneTransferPlan {
     tsig_key: Option<Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    parse_options: axfr::TransferParseOptions,
     transfer_sources: Vec<SocketAddr>,
 }
 
@@ -5409,6 +5439,7 @@ impl ZoneTransferPlan {
             tsig_key: self.tsig_key.clone(),
             tsig_fudge_seconds: self.tsig_fudge_seconds,
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
+            parse_options: self.parse_options,
             transfer_sources: self.transfer_sources.clone(),
         }
     }
@@ -5447,6 +5478,9 @@ impl TransferPlan {
                 &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
+                axfr::TransferParseOptions {
+                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
+                },
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -5458,6 +5492,9 @@ impl TransferPlan {
                 &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
+                axfr::TransferParseOptions {
+                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
+                },
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -5509,6 +5546,7 @@ fn transfer_plan_from_zone_config(
     tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    parse_options: axfr::TransferParseOptions,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -5533,6 +5571,7 @@ fn transfer_plan_from_zone_config(
         tsig_key,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
+        parse_options,
         transfer_sources: transfer_sources.to_vec(),
     })
 }
@@ -5542,6 +5581,7 @@ fn transfer_plan_from_catalog_zone_config(
     tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
+    parse_options: axfr::TransferParseOptions,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -5558,6 +5598,7 @@ fn transfer_plan_from_catalog_zone_config(
         tsig_keys,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
+        parse_options,
         transfer_sources,
         primary_start_index,
     )
@@ -7542,7 +7583,8 @@ async fn refresh_zone_from_primaries_with_outcome(
                         TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                         plan.max_transfer_ingest_bytes,
                     )
-                    .with_transfer_source(transfer_source),
+                    .with_transfer_source(transfer_source)
+                    .with_parse_options(plan.parse_options),
                     context.ixfr_timeout,
                     context.tcp_connect_timeout,
                 )
@@ -7616,7 +7658,8 @@ async fn refresh_zone_from_primaries_with_outcome(
             TransferSession::new(
                 TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 plan.max_transfer_ingest_bytes,
-            ),
+            )
+            .with_parse_options(plan.parse_options),
             transfer_source,
             context.axfr_timeout,
             context.tcp_connect_timeout,
@@ -8382,6 +8425,33 @@ mod tests {
             plan.primaries[0].server_name.as_deref(),
             Some("primary.example.test")
         );
+    }
+
+    #[test]
+    fn transfer_plan_carries_out_of_zone_glue_tolerance() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [transfer]
+                accept_out_of_zone_glue = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+        let plan = TransferPlan::from_config(&config)
+            .expect("transfer plan")
+            .get(&zone)
+            .expect("transfer plan");
+
+        assert!(plan.parse_options.accept_out_of_zone_glue);
     }
 
     #[test]
