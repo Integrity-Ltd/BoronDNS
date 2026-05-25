@@ -141,6 +141,9 @@ capture_request metrics-plain /metrics
 capture_request metrics-gzip /metrics -H 'Accept-Encoding: gzip'
 capture_request metrics-third /metrics
 capture_request metrics-rate-limited /metrics
+for index in $(seq -w 1 10); do
+  capture_request "metrics-burst-$index" /metrics
+done
 capture_request livez-after-metrics-limit /livez
 capture_request readyz-after-metrics-limit /readyz
 
@@ -151,6 +154,9 @@ require_http_code "$evidence_dir/metrics-plain.meta" 200
 require_http_code "$evidence_dir/metrics-gzip.meta" 200
 require_http_code "$evidence_dir/metrics-third.meta" 200
 require_http_code "$evidence_dir/metrics-rate-limited.meta" 429
+for index in $(seq -w 1 10); do
+  require_http_code "$evidence_dir/metrics-burst-$index.meta" 429
+done
 require_http_code "$evidence_dir/livez-after-metrics-limit.meta" 200
 require_http_code "$evidence_dir/readyz-after-metrics-limit.meta" 503
 
@@ -173,8 +179,22 @@ require_text "$evidence_dir/metrics-gzip.headers" 'content-encoding: gzip'
 require_text "$evidence_dir/metrics-gzip.headers" 'vary: accept-encoding'
 require_text "$evidence_dir/metrics-rate-limited.headers" 'retry-after:'
 require_text "$evidence_dir/metrics-rate-limited.body" '"error":"rate_limited"'
+for index in $(seq -w 1 10); do
+  require_text "$evidence_dir/metrics-burst-$index.headers" 'retry-after:'
+  require_text "$evidence_dir/metrics-burst-$index.body" '"error":"rate_limited"'
+done
 require_text "$evidence_dir/livez-after-metrics-limit.body" '"status":"alive"'
 require_text "$evidence_dir/readyz-after-metrics-limit.body" '"status":"not-ready"'
+
+{
+  printf 'request\thttp_code\ttime_total\tretry_after\n'
+  for name in metrics-rate-limited $(seq -f 'metrics-burst-%02g' 1 10); do
+    code="$(awk -F= '$1 == "http_code" { print $2 }' "$evidence_dir/$name.meta")"
+    time_total="$(awk -F= '$1 == "time_total" { print $2 }' "$evidence_dir/$name.meta")"
+    retry_after="$(awk 'tolower($1) == "retry-after:" { print $2; exit }' "$evidence_dir/$name.headers" | tr -d '\r')"
+    printf '%s\t%s\t%s\t%s\n' "$name" "$code" "$time_total" "$retry_after"
+  done
+} >"$evidence_dir/metrics-rate-limit-burst.tsv"
 
 {
   printf 'health_port=%s\n' "$health_port"
@@ -187,6 +207,8 @@ require_text "$evidence_dir/readyz-after-metrics-limit.body" '"status":"not-read
   printf 'metrics_plain_status=200\n'
   printf 'metrics_gzip_status=200\n'
   printf 'metrics_rate_limited_status=429\n'
+  printf 'metrics_rate_limit_burst_requests=10\n'
+  printf 'metrics_rate_limit_burst_status=429\n'
   printf 'probes_after_metrics_rate_limit=available\n'
 } >"$evidence_dir/summary.env"
 
@@ -205,6 +227,9 @@ Captured retained HTTP evidence for SRS health and metrics requirements:
 - `/metrics` returns gzip output when requested.
 - `/metrics` is per-source rate limited with HTTP 429 and `Retry-After`, while
   `/livez` and `/readyz` remain available after the metrics limiter is hit.
+- A retained repeated scrape burst records status, timing, and `Retry-After`
+  values for ten additional over-limit `/metrics` requests from the same
+  source.
 
 Each request stores response body, headers, and curl metadata.
 EOF
