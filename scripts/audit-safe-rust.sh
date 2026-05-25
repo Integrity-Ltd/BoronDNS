@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace_manifest="$repo_root/Cargo.toml"
+unsafe_boundary_registry="$repo_root/docs/unsafe-boundaries.tsv"
 
 python3 - "$workspace_manifest" <<'PY'
 import sys
@@ -28,11 +29,21 @@ if unsafe_code != "forbid":
 print("workspace lint check passed: unsafe_code = \"forbid\"")
 PY
 
+python3 "$repo_root/scripts/check-unsafe-boundaries.py"
+
 process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
 resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
-allowed_unsafe_allow_attrs=(
-  "crates/oxidedns-server/src/process_signals.rs"
-  "crates/oxidedns-server/src/resource_limits.rs"
+mapfile -t allowed_unsafe_allow_attrs < <(
+  python3 - "$unsafe_boundary_registry" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+with Path(sys.argv[1]).open(newline="", encoding="utf-8") as handle:
+    for row in csv.DictReader(handle, delimiter="\t"):
+        if row["status"] == "current" and not row["path"].startswith("future:"):
+            print(row["path"])
+PY
 )
 
 allow_attr_matches="$(

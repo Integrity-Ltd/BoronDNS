@@ -30,7 +30,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | `cargo test --workspace`; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |
@@ -55,7 +55,7 @@ build-blocking for:
 - Test Plan shape validation: `scripts/check-test-plan.sh`;
 - verification ledger consistency: `python3 scripts/check-verification-ledger.py`;
 - static audits: invariant, passive DNSSEC, XoT revocation, safe-Rust where
-  release-review cost allows;
+  release-review cost allows, and unsafe-boundary registry consistency;
 - Rust formatting, clippy, workspace tests, and coverage threshold evidence;
 - dependency advisory/license/source checks through `cargo deny check`.
 

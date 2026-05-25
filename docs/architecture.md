@@ -75,7 +75,10 @@ obscuring SRS traceability.
 The workspace defaults to `unsafe_code = "forbid"` for first-party crates. The
 only current exceptions are the POSIX signal-disposition and file-descriptor
 limit adapters in `crates/oxidedns-server/src/process_signals.rs` and
-`crates/oxidedns-server/src/resource_limits.rs`.
+`crates/oxidedns-server/src/resource_limits.rs`. The machine-readable boundary
+registry is `docs/unsafe-boundaries.tsv`; `scripts/check-unsafe-boundaries.py`
+keeps that registry synchronized with live `#![allow(unsafe_code)]` source
+files and with the deferred optimization tracks below.
 
 Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
 are expected to require `unsafe` or unsafe-heavy dependencies. They must remain
@@ -96,12 +99,14 @@ entry gate is:
 - no `unsafe` in DNS wire parsing, transfer parsing, TSIG verification, or
   response-composition modules;
 - an explicit `scripts/audit-safe-rust.sh` allowlist entry for the adapter file
-  or crate, with the architecture document updated in the same change;
+  or crate, with the architecture document and `docs/unsafe-boundaries.tsv`
+  updated in the same change;
 - unit and integration tests proving the adapter's safe API preserves buffer
   ownership, lifetime, bounds, concurrency, and fallback behavior;
-- retained release evidence from `scripts/audit-safe-rust.sh`, transitive
-  unsafe enumeration, and backend-specific fault tests before enabling the
-  backend in production configuration.
+- retained release evidence from `scripts/check-unsafe-boundaries.py`,
+  `scripts/audit-safe-rust.sh`, transitive unsafe enumeration, and
+  backend-specific fault tests before enabling the backend in production
+  configuration.
 
 For eBPF specifically, runtime loading of operator-supplied programs remains
 forbidden by `ODS-INV-009`. Any future kernel-side program must be built as a

@@ -4,11 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 python3 - "$repo_root" <<'PY'
+import csv
 from pathlib import Path
 import re
 import sys
 
 repo_root = Path(sys.argv[1])
+unsafe_registry = repo_root / "docs" / "unsafe-boundaries.tsv"
 runtime_files = sorted((repo_root / "crates").glob("*/src/**/*.rs"))
 
 def runtime_text(path: Path) -> str:
@@ -21,12 +23,24 @@ def runtime_text(path: Path) -> str:
 runtime_sources = {
     path.relative_to(repo_root): runtime_text(path) for path in runtime_files
 }
-audited_posix_adapter_paths = {
+with unsafe_registry.open(newline="", encoding="utf-8") as handle:
+    audited_unsafe_adapter_paths = {
+        Path(row["path"])
+        for row in csv.DictReader(handle, delimiter="\t")
+        if row["status"] == "current" and not row["path"].startswith("future:")
+    }
+expected_current_unsafe_adapters = {
     Path("crates/oxidedns-server/src/process_signals.rs"),
     Path("crates/oxidedns-server/src/resource_limits.rs"),
 }
-runtime_sources_without_posix_adapters = [
-    path for path in runtime_sources if path not in audited_posix_adapter_paths
+if audited_unsafe_adapter_paths != expected_current_unsafe_adapters:
+    raise SystemExit(
+        "docs/unsafe-boundaries.tsv current unsafe adapter set changed; "
+        "update invariant audit expectations and parser/TSIG/response safe-core checks "
+        f"before accepting: {sorted(str(path) for path in audited_unsafe_adapter_paths)}"
+    )
+runtime_sources_without_unsafe_adapters = [
+    path for path in runtime_sources if path not in audited_unsafe_adapter_paths
 ]
 
 checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
@@ -81,7 +95,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             re.compile(r"\bre-read\b", re.IGNORECASE),
             re.compile(r"\badmin(istrative)?[_ -]?(api|socket|port|interface)\b", re.IGNORECASE),
         ],
-        runtime_sources_without_posix_adapters,
+        runtime_sources_without_unsafe_adapters,
     ),
     (
         "ODS-INV-006 first-party safe-Rust discipline",
@@ -89,7 +103,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         [
             re.compile(r"\bunsafe\s*(?:\{|fn|impl|trait|extern)"),
         ],
-        runtime_sources_without_posix_adapters,
+        runtime_sources_without_unsafe_adapters,
     ),
     (
         "ODS-INV-007 authoritative-only response composition",
@@ -195,7 +209,7 @@ for item in allowed_reads:
 
 print()
 print("audited_unsafe_boundaries:")
-for item in sorted(audited_posix_adapter_paths):
+for item in sorted(audited_unsafe_adapter_paths):
     print(f"  {item}: reviewed by scripts/audit-safe-rust.sh and excluded from network-input parsing paths")
 
 if failures:
