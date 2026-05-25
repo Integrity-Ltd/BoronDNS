@@ -42,11 +42,6 @@ bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/capture-unsafe-dependency-evidence.sh
 bash -n scripts/capture-interface-compatibility-evidence.sh
-bash -n scripts/capture-info-verbosity-handoff.sh
-bash -n scripts/capture-benchmark-handoff.sh
-bash -n scripts/capture-soak-handoff.sh
-bash -n scripts/capture-reproducible-build-handoff.sh
-bash -n scripts/capture-release-handoff.sh
 bash -n scripts/fuzz-campaign.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
@@ -75,11 +70,6 @@ scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
 scripts/capture-interface-compatibility-evidence.sh
-scripts/capture-info-verbosity-handoff.sh
-scripts/capture-benchmark-handoff.sh
-scripts/capture-soak-handoff.sh
-scripts/capture-reproducible-build-handoff.sh
-scripts/capture-release-handoff.sh
 scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings

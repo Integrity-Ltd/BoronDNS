@@ -14,7 +14,8 @@ REQUIRED_SCOPE_PHRASES = [
     "24-hour fuzz campaigns",
     "30-day soak execution",
     "Reference Hardware/Profile benchmark campaigns",
-    "scaffolding only",
+    "not Engineering MVP deliverables",
+    "not Engineering MVP evidence",
 ]
 
 FORBIDDEN_CHECK_COMMANDS = [
@@ -22,6 +23,11 @@ FORBIDDEN_CHECK_COMMANDS = [
     "--duration 24h",
     "--duration 24H",
     "--iterations 1000",
+    "scripts/capture-info-verbosity-handoff.sh",
+    "scripts/capture-benchmark-handoff.sh",
+    "scripts/capture-soak-handoff.sh",
+    "scripts/capture-reproducible-build-handoff.sh",
+    "scripts/capture-release-handoff.sh",
 ]
 
 

@@ -29,11 +29,11 @@ following are later SRS acceptance or release/operations activities:
 - Signed release artifact production.
 
 Setup scripts, schemas, runbooks, and handoff directories for those later
-activities may exist in this repository. They are scaffolding only and are not
-Engineering MVP evidence of the long-running results.
+activities may exist in this repository for later release/operations use. They
+are not Engineering MVP deliverables and are not Engineering MVP evidence.
 
 ## Check Profile
 
 `scripts/check.sh` is the local Engineering MVP quality gate. It may validate
-handoff scaffolds and dry-run campaign wiring, but it must not execute the
-long-running activities listed above.
+script syntax and dry-run campaign wiring, but it must not execute the
+long-running activities or generate long-running handoff evidence listed above.
