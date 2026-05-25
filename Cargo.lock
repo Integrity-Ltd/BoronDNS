@@ -709,6 +709,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oxidedns-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "getrandom 0.3.4",
+ "oxidedns-core",
+ "oxidedns-server",
+ "rcgen",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "oxidedns-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hmac",
+ "serde",
+ "sha1",
+ "sha2",
+ "siphasher",
+ "subtle",
+ "thiserror",
+ "toml",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "oxidedns-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "flate2",
+ "getrandom 0.3.4",
+ "libc",
+ "oxidedns-core",
+ "rcgen",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "x509-parser",
+]
+
+[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1263,57 +1314,6 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
-
-[[package]]
-name = "oxidedns-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "getrandom 0.3.4",
- "rcgen",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "oxidedns-core",
- "oxidedns-server",
-]
-
-[[package]]
-name = "oxidedns-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "hmac",
- "serde",
- "sha1",
- "sha2",
- "siphasher",
- "subtle",
- "thiserror",
- "toml",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "oxidedns-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "flate2",
- "getrandom 0.3.4",
- "libc",
- "rcgen",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tracing",
- "oxidedns-core",
- "x509-parser",
-]
 
 [[package]]
 name = "unicode-ident"
