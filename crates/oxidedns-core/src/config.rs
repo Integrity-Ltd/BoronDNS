@@ -65,6 +65,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub zones: Vec<ZoneConfig>,
     #[serde(default)]
+    pub catalog_zones: Vec<CatalogZoneConfig>,
+    #[serde(default)]
     pub tsig_keys: Vec<TsigKeyConfig>,
 }
 
@@ -100,6 +102,13 @@ impl ServerConfig {
                 }
             }
         }
+        for catalog_zone in &mut redacted.catalog_zones {
+            for primary in &mut catalog_zone.transfer_primaries {
+                if primary.client_key_pem.is_some() {
+                    primary.client_key_pem = Some("<redacted>".to_owned());
+                }
+            }
+        }
         for key in &mut redacted.tsig_keys {
             if key.secret.is_some() {
                 key.secret = Some("<redacted>".to_owned());
@@ -119,9 +128,9 @@ impl ServerConfig {
         self.logging.validate()?;
         self.metrics.validate()?;
 
-        if self.zones.is_empty() {
+        if self.zones.is_empty() && self.catalog_zones.is_empty() {
             return Err(ConfigError::Invalid(
-                "at least one served zone is required".to_owned(),
+                "at least one served zone or catalog zone is required".to_owned(),
             ));
         }
 
@@ -265,6 +274,23 @@ impl ServerConfig {
                     return Err(ConfigError::Invalid(format!(
                         "zone {} references unknown TSIG key {tsig_key}",
                         zone.name
+                    )));
+                }
+            }
+        }
+        for catalog_zone in &self.catalog_zones {
+            catalog_zone.validate()?;
+            if let Some(tsig_key) = &catalog_zone.tsig_key {
+                let key_name = DomainName::from_absolute_str(tsig_key).map_err(|_| {
+                    ConfigError::Invalid(format!(
+                        "catalog zone {} references TSIG key {tsig_key}; TSIG key names must be absolute DNS names",
+                        catalog_zone.name
+                    ))
+                })?;
+                if !tsig_key_names.contains(&key_name.canonical_key()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "catalog zone {} references unknown TSIG key {tsig_key}",
+                        catalog_zone.name
                     )));
                 }
             }
@@ -443,23 +469,34 @@ impl ServerConfig {
             .iter()
             .any(|source| source.is_ipv6());
 
-        for zone in &self.zones {
-            for primary in zone.transfer_targets() {
-                match primary.addr {
-                    SocketAddr::V4(_) if !has_ipv4 => {
-                        return Err(ConfigError::Invalid(format!(
-                            "interfaces.transfer is configured but zone {} primary {} has no IPv4 transfer source",
-                            zone.name, primary.addr
-                        )));
-                    }
-                    SocketAddr::V6(_) if !has_ipv6 => {
-                        return Err(ConfigError::Invalid(format!(
-                            "interfaces.transfer is configured but zone {} primary {} has no IPv6 transfer source",
-                            zone.name, primary.addr
-                        )));
-                    }
-                    _ => {}
+        for (zone_name, primary) in self
+            .zones
+            .iter()
+            .flat_map(|zone| {
+                zone.transfer_targets()
+                    .into_iter()
+                    .map(|primary| (&zone.name, primary))
+            })
+            .chain(self.catalog_zones.iter().flat_map(|zone| {
+                zone.transfer_targets()
+                    .into_iter()
+                    .map(|primary| (&zone.name, primary))
+            }))
+        {
+            match primary.addr {
+                SocketAddr::V4(_) if !has_ipv4 => {
+                    return Err(ConfigError::Invalid(format!(
+                        "interfaces.transfer is configured but zone {} primary {} has no IPv4 transfer source",
+                        zone_name, primary.addr
+                    )));
                 }
+                SocketAddr::V6(_) if !has_ipv6 => {
+                    return Err(ConfigError::Invalid(format!(
+                        "interfaces.transfer is configured but zone {} primary {} has no IPv6 transfer source",
+                        zone_name, primary.addr
+                    )));
+                }
+                _ => {}
             }
         }
 
@@ -1159,6 +1196,62 @@ impl ZoneConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogZoneConfig {
+    pub name: String,
+    #[serde(default = "default_dns_class")]
+    pub class: String,
+    #[serde(default)]
+    pub primaries: Vec<SocketAddr>,
+    #[serde(default)]
+    pub transfer_primaries: Vec<TransferPrimaryConfig>,
+    #[serde(default)]
+    pub notify_sources: Vec<std::net::IpAddr>,
+    pub tsig_key: Option<String>,
+    #[serde(default)]
+    pub serve_catalog_zone: bool,
+}
+
+impl CatalogZoneConfig {
+    pub fn transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        if self.transfer_primaries.is_empty() {
+            self.primaries
+                .iter()
+                .copied()
+                .map(TransferPrimaryConfig::tcp)
+                .collect()
+        } else {
+            self.transfer_primaries.clone()
+        }
+    }
+
+    pub fn transfer_target_addrs(&self) -> Vec<SocketAddr> {
+        self.transfer_targets()
+            .into_iter()
+            .map(|target| target.addr)
+            .collect()
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        ZoneConfig {
+            name: self.name.clone(),
+            class: self.class.clone(),
+            primaries: self.primaries.clone(),
+            transfer_primaries: self.transfer_primaries.clone(),
+            notify_sources: self.notify_sources.clone(),
+            tsig_key: self.tsig_key.clone(),
+        }
+        .validate()
+        .map_err(|error| match error {
+            ConfigError::Invalid(message) => {
+                ConfigError::Invalid(message.replace("zone ", "catalog zone "))
+            }
+            other => other,
+        })
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransferPrimaryConfig {
@@ -1746,6 +1839,31 @@ mod tests {
                 Ipv4Addr::new(192, 0, 2, 53),
                 53
             )))]
+        );
+    }
+
+    #[test]
+    fn parses_catalog_zone_without_static_zones() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                notify_sources = ["192.0.2.53"]
+            "#,
+        )
+        .expect("valid catalog-only config");
+
+        assert!(config.zones.is_empty());
+        assert_eq!(config.catalog_zones.len(), 1);
+        assert!(!config.catalog_zones[0].serve_catalog_zone);
+        assert_eq!(
+            config.catalog_zones[0].transfer_target_addrs(),
+            vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
         );
     }
 

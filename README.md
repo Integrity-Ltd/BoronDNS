@@ -51,6 +51,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Test plan](docs/test-plan.md)
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)
+- [Catalog Zone MVP based on RFC 9432](docs/catalog-zone-mvp-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [MVP gap register](docs/mvp-gap-register.md)
 - [Security policy](SECURITY.md)

@@ -47,11 +47,10 @@ runtime_sources_without_unsafe_adapters = [
 checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     (
         "ODS-INV-001 secondary-only prohibited runtime surfaces",
-        "No DNS UPDATE/catalog/admin/primary-serving surface terms found in runtime Rust source.",
+        "No DNS UPDATE/admin/primary-serving surface terms found in runtime Rust source; RFC 9432 catalog-zone secondary support is allowed.",
         [
             re.compile(r"\bOpcode::Update\b"),
             re.compile(r"\bDynamicUpdate\b", re.IGNORECASE),
-            re.compile(r"\bcatalog[_ -]?zone\b", re.IGNORECASE),
             re.compile(r"\badmin(istrative)?[_ -]?(api|socket|port|interface)\b", re.IGNORECASE),
             re.compile(r"\bserve[_ -]?as[_ -]?primary\b", re.IGNORECASE),
         ],
@@ -88,7 +87,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     ),
     (
         "ODS-INV-005 static configuration/control surface",
-        "No reload/runtime configuration/admin control surface terms found outside the audited POSIX signal-disposition adapter.",
+        "No reload/runtime configuration/admin control surface terms found outside the audited POSIX signal-disposition adapter; RFC 9432 catalog members are dynamic zone data from configured transfer primaries.",
         [
             re.compile(r"\bSIGHUP\b"),
             re.compile(r"\breload\b", re.IGNORECASE),

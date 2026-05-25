@@ -49,8 +49,10 @@ Operational state boundaries:
   a runtime administration API.
 - Zone data lives in memory only. Every process start is a cold start and must
   reacquire zones from configured primaries.
-- Configuration is static. Changing configuration requires a process restart;
-  there is no SIGHUP reload path.
+- Configuration is static for listener, primary, TSIG, and catalog-zone
+  definitions. Changing those settings requires a process restart; there is no
+  SIGHUP reload path. RFC 9432 catalog members are dynamic after a configured
+  catalog zone has transferred successfully.
 - OxideDNS does not persist zone data, metrics, transfer history, or runtime state
   to disk.
 
@@ -209,12 +211,22 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   multiple primaries are listed, OxideDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
   later transfer attempts.
+- `[[catalog_zones]]`: RFC 9432 catalog zones. OxideDNS transfers the catalog,
+  reads member-zone PTR records below `zones.<catalog-zone>`, and dynamically
+  transfers and serves those member zones. Catalog members inherit the catalog
+  transfer primaries, transfer transport, TSIG key, NOTIFY source policy,
+  transfer source binding, and transfer limits. `serve_catalog_zone` defaults to
+  `false`, which lets OxideDNS transfer and process the catalog without
+  answering DNS queries for the catalog zone itself.
 - `[[tsig_keys]]`: static TSIG keys referenced by zones. Each key uses exactly
   one of inline `secret` or filesystem `secret_file`.
 
 Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
 NSID diagnostics for anycast or load-balanced deployments. The default is empty,
 which suppresses NSID responses even when clients request the option.
+
+See [Catalog Zone MVP based on RFC 9432](catalog-zone-mvp-rfc9432.md) for the
+catalog-specific behavior, security boundary, and PowerDNS primary pattern.
 
 Minimal local test shape:
 

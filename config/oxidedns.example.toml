@@ -169,6 +169,20 @@ notify_sources = ["192.0.2.53"]
 #client_key = "/etc/oxidedns/xot-client.key"
 #client_key_pem = "<inline PEM private key>"
 
+#[[catalog_zones]]
+# RFC 9432 catalog zone transferred from a trusted primary. Member zones are
+# discovered from PTR records below zones.<catalog-zone> and inherit this
+# catalog's transfer primaries, TSIG key, NOTIFY source policy, and transfer
+# limits.
+#name = "catalog.example.test."
+#class = "IN"
+#primaries = ["192.0.2.53:53"]
+#notify_sources = ["192.0.2.53"]
+#tsig_key = "transfer-key."
+# Default: false. Transfer and process the catalog but do not serve the catalog
+# zone itself on the public DNS query interface.
+#serve_catalog_zone = false
+
 #[[tsig_keys]]
 #name = "transfer-key."
 #algorithm = "hmac-sha256" # also supports "hmac-sha1", "hmac-sha384", "hmac-sha512"

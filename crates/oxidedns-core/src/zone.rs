@@ -1167,6 +1167,7 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
 #[derive(Debug, Default, Clone)]
 pub struct ZoneStore {
     zones: Arc<RwLock<HashMap<String, Arc<ZoneSnapshot>>>>,
+    hidden_zones: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ZoneStore {
@@ -1184,11 +1185,50 @@ impl ZoneStore {
             );
     }
 
+    pub fn insert_loading_hidden(&self, origin: DomainName) {
+        self.hide_zone(&origin);
+        self.insert_loading(origin);
+    }
+
     pub fn insert_snapshot(&self, snapshot: ZoneSnapshot) {
         self.zones
             .write()
             .expect("zone store lock poisoned")
             .insert(snapshot.origin.canonical_key(), Arc::new(snapshot));
+    }
+
+    pub fn remove_zone(&self, origin: &DomainName) -> bool {
+        let key = origin.canonical_key();
+        self.hidden_zones
+            .write()
+            .expect("zone store hidden-zone lock poisoned")
+            .remove(&key);
+        self.zones
+            .write()
+            .expect("zone store lock poisoned")
+            .remove(&key)
+            .is_some()
+    }
+
+    pub fn hide_zone(&self, origin: &DomainName) {
+        self.hidden_zones
+            .write()
+            .expect("zone store hidden-zone lock poisoned")
+            .insert(origin.canonical_key());
+    }
+
+    pub fn show_zone(&self, origin: &DomainName) {
+        self.hidden_zones
+            .write()
+            .expect("zone store hidden-zone lock poisoned")
+            .remove(&origin.canonical_key());
+    }
+
+    pub fn is_hidden(&self, origin: &DomainName) -> bool {
+        self.hidden_zones
+            .read()
+            .expect("zone store hidden-zone lock poisoned")
+            .contains(&origin.canonical_key())
     }
 
     pub fn expire_zone(&self, origin: &DomainName) -> bool {
@@ -1223,10 +1263,15 @@ impl ZoneStore {
     }
 
     pub fn find_zone(&self, qname: &DomainName) -> Option<Arc<ZoneSnapshot>> {
-        self.zones
+        let zones = self.zones.read().expect("zone store lock poisoned");
+        let hidden_zones = self
+            .hidden_zones
             .read()
-            .expect("zone store lock poisoned")
-            .values()
+            .expect("zone store hidden-zone lock poisoned");
+        zones
+            .iter()
+            .filter(|(key, _)| !hidden_zones.contains(*key))
+            .map(|(_, zone)| zone)
             .filter(|zone| qname.is_equal_or_subdomain_of(&zone.origin))
             .max_by_key(|zone| zone.origin.label_count())
             .cloned()
@@ -1425,6 +1470,23 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(origins, vec!["a.test.", "z.test."]);
+    }
+
+    #[test]
+    fn hidden_zone_is_available_exactly_but_not_for_query_lookup() {
+        let store = ZoneStore::new();
+        let origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let child = DomainName::from_absolute_str("member.catalog.example.").unwrap();
+
+        store.insert_loading_hidden(origin.clone());
+
+        assert!(store.find_exact_zone(&origin).is_some());
+        assert!(store.find_zone(&origin).is_none());
+        assert!(store.find_zone(&child).is_none());
+        assert!(store.is_hidden(&origin));
+
+        store.show_zone(&origin);
+        assert!(store.find_zone(&child).is_some());
     }
 
     fn soa_rdata() -> Vec<u8> {

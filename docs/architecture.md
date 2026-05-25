@@ -13,7 +13,7 @@ proof, and signed release artifacts remain tracked as MVP gaps in
 
 ## Module Organisation
 
-The current first-party Rust source is organised into 11 release-reviewed
+The current first-party Rust source is organised into 13 release-reviewed
 modules at the crate/file boundary. This satisfies the `ODS-NFR-MAINT-002`
 module-count target shape for the current MVP scaffold; `crates/oxidedns-server/src/lib.rs`
 remains the broadest module and is the primary future refactor candidate if
@@ -27,6 +27,7 @@ accepted.
 | --- | --- | --- |
 | `crates/oxidedns-core/src/dns.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-EDNS`, `ODS-FR-DNSSEC`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, DNS message parts of `ODS-FR-NOTIFY` | DNS wire parsing, EDNS option handling, authoritative response construction, DNSSEC serve-only augmentation, DNS Cookie encoding, and UDP response shaping. |
 | `crates/oxidedns-core/src/axfr.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, `ODS-FR-SPOOF`, RR ingestion parts of `ODS-FR-DNSSEC` and `ODS-FR-URR` | AXFR/IXFR query construction, transfer stream parsing, response validation, unknown-RR preservation, and zone-publication validation. |
+| `crates/oxidedns-core/src/catalog.rs` | RFC 9432 catalog-zone MVP extension | Catalog schema-version and member-PTR parsing for transferred catalog zones. |
 | `crates/oxidedns-core/src/config.rs` | `ODS-IF-CONF`, configuration surfaces for protocol families, interface roles, limits, TSIG, XoT, DNS Cookies, RRL, metrics, and health | Static TOML configuration schema, validation, warning catalogue inputs, redacted dump support, and environment-override targets. |
 | `crates/oxidedns-core/src/tsig.rs` | `ODS-FR-TSIG`, TSIG-dependent clauses of AXFR, IXFR, NOTIFY, ordinary query signing, and TSIG error response handling | TSIG key material handling, MAC verification/signing, TCP response-stream verification, truncation handling, and TSIG error construction. |
 | `crates/oxidedns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
@@ -61,6 +62,7 @@ source-line target.
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
 | Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
 | Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
+| Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit the catalog transfer policy, and do not create an administrative API or primary-serving path. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-mvp-rfc9432.md`, Appendix C.3.9 MVP update |
 
 ## Line Count Posture
 

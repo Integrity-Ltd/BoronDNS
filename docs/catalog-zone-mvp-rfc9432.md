@@ -1,0 +1,97 @@
+# Catalog Zone MVP Based on RFC 9432
+
+Status: new MVP target
+
+OxideDNS supports an Engineering MVP subset of DNS Catalog Zones as described
+by RFC 9432. A configured catalog zone is transferred from trusted primaries in
+the same way as ordinary secondary zones. OxideDNS then reads member-zone PTR
+records under `zones.<catalog-zone>` and creates in-memory secondary service for
+those member zones.
+
+This feature changes the previous static-zone-only scope: `[[zones]]` remains
+supported for explicit zones, and `[[catalog_zones]]` is now the preferred way
+to let a trusted primary publish the served zone set.
+
+## RFC 9432 Scope
+
+Implemented MVP behavior:
+
+- Catalog zones are configured explicitly by the operator.
+- Catalog zones are fetched over AXFR/IXFR from configured transfer primaries.
+- The catalog schema version must be the RFC 9432 value `2`.
+- Member zones are discovered from single-PTR member nodes directly below
+  `zones.<catalog-zone>`.
+- Unsupported catalog RRs and unsupported properties are ignored.
+- Member zones inherit the catalog zone transfer primaries, transfer transport,
+  TSIG key, NOTIFY source policy, transfer source binding, and transfer limits.
+- Adding a member PTR schedules transfer of the new member zone.
+- Removing a member PTR removes catalog-managed in-memory service for that
+  member zone.
+- Duplicate member zones or malformed required catalog data cause OxideDNS to
+  leave the previous applied catalog membership unchanged.
+
+Out of MVP scope:
+
+- Per-member custom transfer settings from catalog properties.
+- Catalog migration state beyond replacing the previous in-memory membership
+  set for the configured catalog.
+- Persistent catalog or member-zone state across process restarts.
+- Primary-side catalog generation.
+
+## Configuration
+
+Catalog zones use the same primary and TSIG wiring as ordinary zones:
+
+```toml
+[[catalog_zones]]
+name = "catalog.example."
+class = "IN"
+primaries = ["192.0.2.53:53"]
+notify_sources = ["192.0.2.53"]
+tsig_key = "transfer-key."
+serve_catalog_zone = false
+```
+
+`serve_catalog_zone` controls whether the catalog zone itself is visible on the
+DNS query interface. The default is `false`, because RFC 9432 treats catalog
+zones as management data for authoritative-server farms, not as data intended
+for recursive lookup. With the default, OxideDNS still transfers and processes
+the catalog zone but does not answer authoritative DNS queries for that catalog
+apex or names below it.
+
+Catalog member zones are served on the DNS query interface after they transfer
+successfully. They do not need `[[zones]]` entries.
+
+## Operational Model
+
+On startup OxideDNS inserts configured catalog zones into the zone-state
+machine and starts transfer attempts. Once a catalog transfer succeeds,
+member-zone refresh requests are queued. Member zones start in LOADING, become
+ACTIVE after a successful transfer, and follow the same SOA-driven refresh and
+expiry rules as statically configured zones.
+
+Operators should secure catalog transfers at least as strongly as ordinary
+zone transfers. A catalog producer controls the set of zones an OxideDNS
+instance serves, so TSIG or XoT plus tight source-address allowlisting is
+expected for production use.
+
+Configuration remains static for the catalog zone definitions themselves.
+Changing the set of configured catalogs, their primaries, TSIG references, or
+the `serve_catalog_zone` policy requires a process restart. The member-zone set
+inside a catalog is dynamic and follows successful catalog transfers.
+
+## PowerDNS Primary Pattern
+
+For an internal PowerDNS plus PostgreSQL primary, publish one RFC 9432 catalog
+zone from PowerDNS and configure OxideDNS as a secondary for that catalog. Zone
+creation then becomes:
+
+1. Create or update the real authoritative zone in PowerDNS.
+2. Add or remove the matching member PTR in the catalog zone.
+3. Allow PowerDNS to notify OxideDNS for the catalog zone, or wait for the next
+   SOA-driven catalog refresh.
+4. OxideDNS transfers the catalog, schedules member transfers, and begins
+   serving successfully transferred member zones externally.
+
+The catalog zone itself can remain internal management data by leaving
+`serve_catalog_zone = false`.

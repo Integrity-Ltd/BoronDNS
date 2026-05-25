@@ -4061,11 +4061,11 @@ These items could be added in a future version without violating any architectur
 
 *Description.* The mechanism by which a primary publishes a "catalog zone" listing the zones that secondaries should serve, allowing dynamic zone provisioning by adding entries to the catalog.
 
-*Rationale for exclusion.* Per ODS-INV-005, configuration is static; catalog zones imply dynamic zone-set changes outside the operator's static configuration.
+*Engineering MVP update.* Catalog Zones are now a new post-SRS Engineering MVP target. Static configuration still applies to the catalog definitions, transfer primaries, TSIG references, listeners, and management settings. The member-zone set inside a successfully transferred RFC 9432 catalog is intentionally dynamic.
 
-*Enforcement.* ODS-INV-005 prevents implementation under current invariants.
+*Enforcement.* See `docs/catalog-zone-mvp-rfc9432.md`. The default `serve_catalog_zone = false` policy allows OxideDNS to transfer and process the management catalog without answering external DNS queries for the catalog zone itself.
 
-*Note.* A future version relaxing ODS-INV-005 to permit catalog-driven zone configuration would constitute a significant architectural change requiring SRS revision.
+*Note.* This is an Engineering MVP extension to SRS v0.7 and should be carried into the next full SRS revision.
 
 ### C.3.10 EDNS Expire (RFC 7314)
 
@@ -4134,7 +4134,7 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 | 8484 | DNS-over-HTTPS | Current-scope exclusion | C.3.4 |
 | 8914 | EDNS Extended DNS Errors | Current-scope exclusion (flagged) | C.3.15 |
 | 9250 | DNS-over-QUIC | Current-scope exclusion | C.3.5 |
-| 9432 | DNS Catalog Zones | Current-scope exclusion (incompatible with ODS-INV-005) | C.3.9 |
+| 9432 | DNS Catalog Zones | Engineering MVP extension after v0.7; see C.3.9 update | C.3.9 |
 
 *Note.* RFC 7873 (DNS Cookies) was listed in this table in v0.1 and v0.2 as a current-scope exclusion. As of v0.3 it has been brought into MVP scope (§4.19) and is therefore removed from this table.
 

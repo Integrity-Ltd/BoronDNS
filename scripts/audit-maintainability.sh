@@ -84,6 +84,7 @@ print("module_map:")
 module_map = [
     ("crates/oxidedns-core/src/dns.rs", "DNS wire parsing, EDNS handling, and authoritative response construction"),
     ("crates/oxidedns-core/src/axfr.rs", "AXFR/IXFR query construction, transfer parsing, and zone publication validation"),
+    ("crates/oxidedns-core/src/catalog.rs", "RFC 9432 catalog-zone schema and member parsing"),
     ("crates/oxidedns-core/src/config.rs", "static TOML configuration model and validation"),
     ("crates/oxidedns-core/src/tsig.rs", "TSIG signing, verification, and error response helpers"),
     ("crates/oxidedns-core/src/zone.rs", "memory-resident zone snapshots and lookup state"),

@@ -1,4 +1,5 @@
 pub mod axfr;
+pub mod catalog;
 pub mod config;
 pub mod dns;
 pub mod tsig;

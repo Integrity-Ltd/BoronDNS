@@ -29,9 +29,10 @@ use flate2::{Compression, write::GzEncoder};
 use oxidedns_core::{
     ConfigWarning, ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
+    catalog::{CatalogError, parse_catalog_members},
     config::{
-        CookieConfig, CookiePolicyConfig, HealthConfig, RrlConfig, TransferPrimaryConfig,
-        TransferTransportConfig, ZoneConfig,
+        CatalogZoneConfig, CookieConfig, CookiePolicyConfig, HealthConfig, RrlConfig,
+        TransferPrimaryConfig, TransferTransportConfig, ZoneConfig,
     },
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
@@ -250,6 +251,15 @@ impl Runtime {
                     .expect("configuration validation rejects invalid zone names"),
             );
         }
+        for catalog_zone in &config.catalog_zones {
+            let origin = DomainName::from_absolute_str(&catalog_zone.name)
+                .expect("configuration validation rejects invalid catalog zone names");
+            if catalog_zone.serve_catalog_zone {
+                zones.insert_loading(origin);
+            } else {
+                zones.insert_loading_hidden(origin);
+            }
+        }
 
         Self { config, zones }
     }
@@ -282,6 +292,7 @@ impl Runtime {
         let run_as_user = privilege::configured_run_as_user(&self.config)?;
         tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config)?;
+        let catalog_manager = CatalogManager::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
             Duration::from_secs(self.config.limits.zsm_max_interval_secs),
@@ -292,6 +303,11 @@ impl Runtime {
         for zone in &self.config.zones {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
+            refresh_registry.record_loading_start(&origin);
+        }
+        for catalog_zone in &self.config.catalog_zones {
+            let origin = DomainName::from_absolute_str(&catalog_zone.name)
+                .expect("configuration validation rejects invalid catalog zone names");
             refresh_registry.record_loading_start(&origin);
         }
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
@@ -399,9 +415,14 @@ impl Runtime {
         }
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
-            self.config.zones.clone(),
-            transfer_plan.clone(),
-            refresh_registry.clone(),
+            transfer_plan.initial_origins(),
+            CatalogRuntime {
+                manager: catalog_manager.clone(),
+                transfer_plan: transfer_plan.clone(),
+                refresh_registry: refresh_registry.clone(),
+                notify_authority: notify_authority.clone(),
+                refresh_tx: notify_refresh_tx.downgrade(),
+            },
             ixfr_cooldowns.clone(),
             metrics.clone(),
             InitialLoadSettings {
@@ -416,8 +437,13 @@ impl Runtime {
         refresh_workers.spawn(serve_refresh_requests(
             notify_refresh_rx,
             self.zones.clone(),
-            transfer_plan.clone(),
-            refresh_registry.clone(),
+            CatalogRuntime {
+                manager: catalog_manager.clone(),
+                transfer_plan: transfer_plan.clone(),
+                refresh_registry: refresh_registry.clone(),
+                notify_authority: notify_authority.clone(),
+                refresh_tx: notify_refresh_tx.downgrade(),
+            },
             ixfr_cooldowns.clone(),
             metrics.clone(),
             RefreshWorkerSettings {
@@ -614,9 +640,14 @@ impl Runtime {
     ) {
         run_initial_zone_loads(
             self.zones.clone(),
-            self.config.zones.clone(),
-            transfer_plan.clone(),
-            refresh_registry.clone(),
+            transfer_plan.initial_origins(),
+            CatalogRuntime {
+                manager: CatalogManager::from_config(&self.config),
+                transfer_plan: transfer_plan.clone(),
+                refresh_registry: refresh_registry.clone(),
+                notify_authority: NotifyAuthority::from_config(&self.config),
+                refresh_tx: mpsc::channel(1).0.downgrade(),
+            },
             ixfr_cooldowns.clone(),
             metrics.clone(),
             InitialLoadSettings {
@@ -634,11 +665,9 @@ impl Runtime {
 }
 
 pub fn validate_runtime_config(config: &ServerConfig) -> Result<(), TransferError> {
-    for zone in &config.zones {
-        for primary in zone.transfer_targets() {
-            if primary.transport == TransferTransportConfig::Xot {
-                validate_xot_transfer_target(&primary)?;
-            }
+    for (_zone_name, primary) in transfer_targets_with_names(config) {
+        if primary.transport == TransferTransportConfig::Xot {
+            validate_xot_transfer_target(&primary)?;
         }
     }
     Ok(())
@@ -683,19 +712,34 @@ fn runtime_config_warnings_at(
     now_unix_secs: i64,
 ) -> Result<Vec<ConfigWarning>, TransferError> {
     let mut warnings = Vec::new();
-    for zone in &config.zones {
-        for primary in zone.transfer_targets() {
-            if primary.transport != TransferTransportConfig::Xot {
-                continue;
-            }
-            warnings.extend(xot_trust_anchor_expiry_warnings(
-                &zone.name,
-                &primary,
-                now_unix_secs,
-            )?);
+    for (zone_name, primary) in transfer_targets_with_names(config) {
+        if primary.transport != TransferTransportConfig::Xot {
+            continue;
         }
+        warnings.extend(xot_trust_anchor_expiry_warnings(
+            &zone_name,
+            &primary,
+            now_unix_secs,
+        )?);
     }
     Ok(warnings)
+}
+
+fn transfer_targets_with_names(config: &ServerConfig) -> Vec<(String, TransferPrimaryConfig)> {
+    config
+        .zones
+        .iter()
+        .flat_map(|zone| {
+            zone.transfer_targets()
+                .into_iter()
+                .map(|primary| (zone.name.clone(), primary))
+        })
+        .chain(config.catalog_zones.iter().flat_map(|zone| {
+            zone.transfer_targets()
+                .into_iter()
+                .map(|primary| (zone.name.clone(), primary))
+        }))
+        .collect()
 }
 
 fn xot_trust_anchor_expiry_warnings(
@@ -5318,11 +5362,23 @@ impl ZoneTransferPlan {
             .copied()
             .find(|source| source.is_ipv4() == primary.is_ipv4())
     }
+
+    fn for_member_origin(&self, origin: DomainName) -> Self {
+        Self {
+            origin,
+            qclass: self.qclass,
+            primaries: self.primaries.clone(),
+            tsig_key: self.tsig_key.clone(),
+            tsig_fudge_seconds: self.tsig_fudge_seconds,
+            max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
+            transfer_sources: self.transfer_sources.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct TransferPlan {
-    zones_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
+    zones_by_key: Arc<Mutex<HashMap<String, ZoneTransferPlan>>>,
 }
 
 impl TransferPlan {
@@ -5346,47 +5402,127 @@ impl TransferPlan {
                 (key.name.canonical_key(), Arc::new(key))
             })
             .collect::<HashMap<_, _>>();
-        let zones_by_key = config
-            .zones
-            .iter()
-            .map(|zone| -> Result<(String, ZoneTransferPlan), RuntimeError> {
-                let origin = DomainName::from_absolute_str(&zone.name)
-                    .expect("configuration validation rejects invalid zone names");
-                let tsig_key = zone.tsig_key.as_ref().map(|name| {
-                    let name = DomainName::from_absolute_str(name)
-                        .expect("configuration validation rejects invalid TSIG key references");
-                    tsig_keys
-                        .get(&name.canonical_key())
-                        .expect("configuration validation rejects unknown TSIG key references")
-                        .clone()
-                });
-                let primaries = zone.transfer_targets();
-                let primary_start = primary_start_index(primaries.len())
-                    .map_err(RuntimeError::PrimaryRotationRandom)?;
-                let primaries = rotate_transfer_targets(primaries, primary_start);
-                Ok((
-                    origin.canonical_key(),
-                    ZoneTransferPlan {
-                        origin,
-                        qclass: 1,
-                        primaries,
-                        tsig_key,
-                        tsig_fudge_seconds: config.tsig.fudge_seconds,
-                        max_transfer_ingest_bytes: config.limits.max_transfer_ingest_bytes,
-                        transfer_sources: config.interfaces.transfer.clone(),
-                    },
-                ))
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
+        let mut zones_by_key = HashMap::new();
+        for zone in &config.zones {
+            let plan = transfer_plan_from_zone_config(
+                zone,
+                &tsig_keys,
+                config.tsig.fudge_seconds,
+                config.limits.max_transfer_ingest_bytes,
+                &config.interfaces.transfer,
+                &primary_start_index,
+            )?;
+            zones_by_key.insert(plan.origin.canonical_key(), plan);
+        }
+        for catalog_zone in &config.catalog_zones {
+            let plan = transfer_plan_from_catalog_zone_config(
+                catalog_zone,
+                &tsig_keys,
+                config.tsig.fudge_seconds,
+                config.limits.max_transfer_ingest_bytes,
+                &config.interfaces.transfer,
+                &primary_start_index,
+            )?;
+            zones_by_key.insert(plan.origin.canonical_key(), plan);
+        }
 
         Ok(Self {
-            zones_by_key: Arc::new(zones_by_key),
+            zones_by_key: Arc::new(Mutex::new(zones_by_key)),
         })
     }
 
     fn get(&self, origin: &DomainName) -> Option<ZoneTransferPlan> {
-        self.zones_by_key.get(&origin.canonical_key()).cloned()
+        self.zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned")
+            .get(&origin.canonical_key())
+            .cloned()
     }
+
+    fn insert(&self, plan: ZoneTransferPlan) {
+        self.zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned")
+            .insert(plan.origin.canonical_key(), plan);
+    }
+
+    fn remove(&self, origin: &DomainName) {
+        self.zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned")
+            .remove(&origin.canonical_key());
+    }
+
+    fn initial_origins(&self) -> Vec<DomainName> {
+        let mut origins = self
+            .zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned")
+            .values()
+            .map(|plan| plan.origin.clone())
+            .collect::<Vec<_>>();
+        origins.sort_by_key(|origin| origin.canonical_key());
+        origins
+    }
+}
+
+fn transfer_plan_from_zone_config(
+    zone: &ZoneConfig,
+    tsig_keys: &HashMap<String, Arc<TsigKey>>,
+    tsig_fudge_seconds: u16,
+    max_transfer_ingest_bytes: u64,
+    transfer_sources: &[SocketAddr],
+    primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
+) -> Result<ZoneTransferPlan, RuntimeError> {
+    let origin = DomainName::from_absolute_str(&zone.name)
+        .expect("configuration validation rejects invalid zone names");
+    let tsig_key = zone.tsig_key.as_ref().map(|name| {
+        let name = DomainName::from_absolute_str(name)
+            .expect("configuration validation rejects invalid TSIG key references");
+        tsig_keys
+            .get(&name.canonical_key())
+            .expect("configuration validation rejects unknown TSIG key references")
+            .clone()
+    });
+    let primaries = zone.transfer_targets();
+    let primary_start =
+        primary_start_index(primaries.len()).map_err(RuntimeError::PrimaryRotationRandom)?;
+    let primaries = rotate_transfer_targets(primaries, primary_start);
+    Ok(ZoneTransferPlan {
+        origin,
+        qclass: 1,
+        primaries,
+        tsig_key,
+        tsig_fudge_seconds,
+        max_transfer_ingest_bytes,
+        transfer_sources: transfer_sources.to_vec(),
+    })
+}
+
+fn transfer_plan_from_catalog_zone_config(
+    zone: &CatalogZoneConfig,
+    tsig_keys: &HashMap<String, Arc<TsigKey>>,
+    tsig_fudge_seconds: u16,
+    max_transfer_ingest_bytes: u64,
+    transfer_sources: &[SocketAddr],
+    primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
+) -> Result<ZoneTransferPlan, RuntimeError> {
+    let zone = ZoneConfig {
+        name: zone.name.clone(),
+        class: zone.class.clone(),
+        primaries: zone.primaries.clone(),
+        transfer_primaries: zone.transfer_primaries.clone(),
+        notify_sources: zone.notify_sources.clone(),
+        tsig_key: zone.tsig_key.clone(),
+    };
+    transfer_plan_from_zone_config(
+        &zone,
+        tsig_keys,
+        tsig_fudge_seconds,
+        max_transfer_ingest_bytes,
+        transfer_sources,
+        primary_start_index,
+    )
 }
 
 fn rotate_transfer_targets(
@@ -5454,6 +5590,7 @@ struct RefreshRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshReason {
+    Catalog,
     Notify,
     Scheduled,
 }
@@ -5461,10 +5598,216 @@ enum RefreshReason {
 impl RefreshReason {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Catalog => "catalog",
             Self::Notify => "notify",
             Self::Scheduled => "scheduled",
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct CatalogManager {
+    catalogs_by_key: Arc<HashMap<String, CatalogRuntimeConfig>>,
+    static_zone_keys: Arc<HashSet<String>>,
+    memberships_by_catalog: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CatalogRuntime {
+    manager: CatalogManager,
+    transfer_plan: TransferPlan,
+    refresh_registry: ZoneRefreshRegistry,
+    notify_authority: NotifyAuthority,
+    refresh_tx: mpsc::WeakSender<RefreshRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct CatalogRuntimeConfig {
+    origin: DomainName,
+    config: CatalogZoneConfig,
+}
+
+impl CatalogManager {
+    fn from_config(config: &ServerConfig) -> Self {
+        let catalogs_by_key = config
+            .catalog_zones
+            .iter()
+            .map(|catalog| {
+                let origin = DomainName::from_absolute_str(&catalog.name)
+                    .expect("configuration validation rejects invalid catalog zone names");
+                (
+                    origin.canonical_key(),
+                    CatalogRuntimeConfig {
+                        origin,
+                        config: catalog.clone(),
+                    },
+                )
+            })
+            .collect();
+        let static_zone_keys = config
+            .zones
+            .iter()
+            .map(|zone| {
+                DomainName::from_absolute_str(&zone.name)
+                    .expect("configuration validation rejects invalid zone names")
+                    .canonical_key()
+            })
+            .collect();
+
+        Self {
+            catalogs_by_key: Arc::new(catalogs_by_key),
+            static_zone_keys: Arc::new(static_zone_keys),
+            memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn is_catalog(&self, origin: &DomainName) -> bool {
+        self.catalogs_by_key.contains_key(&origin.canonical_key())
+    }
+
+    async fn apply_snapshot(
+        &self,
+        snapshot: &ZoneSnapshot,
+        zones: &ZoneStore,
+        transfer_plan: &TransferPlan,
+        refresh_registry: &ZoneRefreshRegistry,
+        notify_authority: &NotifyAuthority,
+        refresh_tx: &mpsc::WeakSender<RefreshRequest>,
+    ) {
+        let Some(catalog) = self.catalogs_by_key.get(&snapshot.origin.canonical_key()) else {
+            return;
+        };
+
+        if catalog.config.serve_catalog_zone {
+            zones.show_zone(&catalog.origin);
+        } else {
+            zones.hide_zone(&catalog.origin);
+        }
+
+        let members = match parse_catalog_members(snapshot) {
+            Ok(members) => members,
+            Err(error) => {
+                log_catalog_error(&error);
+                return;
+            }
+        };
+
+        let catalog_key = catalog.origin.canonical_key();
+        let mut members_by_key = HashMap::new();
+        for member in members {
+            members_by_key.insert(member.zone.canonical_key(), member.zone);
+        }
+        let new_member_keys = members_by_key.keys().cloned().collect::<HashSet<_>>();
+        let old_member_keys = self
+            .memberships_by_catalog
+            .lock()
+            .expect("catalog membership lock poisoned")
+            .get(&catalog_key)
+            .cloned()
+            .unwrap_or_default();
+
+        let Some(catalog_plan) = transfer_plan.get(&catalog.origin) else {
+            warn!(
+                category = "transfer",
+                event = "catalog_without_transfer_plan",
+                zone = %catalog.origin,
+                "catalog zone has no transfer plan"
+            );
+            return;
+        };
+
+        let mut added = new_member_keys
+            .difference(&old_member_keys)
+            .cloned()
+            .collect::<Vec<_>>();
+        added.sort();
+        for member_key in added {
+            let Some(member_origin) = members_by_key.get(&member_key).cloned() else {
+                continue;
+            };
+            if self.static_zone_keys.contains(&member_key) {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_static_zone_clash",
+                    catalog_zone = %catalog.origin,
+                    zone = %member_origin,
+                    "catalog member zone already has static configuration; keeping static configuration"
+                );
+                continue;
+            }
+            transfer_plan.insert(catalog_plan.for_member_origin(member_origin.clone()));
+            notify_authority.add_zone_from_catalog(&member_origin, &catalog.config);
+            if zones.find_exact_zone(&member_origin).is_none() {
+                zones.insert_loading(member_origin.clone());
+                refresh_registry.record_loading_start(&member_origin);
+            }
+            let Some(refresh_tx) = refresh_tx.upgrade() else {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_refresh_queue_closed",
+                    catalog_zone = %catalog.origin,
+                    zone = %member_origin,
+                    "catalog member refresh queue closed"
+                );
+                continue;
+            };
+            if refresh_tx
+                .send(RefreshRequest {
+                    zone: member_origin.clone(),
+                    requested_serial: None,
+                    reason: RefreshReason::Catalog,
+                })
+                .await
+                .is_err()
+            {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_refresh_queue_closed",
+                    catalog_zone = %catalog.origin,
+                    zone = %member_origin,
+                    "catalog member refresh queue closed"
+                );
+            }
+        }
+
+        let mut removed = old_member_keys
+            .difference(&new_member_keys)
+            .cloned()
+            .collect::<Vec<_>>();
+        removed.sort();
+        for member_key in removed {
+            if self.static_zone_keys.contains(&member_key) {
+                continue;
+            }
+            let member_origin = DomainName::from_absolute_str(&member_key)
+                .expect("canonical zone key is an absolute DNS name");
+            transfer_plan.remove(&member_origin);
+            notify_authority.remove_zone(&member_origin);
+            refresh_registry.remove_zone(&member_origin);
+            zones.remove_zone(&member_origin);
+            info!(
+                category = "transfer",
+                event = "catalog_member_removed",
+                catalog_zone = %catalog.origin,
+                zone = %member_origin,
+                "removed catalog-managed member zone"
+            );
+        }
+
+        self.memberships_by_catalog
+            .lock()
+            .expect("catalog membership lock poisoned")
+            .insert(catalog_key, new_member_keys);
+    }
+}
+
+fn log_catalog_error(error: &CatalogError) {
+    warn!(
+        category = "transfer",
+        event = "catalog_processing_failed",
+        error = %error,
+        "catalog zone update was not applied"
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -5915,6 +6258,13 @@ impl ZoneRefreshRegistry {
         }
     }
 
+    fn remove_zone(&self, origin: &DomainName) {
+        self.statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned")
+            .remove(&origin.canonical_key());
+    }
+
     fn effective_interval(&self, seconds: u32) -> Duration {
         let interval = Duration::from_secs(seconds as u64)
             .max(self.min_interval)
@@ -6005,18 +6355,18 @@ fn jitter_seed() -> u64 {
 
 #[derive(Debug, Clone)]
 struct NotifyAuthority {
-    sources_by_zone: Arc<HashMap<String, HashSet<IpAddr>>>,
+    sources_by_zone: Arc<Mutex<HashMap<String, HashSet<IpAddr>>>>,
     tsig_keys_by_name: Arc<HashMap<String, Arc<TsigKey>>>,
-    tsig_keys_by_zone: Arc<HashMap<String, Arc<TsigKey>>>,
+    tsig_keys_by_zone: Arc<Mutex<HashMap<String, Arc<TsigKey>>>>,
     tsig_fudge_seconds: u16,
 }
 
 impl Default for NotifyAuthority {
     fn default() -> Self {
         Self {
-            sources_by_zone: Arc::new(HashMap::new()),
+            sources_by_zone: Arc::new(Mutex::new(HashMap::new())),
             tsig_keys_by_name: Arc::new(HashMap::new()),
-            tsig_keys_by_zone: Arc::new(HashMap::new()),
+            tsig_keys_by_zone: Arc::new(Mutex::new(HashMap::new())),
             tsig_fudge_seconds: DEFAULT_TSIG_FUDGE_SECS,
         }
     }
@@ -6041,12 +6391,7 @@ impl NotifyAuthority {
         for zone in &config.zones {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
-            let mut sources = zone
-                .transfer_target_addrs()
-                .into_iter()
-                .map(|primary| primary.ip())
-                .collect::<HashSet<_>>();
-            sources.extend(zone.notify_sources.iter().copied());
+            let sources = notify_sources_for_zone(zone);
             sources_by_zone.insert(origin.canonical_key(), sources);
             if let Some(tsig_key) = &zone.tsig_key {
                 let key_name = DomainName::from_absolute_str(tsig_key)
@@ -6058,11 +6403,26 @@ impl NotifyAuthority {
                 tsig_keys_by_zone.insert(origin.canonical_key(), key);
             }
         }
+        for catalog_zone in &config.catalog_zones {
+            let origin = DomainName::from_absolute_str(&catalog_zone.name)
+                .expect("configuration validation rejects invalid catalog zone names");
+            let sources = notify_sources_for_catalog_zone(catalog_zone);
+            sources_by_zone.insert(origin.canonical_key(), sources);
+            if let Some(tsig_key) = &catalog_zone.tsig_key {
+                let key_name = DomainName::from_absolute_str(tsig_key)
+                    .expect("configuration validation rejects invalid TSIG key references");
+                let key = tsig_keys
+                    .get(&key_name.canonical_key())
+                    .expect("configuration validation rejects unknown TSIG key references")
+                    .clone();
+                tsig_keys_by_zone.insert(origin.canonical_key(), key);
+            }
+        }
 
         Self {
-            sources_by_zone: Arc::new(sources_by_zone),
+            sources_by_zone: Arc::new(Mutex::new(sources_by_zone)),
             tsig_keys_by_name: Arc::new(tsig_keys),
-            tsig_keys_by_zone: Arc::new(tsig_keys_by_zone),
+            tsig_keys_by_zone: Arc::new(Mutex::new(tsig_keys_by_zone)),
             tsig_fudge_seconds: config.tsig.fudge_seconds,
         }
     }
@@ -6071,6 +6431,8 @@ impl NotifyAuthority {
         qclass == 1
             && self
                 .sources_by_zone
+                .lock()
+                .expect("notify authority source lock poisoned")
                 .get(&qname.canonical_key())
                 .is_some_and(|sources| sources.contains(&source))
     }
@@ -6079,7 +6441,11 @@ impl NotifyAuthority {
         if qclass != 1 {
             return None;
         }
-        self.tsig_keys_by_zone.get(&qname.canonical_key()).cloned()
+        self.tsig_keys_by_zone
+            .lock()
+            .expect("notify authority zone TSIG lock poisoned")
+            .get(&qname.canonical_key())
+            .cloned()
     }
 
     fn tsig_key_by_name(&self, key_name: &DomainName) -> Option<Arc<TsigKey>> {
@@ -6087,6 +6453,58 @@ impl NotifyAuthority {
             .get(&key_name.canonical_key())
             .cloned()
     }
+
+    fn add_zone_from_catalog(&self, origin: &DomainName, catalog: &CatalogZoneConfig) {
+        self.sources_by_zone
+            .lock()
+            .expect("notify authority source lock poisoned")
+            .insert(
+                origin.canonical_key(),
+                notify_sources_for_catalog_zone(catalog),
+            );
+        if let Some(tsig_key) = &catalog.tsig_key {
+            let key_name = DomainName::from_absolute_str(tsig_key)
+                .expect("configuration validation rejects invalid TSIG key references");
+            if let Some(key) = self.tsig_keys_by_name.get(&key_name.canonical_key()) {
+                self.tsig_keys_by_zone
+                    .lock()
+                    .expect("notify authority zone TSIG lock poisoned")
+                    .insert(origin.canonical_key(), key.clone());
+            }
+        }
+    }
+
+    fn remove_zone(&self, origin: &DomainName) {
+        let key = origin.canonical_key();
+        self.sources_by_zone
+            .lock()
+            .expect("notify authority source lock poisoned")
+            .remove(&key);
+        self.tsig_keys_by_zone
+            .lock()
+            .expect("notify authority zone TSIG lock poisoned")
+            .remove(&key);
+    }
+}
+
+fn notify_sources_for_zone(zone: &ZoneConfig) -> HashSet<IpAddr> {
+    let mut sources = zone
+        .transfer_target_addrs()
+        .into_iter()
+        .map(|primary| primary.ip())
+        .collect::<HashSet<_>>();
+    sources.extend(zone.notify_sources.iter().copied());
+    sources
+}
+
+fn notify_sources_for_catalog_zone(zone: &CatalogZoneConfig) -> HashSet<IpAddr> {
+    let mut sources = zone
+        .transfer_target_addrs()
+        .into_iter()
+        .map(|primary| primary.ip())
+        .collect::<HashSet<_>>();
+    sources.extend(zone.notify_sources.iter().copied());
+    sources
 }
 
 struct PreparedDnsMessage {
@@ -6556,8 +6974,7 @@ fn signal_notify_refresh(
 async fn serve_refresh_requests(
     mut refresh_rx: mpsc::Receiver<RefreshRequest>,
     zones: ZoneStore,
-    transfer_plan: TransferPlan,
-    refresh_registry: ZoneRefreshRegistry,
+    catalog_runtime: CatalogRuntime,
     ixfr_cooldowns: IxfrCooldownRegistry,
     metrics: RuntimeMetrics,
     settings: RefreshWorkerSettings,
@@ -6576,19 +6993,19 @@ async fn serve_refresh_requests(
                     break;
                 };
 
-                let Some(plan) = transfer_plan.get(&request.zone) else {
+                let Some(plan) = catalog_runtime.transfer_plan.get(&request.zone) else {
                     let zone = &request.zone;
                     warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
-                    refresh_registry.cancel_in_progress(zone);
+                    catalog_runtime.refresh_registry.cancel_in_progress(zone);
                     continue;
                 };
 
                 if notify_serial_is_current(&zones, &request) {
                     let zone = &request.zone;
                     if let Some(snapshot) = zones.find_exact_zone(zone) {
-                        refresh_registry.record_success(&snapshot);
+                        catalog_runtime.refresh_registry.record_success(&snapshot);
                     } else {
-                        refresh_registry.cancel_in_progress(zone);
+                        catalog_runtime.refresh_registry.cancel_in_progress(zone);
                     }
                     info!(
                         zone = %zone,
@@ -6608,7 +7025,7 @@ async fn serve_refresh_requests(
                 let ixfr_timeout = settings.ixfr_timeout;
                 let tcp_connect_timeout = settings.tcp_connect_timeout;
                 let zones = zones.clone();
-                let refresh_registry = refresh_registry.clone();
+                let catalog_runtime = catalog_runtime.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
                 let metrics = metrics.clone();
                 transfers.spawn(async move {
@@ -6628,8 +7045,23 @@ async fn serve_refresh_requests(
                     )
                     .await;
                     match outcome.snapshot {
-                        Some(snapshot) => refresh_registry.record_success(&snapshot),
-                        None => refresh_registry.record_failure_with_cause(
+                        Some(snapshot) => {
+                            catalog_runtime.refresh_registry.record_success(&snapshot);
+                            if catalog_runtime.manager.is_catalog(&snapshot.origin) {
+                                catalog_runtime
+                                    .manager
+                                    .apply_snapshot(
+                                        &snapshot,
+                                        &zones,
+                                        &catalog_runtime.transfer_plan,
+                                        &catalog_runtime.refresh_registry,
+                                        &catalog_runtime.notify_authority,
+                                        &catalog_runtime.refresh_tx,
+                                    )
+                                    .await;
+                            }
+                        }
+                        None => catalog_runtime.refresh_registry.record_failure_with_cause(
                             &request.zone,
                             zones.find_exact_zone(&request.zone),
                             outcome.failure_cause,
@@ -6699,23 +7131,21 @@ impl RefreshZoneOutcome {
 
 async fn run_initial_zone_loads(
     zones: ZoneStore,
-    configured_zones: Vec<ZoneConfig>,
-    transfer_plan: TransferPlan,
-    refresh_registry: ZoneRefreshRegistry,
+    initial_origins: Vec<DomainName>,
+    catalog_runtime: CatalogRuntime,
     ixfr_cooldowns: IxfrCooldownRegistry,
     metrics: RuntimeMetrics,
     settings: InitialLoadSettings,
 ) -> Result<(), RuntimeError> {
     let mut transfers = JoinSet::new();
 
-    for zone in configured_zones {
-        let zone_apex = DomainName::from_absolute_str(&zone.name)
-            .expect("configuration validation rejects invalid zone names");
-        let plan = transfer_plan
+    for zone_apex in initial_origins {
+        let plan = catalog_runtime
+            .transfer_plan
             .get(&zone_apex)
             .expect("configuration validation builds a transfer plan for each zone");
         let zones = zones.clone();
-        let refresh_registry = refresh_registry.clone();
+        let catalog_runtime = catalog_runtime.clone();
         let ixfr_cooldowns = ixfr_cooldowns.clone();
         let metrics = metrics.clone();
         let axfr_timeout = settings.axfr_timeout;
@@ -6745,10 +7175,25 @@ async fn run_initial_zone_loads(
             )
             .await;
             match outcome.snapshot {
-                Some(snapshot) => refresh_registry.record_success(&snapshot),
+                Some(snapshot) => {
+                    catalog_runtime.refresh_registry.record_success(&snapshot);
+                    if catalog_runtime.manager.is_catalog(&snapshot.origin) {
+                        catalog_runtime
+                            .manager
+                            .apply_snapshot(
+                                &snapshot,
+                                &zones,
+                                &catalog_runtime.transfer_plan,
+                                &catalog_runtime.refresh_registry,
+                                &catalog_runtime.notify_authority,
+                                &catalog_runtime.refresh_tx,
+                            )
+                            .await;
+                    }
+                }
                 None => {
                     let zone_apex = &plan.origin;
-                    refresh_registry.record_failure_with_cause(
+                    catalog_runtime.refresh_registry.record_failure_with_cause(
                         zone_apex,
                         zones.find_exact_zone(zone_apex),
                         outcome.failure_cause,
@@ -7635,19 +8080,19 @@ mod tests {
     };
 
     use super::{
-        CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
-        DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
-        HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter,
-        NotifyAuthority, NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction,
-        NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage, QueryLatencyCategory,
-        QueryLatencyHistogram, QueryMetricObservation, QueryPipelineStage, RefreshAttemptContext,
-        RefreshRequest, RefreshWorkerSettings, ResponseCacheCandidateCategory,
-        ResponseCacheIneligibleReason, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
-        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError,
-        TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
-        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
-        load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
+        CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
+        DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS,
+        DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
+        LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
+        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage,
+        QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation, QueryPipelineStage,
+        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
+        ResponseCacheCandidateCategory, ResponseCacheIneligibleReason, RrlCategory, RrlDecision,
+        RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
+        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
+        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
+        drain_tcp_connections, handle_tcp_connection, handle_tcp_connection_with_query_hook,
+        jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
         log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
         observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
         prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
@@ -7678,6 +8123,86 @@ mod tests {
 
         let runtime = Runtime::new(config);
         assert_eq!(runtime.zone_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                notify_sources = ["192.0.2.53"]
+            "#,
+        )
+        .expect("valid catalog config");
+        let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog_origin.clone(),
+            Some(7),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![member_origin.to_wire()],
+                ),
+            ],
+        );
+        let zones = ZoneStore::new();
+        zones.insert_loading_hidden(catalog_origin.clone());
+        zones.insert_snapshot(snapshot.clone());
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+        let catalog_manager = CatalogManager::from_config(&config);
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
+        let notify_authority = NotifyAuthority::from_config(&config);
+        let (tx, mut rx) = mpsc::channel(1);
+
+        catalog_manager
+            .apply_snapshot(
+                &snapshot,
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &tx.downgrade(),
+            )
+            .await;
+
+        assert!(zones.find_zone(&catalog_origin).is_none());
+        assert!(transfer_plan.get(&member_origin).is_some());
+        assert_eq!(
+            zones
+                .find_exact_zone(&member_origin)
+                .expect("member zone loading snapshot")
+                .state,
+            ZoneState::Loading
+        );
+        assert!(
+            refresh_registry
+                .snapshots_by_zone()
+                .contains_key(&member_origin.canonical_key())
+        );
+        let request = rx.recv().await.expect("member refresh request");
+        assert_eq!(request.zone, member_origin);
+        assert_eq!(request.reason, super::RefreshReason::Catalog);
     }
 
     #[test]
@@ -7803,6 +8328,8 @@ mod tests {
         assert!(
             authority
                 .tsig_keys_by_zone
+                .lock()
+                .expect("notify authority zone TSIG lock poisoned")
                 .contains_key(&zone.canonical_key())
         );
 
@@ -11264,12 +11791,17 @@ mod tests {
         serve_refresh_requests(
             rx,
             zones.clone(),
-            transfer_plan,
-            ZoneRefreshRegistry::without_jitter(
-                std::time::Duration::ZERO,
-                std::time::Duration::ZERO,
-                std::time::Duration::ZERO,
-            ),
+            CatalogRuntime {
+                manager: CatalogManager::from_config(&config),
+                transfer_plan,
+                refresh_registry: ZoneRefreshRegistry::without_jitter(
+                    std::time::Duration::ZERO,
+                    std::time::Duration::ZERO,
+                    std::time::Duration::ZERO,
+                ),
+                notify_authority: NotifyAuthority::from_config(&config),
+                refresh_tx: mpsc::channel(1).0.downgrade(),
+            },
             IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
             metrics.clone(),
             RefreshWorkerSettings {
@@ -11360,12 +11892,17 @@ mod tests {
         let worker = tokio::spawn(serve_refresh_requests(
             rx,
             zones.clone(),
-            transfer_plan,
-            ZoneRefreshRegistry::without_jitter(
-                std::time::Duration::ZERO,
-                std::time::Duration::ZERO,
-                std::time::Duration::ZERO,
-            ),
+            CatalogRuntime {
+                manager: CatalogManager::from_config(&config),
+                transfer_plan,
+                refresh_registry: ZoneRefreshRegistry::without_jitter(
+                    std::time::Duration::ZERO,
+                    std::time::Duration::ZERO,
+                    std::time::Duration::ZERO,
+                ),
+                notify_authority: NotifyAuthority::from_config(&config),
+                refresh_tx: mpsc::channel(1).0.downgrade(),
+            },
             IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
             RuntimeMetrics::new(),
             RefreshWorkerSettings {
