@@ -98,12 +98,25 @@ OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-catalog \
 ```
 
 The script starts BIND in Docker with `catalog.example.` and `member.example.`
-as ordinary authoritative zones, starts OxideDNS with only `[[catalog_zones]]`,
-verifies the catalog is not query-visible with `serve_catalog_zone = false`,
-then edits and reloads the BIND catalog zone while OxideDNS keeps running. It
-confirms that adding a member PTR makes OxideDNS transfer and serve
-`member.example.`, and that removing the PTR makes OxideDNS stop serving that
-catalog-managed member.
+as ordinary authoritative zones, restricts AXFR to TSIG, starts OxideDNS with
+only `[[catalog_zones]]`, verifies the catalog is not query-visible with
+`serve_catalog_zone = false`, then edits and reloads the BIND catalog zone while
+OxideDNS keeps running. It confirms that adding a member PTR makes OxideDNS
+transfer and serve `member.example.`, and that removing the PTR makes OxideDNS
+stop serving that catalog-managed member.
+
+For the v0.9 BIND XoT matrix row, run the XoT variant:
+
+```bash
+OXIDEDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-xot-catalog \
+  scripts/interop-bind-xot-catalog-zone-docker.sh
+```
+
+This script starts BIND with an XoT listener, generated local CA/server
+certificate, ALPN `dot`, and TSIG-restricted catalog/member transfers. It proves
+plain TCP transfer is denied, signed XoT catalog transfer succeeds, OxideDNS
+consumes the catalog over XoT+TSIG, and live catalog add/remove updates are
+reconciled while OxideDNS remains running.
 
 ## PowerDNS PostgreSQL Catalog Check
 
