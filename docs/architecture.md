@@ -91,7 +91,9 @@ files and with the deferred optimization tracks below.
 `docs/unsafe-prone-dependencies.tsv` and
 `scripts/check-unsafe-prone-dependencies.py` gate adoption of known low-level
 dependencies so XDP/eBPF, io_uring, packed-store, or response-cache crates
-cannot enter `Cargo.lock` without an active boundary record.
+cannot enter `Cargo.lock` without an active boundary record. Current
+unsafe-prone dependencies must also declare adapter `allowed_paths`, and the
+gate rejects first-party Rust references outside those paths.
 
 Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
 are expected to require `unsafe` or unsafe-heavy dependencies. They must remain

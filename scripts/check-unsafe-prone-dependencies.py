@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 try:
@@ -10,7 +11,7 @@ except ModuleNotFoundError as exc:
     raise SystemExit("python tomllib is required to inspect Cargo.lock") from exc
 
 
-HEADER = ["package", "boundary_ids", "status", "rationale"]
+HEADER = ["package", "boundary_ids", "status", "allowed_paths", "rationale"]
 
 
 def fail(message: str) -> None:
@@ -53,6 +54,65 @@ def locked_packages(path: Path) -> set[str]:
     return {package["name"] for package in data.get("package", [])}
 
 
+def rust_crate_name(package: str) -> str:
+    return package.replace("-", "_")
+
+
+def first_party_rust_sources(repo_root: Path) -> list[Path]:
+    paths = sorted((repo_root / "crates").glob("*/src/**/*.rs"))
+    paths.extend(sorted((repo_root / "crates").glob("*/build.rs")))
+    paths.extend(sorted((repo_root / "fuzz").glob("**/*.rs")))
+    return paths
+
+
+def crate_reference_re(crate_name: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(^|\W)(use\s+{re.escape(crate_name)}\b|"
+        rf"extern\s+crate\s+{re.escape(crate_name)}\b|"
+        rf"{re.escape(crate_name)}::)"
+    )
+
+
+def assert_current_dependency_confined(
+    repo_root: Path, trigger_path: Path, package: str, row: dict[str, str]
+) -> None:
+    allowed_paths = {item for item in row["allowed_paths"].split(";") if item}
+    if not allowed_paths:
+        fail(f"{trigger_path}: {package} current row must declare allowed_paths")
+    live_allowed_paths = {path for path in allowed_paths if not path.startswith("future:")}
+    if not live_allowed_paths:
+        fail(f"{trigger_path}: {package} current row must declare live source allowed_paths")
+    for relative_path in live_allowed_paths:
+        if not (repo_root / relative_path).is_file():
+            fail(f"{trigger_path}: {package} allowed path does not exist: {relative_path}")
+
+    crate_name = rust_crate_name(package)
+    reference_re = crate_reference_re(crate_name)
+    violations: list[str] = []
+    observed_allowed_reference = False
+    for path in first_party_rust_sources(repo_root):
+        relative_path = path.relative_to(repo_root).as_posix()
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not reference_re.search(line):
+                continue
+            if relative_path in live_allowed_paths:
+                observed_allowed_reference = True
+            else:
+                violations.append(f"{relative_path}:{line_number}:{line.strip()}")
+
+    if violations:
+        formatted = "\n".join(f"- {violation}" for violation in violations)
+        fail(
+            f"unsafe-prone dependency {package!r} is referenced outside its "
+            f"declared adapter paths:\n{formatted}"
+        )
+    if not observed_allowed_reference:
+        fail(
+            f"unsafe-prone dependency {package!r} is current but no first-party "
+            "source reference was observed in its declared allowed_paths"
+        )
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     trigger_path = repo_root / "docs" / "unsafe-prone-dependencies.tsv"
@@ -92,6 +152,7 @@ def main() -> None:
                 f"unsafe-prone dependency {package!r} is current but mapped to "
                 f"non-current unsafe boundary rows: {inactive_boundaries}"
             )
+        assert_current_dependency_confined(repo_root, trigger_path, package, row)
 
     print("unsafe_prone_dependency_gate=passed")
 
