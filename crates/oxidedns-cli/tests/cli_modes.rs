@@ -186,6 +186,7 @@ fn dump_config_includes_rds_environment_overrides() {
         .env("ODS_TSIG_FUDGE_SECONDS", "30")
         .env("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600")
         .env("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200")
+        .env("ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200")
         .output()
         .expect("run oxidedns --dump-config");
 
@@ -202,6 +203,7 @@ fn dump_config_includes_rds_environment_overrides() {
     assert!(stdout.contains("fudge_seconds = 30"));
     assert!(stdout.contains("max_transfer_ingest_bytes = 104857600"));
     assert!(stdout.contains("zsm_max_interval_secs = 43200"));
+    assert!(stdout.contains("zsm_loading_warning_threshold_secs = 1200"));
 
     let _ = fs::remove_file(config);
 }
