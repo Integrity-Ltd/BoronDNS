@@ -420,6 +420,11 @@ XoT:
 - Runtime validation checks TLS file readability and parses trust anchors,
   client certificates, and client private keys before binding listeners.
 - TLS failures do not fall back to cleartext TCP for an XoT primary.
+- XoT logs record TLS session establishment, handshake failure, ALPN failure,
+  and session close. Successful establishment includes peer IP, SNI, negotiated
+  TLS version, and cipher suite. Session close includes duration and byte
+  counters. Certificate material, private keys, and TLS key material are not
+  logged.
 
 Network and process hardening:
 
@@ -543,8 +548,8 @@ current operator-relevant limitations are:
 - Full per-requirement traceability against the SRS is still pending.
 - IXFR has BIND true incremental interop and fallback coverage, but broader
   real-primary IXFR behavior matrix evidence remains pending.
-- XoT has in-process TLS success and fault coverage plus a Knot XoT script;
-  additional real-primary evidence remains pending.
+- XoT has in-process TLS success, fault, and structured logging coverage plus a
+  Knot XoT script; additional real-primary evidence remains pending.
 - DNSSEC serving has unit, fake-primary runtime, and Knot signed-primary
   runtime coverage for NSEC and NSEC3 paths; release traceability remains
   pending.

@@ -852,7 +852,20 @@ async fn poll_soa_from_primary_inner(
 
 enum TransferStream {
     Tcp(TcpStream),
-    Xot(Box<TlsStream<TcpStream>>),
+    Xot(XotTransferStream),
+}
+
+struct XotTransferStream {
+    stream: Box<TlsStream<TcpStream>>,
+    session: XotSessionLog,
+}
+
+struct XotSessionLog {
+    addr: SocketAddr,
+    sni: String,
+    started_at: Instant,
+    bytes_in: u64,
+    bytes_out: u64,
 }
 
 impl TransferStream {
@@ -868,6 +881,52 @@ impl TransferStream {
             Self::Tcp(stream) => stream.read_exact(buffer).await,
             Self::Xot(stream) => stream.read_exact(buffer).await,
         }
+    }
+}
+
+impl XotTransferStream {
+    fn new(stream: TlsStream<TcpStream>, addr: SocketAddr, sni: String) -> Self {
+        Self {
+            stream: Box::new(stream),
+            session: XotSessionLog {
+                addr,
+                sni,
+                started_at: Instant::now(),
+                bytes_in: 0,
+                bytes_out: 0,
+            },
+        }
+    }
+
+    async fn write_all(&mut self, buffer: &[u8]) -> std::io::Result<()> {
+        self.stream.write_all(buffer).await?;
+        self.session.bytes_out = self.session.bytes_out.saturating_add(buffer.len() as u64);
+        Ok(())
+    }
+
+    async fn read_exact(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.stream.read_exact(buffer).await?;
+        self.session.bytes_in = self.session.bytes_in.saturating_add(read as u64);
+        Ok(read)
+    }
+}
+
+impl Drop for XotSessionLog {
+    fn drop(&mut self) {
+        let duration_ms = duration_millis_u64(self.started_at.elapsed());
+        let bytes = self.bytes_in.saturating_add(self.bytes_out);
+        info!(
+            category = "xot",
+            event = "xot_tls_session_closed",
+            primary = %self.addr,
+            peer_ip = %self.addr.ip(),
+            sni = %self.sni,
+            duration_ms,
+            bytes,
+            bytes_in = self.bytes_in,
+            bytes_out = self.bytes_out,
+            "XoT TLS session closed"
+        );
     }
 }
 
@@ -891,17 +950,18 @@ async fn connect_transfer_stream(
 async fn connect_xot_stream(
     primary: &TransferPrimaryConfig,
 ) -> Result<TransferStream, TransferError> {
-    let server_name = primary
+    let sni = primary
         .server_name
         .as_deref()
         .ok_or_else(|| TransferError::XotConfig {
             addr: primary.addr,
             message: "missing server_name".to_owned(),
-        })?;
+        })?
+        .to_owned();
     let server_name =
-        ServerName::try_from(server_name.to_owned()).map_err(|error| TransferError::XotConfig {
+        ServerName::try_from(sni.clone()).map_err(|error| TransferError::XotConfig {
             addr: primary.addr,
-            message: format!("invalid server_name {server_name:?}: {error}"),
+            message: format!("invalid server_name {sni:?}: {error}"),
         })?;
 
     let mut client_config = build_xot_client_config(primary)?;
@@ -914,17 +974,67 @@ async fn connect_xot_stream(
                 source,
             })?;
     let connector = TlsConnector::from(Arc::new(client_config));
-    let stream = connector
-        .connect(server_name, tcp)
-        .await
-        .map_err(|source| TransferError::TlsHandshake {
-            addr: primary.addr,
-            source,
-        })?;
+    let stream = match connector.connect(server_name, tcp).await {
+        Ok(stream) => stream,
+        Err(source) => {
+            warn!(
+                category = "xot",
+                event = "xot_tls_handshake_failed",
+                primary = %primary.addr,
+                peer_ip = %primary.addr.ip(),
+                sni = %sni,
+                failure_cause = %source,
+                "XoT TLS handshake failed"
+            );
+            return Err(TransferError::TlsHandshake {
+                addr: primary.addr,
+                source,
+            });
+        }
+    };
     if stream.get_ref().1.alpn_protocol() != Some(b"dot".as_slice()) {
+        warn!(
+            category = "xot",
+            event = "xot_alpn_negotiation_failed",
+            primary = %primary.addr,
+            peer_ip = %primary.addr.ip(),
+            sni = %sni,
+            failure_cause = "missing negotiated dot ALPN",
+            "XoT ALPN negotiation failed"
+        );
         return Err(TransferError::XotAlpn { addr: primary.addr });
     }
-    Ok(TransferStream::Xot(Box::new(stream)))
+    let tls_version = stream
+        .get_ref()
+        .1
+        .protocol_version()
+        .map(|version| format!("{version:?}"))
+        .unwrap_or_else(|| "unknown".to_owned());
+    let cipher_suite = stream
+        .get_ref()
+        .1
+        .negotiated_cipher_suite()
+        .map(|suite| format!("{:?}", suite.suite()))
+        .unwrap_or_else(|| "unknown".to_owned());
+    info!(
+        category = "xot",
+        event = "xot_tls_session_established",
+        primary = %primary.addr,
+        peer_ip = %primary.addr.ip(),
+        sni = %sni,
+        tls_version = %tls_version,
+        cipher_suite = %cipher_suite,
+        "XoT TLS session established"
+    );
+    Ok(TransferStream::Xot(XotTransferStream::new(
+        stream,
+        primary.addr,
+        sni,
+    )))
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn build_xot_client_config(primary: &TransferPrimaryConfig) -> Result<ClientConfig, TransferError> {
@@ -8295,6 +8405,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn xot_transfer_logs_tls_session_establishment_and_close() {
+        let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
+        let target = TransferPrimaryConfig {
+            addr: primary,
+            transport: TransferTransportConfig::Xot,
+            server_name: Some("primary.example.test".to_owned()),
+            trust_anchors: vec![trust_anchor],
+            client_cert: None,
+            client_key: None,
+        };
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let snapshot = super::transfer_axfr_from_target_with_tsig(
+            &target,
+            &apex,
+            1,
+            0x1234,
+            TransferSession::default_unsigned(),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("XoT AXFR should succeed");
+
+        assert_eq!(snapshot.serial, Some(1));
+        assert!(captured.contains_all(&[
+            "XoT TLS session established",
+            "category=\"xot\"",
+            "event=\"xot_tls_session_established\"",
+            &format!("primary={primary}"),
+            "peer_ip=127.0.0.1",
+            "sni=primary.example.test",
+            "tls_version=TLSv1_",
+            "cipher_suite=TLS",
+        ]));
+        assert!(captured.contains_all(&[
+            "XoT TLS session closed",
+            "category=\"xot\"",
+            "event=\"xot_tls_session_closed\"",
+            &format!("primary={primary}"),
+            "peer_ip=127.0.0.1",
+            "sni=primary.example.test",
+            "duration_ms=",
+            "bytes=",
+            "bytes_in=",
+            "bytes_out=",
+        ]));
+    }
+
+    #[tokio::test]
     async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let primary = listener.local_addr().unwrap();
@@ -8442,6 +8604,9 @@ mod tests {
         zones.insert_loading(apex);
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
 
         let snapshot = refresh_zone_from_primaries(
             &zones,
@@ -8465,6 +8630,15 @@ mod tests {
             "missing ALPN dot must abort before sending a DNS transfer query"
         );
         assert_eq!(metrics.snapshot().axfr_failed, 1);
+        assert!(captured.contains_all(&[
+            "XoT ALPN negotiation failed",
+            "category=\"xot\"",
+            "event=\"xot_alpn_negotiation_failed\"",
+            &format!("primary={primary}"),
+            "peer_ip=127.0.0.1",
+            "sni=primary.example.test",
+            "failure_cause=\"missing negotiated dot ALPN\"",
+        ]));
     }
 
     #[tokio::test]
