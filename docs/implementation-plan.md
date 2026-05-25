@@ -34,7 +34,8 @@ plus already-started MVP protocol work:
 - SRS v0.7 Alpha interface surface: static configuration including validation
   and dump modes, canonical structured logging, process exit/help/version
   behavior, health/metrics, and graceful shutdown;
-- health, readiness, metrics, structured logs, and graceful shutdown;
+- health, readiness, metrics, long-LOADING zone warnings, structured logs, and
+  graceful shutdown;
 - safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
   evidence commands retained in the repo;
 - interoperability evidence against at least one real primary for AXFR, TSIG,
@@ -186,6 +187,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to configurable minimum and maximum effective intervals;
 - failed refresh transfers schedule retry from the transferred SOA RETRY field where available;
 - failed initial transfers for LOADING zones use exponential backoff starting at `[limits].zsm_initial_retry_secs`, defaulting to 60 seconds, and capped by `[limits].zsm_initial_retry_max_secs`, defaulting to 3600 seconds;
+- zones remaining in LOADING emit repeated structured warning logs at `[limits].zsm_loading_warning_threshold_secs`, defaulting to 3600 seconds, with zone name, elapsed LOADING duration, latest transfer failure cause, and next retry timestamp;
 - `[limits].zsm_min_interval_secs` configures the 60-second minimum effective SOA REFRESH/RETRY interval, and `[limits].zsm_max_interval_secs` configures the 86400-second maximum effective interval; original SOA timer values are preserved unchanged for serving;
 - scheduled REFRESH, RETRY, and initial-load backoff intervals receive independently sampled ±10% jitter;
 - the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
@@ -278,6 +280,7 @@ Slice 8 has health endpoint foundations:
 - `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
 - `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;
 - `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones; SRS-named per-zone state, LOADING duration seconds during current process uptime, held SOA serial, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, and per-zone query counts; query received totals; query RCODE totals; query truncation totals; CNAME chain limit and loop totals; AXFR/IXFR transfer-session started/completed/failed counters; NOTIFY receive/unauthorized/refresh-action counters; authorized NOTIFY TSIG verification outcome counters; global plus per-source-prefix DNS Cookie case/BADCOOKIE counters; suspicious configuration-warning count; the SRS `oxidedns_secondary_build_info` gauge; and the SRS `oxidedns_secondary_query_duration_seconds` histogram with default buckets and query-category labels;
+- the zone state scheduler emits `category=zone_state` / `event=zone_loading_threshold_exceeded` warning logs for zones that exceed the configured LOADING threshold and repeats them at the same interval until the zone leaves LOADING;
 - `GET /metrics` emits gzip-compressed output with `Content-Encoding: gzip` and `Vary: accept-encoding` when the request allows `Accept-Encoding: gzip`;
 - `GET /metrics` is rate limited per source IP by `[health].metrics_rate_limit_per_minute` and `[health].metrics_rate_limit_idle_seconds`, returning HTTP 429 with `Retry-After` and the SRS JSON body while leaving `/livez`, `/readyz`, and `/healthz` unbounded by the metrics limiter;
 - unknown paths return JSON HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405;

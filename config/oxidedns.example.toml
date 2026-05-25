@@ -108,6 +108,8 @@ zsm_min_interval_secs = 60
 zsm_max_interval_secs = 86400
 zsm_initial_retry_secs = 60
 zsm_initial_retry_max_secs = 3600
+# Long-LOADING warning threshold and repeat interval. Default: 3600 seconds.
+zsm_loading_warning_threshold_secs = 3600
 
 [[zones]]
 # Zone apex in absolute DNS name form.

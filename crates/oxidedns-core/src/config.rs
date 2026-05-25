@@ -190,6 +190,11 @@ impl ServerConfig {
                 "limits.zsm_initial_retry_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.zsm_loading_warning_threshold_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.zsm_loading_warning_threshold_secs must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.zsm_initial_retry_max_secs < self.limits.zsm_initial_retry_secs {
             return Err(ConfigError::Invalid(
                 "limits.zsm_initial_retry_max_secs must be at least limits.zsm_initial_retry_secs"
@@ -688,6 +693,8 @@ pub struct Limits {
     pub zsm_initial_retry_secs: u64,
     #[serde(default = "default_zsm_initial_retry_max_secs")]
     pub zsm_initial_retry_max_secs: u64,
+    #[serde(default = "default_zsm_loading_warning_threshold_secs")]
+    pub zsm_loading_warning_threshold_secs: u64,
 }
 
 impl Default for Limits {
@@ -715,6 +722,7 @@ impl Default for Limits {
             zsm_max_interval_secs: default_zsm_max_interval_secs(),
             zsm_initial_retry_secs: default_zsm_initial_retry_secs(),
             zsm_initial_retry_max_secs: default_zsm_initial_retry_max_secs(),
+            zsm_loading_warning_threshold_secs: default_zsm_loading_warning_threshold_secs(),
         }
     }
 }
@@ -1143,6 +1151,10 @@ fn default_zsm_initial_retry_max_secs() -> u64 {
     3600
 }
 
+fn default_zsm_loading_warning_threshold_secs() -> u64 {
+    3600
+}
+
 fn default_metrics_rate_limit_per_minute() -> u32 {
     60
 }
@@ -1226,6 +1238,7 @@ mod tests {
         assert_eq!(config.limits.zsm_max_interval_secs, 86_400);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
+        assert_eq!(config.limits.zsm_loading_warning_threshold_secs, 3600);
         assert_eq!(
             config.zones[0].transfer_targets(),
             vec![TransferPrimaryConfig::tcp(SocketAddr::from((
@@ -2433,6 +2446,7 @@ mod tests {
                 zsm_max_interval_secs = 86400
                 zsm_initial_retry_secs = 30
                 zsm_initial_retry_max_secs = 900
+                zsm_loading_warning_threshold_secs = 1200
 
                 [[zones]]
                 name = "example.test."
@@ -2445,6 +2459,7 @@ mod tests {
         assert_eq!(config.limits.zsm_max_interval_secs, 86_400);
         assert_eq!(config.limits.zsm_initial_retry_secs, 30);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 900);
+        assert_eq!(config.limits.zsm_loading_warning_threshold_secs, 1200);
     }
 
     #[test]
@@ -2744,6 +2759,10 @@ mod tests {
             ("zsm_min_interval_secs", "zsm_min_interval_secs"),
             ("zsm_max_interval_secs", "zsm_max_interval_secs"),
             ("zsm_initial_retry_secs", "zsm_initial_retry_secs"),
+            (
+                "zsm_loading_warning_threshold_secs",
+                "zsm_loading_warning_threshold_secs",
+            ),
         ] {
             let error = ServerConfig::from_toml_str(&format!(
                 r#"

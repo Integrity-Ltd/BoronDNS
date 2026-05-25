@@ -248,7 +248,13 @@ impl Runtime {
             Duration::from_secs(self.config.limits.zsm_max_interval_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_max_secs),
+            Duration::from_secs(self.config.limits.zsm_loading_warning_threshold_secs),
         );
+        for zone in &self.config.zones {
+            let origin = DomainName::from_absolute_str(&zone.name)
+                .expect("configuration validation rejects invalid zone names");
+            refresh_registry.record_loading_start(&origin);
+        }
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
@@ -4622,6 +4628,7 @@ struct ZoneRefreshRegistry {
     max_interval: Duration,
     initial_retry: Duration,
     initial_retry_max: Duration,
+    loading_warning_threshold: Duration,
     jitter: Jitter,
     statuses: Arc<Mutex<HashMap<String, ZoneRefreshStatus>>>,
 }
@@ -4685,6 +4692,9 @@ struct ZoneRefreshStatus {
     next_refresh: Option<Instant>,
     next_refresh_unix_secs: Option<u64>,
     expire_at: Option<Instant>,
+    loading_since: Option<Instant>,
+    next_loading_warning: Option<Instant>,
+    last_failure_cause: Option<String>,
     initial_failure_count: u32,
     failures_since_success: u64,
     in_progress: bool,
@@ -4696,6 +4706,14 @@ struct ZoneRefreshStatusSnapshot {
     last_success_unix_secs: Option<u64>,
     next_refresh_unix_secs: Option<u64>,
     failures_since_success: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadingWarning {
+    zone: DomainName,
+    elapsed_loading_secs: u64,
+    last_failure_cause: String,
+    next_retry_unix_secs: Option<u64>,
 }
 
 impl IxfrCooldownRegistry {
@@ -4745,12 +4763,14 @@ impl ZoneRefreshRegistry {
         max_interval: Duration,
         initial_retry: Duration,
         initial_retry_max: Duration,
+        loading_warning_threshold: Duration,
     ) -> Self {
         Self {
             min_interval,
             max_interval,
             initial_retry,
             initial_retry_max,
+            loading_warning_threshold,
             jitter: Jitter::new(jitter_seed()),
             statuses: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -4767,6 +4787,7 @@ impl ZoneRefreshRegistry {
             Duration::from_secs(86_400),
             initial_retry,
             initial_retry_max,
+            Duration::from_secs(3600),
         )
     }
 
@@ -4776,12 +4797,14 @@ impl ZoneRefreshRegistry {
         max_interval: Duration,
         initial_retry: Duration,
         initial_retry_max: Duration,
+        loading_warning_threshold: Duration,
     ) -> Self {
         Self {
             min_interval,
             max_interval,
             initial_retry,
             initial_retry_max,
+            loading_warning_threshold,
             jitter: Jitter::none(),
             statuses: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -4823,6 +4846,9 @@ impl ZoneRefreshRegistry {
                 next_refresh,
                 next_refresh_unix_secs,
                 expire_at,
+                loading_since: None,
+                next_loading_warning: None,
+                last_failure_cause: None,
                 initial_failure_count: 0,
                 failures_since_success: 0,
                 in_progress: false,
@@ -4831,19 +4857,70 @@ impl ZoneRefreshRegistry {
         );
     }
 
-    fn record_failure(&self, origin: &DomainName, current: Option<Arc<ZoneSnapshot>>) {
-        self.record_failure_at(origin, current, Instant::now());
+    fn record_loading_start(&self, origin: &DomainName) {
+        self.record_loading_start_at(origin, Instant::now());
     }
 
+    fn record_loading_start_at(&self, origin: &DomainName, now: Instant) {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        statuses
+            .entry(origin.canonical_key())
+            .or_insert_with(|| ZoneRefreshStatus {
+                origin: origin.clone(),
+                soa_timers: None,
+                last_success_unix_secs: None,
+                next_refresh: None,
+                next_refresh_unix_secs: None,
+                expire_at: None,
+                loading_since: Some(now),
+                next_loading_warning: Some(now + self.loading_warning_threshold),
+                last_failure_cause: None,
+                initial_failure_count: 0,
+                failures_since_success: 0,
+                in_progress: false,
+                expired: false,
+            });
+    }
+
+    fn record_failure_with_cause(
+        &self,
+        origin: &DomainName,
+        current: Option<Arc<ZoneSnapshot>>,
+        failure_cause: Option<String>,
+    ) {
+        self.record_failure_at_with_cause(origin, current, failure_cause, Instant::now());
+    }
+
+    #[cfg(test)]
     fn record_failure_at(
         &self,
         origin: &DomainName,
         current: Option<Arc<ZoneSnapshot>>,
         now: Instant,
     ) {
-        self.record_failure_at_with_timestamp(origin, current, now, unix_timestamp_seconds());
+        self.record_failure_at_with_cause(origin, current, None, now);
     }
 
+    fn record_failure_at_with_cause(
+        &self,
+        origin: &DomainName,
+        current: Option<Arc<ZoneSnapshot>>,
+        failure_cause: Option<String>,
+        now: Instant,
+    ) {
+        self.record_failure_at_with_timestamp_and_cause(
+            origin,
+            current,
+            failure_cause,
+            now,
+            unix_timestamp_seconds(),
+        );
+    }
+
+    #[cfg(test)]
     fn record_failure_at_with_timestamp(
         &self,
         origin: &DomainName,
@@ -4851,10 +4928,24 @@ impl ZoneRefreshRegistry {
         now: Instant,
         unix_secs: u64,
     ) {
+        self.record_failure_at_with_timestamp_and_cause(origin, current, None, now, unix_secs);
+    }
+
+    fn record_failure_at_with_timestamp_and_cause(
+        &self,
+        origin: &DomainName,
+        current: Option<Arc<ZoneSnapshot>>,
+        failure_cause: Option<String>,
+        now: Instant,
+        unix_secs: u64,
+    ) {
         let mut statuses = self
             .statuses
             .lock()
             .expect("zone refresh registry lock poisoned");
+        let failure_keeps_zone_loading = current
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.state == ZoneState::Loading);
         let status = statuses
             .entry(origin.canonical_key())
             .or_insert_with(|| ZoneRefreshStatus {
@@ -4864,6 +4955,9 @@ impl ZoneRefreshRegistry {
                 next_refresh: None,
                 next_refresh_unix_secs: None,
                 expire_at: None,
+                loading_since: None,
+                next_loading_warning: None,
+                last_failure_cause: None,
                 initial_failure_count: 0,
                 failures_since_success: 0,
                 in_progress: false,
@@ -4872,7 +4966,14 @@ impl ZoneRefreshRegistry {
 
         if let Some(snapshot) = current {
             status.soa_timers = snapshot.soa_timers;
-            status.expired = snapshot.state == oxidedns_core::zone::ZoneState::Expired;
+            status.expired = snapshot.state == ZoneState::Expired;
+        }
+        if failure_keeps_zone_loading && status.loading_since.is_none() {
+            status.loading_since = Some(now);
+            status.next_loading_warning = Some(now + self.loading_warning_threshold);
+        }
+        if let Some(failure_cause) = failure_cause {
+            status.last_failure_cause = Some(failure_cause);
         }
         let retry = if let Some(timers) = status.soa_timers {
             status.initial_failure_count = 0;
@@ -4886,6 +4987,42 @@ impl ZoneRefreshRegistry {
         status.next_refresh_unix_secs = Some(unix_secs.saturating_add(retry.as_secs()));
         status.failures_since_success = status.failures_since_success.saturating_add(1);
         status.in_progress = false;
+    }
+
+    fn loading_warnings_due(&self, zones: &ZoneStore, now: Instant) -> Vec<LoadingWarning> {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        statuses
+            .values_mut()
+            .filter_map(|status| {
+                if status
+                    .next_loading_warning
+                    .is_none_or(|warning_at| warning_at > now)
+                {
+                    return None;
+                }
+                let snapshot = zones.find_exact_zone(&status.origin)?;
+                if snapshot.state != ZoneState::Loading {
+                    status.loading_since = None;
+                    status.next_loading_warning = None;
+                    return None;
+                }
+                let loading_since = status.loading_since?;
+                let elapsed_loading_secs = now.saturating_duration_since(loading_since).as_secs();
+                status.next_loading_warning = Some(now + self.loading_warning_threshold);
+                Some(LoadingWarning {
+                    zone: status.origin.clone(),
+                    elapsed_loading_secs,
+                    last_failure_cause: status
+                        .last_failure_cause
+                        .clone()
+                        .unwrap_or_else(|| "none recorded".to_owned()),
+                    next_retry_unix_secs: status.next_refresh_unix_secs,
+                })
+            })
+            .collect()
     }
 
     fn start_due_refreshes(&self, now: Instant) -> Vec<DomainName> {
@@ -5494,7 +5631,7 @@ async fn serve_refresh_requests(
                 let metrics = metrics.clone();
                 transfers.spawn(async move {
                     let _transfer_permit = transfer_permit;
-                    match refresh_zone_from_primaries(
+                    let outcome = refresh_zone_from_primaries_with_outcome(
                         &zones,
                         &plan,
                         request.requested_serial,
@@ -5506,11 +5643,14 @@ async fn serve_refresh_requests(
                             reason: request.reason.as_str(),
                         },
                     )
-                    .await
-                    {
+                    .await;
+                    match outcome.snapshot {
                         Some(snapshot) => refresh_registry.record_success(&snapshot),
-                        None => refresh_registry
-                            .record_failure(&request.zone, zones.find_exact_zone(&request.zone)),
+                        None => refresh_registry.record_failure_with_cause(
+                            &request.zone,
+                            zones.find_exact_zone(&request.zone),
+                            outcome.failure_cause,
+                        ),
                     }
                 });
             }
@@ -5549,6 +5689,28 @@ struct RefreshAttemptContext<'a> {
     reason: &'a str,
 }
 
+#[derive(Debug)]
+struct RefreshZoneOutcome {
+    snapshot: Option<ZoneSnapshot>,
+    failure_cause: Option<String>,
+}
+
+impl RefreshZoneOutcome {
+    fn success(snapshot: ZoneSnapshot) -> Self {
+        Self {
+            snapshot: Some(snapshot),
+            failure_cause: None,
+        }
+    }
+
+    fn failure(failure_cause: Option<String>) -> Self {
+        Self {
+            snapshot: None,
+            failure_cause,
+        }
+    }
+}
+
 async fn run_initial_zone_loads(
     zones: ZoneStore,
     configured_zones: Vec<ZoneConfig>,
@@ -5581,7 +5743,7 @@ async fn run_initial_zone_loads(
 
         transfers.spawn(async move {
             let _transfer_permit = transfer_permit;
-            if let Some(snapshot) = refresh_zone_from_primaries(
+            let outcome = refresh_zone_from_primaries_with_outcome(
                 &zones,
                 &plan,
                 None,
@@ -5593,13 +5755,18 @@ async fn run_initial_zone_loads(
                     reason: "initial",
                 },
             )
-            .await
-            {
-                refresh_registry.record_success(&snapshot);
-            } else {
-                let zone_apex = &plan.origin;
-                refresh_registry.record_failure(zone_apex, zones.find_exact_zone(zone_apex));
-                warn!(zone = %zone_apex, "zone remains in LOADING state");
+            .await;
+            match outcome.snapshot {
+                Some(snapshot) => refresh_registry.record_success(&snapshot),
+                None => {
+                    let zone_apex = &plan.origin;
+                    refresh_registry.record_failure_with_cause(
+                        zone_apex,
+                        zones.find_exact_zone(zone_apex),
+                        outcome.failure_cause,
+                    );
+                    warn!(zone = %zone_apex, "zone remains in LOADING state");
+                }
             }
         });
     }
@@ -5628,6 +5795,9 @@ async fn serve_scheduled_refreshes(
                 warn!(zone = %zone, "zone expired");
             }
         }
+        for warning in refresh_registry.loading_warnings_due(&zones, now) {
+            log_loading_warning(warning);
+        }
 
         for zone in refresh_registry.start_due_refreshes(now) {
             match refresh_tx.try_send(RefreshRequest {
@@ -5648,6 +5818,18 @@ async fn serve_scheduled_refreshes(
             }
         }
     }
+}
+
+fn log_loading_warning(warning: LoadingWarning) {
+    warn!(
+        category = "zone_state",
+        event = "zone_loading_threshold_exceeded",
+        zone = %warning.zone,
+        elapsed_loading_secs = warning.elapsed_loading_secs,
+        last_failure_cause = %warning.last_failure_cause,
+        next_retry_unix_secs = ?warning.next_retry_unix_secs,
+        "zone remains in LOADING state beyond configured threshold"
+    );
 }
 
 fn notify_serial_is_current(zones: &ZoneStore, request: &RefreshRequest) -> bool {
@@ -5675,18 +5857,31 @@ fn ixfr_error_disables_ixfr(error: &TransferError) -> bool {
     )
 }
 
+#[cfg(test)]
 async fn refresh_zone_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
     context: RefreshAttemptContext<'_>,
 ) -> Option<ZoneSnapshot> {
+    refresh_zone_from_primaries_with_outcome(zones, plan, primary_serial_hint, context)
+        .await
+        .snapshot
+}
+
+async fn refresh_zone_from_primaries_with_outcome(
+    zones: &ZoneStore,
+    plan: &ZoneTransferPlan,
+    primary_serial_hint: Option<u32>,
+    context: RefreshAttemptContext<'_>,
+) -> RefreshZoneOutcome {
     let current_snapshot = zones
         .find_exact_zone(&plan.origin)
         .filter(|snapshot| snapshot.serial.is_some());
     let current_serial = current_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.serial);
+    let mut last_failure_cause = None;
 
     if let (Some(snapshot), Some(current_serial), Some(primary_serial)) =
         (&current_snapshot, current_serial, primary_serial_hint)
@@ -5699,7 +5894,7 @@ async fn refresh_zone_from_primaries(
                 reason = %context.reason,
                 "SOA serial hint confirmed zone current"
             );
-            return Some((**snapshot).clone());
+            return RefreshZoneOutcome::success((**snapshot).clone());
         }
 
         info!(
@@ -5721,6 +5916,8 @@ async fn refresh_zone_from_primaries(
             let qid = match transfer_query_id() {
                 Ok(qid) => qid,
                 Err(error) => {
+                    last_failure_cause =
+                        Some(format!("SOA poll failed for primary {primary}: {error}"));
                     warn!(
                         zone = %plan.origin,
                         %primary,
@@ -5750,7 +5947,7 @@ async fn refresh_zone_from_primaries(
                         reason = %context.reason,
                         "SOA poll confirmed zone current"
                     );
-                    return Some((**snapshot).clone());
+                    return RefreshZoneOutcome::success((**snapshot).clone());
                 }
                 Ok(primary_serial) => {
                     info!(
@@ -5763,6 +5960,8 @@ async fn refresh_zone_from_primaries(
                     );
                 }
                 Err(error) => {
+                    last_failure_cause =
+                        Some(format!("SOA poll failed for primary {primary}: {error}"));
                     warn!(
                         zone = %plan.origin,
                         %primary,
@@ -5787,6 +5986,9 @@ async fn refresh_zone_from_primaries(
                 let qid = match transfer_query_id() {
                     Ok(qid) => qid,
                     Err(error) => {
+                        last_failure_cause = Some(format!(
+                            "failed to generate IXFR query ID for primary {primary}: {error}"
+                        ));
                         warn!(
                             zone = %plan.origin,
                             %primary,
@@ -5823,7 +6025,7 @@ async fn refresh_zone_from_primaries(
                             reason = %context.reason,
                             "IXFR completed"
                         );
-                        return Some(snapshot);
+                        return RefreshZoneOutcome::success(snapshot);
                     }
                     Ok(IxfrResponse::Current) => {
                         context.metrics.record_ixfr_succeeded();
@@ -5834,7 +6036,7 @@ async fn refresh_zone_from_primaries(
                             reason = %context.reason,
                             "IXFR confirmed zone current"
                         );
-                        return Some((**current_snapshot).clone());
+                        return RefreshZoneOutcome::success((**current_snapshot).clone());
                     }
                     Err(error) => {
                         context.metrics.record_ixfr_failed();
@@ -5858,6 +6060,9 @@ async fn refresh_zone_from_primaries(
         let qid = match transfer_query_id() {
             Ok(qid) => qid,
             Err(error) => {
+                last_failure_cause = Some(format!(
+                    "failed to generate AXFR query ID for primary {primary}: {error}"
+                ));
                 warn!(
                     zone = %plan.origin,
                     %primary,
@@ -5893,9 +6098,10 @@ async fn refresh_zone_from_primaries(
                     reason = %context.reason,
                     "AXFR completed"
                 );
-                return Some(snapshot);
+                return RefreshZoneOutcome::success(snapshot);
             }
             Err(error) => {
+                last_failure_cause = Some(format!("AXFR failed for primary {primary}: {error}"));
                 context.metrics.record_axfr_failed();
                 warn!(
                     zone = %plan.origin,
@@ -5908,7 +6114,7 @@ async fn refresh_zone_from_primaries(
         }
     }
 
-    None
+    RefreshZoneOutcome::failure(last_failure_cause)
 }
 
 impl Drop for TcpConnectionPermit {
@@ -6265,25 +6471,25 @@ mod tests {
 
     use super::{
         CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore,
-        HealthEndpointState, IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority,
-        NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction, NotifyRefreshTracker,
-        NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
-        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
-        RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
-        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
-        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
-        load_pem_private_key, log_notify_log_summary, log_rrl_summary, metrics_body,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        required_file_descriptor_limit, response_category, response_opt_record,
-        response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
-        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
-        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-        transfer_query_id, uniform_index_from_u64, validate_file_descriptor_limit_value,
-        validate_runtime_config, write_tcp_message,
+        HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter,
+        NotifyAuthority, NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction,
+        NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
+        QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
+        RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
+        RuntimeStatus, TcpServerSettings, TransferError, TransferPlan, TransferSession,
+        TransferTsig, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
+        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        load_pem_certs, load_pem_private_key, log_loading_warning, log_notify_log_summary,
+        log_rrl_summary, metrics_body, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
+        response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
+        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
+        sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
+        validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -8806,6 +9012,7 @@ mod tests {
             std::time::Duration::from_secs(1_000),
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(180),
+            std::time::Duration::from_secs(3600),
         );
         let now = std::time::Instant::now();
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
@@ -8855,6 +9062,7 @@ mod tests {
             std::time::Duration::from_secs(1_000),
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(180),
+            std::time::Duration::from_secs(3600),
         );
         let now = std::time::Instant::now();
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
@@ -8901,6 +9109,136 @@ mod tests {
             "max_effective_secs=1000",
             "threshold_percent=90",
         ]));
+    }
+
+    #[test]
+    fn refresh_registry_emits_repeated_long_loading_warnings() {
+        let registry = ZoneRefreshRegistry::without_jitter_with_max(
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(86_400),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(300),
+        );
+        let zones = ZoneStore::new();
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("loading.test.").unwrap();
+        zones.insert_loading(origin.clone());
+
+        registry.record_loading_start_at(&origin, now);
+        assert!(
+            registry
+                .loading_warnings_due(&zones, now + std::time::Duration::from_secs(299))
+                .is_empty()
+        );
+
+        registry.record_failure_at_with_timestamp_and_cause(
+            &origin,
+            None,
+            Some("AXFR failed for primary 192.0.2.53:53: timeout".to_owned()),
+            now + std::time::Duration::from_secs(60),
+            1_700_000_000,
+        );
+        let warnings =
+            registry.loading_warnings_due(&zones, now + std::time::Duration::from_secs(300));
+        assert_eq!(
+            warnings,
+            vec![LoadingWarning {
+                zone: origin.clone(),
+                elapsed_loading_secs: 300,
+                last_failure_cause: "AXFR failed for primary 192.0.2.53:53: timeout".to_owned(),
+                next_retry_unix_secs: Some(1_700_000_060),
+            }]
+        );
+        assert!(
+            registry
+                .loading_warnings_due(&zones, now + std::time::Duration::from_secs(300))
+                .is_empty()
+        );
+
+        let warnings =
+            registry.loading_warnings_due(&zones, now + std::time::Duration::from_secs(600));
+        assert_eq!(
+            warnings,
+            vec![LoadingWarning {
+                zone: origin,
+                elapsed_loading_secs: 600,
+                last_failure_cause: "AXFR failed for primary 192.0.2.53:53: timeout".to_owned(),
+                next_retry_unix_secs: Some(1_700_000_060),
+            }]
+        );
+    }
+
+    #[test]
+    fn refresh_registry_does_not_warn_for_active_refresh_failures() {
+        let registry = ZoneRefreshRegistry::without_jitter_with_max(
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(86_400),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+            std::time::Duration::from_secs(300),
+        );
+        let zones = ZoneStore::new();
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("active.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+        zones.insert_snapshot(snapshot.clone());
+
+        registry.record_success_at(&snapshot, now);
+        registry.record_failure_at_with_timestamp_and_cause(
+            &origin,
+            Some(Arc::new(snapshot)),
+            Some("AXFR failed for primary 192.0.2.53:53: timeout".to_owned()),
+            now + std::time::Duration::from_secs(60),
+            1_700_000_000,
+        );
+
+        assert!(
+            registry
+                .loading_warnings_due(&zones, now + std::time::Duration::from_secs(3600))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn long_loading_warning_log_contains_operator_fields() {
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        log_loading_warning(LoadingWarning {
+            zone: DomainName::from_absolute_str("example.test.").unwrap(),
+            elapsed_loading_secs: 3600,
+            last_failure_cause: "AXFR failed for primary 192.0.2.53:53: timed out".to_owned(),
+            next_retry_unix_secs: Some(1_700_003_600),
+        });
+
+        assert!(
+            captured.contains_all(&[
+                "zone remains in LOADING state beyond configured threshold",
+                "category=\"zone_state\"",
+                "event=\"zone_loading_threshold_exceeded\"",
+                "zone=example.test.",
+                "elapsed_loading_secs=3600",
+                "last_failure_cause=AXFR failed for primary 192.0.2.53:53: timed out",
+                "next_retry_unix_secs=Some(1700003600)",
+            ]),
+            "{:?}",
+            captured
+                .lines
+                .lock()
+                .expect("captured events lock poisoned")
+        );
     }
 
     #[test]

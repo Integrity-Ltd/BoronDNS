@@ -180,7 +180,8 @@ reference. The major sections are:
 - `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
   fudge value.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
-  limits.
+  limits. `zsm_loading_warning_threshold_secs` defaults to 3600 and controls
+  the warning threshold and repeat interval for zones stuck in LOADING.
 - `[[zones]]`: served secondary zones and their primary transfer sources. When
   multiple primaries are listed, OxideDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
@@ -242,6 +243,11 @@ Production configuration notes:
   unauthorized-source and TSIG-failure NOTIFY warning logs. The default is 60
   seconds; repeated warnings from the same source /24 or /56 prefix, zone, and
   category are suppressed until the next window summary.
+- `[limits].zsm_loading_warning_threshold_secs` controls
+  `zone_loading_threshold_exceeded` warnings for zones that remain in LOADING.
+  The default is 3600 seconds. Each warning includes the zone name, elapsed
+  LOADING duration, latest transfer failure cause, and next retry timestamp,
+  and repeats at the same interval until the zone becomes ACTIVE.
 
 ## Running as a Service
 
@@ -314,7 +320,9 @@ HTTP 429, a `Retry-After` header, and a JSON body; `/livez`, `/readyz`, and
 The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
 process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
 zones. It is intended for alerts around zones that have not completed initial
-transfer after startup.
+transfer after startup. The scheduler also emits repeated
+`category=zone_state`, `event=zone_loading_threshold_exceeded` warning logs at
+`[limits].zsm_loading_warning_threshold_secs` while a zone remains in LOADING.
 
 Basic checks:
 
@@ -348,6 +356,8 @@ traffic. Treat those as pending until the gap register says otherwise.
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 
 - `/readyz` remaining 503 beyond the expected initial transfer window.
+- `zone_loading_threshold_exceeded` warnings or sustained non-zero
+  `oxidedns_secondary_zone_loading_seconds` for any zone.
 - A zone entering or remaining in EXPIRED state.
 - Increasing transfer failure counters.
 - Unexpected NOTIFY authorization or TSIG verification failures.
