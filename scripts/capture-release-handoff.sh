@@ -167,6 +167,7 @@ Required evidence pointer sources:
 - `logs/check-sh.log`
 - `logs/cargo-deny.log`
 - `logs/audit-safe-rust.log`
+- `unsafe-dependency-evidence/`
 - `logs/audit-maintainability.log`
 - `logs/audit-unused-code.log`
 - `coverage-evidence/`

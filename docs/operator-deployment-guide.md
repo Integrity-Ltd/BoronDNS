@@ -470,11 +470,14 @@ verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. It also retains unused/dead-code audit
 artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
-`coverage-evidence/`, the production-depth info verbosity profile setup under
-`info-verbosity-handoff/`, the Reference Hardware/Profile benchmark
-setup/report scaffold under `benchmark-handoff/`, the long-run soak
+`coverage-evidence/`, `cargo geiger` unsafe dependency enumeration under
+`unsafe-dependency-evidence/`, the production-depth info verbosity profile
+setup under `info-verbosity-handoff/`, the Reference Hardware/Profile
+benchmark setup/report scaffold under `benchmark-handoff/`, the long-run soak
 setup/report scaffold under `soak-handoff/`, and the release-governance setup
-under `release-handoff/`. The info verbosity, benchmark, soak, and
+under `release-handoff/`. The unsafe dependency evidence records scanner
+caveats and must be reviewed before it is treated as complete. The info
+verbosity, benchmark, soak, and
 release-governance handoffs are not completed profile, benchmark, soak, or
 release-acceptance evidence; they are release/operations template sets for the
 later delegated runs. Set
