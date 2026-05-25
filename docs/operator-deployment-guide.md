@@ -109,8 +109,10 @@ and are included in `--dump-config` output:
 - `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
 
-Full warning-catalogue handling for unrecognised `ODS_*` variables and any
-future schema-wide expansion remains tracked in the gap register.
+Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
+`category=configuration_warning` messages and ignored. Variables outside the
+`ODS_*` namespace are ignored silently. Full suspicious-configuration catalogue
+handling remains tracked in the gap register.
 
 ## Configuration
 

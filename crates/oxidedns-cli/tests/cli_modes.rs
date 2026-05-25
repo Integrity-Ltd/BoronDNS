@@ -152,6 +152,42 @@ fn invalid_rds_environment_override_exits_with_config_invalid() {
 }
 
 #[test]
+fn unrecognized_rds_environment_override_warns_without_failing() {
+    let config = write_config(
+        "unknown-env",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT", "120")
+        .env("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "240")
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("category=configuration_warning"));
+    assert!(stderr.contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"));
+    assert!(!stderr.contains("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn semantically_invalid_config_exits_with_config_invalid() {
     let config = write_config(
         "invalid",

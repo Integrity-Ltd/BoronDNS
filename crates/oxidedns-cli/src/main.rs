@@ -153,7 +153,9 @@ fn default_config_path() -> PathBuf {
 fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config =
         ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
-    apply_environment_overrides(&mut config).context("applying environment overrides")?;
+    let warnings =
+        apply_environment_overrides(&mut config).context("applying environment overrides")?;
+    emit_config_warnings(&warnings);
     config
         .validate()
         .context("validating effective configuration")?;
@@ -161,37 +163,60 @@ fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
     Ok(config)
 }
 
-fn apply_environment_overrides(config: &mut ServerConfig) -> Result<(), ConfigError> {
+fn apply_environment_overrides(config: &mut ServerConfig) -> Result<Vec<String>, ConfigError> {
     apply_environment_overrides_from(config, std::env::vars_os())
 }
 
 fn apply_environment_overrides_from<I>(
     config: &mut ServerConfig,
     vars: I,
-) -> Result<(), ConfigError>
+) -> Result<Vec<String>, ConfigError>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
+    let mut warnings = Vec::new();
     for (name, value) in vars {
         let Ok(name) = name.into_string() else {
             continue;
         };
-        let value = env_value_to_string(&name, value)?;
         match name.as_str() {
-            "ODS_SERVER_HEALTH" => config.server.health = Some(parse_env_value(&name, &value)?),
-            "ODS_SERVER_LOG_LEVEL" => config.server.log_level = value,
-            "ODS_SERVER_LOG_FORMAT" => config.server.log_format = parse_log_format(&name, &value)?,
-            "ODS_SERVER_NSID" => config.server.nsid = value,
+            "ODS_SERVER_HEALTH" => {
+                let value = env_value_to_string(&name, value)?;
+                config.server.health = Some(parse_env_value(&name, &value)?);
+            }
+            "ODS_SERVER_LOG_LEVEL" => {
+                config.server.log_level = env_value_to_string(&name, value)?;
+            }
+            "ODS_SERVER_LOG_FORMAT" => {
+                let value = env_value_to_string(&name, value)?;
+                config.server.log_format = parse_log_format(&name, &value)?;
+            }
+            "ODS_SERVER_NSID" => {
+                config.server.nsid = env_value_to_string(&name, value)?;
+            }
             "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
+                let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_per_minute = parse_env_value(&name, &value)?;
             }
             "ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS" => {
+                let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
+            }
+            _ if name.starts_with("ODS_") => {
+                warnings.push(format!(
+                    "warning category=configuration_warning env_var={name} message=\"unrecognised ODS_* environment variable ignored\""
+                ));
             }
             _ => {}
         }
     }
-    Ok(())
+    Ok(warnings)
+}
+
+fn emit_config_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("{warning}");
+    }
 }
 
 fn env_value_to_string(name: &str, value: OsString) -> Result<String, ConfigError> {
@@ -403,7 +428,7 @@ mod tests {
         )
         .expect("valid config");
 
-        apply_environment_overrides_from(
+        let warnings = apply_environment_overrides_from(
             &mut config,
             [
                 ("ODS_SERVER_HEALTH", "127.0.0.1:8081"),
@@ -417,6 +442,7 @@ mod tests {
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
         )
         .expect("env overrides");
+        assert!(warnings.is_empty());
         config.validate().expect("effective config is valid");
 
         assert_eq!(
@@ -459,5 +485,44 @@ mod tests {
                 .to_string()
                 .contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
         );
+    }
+
+    #[test]
+    fn unrecognised_rds_environment_override_reports_warning() {
+        let mut config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        let warnings = apply_environment_overrides_from(
+            &mut config,
+            [
+                (
+                    OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                    OsString::from("120"),
+                ),
+                (
+                    OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"),
+                    OsString::from("240"),
+                ),
+                (
+                    OsString::from("NOT_ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                    OsString::from("480"),
+                ),
+            ],
+        )
+        .expect("env overrides");
+
+        assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("category=configuration_warning"));
+        assert!(warnings[0].contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"));
     }
 }

@@ -278,7 +278,7 @@ Slice 8 has health endpoint foundations:
 - focused tests cover `/livez` and `/readyz` responses within the SRS 100 ms health-probe bound under starting and draining states.
 - CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
 - `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
-- `ODS_<SECTION>_<KEY>` environment overrides cover the current scalar server/health subset (`server.health`, log level/format, NSID, and health metrics rate-limit knobs), take precedence before runtime validation, and are reflected by `--dump-config`;
+- `ODS_<SECTION>_<KEY>` environment overrides cover the current scalar server/health subset (`server.health`, log level/format, NSID, and health metrics rate-limit knobs), take precedence before runtime validation, are reflected by `--dump-config`, and emit non-fatal `configuration_warning` stderr messages for unrecognised `ODS_*` variables;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
 
 RRL foundations are started:
