@@ -1,0 +1,17 @@
+options {
+    directory "/work";
+    listen-on port 5353 { any; };
+    listen-on-v6 { none; };
+    recursion no;
+    dnssec-validation no;
+    pid-file "/work/named.pid";
+    session-keyfile "/work/session.key";
+};
+
+zone "alpha.test." IN {
+    type primary;
+    file "/work/alpha.test.zone";
+    allow-query { any; };
+    allow-transfer { any; };
+    notify no;
+};

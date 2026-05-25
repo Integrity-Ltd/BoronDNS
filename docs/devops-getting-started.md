@@ -48,6 +48,18 @@ cargo deny check
 evidence. It includes formatting, clippy, tests, dependency policy, unused-code
 audit, unsafe-boundary checks, and short evidence captures.
 
+For a human-operated primary-server smoke test, run the BIND interop check after
+the normal Rust tests:
+
+```bash
+OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
+  scripts/interop-bind-axfr-docker.sh
+```
+
+See [Manual BIND interop smoke](manual-bind-interop.md) for the Docker and
+host-installed BIND variants, retained artifacts, and the VM/bare-metal note for
+large RRL source-IP rotation.
+
 ## 4. Build the Binary
 
 ```bash
@@ -142,6 +154,8 @@ OxideDNS ignores `SIGHUP`; configuration changes require a process restart.
 
 - [Operator deployment guide](operator-deployment-guide.md): full runtime,
   monitoring, security, and release evidence guidance.
+- [Manual BIND interop smoke](manual-bind-interop.md): local real-primary smoke
+  run and retained artifact map.
 - [Engineering MVP readiness](engineering-mvp-readiness.md): what can and
   cannot be claimed at the current milestone.
 - [Interface stability baseline](interface-stability-baseline.tsv): CLI,
