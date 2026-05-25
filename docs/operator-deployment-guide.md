@@ -231,10 +231,12 @@ Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram.
 
-SRS v0.7 also requires retained release evidence for build-info label accuracy,
-latency histogram behavior, broader retained health response-time evidence,
-gzip-capable metrics responses, and a per-source `/metrics` rate limit. Treat
-those as pending until the gap register says otherwise.
+The `/metrics` endpoint returns gzip-compressed output when the scrape request
+includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
+default. SRS v0.7 still requires retained release evidence for build-info label
+accuracy, latency histogram behavior, broader retained health response-time
+evidence, and a per-source `/metrics` rate limit. Treat those as pending until
+the gap register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 

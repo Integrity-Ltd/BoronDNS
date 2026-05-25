@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     future::Future,
+    io::Write,
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
@@ -13,10 +14,11 @@ use std::{
 use axum::{
     Router,
     extract::State,
-    http::{StatusCode, Uri, header},
+    http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
+use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
@@ -2210,16 +2212,82 @@ async fn readyz(State(state): State<HealthEndpointState>) -> Response {
     readiness_response(&state)
 }
 
-async fn metrics(State(state): State<HealthEndpointState>) -> Response {
+async fn metrics(headers: HeaderMap, State(state): State<HealthEndpointState>) -> Response {
+    let body = metrics_body(&state.zones, &state.metrics, &state.refresh_registry);
+    if accepts_gzip(&headers) {
+        match gzip_bytes(body.as_bytes()) {
+            Ok(compressed) => {
+                return (
+                    StatusCode::OK,
+                    [
+                        (
+                            header::CONTENT_TYPE,
+                            "text/plain; version=0.0.4; charset=utf-8",
+                        ),
+                        (header::CONTENT_ENCODING, "gzip"),
+                        (header::VARY, "accept-encoding"),
+                    ],
+                    compressed,
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                warn!(%error, "failed to gzip metrics response");
+            }
+        }
+    }
+
     (
         StatusCode::OK,
         [(
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        metrics_body(&state.zones, &state.metrics, &state.refresh_registry),
+        body,
     )
         .into_response()
+}
+
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(accept_encoding_value_allows_gzip)
+}
+
+fn accept_encoding_value_allows_gzip(value: &str) -> bool {
+    value.split(',').any(|encoding| {
+        let mut parts = encoding.split(';').map(str::trim);
+        if !parts
+            .next()
+            .is_some_and(|token| token.eq_ignore_ascii_case("gzip"))
+        {
+            return false;
+        }
+
+        for parameter in parts {
+            let Some((name, value)) = parameter.split_once('=') else {
+                continue;
+            };
+            if name.trim().eq_ignore_ascii_case("q")
+                && value
+                    .trim()
+                    .parse::<f32>()
+                    .is_ok_and(|quality| quality <= 0.0)
+            {
+                return false;
+            }
+        }
+
+        true
+    })
+}
+
+fn gzip_bytes(body: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(body)?;
+    encoder.finish()
 }
 
 fn metrics_body(
@@ -5200,6 +5268,7 @@ mod tests {
         let metrics = http_request(addr, "GET", "/metrics").await;
         assert!(metrics.starts_with("HTTP/1.1 200 OK"));
         assert!(metrics.contains("content-type: text/plain; version=0.0.4; charset=utf-8"));
+        assert!(!metrics.contains("content-encoding: gzip"));
         assert!(metrics.contains("oxidedns_zones_total 2"));
         assert!(metrics.contains("oxidedns_zones_active 1"));
         assert!(metrics.contains("oxidedns_queries_received_total 2"));
@@ -5286,6 +5355,34 @@ mod tests {
         );
         assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"example.test.\"} 2"));
         assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"loading.test.\"} 0"));
+
+        let compressed_metrics =
+            http_request_with_headers(addr, "GET", "/metrics", &[("Accept-Encoding", "gzip")])
+                .await;
+        let (compressed_headers, compressed_body) = split_http_response(&compressed_metrics);
+        assert!(compressed_headers.starts_with("HTTP/1.1 200 OK"));
+        assert!(
+            compressed_headers.contains("content-type: text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert!(compressed_headers.contains("content-encoding: gzip"));
+        assert!(compressed_headers.contains("vary: accept-encoding"));
+        let mut decoder = flate2::read::GzDecoder::new(compressed_body);
+        let mut decoded_metrics = String::new();
+        std::io::Read::read_to_string(&mut decoder, &mut decoded_metrics).unwrap();
+        assert!(decoded_metrics.contains("oxidedns_zones_total 2"));
+        assert!(decoded_metrics.contains("oxidedns_secondary_build_info{version=\"0.1.0\""));
+        assert!(decoded_metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"} 1"
+        ));
+
+        let gzip_disallowed =
+            http_request_with_headers(addr, "GET", "/metrics", &[("Accept-Encoding", "gzip;q=0")])
+                .await;
+        let (gzip_disallowed_headers, gzip_disallowed_body) = split_http_response(&gzip_disallowed);
+        assert!(gzip_disallowed_headers.starts_with("HTTP/1.1 200 OK"));
+        assert!(!gzip_disallowed_headers.contains("content-encoding: gzip"));
+        let gzip_disallowed_body = std::str::from_utf8(gzip_disallowed_body).unwrap();
+        assert!(gzip_disallowed_body.contains("oxidedns_zones_total 2"));
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
@@ -9751,19 +9848,44 @@ mod tests {
     }
 
     async fn http_request(addr: std::net::SocketAddr, method: &str, path: &str) -> String {
+        String::from_utf8(http_request_with_headers(addr, method, path, &[]).await)
+            .expect("HTTP response should be UTF-8")
+    }
+
+    async fn http_request_with_headers(
+        addr: std::net::SocketAddr,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Vec<u8> {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        let request = format!(
+        let mut request = format!(
             "{method} {path} HTTP/1.1\r\n\
              Host: localhost\r\n\
-             Connection: close\r\n\
-             Content-Length: 0\r\n\
-             \r\n"
+             Connection: close\r\n"
         );
+        for (name, value) in headers {
+            request.push_str(name);
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
+        request.push_str("Content-Length: 0\r\n\r\n");
         stream.write_all(request.as_bytes()).await.unwrap();
 
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
         response
+    }
+
+    fn split_http_response(response: &[u8]) -> (&str, &[u8]) {
+        let split = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("HTTP response should contain a header/body split")
+            + 4;
+        let headers = std::str::from_utf8(&response[..split]).expect("headers should be UTF-8");
+        (headers, &response[split..])
     }
 
     async fn eventually_http_request(
