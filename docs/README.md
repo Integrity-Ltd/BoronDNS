@@ -21,6 +21,8 @@ and update companion documents afterward.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
 - `engineering-mvp-scope.md`: local Engineering MVP boundary, especially the
   exclusion of completed long-running evidence from this milestone.
+- `zsm-engineering-mvp-matrix.tsv`: checked short-evidence matrix for Zone
+  State Machine requirements.
 - `implementation-plan.md`: Engineering MVP and SRS acceptance implementation plan.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
 - `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.
