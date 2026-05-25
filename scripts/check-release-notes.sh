@@ -110,6 +110,13 @@ for regression_field in \
   require_text "$regression_field"
 done
 
+for maintainability_field in \
+  "First-party Rust source line count" \
+  "Rationale for exceeding LOC target" \
+  "Coverage summary"; do
+  require_text "$maintainability_field"
+done
+
 for security_field in \
   "Dependency audit result" \
   "Unsafe dependency enumeration and scanner caveats" \

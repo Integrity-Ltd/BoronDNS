@@ -122,7 +122,7 @@ def main() -> None:
         if not row["path"].startswith("future:"):
             fail(f"{registry_path}: {row_id} must not point at a live source path while deferred")
         joined = " ".join(row.values()).lower()
-        for term in ("adapter", "test", "unsafe"):
+        for term in ("adapter", "test", "unsafe", "safety"):
             if term not in joined:
                 fail(f"{registry_path}: {row_id} must document {term} expectations")
 

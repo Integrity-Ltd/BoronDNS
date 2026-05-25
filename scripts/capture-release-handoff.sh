@@ -216,6 +216,8 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] `scripts/release-evidence-snapshot.sh` captured the candidate evidence.
 - [ ] Release notes contain no placeholders and pass `scripts/check-release-notes.sh`.
 - [ ] Dependency audit and source/license checks reviewed.
+- [ ] First-party Rust source line count and coverage measurements recorded in
+      release notes.
 - [ ] Safe-Rust audit, transitive unsafe enumeration, scanner caveats, and
       unsafe exception review attached.
 - [ ] Security policy reviewed for this release candidate.

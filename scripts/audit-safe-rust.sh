@@ -33,7 +33,7 @@ python3 "$repo_root/scripts/check-unsafe-boundaries.py"
 
 process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
 resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
-mapfile -t allowed_unsafe_allow_attrs < <(
+mapfile -t current_unsafe_adapter_paths < <(
   python3 - "$unsafe_boundary_registry" <<'PY'
 import csv
 import sys
@@ -57,7 +57,7 @@ if [[ -n "$allow_attr_matches" ]]; then
     absolute_path="${match%%:*}"
     relative_path="${absolute_path#"$repo_root/"}"
     allowed=0
-    for allowed_path in "${allowed_unsafe_allow_attrs[@]}"; do
+    for allowed_path in "${current_unsafe_adapter_paths[@]}"; do
       if [[ "$relative_path" == "$allowed_path" ]]; then
         allowed=1
         break
@@ -76,13 +76,16 @@ if [[ "${#unexpected_allow_attrs[@]}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "unsafe allowlist check passed: only audited OS adapter modules may opt into unsafe_code"
+echo "unsafe allowlist check passed: only audited registry adapter modules may opt into unsafe_code"
 
+unsafe_exclude_globs=()
+for adapter_path in "${current_unsafe_adapter_paths[@]}"; do
+  unsafe_exclude_globs+=(--glob "!$adapter_path")
+done
 unsafe_matches="$(
-  rg --line-number --glob '*.rs' '\bunsafe\s*(\{|fn|impl|trait|extern)' \
-    "$repo_root/crates" "$repo_root/fuzz" \
-    --glob '!crates/oxidedns-server/src/process_signals.rs' \
-    --glob '!crates/oxidedns-server/src/resource_limits.rs' || true
+  rg --line-number --glob '*.rs' "${unsafe_exclude_globs[@]}" \
+    '\bunsafe\s*(\{|fn|impl|trait|extern)' \
+    "$repo_root/crates" "$repo_root/fuzz" || true
 )"
 
 if [[ -n "$unsafe_matches" ]]; then
@@ -100,7 +103,11 @@ if ! rg --quiet 'libc::getrlimit\(libc::RLIMIT_NOFILE' "$resource_limits_excepti
   exit 1
 fi
 
-python3 - "$process_signals_exception" "$resource_limits_exception" <<'PY'
+adapter_absolute_paths=()
+for adapter_path in "${current_unsafe_adapter_paths[@]}"; do
+  adapter_absolute_paths+=("$repo_root/$adapter_path")
+done
+python3 - "${adapter_absolute_paths[@]}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -121,7 +128,7 @@ if failures:
 print("unsafe rationale check passed: audited unsafe blocks have SAFETY comments")
 PY
 
-echo "first-party unsafe scan passed: only audited POSIX signal-disposition and rlimit exceptions found"
+echo "first-party unsafe scan passed: only audited registry adapter exceptions found"
 
 if command -v cargo-geiger >/dev/null 2>&1; then
   echo "cargo-geiger available; retain transitive unsafe enumeration with scripts/capture-unsafe-dependency-evidence.sh"

@@ -73,8 +73,12 @@ obscuring SRS traceability.
 ## Unsafe Boundary Policy
 
 The workspace defaults to `unsafe_code = "forbid"` for first-party crates. The
-only current exceptions are the POSIX signal-disposition and file-descriptor
-limit adapters in `crates/oxidedns-server/src/process_signals.rs` and
+`oxidedns-server` package is the deliberate exception at the manifest-lint layer
+because it owns the current operating-system adapters; its crate root keeps
+`#![deny(unsafe_code)]`, and only registry-listed adapter modules may opt back
+in with local `#![allow(unsafe_code)]`. The only current adapter modules are the
+POSIX signal-disposition and file-descriptor limit wrappers in
+`crates/oxidedns-server/src/process_signals.rs` and
 `crates/oxidedns-server/src/resource_limits.rs`. The machine-readable boundary
 registry is `docs/unsafe-boundaries.tsv`; `scripts/check-unsafe-boundaries.py`
 keeps that registry synchronized with live `#![allow(unsafe_code)]` source
