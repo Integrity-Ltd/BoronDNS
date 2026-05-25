@@ -4,7 +4,8 @@
 # ["0.0.0.0:53", "[::]:53"] for UDP and TCP.
 # Runtime log level. Default: "info".
 log_level = "info"
-# Runtime log format. Default: "json"; set to "plain" for local debugging.
+# Runtime log format. Default: "json"; "logfmt" is also SRS-structured.
+# "plain" remains a local debugging compatibility format.
 log_format = "json"
 # Optional NSID response payload. Default: empty, which disables NSID responses.
 nsid = "oxidedns-example"

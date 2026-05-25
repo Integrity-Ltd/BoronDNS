@@ -163,7 +163,7 @@ reference. The major sections are:
   log level, and log format. New deployments should prefer `[interfaces]` for
   network roles.
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
-  16384 and causes oversized JSON/plain entries to be replaced by a parseable
+  16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
 - `[interfaces]`: SRS v0.7 network roles. `interfaces.dns` overrides the
   legacy DNS listener lists and is used for both UDP and TCP DNS service;
@@ -230,9 +230,10 @@ Production configuration notes:
 - Use absolute DNS names with trailing dots for zone names and TSIG key names.
 - Keep `notify_sources` restricted to primary addresses or explicit NOTIFY
   relays.
-- Prefer `log_format = "json"` for supervised service and log aggregation.
-  Warning and error entries are written to stderr; lower-level entries are
-  written to stdout.
+- Prefer `log_format = "json"` or `log_format = "logfmt"` for supervised
+  service and log aggregation. `plain` remains available for local debugging
+  but is not the SRS structured non-JSON format. Warning and error entries are
+  written to stderr; lower-level entries are written to stdout.
 - Before the configuration is parsed, OxideDNS emits JSON bootstrap records on
   stderr for process start, configuration read, and validation success or
   failure; those records are not reformatted by later logging settings.

@@ -7,8 +7,20 @@ use std::str::FromStr;
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tracing::{Level, warn};
-use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
+use tracing::{
+    Event, Level, Subscriber,
+    field::{Field, Visit},
+    warn,
+};
+use tracing_subscriber::{
+    EnvFilter,
+    fmt::{
+        FmtContext,
+        format::{FormatEvent, FormatFields, Writer},
+        writer::MakeWriterExt,
+    },
+    registry::LookupSpan,
+};
 use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
 use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
@@ -461,9 +473,10 @@ where
 fn parse_log_format(name: &str, value: &str) -> Result<LogFormatConfig, ConfigError> {
     match value {
         "json" => Ok(LogFormatConfig::Json),
+        "logfmt" => Ok(LogFormatConfig::Logfmt),
         "plain" => Ok(LogFormatConfig::Plain),
         _ => Err(ConfigError::Invalid(format!(
-            "environment variable {name} must be either json or plain"
+            "environment variable {name} must be json, logfmt, or plain"
         ))),
     }
 }
@@ -523,6 +536,16 @@ fn init_logging(config: &ServerConfig) -> anyhow::Result<()> {
             let writer = level_split_log_writer(max_entry_length_bytes, log_format);
             tracing_subscriber::fmt()
                 .json()
+                .with_env_filter(filter)
+                .with_writer(writer)
+                .try_init()
+                .map_err(|error| anyhow!("initializing logging: {error}"))?
+        }
+        LogFormatConfig::Logfmt => {
+            let writer = level_split_log_writer(max_entry_length_bytes, log_format);
+            tracing_subscriber::fmt()
+                .fmt_fields(LogfmtFields)
+                .event_format(LogfmtFormatter)
                 .with_env_filter(filter)
                 .with_writer(writer)
                 .try_init()
@@ -616,7 +639,9 @@ fn truncated_log_entry(
     let entry_text = String::from_utf8_lossy(entry);
     match format {
         LogFormatConfig::Json => truncated_json_log_entry(&entry_text, max_entry_length_bytes),
-        LogFormatConfig::Plain => truncated_plain_log_entry(&entry_text, max_entry_length_bytes),
+        LogFormatConfig::Logfmt | LogFormatConfig::Plain => {
+            truncated_logfmt_log_entry(&entry_text, max_entry_length_bytes)
+        }
     }
 }
 
@@ -630,7 +655,7 @@ fn truncated_json_log_entry(entry_text: &str, max_entry_length_bytes: usize) -> 
     })
 }
 
-fn truncated_plain_log_entry(entry_text: &str, max_entry_length_bytes: usize) -> Vec<u8> {
+fn truncated_logfmt_log_entry(entry_text: &str, max_entry_length_bytes: usize) -> Vec<u8> {
     truncated_entry_with(entry_text, max_entry_length_bytes, |message| {
         format!(
             "message=\"{}\" truncated=true\n",
@@ -694,6 +719,171 @@ fn escape_json_string(value: &str) -> String {
     escaped
 }
 
+struct LogfmtFormatter;
+
+impl<S, N> FormatEvent<S, N> for LogfmtFormatter
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        let metadata = event.metadata();
+        let mut fields = LogfmtFieldVisitor::default();
+        event.record(&mut fields);
+
+        write!(
+            writer,
+            "timestamp={} level={} target={}",
+            logfmt_value(&bootstrap_timestamp()),
+            log_level_name(metadata.level()),
+            logfmt_value(metadata.target())
+        )?;
+
+        if let Some(scope) = ctx.event_scope() {
+            for span in scope.from_root() {
+                write!(writer, " span={}", logfmt_value(span.name()))?;
+                let extensions = span.extensions();
+                if let Some(span_fields) =
+                    extensions.get::<tracing_subscriber::fmt::FormattedFields<N>>()
+                    && !span_fields.is_empty()
+                {
+                    write!(writer, " {span_fields}")?;
+                }
+            }
+        }
+
+        if let Some(message) = fields.message {
+            write!(writer, " message={}", logfmt_value(&message))?;
+        }
+
+        for (name, value) in fields.fields {
+            write!(writer, " {name}={}", logfmt_value(&value))?;
+        }
+
+        writeln!(writer)
+    }
+}
+
+struct LogfmtFields;
+
+impl<'writer> FormatFields<'writer> for LogfmtFields {
+    fn format_fields<R>(&self, mut writer: Writer<'writer>, fields: R) -> std::fmt::Result
+    where
+        R: tracing_subscriber::field::RecordFields,
+    {
+        let mut visitor = LogfmtFieldVisitor::default();
+        fields.record(&mut visitor);
+
+        let mut first = true;
+        if let Some(message) = visitor.message {
+            write_logfmt_pair(&mut writer, &mut first, "message", &message)?;
+        }
+        for (name, value) in visitor.fields {
+            write_logfmt_pair(&mut writer, &mut first, &name, &value)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct LogfmtFieldVisitor {
+    message: Option<String>,
+    fields: Vec<(String, String)>,
+}
+
+impl LogfmtFieldVisitor {
+    fn record_value(&mut self, field: &Field, value: String) {
+        let name = canonical_field_name(field.name());
+        if name.starts_with("log.") {
+            return;
+        }
+        if name == "message" {
+            self.message = Some(value);
+        } else {
+            self.fields.push((name.to_owned(), value));
+        }
+    }
+}
+
+impl Visit for LogfmtFieldVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_value(field, value.to_owned());
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_value(field, value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_value(field, value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_value(field, value.to_string());
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.record_value(field, value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.record_value(field, trim_debug_string(format!("{value:?}")));
+    }
+}
+
+fn write_logfmt_pair(
+    writer: &mut Writer<'_>,
+    first: &mut bool,
+    name: &str,
+    value: &str,
+) -> std::fmt::Result {
+    if *first {
+        *first = false;
+    } else {
+        write!(writer, " ")?;
+    }
+    write!(writer, "{name}={}", logfmt_value(value))
+}
+
+fn log_level_name(level: &Level) -> &'static str {
+    match *level {
+        Level::ERROR => "error",
+        Level::WARN => "warning",
+        Level::INFO => "info",
+        Level::DEBUG => "debug",
+        Level::TRACE => "trace",
+    }
+}
+
+fn canonical_field_name(name: &str) -> &str {
+    name.strip_prefix("r#").unwrap_or(name)
+}
+
+fn logfmt_value(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
+        })
+    {
+        value.to_owned()
+    } else {
+        format!("\"{}\"", escape_logfmt_string(value))
+    }
+}
+
+fn trim_debug_string(value: String) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(&value)
+        .to_owned()
+}
+
 fn escape_logfmt_string(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -720,6 +910,7 @@ fn normalize_log_level(level: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn commands_default_to_srs_config_path() {
@@ -974,7 +1165,7 @@ mod tests {
             [
                 ("ODS_SERVER_HEALTH", "127.0.0.1:8081"),
                 ("ODS_SERVER_LOG_LEVEL", "debug"),
-                ("ODS_SERVER_LOG_FORMAT", "plain"),
+                ("ODS_SERVER_LOG_FORMAT", "logfmt"),
                 ("ODS_SERVER_NSID", "env-nsid"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
@@ -996,7 +1187,7 @@ mod tests {
             Some("127.0.0.1:8081".parse().unwrap())
         );
         assert_eq!(config.server.log_level, "debug");
-        assert_eq!(config.server.log_format, LogFormatConfig::Plain);
+        assert_eq!(config.server.log_format, LogFormatConfig::Logfmt);
         assert_eq!(config.server.nsid, "env-nsid");
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
@@ -1095,9 +1286,9 @@ mod tests {
     }
 
     #[test]
-    fn oversized_plain_log_entry_is_truncated_to_logfmt_entry() {
+    fn oversized_logfmt_entry_is_truncated_to_parseable_entry() {
         let entry = format!("INFO message=\"{}\"\n", "x".repeat(512));
-        let truncated = truncated_log_entry(LogFormatConfig::Plain, entry.as_bytes(), 160);
+        let truncated = truncated_log_entry(LogFormatConfig::Logfmt, entry.as_bytes(), 160);
         let text = String::from_utf8(truncated).expect("utf8 log entry");
 
         assert!(text.len() <= 160);
@@ -1105,6 +1296,45 @@ mod tests {
         assert!(text.starts_with("message=\""));
         assert!(text.contains(LOG_TRUNCATION_MARKER));
         assert!(text.contains("truncated=true"));
+    }
+
+    #[test]
+    fn logfmt_helpers_render_canonical_values() {
+        assert_eq!(log_level_name(&Level::WARN), "warning");
+        assert_eq!(logfmt_value("refresh failed"), "\"refresh failed\"");
+        assert_eq!(logfmt_value("example.test."), "example.test.");
+        assert_eq!(trim_debug_string("\"192.0.2.53\"".to_owned()), "192.0.2.53");
+    }
+
+    #[test]
+    fn logfmt_formatter_emits_structured_tracing_events() {
+        let output = SharedLogOutput::default();
+        let subscriber = tracing_subscriber::fmt()
+            .fmt_fields(LogfmtFields)
+            .event_format(LogfmtFormatter)
+            .with_env_filter(EnvFilter::new("info"))
+            .with_writer(output.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                target: "oxidedns_test",
+                zone = "example.test.",
+                serial = 42_u64,
+                r#type = "axfr",
+                "refresh complete"
+            );
+        });
+
+        let text = output.text();
+        assert!(text.starts_with("timestamp="));
+        assert!(text.contains(" level=warning "));
+        assert!(text.contains(" target=oxidedns_test "));
+        assert!(text.contains(" message=\"refresh complete\""));
+        assert!(text.contains(" zone=example.test."));
+        assert!(text.contains(" serial=42"));
+        assert!(text.contains(" type=axfr"));
+        assert!(text.ends_with('\n'));
     }
 
     #[test]
@@ -1140,6 +1370,40 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedLogOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedLogOutput {
+        fn text(&self) -> String {
+            let bytes = self.0.lock().expect("log output lock").clone();
+            String::from_utf8(bytes).expect("utf8 log output")
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedLogOutput {
+        type Writer = SharedLogWriter;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            SharedLogWriter(self.0.clone())
+        }
+    }
+
+    struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedLogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log output lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 }

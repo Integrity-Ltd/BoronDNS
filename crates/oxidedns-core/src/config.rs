@@ -749,6 +749,7 @@ pub enum AnyResponseConfig {
 pub enum LogFormatConfig {
     #[default]
     Json,
+    Logfmt,
     Plain,
 }
 
@@ -2413,23 +2414,28 @@ mod tests {
     }
 
     #[test]
-    fn parses_plain_log_format() {
-        let config = ServerConfig::from_toml_str(
-            r#"
-                [server]
-                listen_udp = ["127.0.0.1:5300"]
-                log_level = "debug"
-                log_format = "plain"
+    fn parses_non_json_log_formats() {
+        for (format, expected) in [
+            ("logfmt", LogFormatConfig::Logfmt),
+            ("plain", LogFormatConfig::Plain),
+        ] {
+            let config = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+                    log_level = "debug"
+                    log_format = "{format}"
 
-                [[zones]]
-                name = "example.test."
-                primaries = ["192.0.2.53:53"]
-            "#,
-        )
-        .expect("valid config");
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect("valid config");
 
-        assert_eq!(config.server.log_level, "debug");
-        assert_eq!(config.server.log_format, LogFormatConfig::Plain);
+            assert_eq!(config.server.log_level, "debug");
+            assert_eq!(config.server.log_format, expected);
+        }
     }
 
     #[test]
