@@ -8,6 +8,7 @@ EVIDENCE = ROOT / "scripts" / "engineering-mvp-evidence.sh"
 PLAN = ROOT / "docs" / "implementation-plan.md"
 GAPS = ROOT / "docs" / "mvp-gap-register.md"
 LEDGER = ROOT / "docs" / "verification-ledger.md"
+READINESS = ROOT / "docs" / "engineering-mvp-readiness.md"
 
 REQUIRED_SCOPE_PHRASES = [
     "not the SRS",
@@ -108,6 +109,16 @@ def main() -> None:
     require(
         "block Engineering MVP when the missing evidence is explicitly deferred" in ledger,
         f"{LEDGER}: missing Engineering MVP interpretation for Partial ledger rows",
+    )
+
+    readiness = normalized(READINESS)
+    require(
+        "not full SRS `ODS-VER-008` release acceptance" in readiness,
+        f"{READINESS}: missing Engineering MVP readiness SRS-acceptance boundary",
+    )
+    require(
+        "Do not call the Engineering MVP ready" in readiness,
+        f"{READINESS}: missing Engineering MVP stop conditions",
     )
 
     for path in [CHECK, EVIDENCE]:

@@ -13,6 +13,7 @@ python3 -m py_compile scripts/check-unsafe-prone-dependencies.py
 python3 -m py_compile scripts/check-interface-compatibility.py
 python3 -m py_compile scripts/check-dnssec-conformance-matrix.py
 python3 -m py_compile scripts/check-engineering-mvp-scope.py
+python3 -m py_compile scripts/check-engineering-mvp-readiness.py
 python3 -m py_compile scripts/check-zsm-engineering-mvp-matrix.py
 python3 -m py_compile scripts/check-functional-requirement-references.py
 python3 -m py_compile scripts/check-ci-workflow.py
@@ -24,6 +25,7 @@ python3 scripts/check-unsafe-prone-dependencies.py
 python3 scripts/check-interface-compatibility.py
 python3 scripts/check-dnssec-conformance-matrix.py
 python3 scripts/check-engineering-mvp-scope.py
+python3 scripts/check-engineering-mvp-readiness.py
 python3 scripts/check-zsm-engineering-mvp-matrix.py
 python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-ci-workflow.py
