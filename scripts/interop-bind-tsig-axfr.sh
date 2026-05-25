@@ -19,6 +19,7 @@ zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/bind-tsig-axfr-$$"
+artifact_dir="${OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -34,6 +35,8 @@ cleanup() {
   if (( status != 0 )); then
     [[ -f "$workdir/named.log" ]] && { echo "---- named.log ----" >&2; tail -100 "$workdir/named.log" >&2; }
     [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
+    [[ -f "$workdir/unsigned-axfr.out" ]] && { echo "---- unsigned-axfr.out ----" >&2; cat "$workdir/unsigned-axfr.out" >&2; }
+    [[ -f "$workdir/signed-axfr.out" ]] && { echo "---- signed-axfr.out ----" >&2; cat "$workdir/signed-axfr.out" >&2; }
   fi
 }
 trap cleanup EXIT
@@ -118,15 +121,18 @@ if [[ -z "$primary_soa" ]]; then
 fi
 
 set +e
-unsigned_axfr="$(dig "@127.0.0.1" -p "$bind_port" alpha.test. AXFR +time=2 +tries=1 2>&1)"
+dig "@127.0.0.1" -p "$bind_port" alpha.test. AXFR +nocmd +time=2 +tries=1 >"$workdir/unsigned-axfr.out" 2>&1
 unsigned_status=$?
 set -e
+unsigned_axfr="$(cat "$workdir/unsigned-axfr.out")"
 if (( unsigned_status == 0 )) && [[ "$unsigned_axfr" == *"www.alpha.test."* ]]; then
   echo "BIND TSIG primary unexpectedly allowed unsigned AXFR" >&2
   exit 1
 fi
 
-signed_axfr="$(dig "@127.0.0.1" -p "$bind_port" -y "hmac-sha256:transfer-key.:$tsig_secret" alpha.test. AXFR +time=2 +tries=1)"
+dig "@127.0.0.1" -p "$bind_port" -y "hmac-sha256:transfer-key.:$tsig_secret" alpha.test. AXFR +nocmd +time=2 +tries=1 \
+  >"$workdir/signed-axfr.out"
+signed_axfr="$(cat "$workdir/signed-axfr.out")"
 if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.alpha.test."* ]]; then
   echo "BIND TSIG primary signed AXFR did not include expected fixture records" >&2
   exit 1
@@ -139,29 +145,35 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+printf '%s\n' "$ready" >"$workdir/readyz.json"
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after TSIG-signed BIND AXFR" >&2
   exit 1
 fi
 
-answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/oxidedns-answer-a.out"
+answer_a="$(cat "$workdir/oxidedns-answer-a.out")"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected A response after TSIG AXFR" >&2
   exit 1
 fi
 
-tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
+  >"$workdir/oxidedns-tcp-soa.out"
+tcp_soa="$(cat "$workdir/oxidedns-tcp-soa.out")"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
   echo "OxideDNS did not serve expected TCP SOA response after TSIG AXFR" >&2
   exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 if [[ "$metrics" != *'oxidedns_zones_active 1'* ]] || [[ "$metrics" != *'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'* ]]; then
   echo "OxideDNS metrics did not expose successful TSIG AXFR transfer" >&2
   exit 1
@@ -170,6 +182,32 @@ fi
 if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
   echo "OxideDNS log leaked TSIG secret" >&2
   exit 1
+fi
+
+cat >"$workdir/bind-tsig-axfr-summary.env" <<EOF
+unsigned_axfr_rejected=1
+signed_axfr_succeeded=1
+oxidedns_ready_after_signed_axfr=1
+oxidedns_served_transferred_a=1
+oxidedns_served_transferred_tcp_soa=1
+oxidedns_transfer_metrics_checked=1
+tsig_secret_redaction_checked=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$named_conf" >"$artifact_dir/named.conf.redacted"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+  cp "$workdir/named.log" "$artifact_dir/named.log"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$workdir/unsigned-axfr.out" "$artifact_dir/unsigned-axfr.out"
+  cp "$workdir/signed-axfr.out" "$artifact_dir/signed-axfr.out"
+  cp "$workdir/oxidedns-answer-a.out" "$artifact_dir/oxidedns-answer-a.out"
+  cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
+  cp "$workdir/readyz.json" "$artifact_dir/readyz.json"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$workdir/bind-tsig-axfr-summary.env" "$artifact_dir/bind-tsig-axfr-summary.env"
 fi
 
 echo "BIND TSIG AXFR interop passed"
