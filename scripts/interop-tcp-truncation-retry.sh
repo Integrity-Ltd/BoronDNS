@@ -52,9 +52,13 @@ PY
 
 fake_primary="$workdir/fake-primary.py"
 client="$workdir/client.py"
+drain_client="$workdir/drain-client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+limit_summary_path="$workdir/tcp-limit-summary.env"
+drain_summary_path="$workdir/graceful-drain-summary.env"
+readyz_draining_path="$workdir/readyz-draining.txt"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -190,10 +194,12 @@ cat >"$client" <<'PY'
 import socket
 import struct
 import sys
+import time
 
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1])
 LOG_PATH = sys.argv[2]
+LIMIT_SUMMARY_PATH = sys.argv[3]
 QNAME = "large.tcp.test."
 A = 1
 IN = 1
@@ -220,6 +226,17 @@ def query(qid):
         + name_wire(QNAME)
         + struct.pack("!HH", A, IN)
     )
+
+
+def read_tcp_response(tcp):
+    length = struct.unpack("!H", tcp.recv(2))[0]
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = tcp.recv(length - len(chunks))
+        if not chunk:
+            raise AssertionError("short TCP response")
+        chunks.extend(chunk)
+    return bytes(chunks)
 
 
 def skip_name(packet, offset):
@@ -279,26 +296,156 @@ if not (udp_flags & 0x0200):
 tcp = socket.create_connection((HOST, PORT), timeout=2.0)
 tcp_query = query(0x6002)
 tcp.sendall(struct.pack("!H", len(tcp_query)) + tcp_query)
-length = struct.unpack("!H", tcp.recv(2))[0]
-chunks = bytearray()
-while len(chunks) < length:
-    chunk = tcp.recv(length - len(chunks))
-    if not chunk:
-        raise AssertionError("short TCP response")
-    chunks.extend(chunk)
-tcp_response = bytes(chunks)
+tcp_response = read_tcp_response(tcp)
 tcp_flags = struct.unpack("!H", tcp_response[2:4])[0]
 if tcp_flags & 0x0200:
     raise AssertionError("TCP response unexpectedly had TC=1")
 tcp_answers = answer_count(tcp_response)
 if tcp_answers < 80:
     raise AssertionError(f"TCP response returned too few A answers: {tcp_answers}")
+tcp.close()
+
+holder = socket.create_connection((HOST, PORT), timeout=2.0)
+holder_query = query(0x6003)
+holder.sendall(struct.pack("!H", len(holder_query)) + holder_query)
+holder_response = read_tcp_response(holder)
+if struct.unpack("!H", holder_response[2:4])[0] & 0x000F:
+    raise AssertionError("holder TCP response had non-zero RCODE")
+
+started = time.monotonic()
+overflow = socket.create_connection((HOST, PORT), timeout=2.0)
+overflow.settimeout(2.0)
+try:
+    overflow_data = overflow.recv(1)
+except ConnectionResetError:
+    overflow_data = b""
+elapsed_ms = int((time.monotonic() - started) * 1000)
+overflow.close()
+holder.close()
+if overflow_data:
+    raise AssertionError("over-limit TCP connection returned data instead of closing")
+
+limit_summary = f"over_limit_closed=1 over_limit_close_ms={elapsed_ms}"
+with open(LIMIT_SUMMARY_PATH, "w", encoding="utf-8") as handle:
+    print(limit_summary, file=handle)
+log(limit_summary)
 
 summary = (
     f"udp_truncated=1 udp_response_bytes={len(udp_response)} "
-    f"tcp_truncated=0 tcp_response_bytes={len(tcp_response)} tcp_a_answers={tcp_answers}"
+    f"tcp_truncated=0 tcp_response_bytes={len(tcp_response)} tcp_a_answers={tcp_answers} "
+    f"{limit_summary}"
 )
 log(summary)
+print(summary)
+PY
+
+cat >"$drain_client" <<'PY'
+#!/usr/bin/env python3
+import os
+import signal
+import socket
+import struct
+import sys
+import time
+import urllib.error
+import urllib.request
+
+HOST = "127.0.0.1"
+PORT = int(sys.argv[1])
+HEALTH_PORT = int(sys.argv[2])
+OXIDEDNS_PID = int(sys.argv[3])
+DRAIN_SUMMARY_PATH = sys.argv[4]
+READYZ_DRAINING_PATH = sys.argv[5]
+QNAME = "large.tcp.test."
+A = 1
+IN = 1
+
+
+def name_wire(name):
+    out = bytearray()
+    for label in name.rstrip(".").split("."):
+        encoded = label.encode("ascii")
+        out.append(len(encoded))
+        out.extend(encoded)
+    out.append(0)
+    return bytes(out)
+
+
+def query(qid):
+    return (
+        struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0)
+        + name_wire(QNAME)
+        + struct.pack("!HH", A, IN)
+    )
+
+
+def read_tcp_response(tcp):
+    length = struct.unpack("!H", tcp.recv(2))[0]
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = tcp.recv(length - len(chunks))
+        if not chunk:
+            raise AssertionError("short TCP response during drain")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def readyz_body():
+    url = f"http://{HOST}:{HEALTH_PORT}/readyz"
+    try:
+        with urllib.request.urlopen(url, timeout=0.2) as response:
+            return response.status, response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8")
+
+
+drain_socket = socket.create_connection((HOST, PORT), timeout=2.0)
+drain_query = query(0x6004)
+drain_socket.sendall(struct.pack("!H", len(drain_query)) + drain_query)
+
+start = time.monotonic()
+os.kill(OXIDEDNS_PID, signal.SIGTERM)
+draining_status = None
+draining_body = ""
+while time.monotonic() - start < 2.0:
+    status, body = readyz_body()
+    if status == 503 and '"status":"draining"' in body:
+        draining_status = status
+        draining_body = body
+        break
+    time.sleep(0.02)
+if draining_status != 503:
+    raise AssertionError("readyz did not report draining after SIGTERM")
+draining_ms = int((time.monotonic() - start) * 1000)
+with open(READYZ_DRAINING_PATH, "w", encoding="utf-8") as handle:
+    print(draining_body, file=handle)
+
+connect_start = time.monotonic()
+new_connection_closed = 0
+try:
+    probe = socket.create_connection((HOST, PORT), timeout=0.2)
+    probe.settimeout(0.2)
+    data = probe.recv(1)
+    new_connection_closed = 1 if not data else 0
+    probe.close()
+except OSError:
+    new_connection_closed = 1
+new_connection_ms = int((time.monotonic() - connect_start) * 1000)
+if new_connection_closed != 1:
+    raise AssertionError("new TCP connection stayed open during drain")
+
+drain_response = read_tcp_response(drain_socket)
+drain_socket.close()
+if struct.unpack("!H", drain_response[2:4])[0] & 0x000F:
+    raise AssertionError("drained TCP response had non-zero RCODE")
+
+summary = (
+    f"readyz_draining=1 readyz_draining_ms={draining_ms} "
+    f"new_tcp_rejected_or_closed=1 new_tcp_rejected_or_closed_ms={new_connection_ms} "
+    f"drained_response_bytes={len(drain_response)}"
+)
+with open(DRAIN_SUMMARY_PATH, "w", encoding="utf-8") as handle:
+    print(summary, file=handle)
 print(summary)
 PY
 
@@ -307,8 +454,8 @@ cat >"$oxidedns_conf" <<EOF
 listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
 listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
 health = "127.0.0.1:$oxidedns_health_port"
-log_level = "warn"
-log_format = "plain"
+log_level = "info"
+log_format = "logfmt"
 
 [rrl]
 enabled = false
@@ -316,6 +463,9 @@ enabled = false
 [limits]
 max_udp_payload = 512
 max_concurrent_transfers = 1
+max_tcp_connections = 1
+tcp_idle_timeout_secs = 5
+graceful_shutdown_secs = 2
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
 
@@ -357,15 +507,29 @@ if (( ready != 1 )); then
   exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log")"
+client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_secondary_queries_total{zone="tcp.test."} 2' \
-  'oxidedns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 2' \
+  'oxidedns_secondary_queries_total{zone="tcp.test."} 3' \
+  'oxidedns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 3' \
   'oxidedns_queries_truncated_total 1'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected TCP truncation retry line: $expected" >&2
+    exit 1
+  fi
+done
+
+drain_summary="$(python3 "$drain_client" "$oxidedns_dns_port" "$oxidedns_health_port" "$oxidedns_pid" "$drain_summary_path" "$readyz_draining_path")"
+wait "$oxidedns_pid"
+oxidedns_pid=""
+
+for expected in \
+  'TCP connection limit reached; closing accepted connection' \
+  'shutdown signal received; draining runtime' \
+  'TCP connection drain completed'; do
+  if ! grep -q "$expected" "$workdir/oxidedns.log"; then
+    echo "OxideDNS log missing expected TCP evidence line: $expected" >&2
     exit 1
   fi
 done
@@ -377,7 +541,11 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
   printf '%s\n' "$client_summary" >"$artifact_dir/client-summary.env"
+  cp "$limit_summary_path" "$artifact_dir/tcp-limit-summary.env"
+  cp "$drain_summary_path" "$artifact_dir/graceful-drain-summary.env"
+  cp "$readyz_draining_path" "$artifact_dir/readyz-draining.txt"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
 printf '%s\n' "$client_summary"
+printf '%s\n' "$drain_summary"
