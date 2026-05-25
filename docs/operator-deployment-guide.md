@@ -129,10 +129,14 @@ implemented warning catalogue is:
   100 MiB.
 - `xot_trust_anchor_expiring_soon`: a configured XoT trust-anchor certificate
   expires within 30 days of process startup.
+- `soa_timer_near_max_effective_interval`: a transferred SOA REFRESH or RETRY
+  value is at least 90% of `[limits].zsm_max_interval_secs`.
 
 `--validate-config` and `--dump-config` print these warnings to stderr. `serve`
-emits them as structured startup logs. The `/metrics` endpoint exposes the
-current count as `oxidedns_configuration_warnings_total`.
+emits static configuration warnings as structured startup logs, and emits the
+SOA timer warning when a transferred zone snapshot supplies the relevant SOA
+fields. The `/metrics` endpoint exposes the startup warning count as
+`oxidedns_configuration_warnings_total`.
 
 ## Configuration
 

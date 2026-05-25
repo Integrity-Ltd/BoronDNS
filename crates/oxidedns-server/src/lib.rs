@@ -189,6 +189,7 @@ const RUNTIME_STATUS_RUNNING: u8 = 0;
 const RUNTIME_STATUS_DRAINING: u8 = 1;
 const RUNTIME_STATUS_UNHEALTHY: u8 = 2;
 const XOT_TRUST_ANCHOR_EXPIRY_WARNING_SECS: i64 = 30 * 24 * 60 * 60;
+const SOA_TIMER_NEAR_MAX_WARNING_PERCENT: u64 = 90;
 
 impl Runtime {
     pub fn new(config: ServerConfig) -> Self {
@@ -4145,6 +4146,9 @@ impl ZoneRefreshRegistry {
         unix_secs: u64,
     ) {
         let timers = snapshot.soa_timers;
+        if let Some(timers) = timers {
+            self.warn_near_max_soa_timers(&snapshot.origin, timers);
+        }
         let refresh_interval = timers.map(|timers| self.effective_interval(timers.refresh));
         let next_refresh = refresh_interval.map(|interval| now + interval);
         let next_refresh_unix_secs =
@@ -4278,6 +4282,35 @@ impl ZoneRefreshRegistry {
             .max(self.min_interval)
             .min(self.max_interval);
         self.jitter.apply(interval)
+    }
+
+    fn warn_near_max_soa_timers(&self, origin: &DomainName, timers: SoaTimers) {
+        self.warn_near_max_soa_timer(origin, "refresh", timers.refresh);
+        self.warn_near_max_soa_timer(origin, "retry", timers.retry);
+    }
+
+    fn warn_near_max_soa_timer(&self, origin: &DomainName, field: &'static str, seconds: u32) {
+        let max_effective_secs = self.max_interval.as_secs();
+        if max_effective_secs == 0 {
+            return;
+        }
+        let threshold_secs = max_effective_secs
+            .saturating_mul(SOA_TIMER_NEAR_MAX_WARNING_PERCENT)
+            .div_ceil(100);
+        if (seconds as u64) < threshold_secs {
+            return;
+        }
+
+        warn!(
+            category = "configuration_warning",
+            code = "soa_timer_near_max_effective_interval",
+            zone = %origin,
+            soa_field = field,
+            soa_value_secs = seconds,
+            max_effective_secs,
+            threshold_percent = SOA_TIMER_NEAR_MAX_WARNING_PERCENT,
+            "SOA timer approaches configured maximum effective ZSM interval"
+        );
     }
 
     fn initial_retry_delay(&self, failure_count: u32) -> Duration {
@@ -7709,6 +7742,61 @@ mod tests {
             .expect("zone refresh status");
         assert_eq!(status.next_refresh_unix_secs, Some(1_700_002_000));
         assert_eq!(status.failures_since_success, 1);
+    }
+
+    #[test]
+    fn refresh_registry_warns_when_soa_timers_approach_maximum_effective_interval() {
+        let registry = ZoneRefreshRegistry::without_jitter_with_max(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(1_000),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(180),
+        );
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin,
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+        snapshot.soa_timers = Some(SoaTimers {
+            refresh: 900,
+            retry: 1_500,
+            expire: 86_400,
+            minimum: 300,
+        });
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+
+        assert!(captured.contains_all(&[
+            "SOA timer approaches configured maximum effective ZSM interval",
+            "category=\"configuration_warning\"",
+            "code=\"soa_timer_near_max_effective_interval\"",
+            "zone=example.test.",
+            "soa_field=\"refresh\"",
+            "soa_value_secs=900",
+            "max_effective_secs=1000",
+            "threshold_percent=90",
+        ]));
+        assert!(captured.contains_all(&[
+            "SOA timer approaches configured maximum effective ZSM interval",
+            "category=\"configuration_warning\"",
+            "code=\"soa_timer_near_max_effective_interval\"",
+            "zone=example.test.",
+            "soa_field=\"retry\"",
+            "soa_value_secs=1500",
+            "max_effective_secs=1000",
+            "threshold_percent=90",
+        ]));
     }
 
     #[test]
