@@ -605,9 +605,12 @@ Network and process hardening:
 - Keep health and metrics private.
 - Restrict outbound transfer access to configured primaries where the platform
   firewall supports it.
-- Run as a non-root user where possible. Use a port capability or high ports
-  instead of full root service where possible; document the privilege-drop
-  mechanism in the service manifest or container profile.
+- Run as a non-root user where possible. Use `CAP_NET_BIND_SERVICE`, socket
+  activation, or high ports instead of a full root service. If a deployment
+  invokes OxideDNS as root, configure `[process] run_as_user = "oxidedns"` or another
+  unprivileged account; startup binds configured listeners, drops to that user
+  irrevocably, and only then starts DNS, transfer, health, and background
+  workers.
 - Store TSIG and TLS private key material outside world-readable paths.
 - Prefer read-only filesystems and minimal service capabilities.
 - `ODS-FR-XOT-012` means OxideDNS does not perform real-time XoT revocation

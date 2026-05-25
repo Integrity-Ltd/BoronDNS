@@ -4,6 +4,7 @@ configuration	[server].listen_tcp	stable	0.1	config/oxidedns.example.toml	major	
 configuration	[interfaces].dns	stable	0.1	config/oxidedns.example.toml	major	Primary DNS query and NOTIFY reception role; optional interface name retained for future XDP planning.
 configuration	[interfaces].transfer	stable	0.1	config/oxidedns.example.toml	major	Outbound SOA poll, AXFR, IXFR, and XoT source role.
 configuration	[interfaces].mgmt	stable	0.1	config/oxidedns.example.toml	major	Health and metrics management role.
+configuration	[process].run_as_user	stable	0.1	config/oxidedns.example.toml	major	Optional unprivileged account used for startup privilege drop when invoked as root.
 configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.

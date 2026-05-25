@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod privilege;
 mod process_signals;
 mod resource_limits;
 
@@ -141,6 +142,15 @@ pub enum RuntimeError {
 
     #[error("failed to inspect file-descriptor rlimit: {0}")]
     FileDescriptorLimit(std::io::Error),
+
+    #[error("{0}")]
+    PrivilegeDrop(String),
+}
+
+impl From<privilege::PrivilegeError> for RuntimeError {
+    fn from(error: privilege::PrivilegeError) -> Self {
+        Self::PrivilegeDrop(error.to_string())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -269,6 +279,7 @@ impl Runtime {
         validate_runtime_config(&self.config)
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
         validate_file_descriptor_limit(&self.config)?;
+        let run_as_user = privilege::configured_run_as_user(&self.config)?;
         tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config)?;
         let refresh_registry = ZoneRefreshRegistry::new(
@@ -321,17 +332,6 @@ impl Runtime {
         ));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
-        background_tasks.spawn(serve_notify_log_summaries(
-            notify_log_limiter.clone(),
-            Duration::from_secs(self.config.limits.notify_log_rate_window_secs),
-        ));
-        if self.config.rrl.enabled {
-            background_tasks.spawn(serve_rrl_summary_logs(
-                rrl.clone(),
-                metrics.clone(),
-                Duration::from_secs(self.config.rrl.summary_log_interval_secs),
-            ));
-        }
         let dns_cookie = dns_cookie_settings(&self.config.cookie);
         let cookie_prefix_metrics = CookiePrefixMetricSettings {
             ipv4_prefix_len: self.config.rrl.ipv4_prefix_len,
@@ -347,6 +347,54 @@ impl Runtime {
                 rotation_interval_secs = dns_cookie.secret_rotation_interval.map(|duration| duration.as_secs()).unwrap_or(0),
                 "DNS Cookie server secret generated"
             );
+        }
+        let mut health_shutdown = Vec::new();
+        let mut bound_health_listeners = Vec::new();
+        for addr in self.config.health_listeners() {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindHealth { addr, source })?;
+            if let Some(health_bound) = health_bound.take() {
+                let _ = health_bound.send(listener.local_addr().map_err(RuntimeError::Health)?);
+            }
+            let (health_shutdown_tx, health_shutdown_rx) = oneshot::channel();
+            health_shutdown.push(health_shutdown_tx);
+            bound_health_listeners.push((listener, health_shutdown_rx));
+        }
+        let mut bound_udp_sockets = Vec::new();
+        for addr in self.config.udp_listeners() {
+            let socket = UdpSocket::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindUdp { addr, source })?;
+            bound_udp_sockets.push(socket);
+        }
+        let mut bound_tcp_listeners = Vec::new();
+        for addr in self.config.tcp_listeners() {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindTcp { addr, source })?;
+            bound_tcp_listeners.push(listener);
+        }
+        if let Some(identity) = run_as_user {
+            privilege::drop_to_user(&identity)?;
+            info!(
+                user = %identity.name,
+                uid = identity.uid,
+                gid = identity.gid,
+                "dropped process privileges"
+            );
+        }
+
+        background_tasks.spawn(serve_notify_log_summaries(
+            notify_log_limiter.clone(),
+            Duration::from_secs(self.config.limits.notify_log_rate_window_secs),
+        ));
+        if self.config.rrl.enabled {
+            background_tasks.spawn(serve_rrl_summary_logs(
+                rrl.clone(),
+                metrics.clone(),
+                Duration::from_secs(self.config.rrl.summary_log_interval_secs),
+            ));
         }
         refresh_workers.spawn(run_initial_zone_loads(
             self.zones.clone(),
@@ -386,16 +434,7 @@ impl Runtime {
             notify_refresh_tx.clone(),
             ZSM_SCHEDULER_TICK,
         ));
-        let mut health_shutdown = Vec::new();
-        for addr in self.config.health_listeners() {
-            let listener = TcpListener::bind(addr)
-                .await
-                .map_err(|source| RuntimeError::BindHealth { addr, source })?;
-            if let Some(health_bound) = health_bound.take() {
-                let _ = health_bound.send(listener.local_addr().map_err(RuntimeError::Health)?);
-            }
-            let (health_shutdown_tx, health_shutdown_rx) = oneshot::channel();
-            health_shutdown.push(health_shutdown_tx);
+        for (listener, health_shutdown_rx) in bound_health_listeners {
             health_listeners.spawn(serve_health(
                 listener,
                 HealthEndpointState {
@@ -412,10 +451,7 @@ impl Runtime {
                 },
             ));
         }
-        for addr in self.config.udp_listeners() {
-            let socket = UdpSocket::bind(addr)
-                .await
-                .map_err(|source| RuntimeError::BindUdp { addr, source })?;
+        for socket in bound_udp_sockets {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;
@@ -446,10 +482,7 @@ impl Runtime {
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
-        for addr in self.config.tcp_listeners() {
-            let listener = TcpListener::bind(addr)
-                .await
-                .map_err(|source| RuntimeError::BindTcp { addr, source })?;
+        for listener in bound_tcp_listeners {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;

@@ -32,6 +32,7 @@ accepted.
 | `crates/oxidedns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
 | `crates/oxidedns-core/src/lib.rs` | Core crate public API boundary | Re-exports the core configuration and protocol modules for the server and CLI crates. |
 | `crates/oxidedns-server/src/lib.rs` | Runtime integration for all functional protocol areas; `ODS-FR-TCP`, `ODS-FR-NOTIFY`, `ODS-FR-ZSM`, XoT transport, health, metrics, logging, refresh scheduling, and resource limits | Tokio runtime listeners, UDP/TCP serving, transfer workers, refresh scheduling, runtime metrics, health endpoints, RRL application, XoT TLS sessions, and graceful shutdown. |
+| `crates/oxidedns-server/src/privilege.rs` | `ODS-NFR-SEC-004`, root-startup privilege drop, and the audited `ODS-INV-006` unsafe boundary | Minimal Linux/POSIX FFI wrapper for user lookup, supplementary-group setup, and irrevocable uid/gid drop before network workers process input. |
 | `crates/oxidedns-server/src/process_signals.rs` | `ODS-IF-SIG`, POSIX signal disposition evidence, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for SIGHUP/SIGPIPE `SIG_IGN`; excluded from network-input parsing paths. |
 | `crates/oxidedns-server/src/resource_limits.rs` | `ODS-NFR-RES-004`, OS startup validation, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for `RLIMIT_NOFILE` inspection; feeds runtime startup validation. |
 | `crates/oxidedns-server/build.rs` | Build metadata for `ODS-IF-PROC-002`, `ODS-NFR-OBS-006`, release traceability, and metrics labels | Embeds commit, Rust compiler version, and build timestamp labels without changing runtime behavior. |
@@ -82,9 +83,10 @@ The workspace defaults to `unsafe_code = "forbid"` for first-party crates. The
 because it owns the current operating-system adapters; its crate root keeps
 `#![deny(unsafe_code)]`, and only registry-listed adapter modules may opt back
 in with local `#![allow(unsafe_code)]`. The only current adapter modules are the
-POSIX signal-disposition and file-descriptor limit wrappers in
-`crates/oxidedns-server/src/process_signals.rs` and
-`crates/oxidedns-server/src/resource_limits.rs`. The machine-readable boundary
+POSIX signal-disposition, file-descriptor limit, and root-startup privilege-drop
+wrappers in `crates/oxidedns-server/src/process_signals.rs`,
+`crates/oxidedns-server/src/resource_limits.rs`, and
+`crates/oxidedns-server/src/privilege.rs`. The machine-readable boundary
 registry is `docs/unsafe-boundaries.tsv`; `scripts/check-unsafe-boundaries.py`
 keeps that registry synchronized with live `#![allow(unsafe_code)]` source
 files and with the deferred optimization tracks below.

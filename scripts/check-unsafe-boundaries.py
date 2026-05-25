@@ -20,11 +20,13 @@ HEADER = [
 REQUIRED_CURRENT = {
     "posix-signal-disposition": "crates/oxidedns-server/src/process_signals.rs",
     "posix-rlimit": "crates/oxidedns-server/src/resource_limits.rs",
+    "posix-privilege-drop": "crates/oxidedns-server/src/privilege.rs",
 }
 
 CURRENT_SOURCE_SHAPE = {
     "posix-signal-disposition": "libc::signal(signal, libc::SIG_IGN)",
     "posix-rlimit": "libc::getrlimit(libc::RLIMIT_NOFILE",
+    "posix-privilege-drop": "libc::setresuid(uid, uid, uid)",
 }
 
 REQUIRED_DEFERRED = {

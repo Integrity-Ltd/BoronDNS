@@ -1,5 +1,5 @@
 package	boundary_ids	status	allowed_paths	rationale
-libc	posix-signal-disposition;posix-rlimit	current	crates/oxidedns-server/src/process_signals.rs;crates/oxidedns-server/src/resource_limits.rs	Current Linux/POSIX FFI dependency is limited to audited signal-disposition and file-descriptor-limit adapters.
+libc	posix-signal-disposition;posix-rlimit;posix-privilege-drop	current	crates/oxidedns-server/src/process_signals.rs;crates/oxidedns-server/src/resource_limits.rs;crates/oxidedns-server/src/privilege.rs	Current Linux/POSIX FFI dependency is limited to audited signal-disposition file-descriptor-limit and root-startup privilege-drop adapters.
 aya	xdp-af-xdp	deferred	future:packet-io-xdp	Future eBPF/XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.
 libbpf-rs	xdp-af-xdp	deferred	future:packet-io-xdp	Future eBPF/XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.
 xsk-rs	xdp-af-xdp	deferred	future:packet-io-xdp	Future AF_XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.

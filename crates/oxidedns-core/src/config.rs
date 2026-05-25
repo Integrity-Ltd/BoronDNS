@@ -45,6 +45,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub interfaces: InterfacesConfig,
     #[serde(default)]
+    pub process: ProcessConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
     pub health: HealthConfig,
@@ -108,6 +110,7 @@ impl ServerConfig {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.interfaces.validate(&self.server)?;
+        self.process.validate()?;
         if self.dns_udp_listeners().is_empty() && self.dns_tcp_listeners().is_empty() {
             return Err(ConfigError::Invalid(
                 "at least one UDP or TCP listener is required".to_owned(),
@@ -484,6 +487,28 @@ impl TsigConfig {
         if self.fudge_seconds == 0 {
             return Err(ConfigError::Invalid(
                 "tsig.fudge_seconds must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_as_user: Option<String>,
+}
+
+impl ProcessConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self
+            .run_as_user
+            .as_deref()
+            .is_some_and(|user| user.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "process.run_as_user must not be empty when configured".to_owned(),
             ));
         }
         Ok(())
@@ -1652,6 +1677,7 @@ mod tests {
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
+        assert_eq!(config.process.run_as_user, None);
         assert_eq!(config.logging.max_entry_length_bytes, 16_384);
         assert!(config.interfaces.dns.is_none());
         assert!(config.interfaces.mgmt.is_empty());
@@ -1717,6 +1743,51 @@ mod tests {
                 Ipv4Addr::new(192, 0, 2, 53),
                 53
             )))]
+        );
+    }
+
+    #[test]
+    fn parses_process_run_as_user() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [process]
+                run_as_user = "oxidedns"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid process config");
+
+        assert_eq!(config.process.run_as_user.as_deref(), Some("oxidedns"));
+    }
+
+    #[test]
+    fn rejects_empty_process_run_as_user() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [process]
+                run_as_user = "   "
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("empty run_as_user must fail validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("process.run_as_user must not be empty"),
+            "{error}"
         );
     }
 
