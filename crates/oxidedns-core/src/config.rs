@@ -538,6 +538,8 @@ pub struct RrlConfig {
     pub slip: u32,
     #[serde(default = "default_rrl_max_keys")]
     pub max_keys: usize,
+    #[serde(default = "default_rrl_summary_log_interval_secs")]
+    pub summary_log_interval_secs: u64,
     #[serde(default)]
     pub allowlist: Vec<String>,
 }
@@ -555,6 +557,7 @@ impl Default for RrlConfig {
             error_per_second: default_rrl_error_per_second(),
             slip: default_rrl_slip(),
             max_keys: default_rrl_max_keys(),
+            summary_log_interval_secs: default_rrl_summary_log_interval_secs(),
             allowlist: Vec::new(),
         }
     }
@@ -575,6 +578,11 @@ impl RrlConfig {
         if self.max_keys == 0 {
             return Err(ConfigError::Invalid(
                 "rrl.max_keys must be at least 1".to_owned(),
+            ));
+        }
+        if self.summary_log_interval_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "rrl.summary_log_interval_secs must be at least 1".to_owned(),
             ));
         }
         for prefix in &self.allowlist {
@@ -910,6 +918,10 @@ fn default_rrl_slip() -> u32 {
 
 fn default_rrl_max_keys() -> usize {
     100_000
+}
+
+fn default_rrl_summary_log_interval_secs() -> u64 {
+    60
 }
 
 fn default_tsig_fudge_seconds() -> u16 {
@@ -1647,6 +1659,7 @@ mod tests {
                 error_per_second = 7
                 slip = 1
                 max_keys = 9
+                summary_log_interval_secs = 30
                 allowlist = ["127.0.0.1", "192.0.2.0/24", "2001:db8::/48"]
 
                 [[zones]]
@@ -1666,6 +1679,7 @@ mod tests {
         assert_eq!(config.rrl.error_per_second, 7);
         assert_eq!(config.rrl.slip, 1);
         assert_eq!(config.rrl.max_keys, 9);
+        assert_eq!(config.rrl.summary_log_interval_secs, 30);
         assert_eq!(config.rrl.allowlist.len(), 3);
     }
 
@@ -1675,6 +1689,11 @@ mod tests {
             ("ipv4_prefix_len", "33", "ipv4_prefix_len"),
             ("ipv6_prefix_len", "129", "ipv6_prefix_len"),
             ("max_keys", "0", "max_keys"),
+            (
+                "summary_log_interval_secs",
+                "0",
+                "summary_log_interval_secs",
+            ),
         ] {
             let error = ServerConfig::from_toml_str(&format!(
                 r#"

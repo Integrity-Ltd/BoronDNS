@@ -28,12 +28,14 @@ if unsafe_code != "forbid":
 print("workspace lint check passed: unsafe_code = \"forbid\"")
 PY
 
-allowed_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
+process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
+resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
 
 unsafe_matches="$(
   rg --line-number --glob '*.rs' '\bunsafe\s*(\{|fn|impl|trait|extern)' \
     "$repo_root/crates" "$repo_root/fuzz" \
-    --glob '!crates/oxidedns-server/src/process_signals.rs' || true
+    --glob '!crates/oxidedns-server/src/process_signals.rs' \
+    --glob '!crates/oxidedns-server/src/resource_limits.rs' || true
 )"
 
 if [[ -n "$unsafe_matches" ]]; then
@@ -41,12 +43,17 @@ if [[ -n "$unsafe_matches" ]]; then
   exit 1
 fi
 
-if ! rg --quiet 'libc::signal\(signal, libc::SIG_IGN\)' "$allowed_exception"; then
-  echo "signal disposition unsafe exception changed unexpectedly: $allowed_exception" >&2
+if ! rg --quiet 'libc::signal\(signal, libc::SIG_IGN\)' "$process_signals_exception"; then
+  echo "signal disposition unsafe exception changed unexpectedly: $process_signals_exception" >&2
   exit 1
 fi
 
-echo "first-party unsafe scan passed: only audited POSIX signal-disposition exception found"
+if ! rg --quiet 'libc::getrlimit\(libc::RLIMIT_NOFILE' "$resource_limits_exception"; then
+  echo "resource-limit unsafe exception changed unexpectedly: $resource_limits_exception" >&2
+  exit 1
+fi
+
+echo "first-party unsafe scan passed: only audited POSIX signal-disposition and rlimit exceptions found"
 
 if command -v cargo-geiger >/dev/null 2>&1; then
   echo "cargo-geiger available; run cargo geiger for transitive dependency unsafe enumeration"

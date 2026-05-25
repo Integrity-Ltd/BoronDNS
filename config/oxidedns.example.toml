@@ -56,6 +56,8 @@ error_per_second = 5
 slip = 2
 # Maximum tracked RRL accounting keys. Default: 100000.
 max_keys = 100000
+# Interval for aggregate RRL summary logs. Default: 60 seconds.
+summary_log_interval_secs = 60
 # Source prefixes exempt from RRL. Default: empty.
 allowlist = []
 

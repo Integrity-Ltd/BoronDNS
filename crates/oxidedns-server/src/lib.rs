@@ -269,6 +269,7 @@ impl Runtime {
         let mut listeners = JoinSet::new();
         let mut health_listeners = JoinSet::new();
         let mut refresh_workers = JoinSet::new();
+        let mut background_tasks = JoinSet::new();
         let tcp_connections = Arc::new(AtomicUsize::new(0));
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let runtime_status = RuntimeStatus::new();
@@ -277,6 +278,13 @@ impl Runtime {
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
+        if self.config.rrl.enabled {
+            background_tasks.spawn(serve_rrl_summary_logs(
+                rrl.clone(),
+                metrics.clone(),
+                Duration::from_secs(self.config.rrl.summary_log_interval_secs),
+            ));
+        }
         let dns_cookie = dns_cookie_settings(&self.config.cookie);
         let cookie_prefix_metrics = CookiePrefixMetricSettings {
             ipv4_prefix_len: self.config.rrl.ipv4_prefix_len,
@@ -431,6 +439,7 @@ impl Runtime {
                     );
                     runtime_status.mark_draining();
                     abort_task_set(&mut listeners, "listener").await;
+                    abort_task_set(&mut background_tasks, "background").await;
                     drop(notify_refresh_tx);
                     let (tcp_drained, refresh_drained) = tokio::join!(
                         drain_tcp_connections(
@@ -475,9 +484,13 @@ impl Runtime {
                 result = health_listeners.join_next(), if !health_listeners.is_empty() => {
                     handle_runtime_task_result("health listener", result)?;
                 }
+                result = background_tasks.join_next(), if !background_tasks.is_empty() => {
+                    handle_runtime_task_result("background", result)?;
+                }
             }
 
             if listeners.is_empty() && refresh_workers.is_empty() && health_listeners.is_empty() {
+                abort_task_set(&mut background_tasks, "background").await;
                 break;
             }
         }
@@ -683,6 +696,60 @@ async fn abort_task_set(tasks: &mut JoinSet<Result<(), RuntimeError>>, task_set:
             }
         }
     }
+}
+
+async fn serve_rrl_summary_logs(
+    rrl: RrlLimiter,
+    metrics: RuntimeMetrics,
+    interval: Duration,
+) -> Result<(), RuntimeError> {
+    let mut previous = metrics.snapshot();
+    loop {
+        tokio::time::sleep(interval).await;
+        let current = metrics.snapshot();
+        let summary = RrlSummary::from_snapshots(previous, current, rrl.rate_limited_key_count());
+        log_rrl_summary(summary, interval);
+        previous = current;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RrlSummary {
+    dropped_responses: u64,
+    truncated_responses: u64,
+    rate_limited_keys: u64,
+    total_dropped_responses: u64,
+    total_truncated_responses: u64,
+}
+
+impl RrlSummary {
+    fn from_snapshots(
+        previous: RuntimeMetricsSnapshot,
+        current: RuntimeMetricsSnapshot,
+        rate_limited_keys: u64,
+    ) -> Self {
+        Self {
+            dropped_responses: current.rrl_dropped.saturating_sub(previous.rrl_dropped),
+            truncated_responses: current.rrl_truncated.saturating_sub(previous.rrl_truncated),
+            rate_limited_keys,
+            total_dropped_responses: current.rrl_dropped,
+            total_truncated_responses: current.rrl_truncated,
+        }
+    }
+}
+
+fn log_rrl_summary(summary: RrlSummary, interval: Duration) {
+    info!(
+        category = "rrl",
+        event = "rrl_periodic_summary",
+        interval_secs = interval.as_secs(),
+        dropped_responses = summary.dropped_responses,
+        truncated_responses = summary.truncated_responses,
+        rate_limited_keys = summary.rate_limited_keys,
+        total_dropped_responses = summary.total_dropped_responses,
+        total_truncated_responses = summary.total_truncated_responses,
+        "RRL periodic summary"
+    );
 }
 
 async fn drain_task_set(
@@ -1754,6 +1821,13 @@ impl RrlLimiter {
         let mut state = self.inner.lock().expect("RRL state lock poisoned");
         state.apply(source, category, response, &self.metrics)
     }
+
+    fn rate_limited_key_count(&self) -> u64 {
+        self.inner
+            .lock()
+            .expect("RRL state lock poisoned")
+            .rate_limited_key_count()
+    }
 }
 
 #[derive(Debug)]
@@ -1874,6 +1948,17 @@ impl RrlState {
     fn tracked_keys(&self) -> u64 {
         self.buckets.len() as u64
     }
+
+    fn rate_limited_key_count(&self) -> u64 {
+        let now = Instant::now();
+        self.buckets
+            .iter()
+            .filter(|(key, bucket)| {
+                bucket.limited_count > 0
+                    && !bucket.would_have_token(self.rates.for_category(key.category), now)
+            })
+            .count() as u64
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1926,6 +2011,16 @@ impl RrlBucket {
         } else {
             false
         }
+    }
+
+    fn would_have_token(self, rate: u32, now: Instant) -> bool {
+        let tokens = if rate > 0 {
+            let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+            (self.tokens + elapsed * f64::from(rate)).min(f64::from(rate))
+        } else {
+            self.tokens
+        };
+        tokens >= 1.0
     }
 }
 
@@ -5691,20 +5786,21 @@ mod tests {
         HealthEndpointState, IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority,
         NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory,
         QueryLatencyHistogram, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
-        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError,
-        RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError, TransferPlan,
-        TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
+        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
+        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError,
+        TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
         dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        required_file_descriptor_limit, response_category, response_opt_record,
-        response_question_end, response_rcode, rrl_truncated_response, runtime_config_warnings_at,
-        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
-        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, validate_file_descriptor_limit_value,
-        validate_runtime_config, write_tcp_message,
+        log_rrl_summary, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
+        response_opt_record, response_question_end, response_rcode, rrl_truncated_response,
+        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
+        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
+        transfer_query_id, validate_file_descriptor_limit_value, validate_runtime_config,
+        write_tcp_message,
     };
 
     #[test]
@@ -7477,6 +7573,58 @@ mod tests {
         assert_eq!(snapshot.rrl_dropped, 1);
         assert_eq!(snapshot.rrl_truncated, 1);
         assert_eq!(snapshot.rrl_tracked_keys, 1);
+    }
+
+    #[test]
+    fn rrl_periodic_summary_reports_aggregate_deltas() {
+        let config = RrlConfig {
+            positive_per_second: 0,
+            slip: 2,
+            ..RrlConfig::default()
+        };
+        let metrics = RuntimeMetrics::new();
+        let limiter = RrlLimiter::from_config(&config, metrics.clone());
+        let previous = metrics.snapshot();
+        let source = "192.0.2.1".parse().unwrap();
+
+        assert!(matches!(
+            limiter.apply(source, positive_query_response()),
+            RrlDecision::Drop
+        ));
+        assert!(matches!(
+            limiter.apply(source, positive_query_response()),
+            RrlDecision::Send(_)
+        ));
+
+        let summary = RrlSummary::from_snapshots(
+            previous,
+            metrics.snapshot(),
+            limiter.rate_limited_key_count(),
+        );
+        assert_eq!(
+            summary,
+            RrlSummary {
+                dropped_responses: 1,
+                truncated_responses: 1,
+                rate_limited_keys: 1,
+                total_dropped_responses: 1,
+                total_truncated_responses: 1,
+            }
+        );
+
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        log_rrl_summary(summary, std::time::Duration::from_secs(60));
+
+        assert!(captured.contains_all(&[
+            "RRL periodic summary",
+            "category=\"rrl\"",
+            "event=\"rrl_periodic_summary\"",
+            "dropped_responses=1",
+            "truncated_responses=1",
+            "rate_limited_keys=1",
+        ]));
     }
 
     #[test]

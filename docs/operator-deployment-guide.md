@@ -172,6 +172,8 @@ reference. The major sections are:
   server cookies when rotation occurs, equivalent to the cookie effect of a
   process restart.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration.
+  `summary_log_interval_secs` controls aggregate RRL summary logs and defaults
+  to 60 seconds.
 - `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
   fudge value.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
