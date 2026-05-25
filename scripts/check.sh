@@ -22,6 +22,7 @@ bash -n scripts/capture-malformed-query-evidence.sh
 bash -n scripts/capture-portability-evidence.sh
 bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
+bash -n scripts/capture-info-verbosity-handoff.sh
 bash -n scripts/capture-benchmark-handoff.sh
 bash -n scripts/capture-soak-handoff.sh
 bash -n scripts/capture-release-handoff.sh
@@ -51,6 +52,7 @@ scripts/audit-dnssec-passive.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
+scripts/capture-info-verbosity-handoff.sh
 scripts/capture-benchmark-handoff.sh
 scripts/capture-soak-handoff.sh
 scripts/capture-release-handoff.sh

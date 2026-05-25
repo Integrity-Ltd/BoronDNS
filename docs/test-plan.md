@@ -42,7 +42,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/mvp-gap-register.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
 | Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
-| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, deployment/rollback exercise, external operator acceptance | release notes and operator acceptance records |
+| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, deployment/rollback exercise, external operator acceptance | release notes, info verbosity profile, and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
 | External operator acceptance | Gate | Production-representative external deployment and signed scope statement for MVP acceptance | MVP release notes |
 
@@ -94,6 +94,13 @@ runbook, release-note fill plan, external-operator acceptance scaffold, and
 release-readiness checklist for later SRS acceptance execution. A generated
 handoff directory proves the local MVP governance setup exists; it does not
 prove that release acceptance or external-operator sign-off has been completed.
+
+`scripts/capture-info-verbosity-handoff.sh` is intentionally a setup artifact.
+It creates the runbook, report template, log-volume/structured-field/metrics
+TSV schemas, requirement traceability map, release-note snippet, and operator
+sign-off scaffold for later production-depth profiling of `info` verbosity
+under release traffic. A generated handoff directory proves the local MVP setup
+exists; it does not prove that production-depth profiling has been executed.
 
 `scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
 creates the benchmark runbook, report template, performance/resource TSV

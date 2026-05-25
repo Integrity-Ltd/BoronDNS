@@ -470,12 +470,14 @@ verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. It also retains unused/dead-code audit
 artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
-`coverage-evidence/`, the Reference Hardware/Profile benchmark setup/report
-scaffold under `benchmark-handoff/`, and the long-run soak setup/report
-scaffold under `soak-handoff/`, and the release-governance setup under
-`release-handoff/`. The benchmark, soak, and release-governance handoffs are
-not completed benchmark, soak, or release-acceptance evidence; they are
-release/operations template sets for the later delegated runs. Set
+`coverage-evidence/`, the production-depth info verbosity profile setup under
+`info-verbosity-handoff/`, the Reference Hardware/Profile benchmark
+setup/report scaffold under `benchmark-handoff/`, the long-run soak
+setup/report scaffold under `soak-handoff/`, and the release-governance setup
+under `release-handoff/`. The info verbosity, benchmark, soak, and
+release-governance handoffs are not completed profile, benchmark, soak, or
+release-acceptance evidence; they are release/operations template sets for the
+later delegated runs. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
 and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
@@ -670,6 +672,14 @@ directory contains the benchmark runbook, report template, metric/resource TSV
 schemas, baseline-history template, requirement traceability map, release-note
 snippet, and operator sign-off scaffold for the later Reference
 Hardware/Profile run.
+
+Before production-depth `info` verbosity profiling begins, run
+`scripts/capture-info-verbosity-handoff.sh` or use the
+`info-verbosity-handoff/` directory created by
+`scripts/release-evidence-snapshot.sh`. The handoff directory contains the
+profile runbook, report template, log-volume/structured-field/metrics TSV
+schemas, requirement traceability map, release-note snippet, and operator
+sign-off scaffold for later release-traffic profiling.
 
 Before a release/operations soak begins, run `scripts/capture-soak-handoff.sh`
 or use the `soak-handoff/` directory created by

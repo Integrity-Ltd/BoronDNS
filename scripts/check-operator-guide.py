@@ -27,6 +27,7 @@ REQUIRED_TEXT = [
     "firewall",
     "clock synchronisation",
     "long-LOADING",
+    "info-verbosity-handoff",
     "benchmark-handoff",
     "soak-handoff",
     "release-handoff",

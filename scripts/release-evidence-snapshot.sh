@@ -93,11 +93,12 @@ This directory contains command logs captured for release review, including
 safe-Rust, maintainability, canonical log-field, and lazy log-formatting audit
 output. It is an evidence collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
-production benchmark reports. The default `benchmark-handoff/`,
-`soak-handoff/`, and `release-handoff/` artifacts are release/operations setup
-scaffolds for later Reference Hardware/Profile benchmark, long-duration soak,
+production benchmark reports. The default `info-verbosity-handoff/`,
+`benchmark-handoff/`, `soak-handoff/`, and `release-handoff/` artifacts are
+release/operations setup scaffolds for later production-depth info-verbosity
+profile, Reference Hardware/Profile benchmark, long-duration soak,
 scheduled-CI, signing, release-note, and external-operator execution; they are
-not completed benchmark, soak, or release-acceptance results.
+not completed profile, benchmark, soak, or release-acceptance results.
 
 Successful real-primary interop runs copy their primary-version artifacts to
 interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
@@ -137,6 +138,7 @@ run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_M
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
 run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
+run_and_capture info-verbosity-handoff bash -lc "cd '$repo_root' && OXIDEDNS_INFO_VERBOSITY_HANDOFF_DIR='$snapshot_dir/info-verbosity-handoff' scripts/capture-info-verbosity-handoff.sh"
 run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
 run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
 run_and_capture release-handoff bash -lc "cd '$repo_root' && OXIDEDNS_RELEASE_HANDOFF_DIR='$snapshot_dir/release-handoff' scripts/capture-release-handoff.sh"
