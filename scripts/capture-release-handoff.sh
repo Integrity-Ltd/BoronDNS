@@ -30,7 +30,48 @@ ODS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC c
 ODS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed responsibility and external-operator rows	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
 ODS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
 ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
+SRS-C5	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending C.5 item before claiming MVP acceptance
 EOF
+
+python3 - "$repo_root/docs/OxideDNS-Secondary-SRS-v0.7.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
+import sys
+from pathlib import Path
+
+srs_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+text = srs_path.read_text(encoding="utf-8")
+
+try:
+    section = text.split("## C.5 Items Flagged for Project Decision", 1)[1]
+    section = section.split("## C.6 Post-MVP / v2 Scope Items", 1)[0]
+except IndexError as exc:
+    raise SystemExit("failed to locate SRS Appendix C.5 decision table") from exc
+
+rows: list[list[str]] = []
+for line in section.splitlines():
+    line = line.strip()
+    if not line.startswith("|"):
+        continue
+    cells = [cell.strip().replace("\t", " ") for cell in line.strip("|").split("|")]
+    if len(cells) != 4:
+        continue
+    if cells[0] == "Item" or set(cells[0]) <= {"-"}:
+        continue
+    decision = cells[3]
+    if decision == "Pending":
+        action = "release review must resolve or explicitly defer with owner and target release"
+    else:
+        action = "confirm implementation and evidence remain aligned with recorded decision"
+    rows.append([*cells, action])
+
+if not rows:
+    raise SystemExit("no SRS Appendix C.5 decision rows parsed")
+
+with out_path.open("w", encoding="utf-8") as handle:
+    handle.write("item\tflagged_at\trecommendation\tdecision\trelease_action\n")
+    for row in rows:
+        handle.write("\t".join(row) + "\n")
+PY
 
 cat >"$evidence_dir/release-ownership.tsv" <<EOF
 role	default_owner	scope	signoff_required	release_notes_section
@@ -129,6 +170,7 @@ Required evidence pointer sources:
 - `logs/audit-maintainability.log`
 - `logs/audit-unused-code.log`
 - `coverage-evidence/`
+- `release-handoff/appendix-c5-decision-register.tsv`
 - `benchmark-handoff/` or completed benchmark artifacts
 - `soak-handoff/` or completed 30-day soak artifacts
 - `fuzz-campaign/campaign-summary.tsv` or delegated fuzz handoff
@@ -180,6 +222,8 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] 30-day soak evidence completed or delegated with owner and path.
 - [ ] Regression delta reviewed and triaged.
 - [ ] RFC compliance assertions copied and updated with release evidence paths.
+- [ ] Appendix C.5 pending decisions resolved or explicitly deferred with owner
+      and target release.
 - [ ] Public/MVP artifacts signed, or internal builds labelled unsigned/internal.
 - [ ] External operator acceptance recorded for MVP acceptance.
 - [ ] Architecture Owner sign-off recorded.
@@ -209,6 +253,7 @@ OXIDEDNS_EXTERNAL_OPERATOR=$external_operator
 Artifacts:
 
 - \`evidence-attachment-map.tsv\`
+- \`appendix-c5-decision-register.tsv\`
 - \`release-ownership.tsv\`
 - \`scheduled-ci-plan.md\`
 - \`signing-runbook.md\`

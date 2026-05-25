@@ -39,6 +39,7 @@ for heading in \
   "## Regression Delta" \
   "## Interop Primary Versions" \
   "## Failed Requirement Decisions" \
+  "## Appendix C.5 Decision Review" \
   "## RFC Compliance Assertions" \
   "## Long-Running Evidence Handoff" \
   "## Release/Operations Handoff" \
@@ -116,6 +117,14 @@ for security_field in \
   "Release signing mechanism and verification instructions" \
   "Security audit findings and remediation actions"; do
   require_text "$security_field"
+done
+
+for c5_field in \
+  "Decision for this release" \
+  "Target release" \
+  "Evidence or rationale" \
+  "Pending"; do
+  require_text "$c5_field"
 done
 
 for handoff_field in \

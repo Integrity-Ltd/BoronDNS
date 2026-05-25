@@ -54,6 +54,17 @@ release here. If none failed, write `No Failed release-blocking requirements`.
 
 TBD
 
+## Appendix C.5 Decision Review
+
+Copy the pending-decision register from
+`release-handoff/appendix-c5-decision-register.tsv`. Every `Pending` item must
+be resolved for this release or explicitly deferred with an owner and target
+release before MVP acceptance is claimed.
+
+| Item | Flagged at | Recommendation | Decision for this release | Owner | Target release | Evidence or rationale |
+| --- | --- | --- | --- | --- | --- | --- |
+| TBD | TBD | TBD | TBD | TBD | TBD | TBD |
+
 ## RFC Compliance Assertions
 
 Allowed compliance status values are `Fully Compliant`, `Partially Compliant`,
