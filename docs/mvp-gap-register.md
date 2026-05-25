@@ -28,7 +28,7 @@ compliance.
 | Area | Current Evidence | Remaining Acceptance Gap |
 | --- | --- | --- |
 | AXFR | Unit parser coverage; randomized multi-primary stable-rotation unit evidence; BIND, NSD, and Knot AXFR interop scripts; TSIG AXFR scripts for all three primaries | Expand release evidence into per-requirement traceability before acceptance review |
-| IXFR | Unit parser/fault coverage; BIND and Knot true incremental IXFR refresh interop; fake-primary NOTIMP fallback/cooldown interop script | Additional real-primary IXFR behavior matrix where primary support permits it |
+| IXFR | Unit parser/fault coverage; BIND and Knot true incremental IXFR refresh interop; retained `scripts/interop-ixfr-notimp-fallback.sh` fake-primary runtime artifacts for initial AXFR, IXFR NOTIMP fallback to AXFR, IXFR-disabled cooldown, final serial/data publication, and transfer metrics | Additional real-primary IXFR behavior matrix where primary support permits it |
 | Negative Responses | Unit coverage and retained `scripts/interop-negative-responses.sh` runtime artifacts for NXDOMAIN, NODATA, empty non-terminal, CNAME negative terminal, DNAME out-of-zone terminal, SOA negative TTL, out-of-zone REFUSED, and RCODE metrics | Expand release artifacts into per-requirement traceability before acceptance review |
 | TCP Query Transport | Unit/runtime coverage for DNS-over-TCP framing, idle/read/write timeouts, global connection limits, back-to-back framed queries, delayed-first-response pipelining, configurable per-connection in-flight query caps, and retained `scripts/interop-tcp-truncation-retry.sh` evidence that a question-validated AXFR load produces a large answer that truncates over UDP while TCP returns the complete answer, two pipelined TCP queries complete with matching IDs and retained observed response order, over-limit TCP connections close, and shutdown enters graceful drain while existing TCP queries complete | Add retained artifacts for intentionally delayed first-response inversion beyond the deterministic in-process test, then expand release artifacts into per-requirement TCP traceability before acceptance review |
 | NOTIFY | Unit/runtime coverage for authority, TSIG rejection, refresh signalling/deduplication, metrics, notify-interface handling, and rate-limited unauthorized/TSIG-failure warning logs; BIND, NSD, and Knot NOTIFY refresh interop; retained `scripts/interop-notify-negative.sh` artifacts for malformed NOTIFY, unknown-zone REFUSED, accepted refresh signalling/deduplication, unauthorized-source discard, required-TSIG BADKEY, metrics, and log events | Release traceability and refresh-trigger artifacts separated by requirement |
@@ -117,6 +117,7 @@ scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-rrl-udp.sh
 scripts/rrl-evidence-campaign.sh --iterations 3
 scripts/interop-dns-cookie-dig.sh
+scripts/interop-ixfr-notimp-fallback.sh
 scripts/interop-dnssec-serve.sh
 scripts/interop-dnssec-nsec3-serve.sh
 scripts/interop-negative-responses.sh

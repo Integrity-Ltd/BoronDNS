@@ -15,6 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/ixfr-notimp-fallback-$$"
+artifact_dir="${OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -31,6 +32,11 @@ cleanup() {
     [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -100 "$workdir/fake-primary.log" >&2; }
     [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
     [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
+    [[ -f "$workdir/primary-soa.out" ]] && { echo "---- primary-soa.out ----" >&2; cat "$workdir/primary-soa.out" >&2; }
+    [[ -f "$workdir/initial-a.out" ]] && { echo "---- initial-a.out ----" >&2; cat "$workdir/initial-a.out" >&2; }
+    [[ -f "$workdir/final-soa.out" ]] && { echo "---- final-soa.out ----" >&2; cat "$workdir/final-soa.out" >&2; }
+    [[ -f "$workdir/final-a.out" ]] && { echo "---- final-a.out ----" >&2; cat "$workdir/final-a.out" >&2; }
+    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -100 "$workdir/metrics.txt" >&2; }
   fi
   rm -rf "$workdir"
 }
@@ -52,6 +58,7 @@ PY
 fake_primary="$workdir/fake-primary.py"
 primary_log="$workdir/fake-primary.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+summary_env="$workdir/ixfr-fallback-summary.env"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -178,13 +185,14 @@ def soa_response(query):
     return response_header(qid, 0x8400, 1, 1) + question + answer
 
 
-def axfr_response(qid, serial):
+def axfr_response(qid, serial, question):
     records = zone_records(serial)
-    return response_header(qid, 0x8400, 0, len(records)) + b"".join(records)
+    return response_header(qid, 0x8400, 1, len(records)) + question + b"".join(records)
 
 
-def error_response(qid, rcode):
-    return response_header(qid, 0x8000 | (rcode & 0x0F), 0, 0)
+def error_response(qid, rcode, question=b""):
+    qdcount = 1 if question else 0
+    return response_header(qid, 0x8000 | (rcode & 0x0F), qdcount, 0) + question
 
 
 def handle_udp(sock):
@@ -217,24 +225,24 @@ def handle_tcp(conn):
         length = struct.unpack("!H", read_exact(conn, 2))[0]
         query = read_exact(conn, length)
         qid = struct.unpack("!H", query[:2])[0]
-        qname, qtype, _, _ = parse_question(query)
+        qname, qtype, _, question = parse_question(query)
         if qname.lower() != ZONE:
-            response = error_response(qid, NOTIMP)
+            response = error_response(qid, NOTIMP, question)
         elif qtype == AXFR:
             with lock:
                 axfr_count += 1
                 serial = min(axfr_count, 3)
             log(f"TCP AXFR serial={serial}")
-            response = axfr_response(qid, serial)
+            response = axfr_response(qid, serial, question)
         elif qtype == IXFR:
             with lock:
                 ixfr_count += 1
                 ixfr = ixfr_count
             log(f"TCP IXFR notimp count={ixfr}")
-            response = error_response(qid, NOTIMP)
+            response = error_response(qid, NOTIMP, question)
         else:
             log(f"TCP qtype={qtype} notimp")
-            response = error_response(qid, NOTIMP)
+            response = error_response(qid, NOTIMP, question)
         conn.sendall(struct.pack("!H", len(response)) + response)
 
 
@@ -301,7 +309,9 @@ for _ in {1..50}; do
   sleep 0.1
 done
 
-primary_soa="$(dig "@127.0.0.1" -p "$primary_port" alpha.test. SOA +time=1 +tries=1 +short)"
+dig "@127.0.0.1" -p "$primary_port" alpha.test. SOA +time=1 +tries=1 +short \
+  >"$workdir/primary-soa.out"
+primary_soa="$(<"$workdir/primary-soa.out")"
 if [[ "$primary_soa" != *" 1 1 1 30 5"* ]]; then
   echo "fake primary did not answer initial SOA serial 1" >&2
   exit 1
@@ -314,17 +324,19 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after initial fake-primary AXFR" >&2
   exit 1
 fi
 
-initial_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/initial-a.out"
+initial_a="$(<"$workdir/initial-a.out")"
 if [[ "$initial_a" != *"192.0.2.11"* ]]; then
   echo "OxideDNS did not serve initial AXFR data" >&2
   exit 1
@@ -346,13 +358,17 @@ for _ in {1..160}; do
   fi
   sleep 0.25
 done
+printf '%s\n' "$final_soa" >"$workdir/final-soa.out"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 
 if [[ "$final_soa" != *" 3 1 1 30 5"* ]]; then
   echo "OxideDNS did not publish serial 3 after IXFR NOTIMP fallback/cooldown" >&2
   exit 1
 fi
 
-final_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/final-a.out"
+final_a="$(<"$workdir/final-a.out")"
 if [[ "$final_a" != *"192.0.2.13"* ]]; then
   echo "OxideDNS did not serve final fallback AXFR data" >&2
   exit 1
@@ -388,5 +404,34 @@ for expected in \
     exit 1
   fi
 done
+
+cat >"$summary_env" <<EOF
+initial_soa_serial=1
+final_soa_serial=3
+initial_a=192.0.2.11
+final_a=192.0.2.13
+axfr_started=3
+axfr_completed=3
+ixfr_started=1
+ixfr_failed=1
+ixfr_completed=0
+ixfr_notimp_cooldown_observed=1
+ixfr_attempts_before_cooldown=$ixfr_count
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$primary_log" "$artifact_dir/fake-primary.log"
+  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+  cp "$fake_primary" "$artifact_dir/fake-primary.py"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/primary-soa.out" "$artifact_dir/primary-soa.out"
+  cp "$workdir/initial-a.out" "$artifact_dir/initial-a.out"
+  cp "$workdir/final-soa.out" "$artifact_dir/final-soa.out"
+  cp "$workdir/final-a.out" "$artifact_dir/final-a.out"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$summary_env" "$artifact_dir/ixfr-fallback-summary.env"
+fi
 
 echo "IXFR NOTIMP fallback interop passed"
