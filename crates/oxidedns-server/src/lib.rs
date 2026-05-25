@@ -8197,6 +8197,17 @@ mod tests {
         assert_eq!(header.id, 0x5678);
         assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
 
+        let mut tcp_client = TcpStream::connect(notify_addr).await.unwrap();
+        let tcp_notify = notify_packet(0x6789, "example.test.", RecordType::Soa as u16, 1);
+        tcp_client
+            .write_all(&frame_tcp_message(&tcp_notify))
+            .await
+            .unwrap();
+        let response = read_framed_tcp_response(&mut tcp_client).await;
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(header.id, 0x6789);
+        assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
+
         server.abort();
     }
 

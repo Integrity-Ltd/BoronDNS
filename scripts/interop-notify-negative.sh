@@ -369,6 +369,30 @@ def udp_exchange(port, packet, bind_addr="127.0.0.1", timeout=1.0):
         sock.close()
 
 
+def tcp_exchange(port, packet, bind_addr="127.0.0.1", timeout=1.0):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    sock.bind((bind_addr, 0))
+    try:
+        sock.connect((DNS_HOST, port))
+        sock.sendall(struct.pack("!H", len(packet)) + packet)
+        length_prefix = sock.recv(2)
+        if len(length_prefix) != 2:
+            raise AssertionError("short TCP length prefix")
+        response_len = struct.unpack("!H", length_prefix)[0]
+        response = bytearray()
+        while len(response) < response_len:
+            chunk = sock.recv(response_len - len(response))
+            if not chunk:
+                raise AssertionError("short TCP response")
+            response.extend(chunk)
+        return bytes(response)
+    except socket.timeout:
+        return None
+    finally:
+        sock.close()
+
+
 def wait_active():
     deadline = time.monotonic() + 10
     request = query_packet(0x1001, "www.notify-negative.test.", A)
@@ -383,8 +407,19 @@ def wait_active():
     raise AssertionError("OxideDNS did not publish active notify-negative.test zone")
 
 
-def assert_response(case, packet, expected_rcode, *, bind_addr="127.0.0.1", expected_tsig_error=None):
-    response = udp_exchange(NOTIFY_PORT, packet, bind_addr=bind_addr)
+def assert_response(
+    case,
+    packet,
+    expected_rcode,
+    *,
+    transport="udp",
+    bind_addr="127.0.0.1",
+    expected_tsig_error=None,
+):
+    if transport == "tcp":
+        response = tcp_exchange(NOTIFY_PORT, packet, bind_addr=bind_addr)
+    else:
+        response = udp_exchange(NOTIFY_PORT, packet, bind_addr=bind_addr)
     if response is None:
         raise AssertionError(f"{case}: expected response")
     summary = response_summary(response)
@@ -420,32 +455,39 @@ def assert_discard(case, packet, *, bind_addr):
 def main():
     wait_active()
     cases = [
-        ("non_soa_question", notify_packet(0x2001, "notify-negative.test.", A), 1, None),
-        ("unknown_zone", notify_packet(0x2002, "unknown.notify-negative.test.", SOA), 5, None),
-        ("authorized_signalled", notify_packet(0x2003, "notify-negative.test.", SOA, serial=2026052502), 0, None),
-        ("authorized_duplicate", notify_packet(0x2004, "notify-negative.test.", SOA, serial=2026052502), 0, None),
-        ("missing_required_tsig", notify_packet(0x2005, "notify-signed.test.", SOA), 9, 17),
+        ("non_soa_question", "udp", notify_packet(0x2001, "notify-negative.test.", A), 1, None),
+        ("unknown_zone", "udp", notify_packet(0x2002, "unknown.notify-negative.test.", SOA), 5, None),
+        ("authorized_signalled", "udp", notify_packet(0x2003, "notify-negative.test.", SOA, serial=2026052502), 0, None),
+        ("authorized_duplicate", "udp", notify_packet(0x2004, "notify-negative.test.", SOA, serial=2026052502), 0, None),
+        ("tcp_authorized_duplicate", "tcp", notify_packet(0x2007, "notify-negative.test.", SOA, serial=2026052502), 0, None),
+        ("missing_required_tsig", "udp", notify_packet(0x2005, "notify-signed.test.", SOA), 9, 17),
     ]
-    rows = ["case\trcode\ttsig_error"]
-    for case, packet, rcode, tsig_error in cases:
-        summary = assert_response(case, packet, rcode, expected_tsig_error=tsig_error)
+    rows = ["case\ttransport\trcode\ttsig_error"]
+    for case, transport, packet, rcode, tsig_error in cases:
+        summary = assert_response(
+            case,
+            packet,
+            rcode,
+            transport=transport,
+            expected_tsig_error=tsig_error,
+        )
         tsig_name = ""
         if summary["tsig"] is not None:
             tsig_name = TSIG_ERRORS.get(summary["tsig"][1], str(summary["tsig"][1]))
-        rows.append(f"{case}\t{summary['rcode_name']}\t{tsig_name}")
-        log(f"{case} rcode={summary['rcode_name']} tsig_error={tsig_name}")
+        rows.append(f"{case}\t{transport}\t{summary['rcode_name']}\t{tsig_name}")
+        log(f"{case} transport={transport} rcode={summary['rcode_name']} tsig_error={tsig_name}")
 
     discard = assert_discard(
         "unauthorized_source",
         notify_packet(0x2006, "notify-negative.test.", SOA),
         bind_addr="127.0.0.2",
     )
-    rows.append(f"unauthorized_source\t{discard['rcode_name']}\t")
+    rows.append(f"unauthorized_source\tudp\t{discard['rcode_name']}\t")
     log("unauthorized_source discarded")
 
     with open(SUMMARY_PATH, "w", encoding="utf-8") as handle:
         handle.write("\n".join(rows) + "\n")
-    print("notify_negative_cases=6")
+    print("notify_negative_cases=7")
 
 
 if __name__ == "__main__":
@@ -534,10 +576,10 @@ sleep 0.2
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_notify_messages_received_total 6' \
+  'oxidedns_notify_messages_received_total 7' \
   'oxidedns_notify_messages_unauthorized_total 1' \
   'oxidedns_notify_refresh_actions_total{action="signalled"} 1' \
-  'oxidedns_notify_refresh_actions_total{action="deduplicated"} 1' \
+  'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
   'oxidedns_tsig_notify_verifications_total{result="badkey"} 1'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected negative NOTIFY line: $expected" >&2
@@ -558,12 +600,12 @@ done
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-runtime-plus-support	udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_notify_interface	This harness receives NOTIFY on a configured UDP notify listener; TCP listener and NOTIFY-response discard coverage remain in focused runtime/unit tests.
+ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_notify_interface	This harness receives NOTIFY on a configured notify listener over both UDP and TCP, with focused runtime coverage for the same configured listener.
 ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
 ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
 ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	An unauthorized source receives no response, increments unauthorized metrics, and emits the warning log.
 ODS-FR-NOTIFY-005	retained-runtime-plus-support	missing_required_tsig	notify-negative-summary.tsv; metrics.txt; oxidedns.log; crates/oxidedns-server/src/lib.rs notify TSIG tests	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; broader TSIG failure classes are covered by focused tests.
-ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed.
+ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages over UDP and TCP receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed.
 ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	The first accepted NOTIFY records action=refresh_signalled and increments the refresh signalled metric.
 ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; oxidedns.log; crates/oxidedns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
 ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
