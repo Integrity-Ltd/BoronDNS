@@ -386,7 +386,9 @@ per-zone status series (`oxidedns_secondary_zone_state`,
 `oxidedns_secondary_zone_last_refresh_seconds`,
 `oxidedns_secondary_zone_next_refresh_seconds`,
 `oxidedns_secondary_zone_refresh_failures`, and
-`oxidedns_secondary_queries_total{zone="..."}`), transfer counters, query
+`oxidedns_secondary_queries_total{zone="..."}`), catalog membership gauges
+(`oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`),
+transfer counters, query
 counters, global and per-zone RCODE counters
 (`oxidedns_secondary_query_responses_total{rcode="..."}` and
 `oxidedns_secondary_query_responses_total{zone="...",rcode="..."}`),
@@ -411,6 +413,9 @@ Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at l
 - `/readyz` remaining 503 beyond the expected initial transfer window.
 - `zone_loading_threshold_exceeded` warnings or sustained non-zero
   `oxidedns_secondary_zone_loading_seconds` for any zone.
+- Catalog membership changes through `catalog_member_added` and
+  `catalog_member_removed` logs, followed by expected member-zone ACTIVE state
+  and SOA serial metrics.
 - A zone entering or remaining in EXPIRED state.
 - Increasing transfer failure counters.
 - Unexpected NOTIFY authorization or TSIG verification failures.
@@ -814,6 +819,8 @@ current operator-relevant limitations are:
   repository currently documents source build and script-driven evidence paths.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.
-- There is no runtime configuration reload, no administrative API, no catalog
-  zones, no primary-mode service, no dynamic update, no client-query DoT, and no
-  NOTIFY-over-TLS listener.
+- There is no runtime configuration reload, no administrative API,
+  no primary-mode service, no dynamic update, no client-query DoT, and no
+  NOTIFY-over-TLS listener. Catalog-zone member discovery is supported through
+  RFC 9432 transfers and remains observable through logs and metrics rather than
+  a mutable management API.

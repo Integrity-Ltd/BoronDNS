@@ -80,6 +80,27 @@ Changing the set of configured catalogs, their primaries, TSIG references, or
 the `serve_catalog_zone` policy requires a process restart. The member-zone set
 inside a catalog is dynamic and follows successful catalog transfers.
 
+## Observability
+
+Catalog membership changes are visible through structured logs and metrics.
+When a newly observed member PTR is accepted for catalog-managed service,
+OxideDNS emits `category=transfer`, `event=catalog_member_added`,
+`catalog_zone=<catalog>`, and `zone=<member>`. Removed member zones emit
+`event=catalog_member_removed`.
+
+The `/metrics` endpoint exposes
+`oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."} 1`
+for the current catalog membership known to the process. `managed="true"`
+means OxideDNS created dynamic secondary service for the member. `managed="false"`
+means the catalog listed the zone, but a static `[[zones]]` entry already owns
+that zone and the static configuration remains authoritative.
+
+Member zones also appear in the normal per-zone metrics after they are inserted
+into the zone-state machine. Use `oxidedns_secondary_zone_state`,
+`oxidedns_secondary_zone_loading_seconds`,
+`oxidedns_secondary_zone_soa_serial`, and the transfer counters to confirm that
+a catalog member was discovered, transferred, and became ACTIVE.
+
 ## PowerDNS Primary Pattern
 
 For an internal PowerDNS plus PostgreSQL primary, publish one RFC 9432 catalog

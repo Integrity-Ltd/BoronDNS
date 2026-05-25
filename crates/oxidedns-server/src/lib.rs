@@ -485,6 +485,7 @@ impl Runtime {
                     zones: self.zones.clone(),
                     runtime_status: runtime_status.clone(),
                     metrics: metrics.clone(),
+                    catalog_manager: catalog_manager.clone(),
                     refresh_registry: refresh_registry.clone(),
                     metrics_rate_limiter: MetricsRateLimiter::from_config(self.config.health),
                     started_at: Instant::now(),
@@ -3241,6 +3242,7 @@ fn record_query_termination_metric(
     match lookup.termination {
         Some(LookupTermination::CnameChainLimit) => metrics.record_query_cname_chain_limit(),
         Some(LookupTermination::CnameLoop) => metrics.record_query_cname_loop(),
+        Some(LookupTermination::MalformedDname) => {}
         None => {}
     }
 }
@@ -3501,6 +3503,7 @@ async fn metrics(
     let body = metrics_body(
         &state.zones,
         &state.metrics,
+        &state.catalog_manager,
         &state.refresh_registry,
         state.started_at.elapsed().as_secs(),
     );
@@ -3595,6 +3598,7 @@ fn gzip_bytes(body: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 fn metrics_body(
     zones: &ZoneStore,
     metrics: &RuntimeMetrics,
+    catalog_manager: &CatalogManager,
     refresh_registry: &ZoneRefreshRegistry,
     uptime_seconds: u64,
 ) -> String {
@@ -3673,6 +3677,7 @@ fn metrics_body(
     append_configuration_warning_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
+    append_catalog_member_metrics(&mut body, catalog_manager);
     append_zone_status_metrics(&mut body, zones, uptime_seconds);
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
@@ -3902,6 +3907,21 @@ fn append_tsig_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
     ] {
         body.push_str(&format!(
             "oxidedns_tsig_notify_verifications_total{{result=\"{result}\"}} {count}\n"
+        ));
+    }
+}
+
+fn append_catalog_member_metrics(body: &mut String, catalog_manager: &CatalogManager) {
+    body.push_str(
+        "# HELP oxidedns_catalog_member_info Current RFC 9432 catalog membership known to this process.\n\
+         # TYPE oxidedns_catalog_member_info gauge\n",
+    );
+    for member in catalog_manager.member_metrics() {
+        let catalog_zone = prometheus_label_value(&member.catalog_zone.to_string());
+        let zone = prometheus_label_value(&member.member_zone.to_string());
+        let managed = if member.managed { "true" } else { "false" };
+        body.push_str(&format!(
+            "oxidedns_catalog_member_info{{catalog_zone=\"{catalog_zone}\",zone=\"{zone}\",managed=\"{managed}\"}} 1\n"
         ));
     }
 }
@@ -4406,6 +4426,7 @@ struct HealthEndpointState {
     zones: ZoneStore,
     runtime_status: RuntimeStatus,
     metrics: RuntimeMetrics,
+    catalog_manager: CatalogManager,
     refresh_registry: ZoneRefreshRegistry,
     metrics_rate_limiter: MetricsRateLimiter,
     started_at: Instant,
@@ -5629,6 +5650,23 @@ struct CatalogManager {
     memberships_by_catalog: Arc<Mutex<HashMap<String, HashSet<String>>>>,
 }
 
+impl Default for CatalogManager {
+    fn default() -> Self {
+        Self {
+            catalogs_by_key: Arc::new(HashMap::new()),
+            static_zone_keys: Arc::new(HashSet::new()),
+            memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CatalogMemberMetric {
+    catalog_zone: DomainName,
+    member_zone: DomainName,
+    managed: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CatalogRuntime {
     manager: CatalogManager,
@@ -5680,6 +5718,40 @@ impl CatalogManager {
 
     fn is_catalog(&self, origin: &DomainName) -> bool {
         self.catalogs_by_key.contains_key(&origin.canonical_key())
+    }
+
+    fn member_metrics(&self) -> Vec<CatalogMemberMetric> {
+        let memberships = self
+            .memberships_by_catalog
+            .lock()
+            .expect("catalog membership lock poisoned");
+        let mut samples = Vec::new();
+        for (catalog_key, member_keys) in memberships.iter() {
+            let Some(catalog_zone) = DomainName::from_absolute_str(catalog_key).ok() else {
+                continue;
+            };
+            for member_key in member_keys {
+                let Some(member_zone) = DomainName::from_absolute_str(member_key).ok() else {
+                    continue;
+                };
+                samples.push(CatalogMemberMetric {
+                    catalog_zone: catalog_zone.clone(),
+                    member_zone,
+                    managed: !self.static_zone_keys.contains(member_key),
+                });
+            }
+        }
+        samples.sort_by(|left, right| {
+            left.catalog_zone
+                .canonical_key()
+                .cmp(&right.catalog_zone.canonical_key())
+                .then_with(|| {
+                    left.member_zone
+                        .canonical_key()
+                        .cmp(&right.member_zone.canonical_key())
+                })
+        });
+        samples
     }
 
     async fn apply_snapshot(
@@ -5783,6 +5855,14 @@ impl CatalogManager {
                     catalog_zone = %catalog.origin,
                     zone = %member_origin,
                     "catalog member refresh queue closed"
+                );
+            } else {
+                info!(
+                    category = "transfer",
+                    event = "catalog_member_added",
+                    catalog_zone = %catalog.origin,
+                    zone = %member_origin,
+                    "added catalog-managed member zone"
                 );
             }
         }
@@ -8061,7 +8141,7 @@ mod tests {
     static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         net::IpAddr,
         sync::{
             Arc, Mutex,
@@ -8724,7 +8804,13 @@ mod tests {
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(3600),
         );
-        let metrics = metrics_body(&zones, &RuntimeMetrics::new(), &refresh_registry, 3600);
+        let metrics = metrics_body(
+            &zones,
+            &RuntimeMetrics::new(),
+            &CatalogManager::default(),
+            &refresh_registry,
+            3600,
+        );
 
         assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"example.test.\"} 0"));
         assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"loading.test.\"} 3600"));
@@ -8735,6 +8821,39 @@ mod tests {
             metrics
                 .contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
         );
+    }
+
+    #[test]
+    fn metrics_body_reports_catalog_membership() {
+        let zones = ZoneStore::new();
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+        let catalog_manager = CatalogManager {
+            catalogs_by_key: Arc::new(HashMap::new()),
+            static_zone_keys: Arc::new(HashSet::from(["static.example.".to_owned()])),
+            memberships_by_catalog: Arc::new(Mutex::new(HashMap::from([(
+                "catalog.example.".to_owned(),
+                HashSet::from(["alpha.example.".to_owned(), "static.example.".to_owned()]),
+            )]))),
+        };
+
+        let metrics = metrics_body(
+            &zones,
+            &RuntimeMetrics::new(),
+            &catalog_manager,
+            &refresh_registry,
+            0,
+        );
+
+        assert!(metrics.contains(
+            "oxidedns_catalog_member_info{catalog_zone=\"catalog.example.\",zone=\"alpha.example.\",managed=\"true\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_catalog_member_info{catalog_zone=\"catalog.example.\",zone=\"static.example.\",managed=\"false\"} 1"
+        ));
     }
 
     #[tokio::test]
@@ -8842,6 +8961,7 @@ mod tests {
                 zones,
                 runtime_status: RuntimeStatus::new(),
                 metrics: metrics_state,
+                catalog_manager: CatalogManager::default(),
                 refresh_registry,
                 metrics_rate_limiter: MetricsRateLimiter::default(),
                 started_at: std::time::Instant::now(),
@@ -9087,6 +9207,7 @@ mod tests {
                 zones,
                 runtime_status: RuntimeStatus::new(),
                 metrics: RuntimeMetrics::new(),
+                catalog_manager: CatalogManager::default(),
                 refresh_registry: ZoneRefreshRegistry::without_jitter(
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_secs(60),
@@ -9137,6 +9258,7 @@ mod tests {
                 zones,
                 runtime_status: runtime_status.clone(),
                 metrics: RuntimeMetrics::new(),
+                catalog_manager: CatalogManager::default(),
                 refresh_registry: ZoneRefreshRegistry::without_jitter(
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_secs(60),
@@ -10562,7 +10684,13 @@ mod tests {
             std::time::Duration::from_micros(1_500),
         );
 
-        let body = metrics_body(&zones, &metrics, &refresh_registry, 0);
+        let body = metrics_body(
+            &zones,
+            &metrics,
+            &CatalogManager::default(),
+            &refresh_registry,
+            0,
+        );
 
         assert!(body.contains(
             "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.001\"} 0"
@@ -10595,7 +10723,13 @@ mod tests {
         metrics.record_response_cache_candidate(ResponseCacheCandidateCategory::Direct);
         metrics.record_response_cache_ineligible(ResponseCacheIneligibleReason::Cookie);
 
-        let body = metrics_body(&zones, &metrics, &refresh_registry, 0);
+        let body = metrics_body(
+            &zones,
+            &metrics,
+            &CatalogManager::default(),
+            &refresh_registry,
+            0,
+        );
 
         assert!(body.contains(
             "oxidedns_query_pipeline_duration_seconds_bucket{stage=\"compose\",query_category=\"udp_direct\",le=\"0.001\"} 0"
@@ -10618,7 +10752,13 @@ mod tests {
         let metrics = RuntimeMetrics::new();
 
         metrics.record_response_cache_candidate(ResponseCacheCandidateCategory::Direct);
-        let body = metrics_body(&zones, &metrics, &refresh_registry, 0);
+        let body = metrics_body(
+            &zones,
+            &metrics,
+            &CatalogManager::default(),
+            &refresh_registry,
+            0,
+        );
 
         assert!(!body.contains("oxidedns_query_pipeline_duration_seconds"));
         assert!(!body.contains("oxidedns_response_cache_candidate_total"));
@@ -15310,6 +15450,7 @@ mod tests {
             zones,
             runtime_status: RuntimeStatus::new(),
             metrics: RuntimeMetrics::new(),
+            catalog_manager: CatalogManager::default(),
             refresh_registry: ZoneRefreshRegistry::without_jitter(
                 std::time::Duration::from_secs(60),
                 std::time::Duration::from_secs(60),
