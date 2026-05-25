@@ -53,6 +53,27 @@ if ! rg --quiet 'libc::getrlimit\(libc::RLIMIT_NOFILE' "$resource_limits_excepti
   exit 1
 fi
 
+python3 - "$process_signals_exception" "$resource_limits_exception" <<'PY'
+import sys
+from pathlib import Path
+
+failures = []
+for filename in sys.argv[1:]:
+    path = Path(filename)
+    lines = path.read_text().splitlines()
+    for index, line in enumerate(lines):
+        if "unsafe {" not in line:
+            continue
+        context = "\n".join(lines[max(0, index - 4):index])
+        if "SAFETY:" not in context:
+            failures.append(f"{path}:{index + 1}: unsafe block lacks preceding SAFETY rationale")
+
+if failures:
+    raise SystemExit("\n".join(failures))
+
+print("unsafe rationale check passed: audited unsafe blocks have SAFETY comments")
+PY
+
 echo "first-party unsafe scan passed: only audited POSIX signal-disposition and rlimit exceptions found"
 
 if command -v cargo-geiger >/dev/null 2>&1; then

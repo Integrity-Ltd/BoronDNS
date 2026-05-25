@@ -6,6 +6,9 @@ pub fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: `limit` points to a valid, initialized `libc::rlimit` value
+    // owned by this stack frame, and `getrlimit` writes only to that out
+    // parameter for the constant `RLIMIT_NOFILE` resource.
     let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
     if result == 0 {
         Ok(limit.rlim_cur)

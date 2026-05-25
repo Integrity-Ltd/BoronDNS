@@ -304,7 +304,7 @@ DNSSEC work is partially started:
 Slice 8 has health endpoint and SRS interface foundations:
 
 - optional `[server].health` remains a compatibility health bind override; `[health].bind_address`/`bind_port` take precedence for the SRS explicit health bind, and `[interfaces].mgmt` activates health/metrics listeners at `[health].default_port` when no explicit override is configured;
-- `[interfaces].dns` overrides legacy DNS listener lists and is used for both UDP and TCP DNS sockets, `[interfaces].notify` opens additional UDP and TCP listeners that reuse the normal DNS query/NOTIFY handlers, configuration validation rejects notify listeners that overlap effective DNS UDP or TCP listener sockets and rejects obsolete `interfaces.xot`, and `[interfaces].transfer` binds same-family outbound SOA poll, AXFR, IXFR, and XoT TCP sockets while preserving ephemeral source-port selection with port `0`;
+- `[interfaces].dns` overrides legacy DNS listener lists and is used for both UDP and TCP DNS sockets, accepts both legacy socket-address strings and `{ address, name }` pairs so a future XDP backend can identify the intended NIC by name while the current socket backend ignores that name, `[interfaces].notify` opens additional UDP and TCP listeners that reuse the normal DNS query/NOTIFY handlers, configuration validation rejects notify listeners that overlap effective DNS UDP or TCP listener sockets and rejects obsolete `interfaces.xot`, and `[interfaces].transfer` binds same-family outbound SOA poll, AXFR, IXFR, and XoT TCP sockets while preserving ephemeral source-port selection with port `0`;
 - `GET /livez` reports JSON liveness with HTTP 200 whenever the process can answer the probe, including LOADING and draining states;
 - `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
 - `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;
@@ -438,5 +438,9 @@ Open near-term work:
 - broaden IXFR fault and interop coverage beyond BIND and Knot true-incremental evidence;
 - broaden real-primary XoT interop evidence;
 - expand DNSSEC passive audit output into retained release traceability and broader conformance matrix entries;
+- preserve the Appendix C.6 future-optimization boundaries: PacketIo-style network
+  adapter for XDP/eBPF and io_uring backends, substitutable zone-store boundary
+  for NSD-style packed arenas, response-assembly/send separation for hot
+  response caches, and isolated `SAFETY:`-documented unsafe adapters;
 - keep the long-run performance, fuzz, interop, and soak harnesses ready for
   later SRS acceptance execution by release or operations owners.

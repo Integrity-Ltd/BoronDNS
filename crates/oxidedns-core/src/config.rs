@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -263,14 +263,16 @@ impl ServerConfig {
     pub fn dns_udp_listeners(&self) -> Vec<SocketAddr> {
         self.interfaces
             .dns
-            .clone()
+            .as_ref()
+            .map(|dns| dns.iter().map(InterfaceEndpoint::addr).collect())
             .unwrap_or_else(|| self.server.listen_udp.clone())
     }
 
     pub fn dns_tcp_listeners(&self) -> Vec<SocketAddr> {
         self.interfaces
             .dns
-            .clone()
+            .as_ref()
+            .map(|dns| dns.iter().map(InterfaceEndpoint::addr).collect())
             .unwrap_or_else(|| self.server.listen_tcp.clone())
     }
 
@@ -317,10 +319,11 @@ impl ServerConfig {
             }
         }
 
-        if let Some(dns) = self.interfaces.dns.as_ref()
+        let dns = self.interfaces.dns_addrs();
+        if self.interfaces.dns.is_some()
             && !dns.is_empty()
             && !self.interfaces.mgmt.is_empty()
-            && !socket_addr_sets_equal(dns, &self.interfaces.mgmt)
+            && !socket_addr_sets_equal(&dns, &self.interfaces.mgmt)
             && dns.iter().any(|dns| {
                 self.interfaces
                     .mgmt
@@ -515,7 +518,7 @@ impl LoggingConfig {
 pub struct InterfacesConfig {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dns: Option<Vec<SocketAddr>>,
+    pub dns: Option<Vec<InterfaceEndpoint>>,
     #[serde(default)]
     pub mgmt: Vec<SocketAddr>,
     #[serde(default)]
@@ -527,6 +530,13 @@ pub struct InterfacesConfig {
 }
 
 impl InterfacesConfig {
+    fn dns_addrs(&self) -> Vec<SocketAddr> {
+        self.dns
+            .as_ref()
+            .map(|dns| dns.iter().map(InterfaceEndpoint::addr).collect())
+            .unwrap_or_default()
+    }
+
     fn validate(&self, server: &ServerSettings) -> Result<(), ConfigError> {
         if self.xot.is_some() {
             return Err(ConfigError::Invalid(
@@ -541,8 +551,32 @@ impl InterfacesConfig {
             ));
         }
 
-        let dns_udp = self.dns.as_deref().unwrap_or(&server.listen_udp);
-        let dns_tcp = self.dns.as_deref().unwrap_or(&server.listen_tcp);
+        if let Some(dns) = &self.dns {
+            for endpoint in dns {
+                if endpoint
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.trim().is_empty())
+                {
+                    return Err(ConfigError::Invalid(
+                        "interfaces.dns interface name must not be empty when configured"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+
+        let configured_dns = self.dns_addrs();
+        let dns_udp = self
+            .dns
+            .as_ref()
+            .map(|_| configured_dns.as_slice())
+            .unwrap_or(&server.listen_udp);
+        let dns_tcp = self
+            .dns
+            .as_ref()
+            .map(|_| configured_dns.as_slice())
+            .unwrap_or(&server.listen_tcp);
 
         let mut transfer_ipv4 = false;
         let mut transfer_ipv6 = false;
@@ -586,6 +620,57 @@ impl InterfacesConfig {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InterfaceEndpoint {
+    pub address: SocketAddr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl InterfaceEndpoint {
+    pub fn new(address: SocketAddr, name: Option<String>) -> Self {
+        Self { address, name }
+    }
+
+    pub fn addr(&self) -> SocketAddr {
+        self.address
+    }
+}
+
+impl<'de> Deserialize<'de> for InterfaceEndpoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DetailedInterfaceEndpoint {
+            address: SocketAddr,
+            #[serde(default)]
+            name: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum InterfaceEndpointRepr {
+            Address(SocketAddr),
+            Detailed(DetailedInterfaceEndpoint),
+        }
+
+        match InterfaceEndpointRepr::deserialize(deserializer)? {
+            InterfaceEndpointRepr::Address(address) => Ok(Self {
+                address,
+                name: None,
+            }),
+            InterfaceEndpointRepr::Detailed(detailed) => Ok(Self {
+                address: detailed.address,
+                name: detailed.name,
+            }),
+        }
     }
 }
 
@@ -1541,7 +1626,10 @@ mod tests {
                 health = "127.0.0.1:8081"
 
                 [interfaces]
-                dns = ["127.0.0.2:5300", "[::1]:5300"]
+                dns = [
+                    { address = "127.0.0.2:5300", name = "eth-dns" },
+                    "[::1]:5300",
+                ]
                 mgmt = ["127.0.0.3:9443"]
                 transfer = ["127.0.0.4:0", "[::1]:0"]
                 notify = ["127.0.0.5:5300"]
@@ -1556,8 +1644,11 @@ mod tests {
         assert_eq!(
             config.interfaces.dns,
             Some(vec![
-                "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
-                "[::1]:5300".parse::<SocketAddr>().unwrap(),
+                InterfaceEndpoint::new(
+                    "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
+                    Some("eth-dns".to_owned()),
+                ),
+                InterfaceEndpoint::new("[::1]:5300".parse::<SocketAddr>().unwrap(), None),
             ])
         );
         assert_eq!(
@@ -1669,6 +1760,21 @@ mod tests {
                 "interfaces.dns must contain at least one listener",
             ),
             (
+                "empty dns interface name",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    dns = [{ address = "127.0.0.2:5300", name = " " }]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "interfaces.dns interface name must not be empty",
+            ),
+            (
                 "fixed transfer source port",
                 r#"
                     [server]
@@ -1763,6 +1869,21 @@ mod tests {
                     primaries = ["192.0.2.53:53"]
                 "#,
                 "unknown field",
+            ),
+            (
+                "dns endpoint",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    dns = [{ address = "127.0.0.2:5300", nic = "eth0" }]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "did not match any variant",
             ),
         ] {
             let error = ServerConfig::from_toml_str(config).expect_err(label);

@@ -52,6 +52,9 @@ source-line target.
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
 | Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Reproducible build posture | `cargo build --locked` is the baseline command; bit-identical independent build evidence is still required before MVP acceptance. | `ODS-NFR-MAINT-005` |
+| Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
+| Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
+| Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
 
 ## Line Count Posture
 
@@ -66,6 +69,22 @@ shape: runtime integration in `crates/oxidedns-server/src/lib.rs` is broad. Futu
 refactoring should split that file along listener, transfer, metrics, and
 refresh-scheduler boundaries when doing so reduces review complexity without
 obscuring SRS traceability.
+
+## Unsafe Boundary Policy
+
+The workspace defaults to `unsafe_code = "forbid"` for first-party crates. The
+only current exceptions are the POSIX signal-disposition and file-descriptor
+limit adapters in `crates/oxidedns-server/src/process_signals.rs` and
+`crates/oxidedns-server/src/resource_limits.rs`.
+
+Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
+are expected to require `unsafe` or unsafe-heavy dependencies. They must remain
+outside the safe DNS parser, transfer parser, TSIG, and response-composition
+core. Any first-party `unsafe` must be confined to a dedicated adapter module or
+crate with local `#![allow(unsafe_code)]`, each unsafe block must carry a
+`SAFETY:` comment explaining the soundness invariants, and release evidence
+must include static unsafe enumeration plus targeted adapter tests before the
+backend can be enabled.
 
 ## Release Signing Decision
 

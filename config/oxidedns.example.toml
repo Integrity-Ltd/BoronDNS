@@ -12,8 +12,14 @@ nsid = "oxidedns-example"
 
 [interfaces]
 # DNS query sockets for both UDP and TCP. By default these sockets also receive
-# inbound NOTIFY when interfaces.notify is empty.
-dns = ["0.0.0.0:5300", "[::]:5300"]
+# inbound NOTIFY when interfaces.notify is empty. String entries remain
+# accepted, but address/name pairs are preferred so future XDP attachment can
+# identify the intended NIC by name. The name is accepted and ignored by the
+# current socket backend.
+dns = [
+  { address = "0.0.0.0:5300", name = "dns0" },
+  { address = "[::]:5300", name = "dns0" },
+]
 # Operator-facing interface address. Health and metrics use health.default_port
 # on these IP addresses unless health.bind_address/bind_port is set.
 mgmt = ["127.0.0.1:9443"]

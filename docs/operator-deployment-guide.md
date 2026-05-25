@@ -174,7 +174,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
 - `[interfaces]`: SRS v0.7 network roles. `interfaces.dns` overrides the
-  legacy DNS listener lists and is used for both UDP and TCP DNS service;
+  legacy DNS listener lists and is used for both UDP and TCP DNS service. DNS
+  entries may be legacy socket-address strings or `{ address, name }` pairs;
+  the optional `name` is accepted for future XDP attachment planning and is
+  ignored by the current kernel-socket backend;
   `interfaces.mgmt` activates the health/metrics endpoint at
   `health.default_port` unless an explicit health bind override is configured;
   `interfaces.transfer` binds outbound SOA polling, AXFR, IXFR, and XoT TCP
