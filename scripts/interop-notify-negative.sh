@@ -55,6 +55,7 @@ client="$workdir/client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/notify-negative-summary.tsv"
+traceability_tsv="$workdir/notify-traceability.tsv"
 oxidedns_conf="$workdir/oxidedns.toml"
 
 cat >"$fake_primary" <<'PY'
@@ -326,9 +327,17 @@ def response_summary(packet):
     qid, flags, qdcount, ancount, nscount, arcount = struct.unpack("!HHHHHH", packet[:12])
     rcode = flags & 0x000F
     qr = bool(flags & 0x8000)
+    aa = bool(flags & 0x0400)
     opcode = (flags >> 11) & 0x0F
     offset = 12
-    for _ in range(qdcount):
+    qname = ""
+    qtype = None
+    qclass = None
+    if qdcount:
+        qname, offset = parse_name(packet, offset)
+        qtype, qclass = struct.unpack("!HH", packet[offset:offset + 4])
+        offset += 4
+    for _ in range(max(0, qdcount - 1)):
         offset += skip_name(packet, offset) + 4
     offset = skip_rrs(packet, offset, ancount)
     offset = skip_rrs(packet, offset, nscount)
@@ -336,9 +345,13 @@ def response_summary(packet):
     return {
         "id": qid,
         "qr": qr,
+        "aa": aa,
         "opcode": opcode,
         "rcode": rcode,
         "rcode_name": RCODES.get(rcode, str(rcode)),
+        "qname": qname,
+        "qtype": qtype,
+        "qclass": qclass,
         "tsig": tsig,
     }
 
@@ -375,10 +388,19 @@ def assert_response(case, packet, expected_rcode, *, bind_addr="127.0.0.1", expe
     if response is None:
         raise AssertionError(f"{case}: expected response")
     summary = response_summary(response)
+    expected_qid = struct.unpack("!H", packet[:2])[0]
+    expected_qname, expected_q_offset = parse_name(packet, 12)
+    expected_qtype, expected_qclass = struct.unpack("!HH", packet[expected_q_offset:expected_q_offset + 4])
     if not summary["qr"] or summary["opcode"] != 4:
         raise AssertionError(f"{case}: unexpected header {summary}")
+    if summary["id"] != expected_qid:
+        raise AssertionError(f"{case}: expected qid {expected_qid}, got {summary}")
+    if summary["qname"] != expected_qname or summary["qtype"] != expected_qtype or summary["qclass"] != expected_qclass:
+        raise AssertionError(f"{case}: response question did not echo request question: {summary}")
     if summary["rcode"] != expected_rcode:
         raise AssertionError(f"{case}: expected rcode {expected_rcode}, got {summary}")
+    if expected_rcode == 0 and not summary["aa"]:
+        raise AssertionError(f"{case}: successful NOTIFY response did not set AA")
     if expected_tsig_error is not None:
         if summary["tsig"] is None:
             raise AssertionError(f"{case}: expected TSIG error")
@@ -524,6 +546,8 @@ for expected in \
 done
 
 for expected_log in \
+  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=refresh_signalled' \
+  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=deduplicated' \
   'event=notify_unauthorized_discard' \
   'event=notify_tsig_failure'; do
   if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
@@ -532,6 +556,21 @@ for expected_log in \
   fi
 done
 
+cat >"$traceability_tsv" <<'EOF'
+requirement_id	evidence_state	runtime_case	artifacts	review_note
+ODS-FR-NOTIFY-001	retained-runtime-plus-support	udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_notify_interface	This harness receives NOTIFY on a configured UDP notify listener; TCP listener and NOTIFY-response discard coverage remain in focused runtime/unit tests.
+ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
+ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
+ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	An unauthorized source receives no response, increments unauthorized metrics, and emits the warning log.
+ODS-FR-NOTIFY-005	retained-runtime-plus-support	missing_required_tsig	notify-negative-summary.tsv; metrics.txt; oxidedns.log; crates/oxidedns-server/src/lib.rs notify TSIG tests	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; broader TSIG failure classes are covered by focused tests.
+ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed.
+ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	The first accepted NOTIFY records action=refresh_signalled and increments the refresh signalled metric.
+ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; oxidedns.log; crates/oxidedns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
+ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
+ODS-FR-NOTIFY-010	retained-runtime	notify_logging	oxidedns.log	Accepted, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
+ODS-FR-NOTIFY-011	retained-runtime-plus-support	first_warning_and_rate_limit_foundation	oxidedns.log; crates/oxidedns-server/src/lib.rs::notify_log_limiter_suppresses_repeats_and_summarizes	This harness retains first warning logs for unauthorized and TSIG-failure cases; suppression and periodic aggregate behavior remain covered by focused log-limiter tests.
+EOF
+
 if [[ -n "$artifact_dir" ]]; then
   mkdir -p "$artifact_dir"
   cp "$primary_log" "$artifact_dir/fake-primary.log"
@@ -539,6 +578,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
   cp "$summary_tsv" "$artifact_dir/notify-negative-summary.tsv"
+  cp "$traceability_tsv" "$artifact_dir/notify-traceability.tsv"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
