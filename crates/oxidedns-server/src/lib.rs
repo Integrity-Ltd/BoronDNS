@@ -12321,7 +12321,7 @@ mod tests {
             assert_eq!(header.nscount, 1);
             assert_eq!(&query[26..28], &(RecordType::Ixfr as u16).to_be_bytes());
 
-            let response = axfr_response(header.id, serial);
+            let response = ixfr_mode2_response(header.id, serial);
             stream
                 .write_all(&frame_tcp_message(&response))
                 .await
@@ -12350,7 +12350,7 @@ mod tests {
 
             barrier.wait().await;
 
-            let response = axfr_response_for_zone(header.id, zone, 2);
+            let response = ixfr_mode2_response_for_zone(header.id, zone, 2);
             stream
                 .write_all(&frame_tcp_message(&response))
                 .await
@@ -12544,6 +12544,18 @@ mod tests {
     }
 
     fn axfr_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
+        transfer_response_for_zone(qid, zone, RecordType::Axfr as u16, serial)
+    }
+
+    fn ixfr_mode2_response(qid: u16, serial: u32) -> Vec<u8> {
+        ixfr_mode2_response_for_zone(qid, "example.test.", serial)
+    }
+
+    fn ixfr_mode2_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
+        transfer_response_for_zone(qid, zone, RecordType::Ixfr as u16, serial)
+    }
+
+    fn transfer_response_for_zone(qid: u16, zone: &str, qtype: u16, serial: u32) -> Vec<u8> {
         let soa = record(zone, RecordType::Soa as u16, soa_rdata_with_serial(serial));
         let ns = record(zone, RecordType::Ns as u16, ns_rdata_for_zone(zone));
         let owner = format!("www.{zone}");
@@ -12552,10 +12564,13 @@ mod tests {
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());
         out.extend_from_slice(&0x8000u16.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
         out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&DomainName::from_absolute_str(zone).unwrap().to_wire());
+        out.extend_from_slice(&qtype.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
         for answer in answers {
             out.extend_from_slice(&answer.owner.to_wire());
             out.extend_from_slice(&answer.rr_type.to_be_bytes());
@@ -12703,10 +12718,17 @@ mod tests {
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());
         out.extend_from_slice(&0x8000u16.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
         out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(
+            &DomainName::from_absolute_str("example.test.")
+                .unwrap()
+                .to_wire(),
+        );
+        out.extend_from_slice(&(RecordType::Ixfr as u16).to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
         for answer in answers {
             out.extend_from_slice(&answer.owner.to_wire());
             out.extend_from_slice(&answer.rr_type.to_be_bytes());

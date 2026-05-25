@@ -26,6 +26,9 @@ pub enum AxfrError {
     #[error("AXFR response returned error RCODE {0}")]
     ErrorRcode(u8),
 
+    #[error("AXFR response question does not match the AXFR query")]
+    MismatchedQuestion,
+
     #[error("AXFR response did not start with SOA at the zone apex")]
     MissingInitialSoa,
 
@@ -131,6 +134,9 @@ pub enum IxfrError {
     #[error("IXFR response returned error RCODE {0}")]
     ErrorRcode(u8),
 
+    #[error("IXFR response question does not match the IXFR query")]
+    MismatchedQuestion,
+
     #[error("IXFR response did not start with SOA at the zone apex")]
     MissingInitialSoa,
 
@@ -222,6 +228,16 @@ pub fn parse_axfr_response(
     qclass: u16,
     messages: &[Vec<u8>],
 ) -> Result<ZoneSnapshot, AxfrError> {
+    parse_axfr_response_with_question(qid, zone_apex, qclass, RecordType::Axfr as u16, messages)
+}
+
+fn parse_axfr_response_with_question(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qtype: u16,
+    messages: &[Vec<u8>],
+) -> Result<ZoneSnapshot, AxfrError> {
     if messages.is_empty() {
         return Err(AxfrError::EmptyResponse);
     }
@@ -247,7 +263,8 @@ pub fn parse_axfr_response(
             return Err(AxfrError::ErrorRcode(rcode));
         }
 
-        let mut offset = skip_questions(message, header.qdcount)?;
+        let mut offset =
+            validate_axfr_response_question(message, header.qdcount, zone_apex, qtype, qclass)?;
         for _ in 0..header.ancount {
             if complete {
                 return Err(AxfrError::TrailingRecords);
@@ -364,8 +381,13 @@ pub fn parse_ixfr_response(
             return Err(IxfrError::ErrorRcode(rcode));
         }
 
-        let mut offset =
-            skip_questions(message, header.qdcount).map_err(|_| IxfrError::MalformedMessage)?;
+        let mut offset = validate_ixfr_response_question(
+            message,
+            header.qdcount,
+            zone_apex,
+            RecordType::Ixfr as u16,
+            qclass,
+        )?;
         for _ in 0..header.ancount {
             let (record, consumed) =
                 parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
@@ -396,7 +418,7 @@ pub fn parse_ixfr_response(
         return apply_ixfr_incremental(zone_apex, qclass, current_zone, &answers);
     }
 
-    parse_axfr_response(qid, zone_apex, qclass, messages)
+    parse_axfr_response_with_question(qid, zone_apex, qclass, RecordType::Ixfr as u16, messages)
         .map(IxfrResponse::Updated)
         .map_err(IxfrError::Axfr)
 }
@@ -515,21 +537,75 @@ fn validate_soa_response_question(
     zone_apex: &DomainName,
     qclass: u16,
 ) -> Result<usize, SoaQueryError> {
+    validate_response_question(message, qdcount, zone_apex, RecordType::Soa as u16, qclass).map_err(
+        |error| match error {
+            ResponseQuestionError::MalformedMessage => SoaQueryError::MalformedMessage,
+            ResponseQuestionError::MismatchedQuestion => SoaQueryError::MismatchedQuestion,
+        },
+    )
+}
+
+fn validate_axfr_response_question(
+    message: &[u8],
+    qdcount: u16,
+    zone_apex: &DomainName,
+    qtype: u16,
+    qclass: u16,
+) -> Result<usize, AxfrError> {
+    validate_response_question(message, qdcount, zone_apex, qtype, qclass).map_err(|error| {
+        match error {
+            ResponseQuestionError::MalformedMessage => AxfrError::MalformedMessage,
+            ResponseQuestionError::MismatchedQuestion => AxfrError::MismatchedQuestion,
+        }
+    })
+}
+
+fn validate_ixfr_response_question(
+    message: &[u8],
+    qdcount: u16,
+    zone_apex: &DomainName,
+    qtype: u16,
+    qclass: u16,
+) -> Result<usize, IxfrError> {
+    validate_response_question(message, qdcount, zone_apex, qtype, qclass).map_err(|error| {
+        match error {
+            ResponseQuestionError::MalformedMessage => IxfrError::MalformedMessage,
+            ResponseQuestionError::MismatchedQuestion => IxfrError::MismatchedQuestion,
+        }
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseQuestionError {
+    MalformedMessage,
+    MismatchedQuestion,
+}
+
+fn validate_response_question(
+    message: &[u8],
+    qdcount: u16,
+    zone_apex: &DomainName,
+    qtype: u16,
+    qclass: u16,
+) -> Result<usize, ResponseQuestionError> {
     if qdcount != 1 {
-        return Err(SoaQueryError::MismatchedQuestion);
+        return Err(ResponseQuestionError::MismatchedQuestion);
     }
 
-    let (qname, consumed) =
-        DomainName::parse(message, DNS_HEADER_LEN).map_err(|_| SoaQueryError::MalformedMessage)?;
+    let (qname, consumed) = DomainName::parse(message, DNS_HEADER_LEN)
+        .map_err(|_| ResponseQuestionError::MalformedMessage)?;
     let offset = DNS_HEADER_LEN + consumed;
     if offset + 4 > message.len() {
-        return Err(SoaQueryError::MalformedMessage);
+        return Err(ResponseQuestionError::MalformedMessage);
     }
 
-    let qtype = u16::from_be_bytes([message[offset], message[offset + 1]]);
+    let response_qtype = u16::from_be_bytes([message[offset], message[offset + 1]]);
     let response_qclass = u16::from_be_bytes([message[offset + 2], message[offset + 3]]);
-    if qname != *zone_apex || qtype != RecordType::Soa as u16 || response_qclass != qclass {
-        return Err(SoaQueryError::MismatchedQuestion);
+    if qname.canonical_key() != zone_apex.canonical_key()
+        || response_qtype != qtype
+        || response_qclass != qclass
+    {
+        return Err(ResponseQuestionError::MismatchedQuestion);
     }
 
     Ok(offset + 4)
@@ -550,20 +626,6 @@ fn soa_serial(rdata: &[u8]) -> Result<u32, AxfrError> {
         rdata[serial_offset + 2],
         rdata[serial_offset + 3],
     ]))
-}
-
-fn skip_questions(message: &[u8], qdcount: u16) -> Result<usize, AxfrError> {
-    let mut offset = DNS_HEADER_LEN;
-    for _ in 0..qdcount {
-        let (_, consumed) =
-            DomainName::parse(message, offset).map_err(|_| AxfrError::MalformedMessage)?;
-        offset += consumed;
-        if offset + 4 > message.len() {
-            return Err(AxfrError::MalformedMessage);
-        }
-        offset += 4;
-    }
-    Ok(offset)
 }
 
 fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize), DnsParseError> {
@@ -1183,14 +1245,32 @@ mod tests {
         rdata
     }
 
-    fn message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
+    fn axfr_message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
+        transfer_response_message(qid, "example.test.", RecordType::Axfr as u16, 1, answers)
+    }
+
+    fn ixfr_message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
+        transfer_response_message(qid, "example.test.", RecordType::Ixfr as u16, 1, answers)
+    }
+
+    fn transfer_response_message(
+        qid: u16,
+        question_name: &str,
+        qtype: u16,
+        qclass: u16,
+        answers: Vec<ResourceRecord>,
+    ) -> Vec<u8> {
+        let qname = DomainName::from_absolute_str(question_name).unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(&qid.to_be_bytes());
         out.extend_from_slice(&0x8000u16.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
         out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&qname.to_wire());
+        out.extend_from_slice(&qtype.to_be_bytes());
+        out.extend_from_slice(&qclass.to_be_bytes());
         for answer in answers {
             out.extend_from_slice(&answer.owner.to_wire());
             out.extend_from_slice(&answer.rr_type.to_be_bytes());
@@ -1203,26 +1283,7 @@ mod tests {
     }
 
     fn soa_message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
-        let apex = DomainName::from_absolute_str("example.test.").unwrap();
-        let mut out = Vec::new();
-        out.extend_from_slice(&qid.to_be_bytes());
-        out.extend_from_slice(&0x8000u16.to_be_bytes());
-        out.extend_from_slice(&1u16.to_be_bytes());
-        out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
-        out.extend_from_slice(&apex.to_wire());
-        out.extend_from_slice(&(RecordType::Soa as u16).to_be_bytes());
-        out.extend_from_slice(&1u16.to_be_bytes());
-        for answer in answers {
-            out.extend_from_slice(&answer.owner.to_wire());
-            out.extend_from_slice(&answer.rr_type.to_be_bytes());
-            out.extend_from_slice(&answer.class.to_be_bytes());
-            out.extend_from_slice(&answer.ttl.to_be_bytes());
-            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
-            out.extend_from_slice(&answer.rdata);
-        }
-        out
+        transfer_response_message(qid, "example.test.", RecordType::Soa as u16, 1, answers)
     }
 
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
@@ -1430,7 +1491,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), ns, a, soa])],
+            &[axfr_message(0x1234, vec![soa.clone(), ns, a, soa])],
         )
         .expect("valid AXFR");
 
@@ -1487,7 +1548,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![
                     compressed_soa.clone(),
@@ -1544,7 +1605,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![soa.clone(), apex_ns(), zero_rdata, pointer_like_rdata, soa],
             )],
@@ -1585,7 +1646,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![
                     soa.clone(),
@@ -1632,7 +1693,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![soa.clone(), apex_ns(), first_a, second_a, soa],
             )],
@@ -1655,7 +1716,7 @@ mod tests {
     fn rejects_axfr_message_not_marked_as_response() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
-        let mut response = message(0x1234, vec![soa.clone(), apex_ns(), soa]);
+        let mut response = axfr_message(0x1234, vec![soa.clone(), apex_ns(), soa]);
         response[2] &= !0x80;
 
         let error = parse_axfr_response(0x1234, &apex, 1, &[response])
@@ -1691,7 +1752,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![new_soa.clone(), ns, a, new_soa])],
+            &[ixfr_message(0x1234, vec![new_soa.clone(), ns, a, new_soa])],
         )
         .expect("mode 2 fallback");
 
@@ -1712,7 +1773,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![current_soa.clone()])],
+            &[ixfr_message(0x1234, vec![current_soa.clone()])],
         )
         .expect("mode 3 current");
 
@@ -1729,7 +1790,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x9999, vec![current_soa])],
+            &[ixfr_message(0x9999, vec![current_soa])],
         )
         .expect_err("mismatched IXFR qid");
 
@@ -1737,11 +1798,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ixfr_response_with_mismatched_question() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let response = transfer_response_message(
+            0x1234,
+            "other.test.",
+            RecordType::Ixfr as u16,
+            1,
+            vec![current_soa],
+        );
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("mismatched IXFR question");
+
+        assert_eq!(error, IxfrError::MismatchedQuestion);
+    }
+
+    #[test]
     fn rejects_ixfr_message_not_marked_as_response() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let current_zone = current_zone(vec![current_soa.clone()]);
-        let mut response = message(0x1234, vec![current_soa]);
+        let mut response = ixfr_message(0x1234, vec![current_soa]);
         response[2] &= !0x80;
 
         let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
@@ -1755,7 +1834,7 @@ mod tests {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let current_zone = current_zone(vec![current_soa.clone()]);
-        let mut response = message(0x1234, vec![current_soa]);
+        let mut response = ixfr_message(0x1234, vec![current_soa]);
         response[2] = 0x88;
 
         let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
@@ -1769,7 +1848,7 @@ mod tests {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let current_zone = current_zone(vec![current_soa.clone()]);
-        let mut response = message(0x1234, vec![current_soa]);
+        let mut response = ixfr_message(0x1234, vec![current_soa]);
         response[3] = 4;
 
         let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
@@ -1789,9 +1868,14 @@ mod tests {
             vec![192, 0, 2, 10],
         );
 
-        let error =
-            parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[message(0x1234, vec![a])])
-                .expect_err("missing IXFR initial SOA");
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(0x1234, vec![a])],
+        )
+        .expect_err("missing IXFR initial SOA");
 
         assert_eq!(error, IxfrError::MissingInitialSoa);
     }
@@ -1812,7 +1896,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![newer_soa])],
+            &[ixfr_message(0x1234, vec![newer_soa])],
         )
         .expect_err("incomplete newer IXFR response");
 
@@ -1844,7 +1928,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![
                     new_soa.clone(),
@@ -1908,7 +1992,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![
                     new_soa.clone(),
@@ -1963,7 +2047,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, old_a, new_soa, new_a],
             )],
@@ -1989,7 +2073,10 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![new_soa.clone(), current_soa, new_soa])],
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, new_soa],
+            )],
         )
         .expect_err("IXFR final zone with non-apex SOA");
 
@@ -2016,7 +2103,10 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![new_soa.clone(), current_soa, new_soa])],
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, new_soa],
+            )],
         )
         .expect_err("IXFR final zone with multiple apex SOAs");
 
@@ -2048,7 +2138,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, new_soa, cname, a],
             )],
@@ -2077,7 +2167,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, bad_a, new_soa],
             )],
@@ -2107,7 +2197,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, bad_dname, new_soa],
             )],
@@ -2137,7 +2227,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), wrong_old_soa, new_soa],
             )],
@@ -2167,7 +2257,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![final_soa, current_soa, intermediate_soa],
             )],
@@ -2197,7 +2287,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, absent_a, new_soa],
             )],
@@ -2227,7 +2317,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, new_soa, existing_a],
             )],
@@ -2258,7 +2348,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, wrong_class, new_soa],
             )],
@@ -2284,7 +2374,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, out, new_soa],
             )],
@@ -2310,7 +2400,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(
+            &[ixfr_message(
                 0x1234,
                 vec![new_soa.clone(), current_soa, reserved, new_soa],
             )],
@@ -2343,7 +2433,7 @@ mod tests {
                 &apex,
                 1,
                 &current_zone,
-                &[message(
+                &[ixfr_message(
                     0x1234,
                     vec![new_soa.clone(), current_soa, prohibited, new_soa],
                 )],
@@ -2369,6 +2459,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_soa_response_question_qname_case_insensitively() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let response = transfer_response_message(
+            0x1234,
+            "EXAMPLE.TEST.",
+            RecordType::Soa as u16,
+            1,
+            vec![soa],
+        );
+        let serial = parse_soa_response(0x1234, &apex, 1, &response)
+            .expect("SOA response question comparison is case-insensitive");
+
+        assert_eq!(serial, 1);
+    }
+
+    #[test]
     fn rejects_soa_response_without_apex_soa() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let a = record(
@@ -2386,10 +2493,31 @@ mod tests {
     fn rejects_mismatched_qid() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
-        let error =
-            parse_axfr_response(0x1234, &apex, 1, &[message(0x9999, vec![soa.clone(), soa])])
-                .expect_err("mismatched qid");
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(0x9999, vec![soa.clone(), soa])],
+        )
+        .expect_err("mismatched qid");
         assert_eq!(error, AxfrError::MismatchedQid);
+    }
+
+    #[test]
+    fn rejects_axfr_response_with_mismatched_question() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let response = transfer_response_message(
+            0x1234,
+            "other.test.",
+            RecordType::Axfr as u16,
+            1,
+            vec![soa.clone(), soa],
+        );
+        let error = parse_axfr_response(0x1234, &apex, 1, &[response])
+            .expect_err("mismatched AXFR question");
+
+        assert_eq!(error, AxfrError::MismatchedQuestion);
     }
 
     #[test]
@@ -2405,7 +2533,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), a, soa])],
+            &[axfr_message(0x1234, vec![soa.clone(), a, soa])],
         )
         .expect_err("missing apex NS");
 
@@ -2428,7 +2556,7 @@ mod tests {
             &apex,
             1,
             &current_zone,
-            &[message(0x1234, vec![new_soa.clone(), a, new_soa])],
+            &[ixfr_message(0x1234, vec![new_soa.clone(), a, new_soa])],
         )
         .expect_err("mode 2 fallback missing apex NS");
 
@@ -2453,7 +2581,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), cname, a, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), cname, a, soa],
+            )],
         )
         .expect_err("CNAME with non-DNSSEC data");
 
@@ -2488,7 +2619,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![soa.clone(), apex_ns(), cname, rrsig, nsec, nsec3, soa],
             )],
@@ -2516,7 +2647,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(
+            &[axfr_message(
                 0x1234,
                 vec![soa.clone(), apex_ns(), dname, cname, soa],
             )],
@@ -2535,7 +2666,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), bad_a, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), bad_a, soa],
+            )],
         )
         .expect_err("invalid A RDATA length");
 
@@ -2551,7 +2685,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), bad_aaaa, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), bad_aaaa, soa],
+            )],
         )
         .expect_err("invalid AAAA RDATA length");
 
@@ -2573,7 +2710,7 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(
+                &[axfr_message(
                     0x1234,
                     vec![soa.clone(), apex_ns(), bad_txt, soa.clone()],
                 )],
@@ -2599,7 +2736,7 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(
+                &[axfr_message(
                     0x1234,
                     vec![soa.clone(), apex_ns(), bad_hinfo, soa.clone()],
                 )],
@@ -2621,7 +2758,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), dname, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dname, soa],
+            )],
         )
         .expect_err("DNAME with trailing RDATA");
 
@@ -2641,7 +2781,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), dname, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dname, soa],
+            )],
         )
         .expect_err("DNAME with compressed target RDATA");
 
@@ -2692,7 +2835,10 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+                &[axfr_message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), invalid, soa],
+                )],
             )
             .expect_err(context);
 
@@ -2737,7 +2883,10 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+                &[axfr_message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), invalid, soa],
+                )],
             )
             .expect_err(context);
 
@@ -2771,7 +2920,10 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+                &[axfr_message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), invalid, soa],
+                )],
             )
             .expect_err(context);
 
@@ -2793,7 +2945,10 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), apex_ns(), nsec3, soa])],
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), nsec3, soa],
+            )],
         )
         .expect("NSEC3 for an empty non-terminal may have an empty type bitmap");
     }
@@ -2851,7 +3006,10 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+                &[axfr_message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), invalid, soa],
+                )],
             )
             .expect_err(context);
 
@@ -2888,7 +3046,10 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(0x1234, vec![soa.clone(), apex_ns(), invalid, soa])],
+                &[axfr_message(
+                    0x1234,
+                    vec![soa.clone(), apex_ns(), invalid, soa],
+                )],
             )
             .expect_err(context);
 
@@ -2932,7 +3093,7 @@ mod tests {
                 0x1234,
                 &apex,
                 1,
-                &[message(
+                &[axfr_message(
                     0x1234,
                     vec![soa.clone(), apex_ns(), prohibited, soa],
                 )],
@@ -2951,7 +3112,7 @@ mod tests {
             RecordType::A as u16,
             vec![192, 0, 2, 10],
         );
-        let error = parse_axfr_response(0x1234, &apex, 1, &[message(0x1234, vec![a])])
+        let error = parse_axfr_response(0x1234, &apex, 1, &[axfr_message(0x1234, vec![a])])
             .expect_err("bad AXFR");
         assert_eq!(error, AxfrError::MissingInitialSoa);
     }
@@ -2962,8 +3123,13 @@ mod tests {
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let mut other_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         other_soa.ttl = 301;
-        let error = parse_axfr_response(0x1234, &apex, 1, &[message(0x1234, vec![soa, other_soa])])
-            .expect_err("bad terminating SOA");
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(0x1234, vec![soa, other_soa])],
+        )
+        .expect_err("bad terminating SOA");
         assert_eq!(error, AxfrError::MismatchedTerminatingSoa);
     }
 
@@ -2980,7 +3146,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), soa, a])],
+            &[axfr_message(0x1234, vec![soa.clone(), soa, a])],
         )
         .expect_err("trailing AXFR data");
         assert_eq!(error, AxfrError::TrailingRecords);
@@ -2995,7 +3161,7 @@ mod tests {
             0x1234,
             &apex,
             1,
-            &[message(0x1234, vec![soa.clone(), out, soa])],
+            &[axfr_message(0x1234, vec![soa.clone(), out, soa])],
         )
         .expect_err("out-of-zone record");
         assert_eq!(error, AxfrError::OutOfZoneOwner);
