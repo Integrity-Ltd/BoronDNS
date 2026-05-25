@@ -159,7 +159,9 @@ notify_sources = ["192.0.2.53"]
 #server_name = "primary.example.test"
 #trust_anchors = ["/etc/oxidedns/xot-ca.pem"]
 #client_cert = "/etc/oxidedns/xot-client.pem"
+# Use exactly one of client_key or client_key_pem when client_cert is set.
 #client_key = "/etc/oxidedns/xot-client.key"
+#client_key_pem = "<inline PEM private key>"
 
 #[[tsig_keys]]
 #name = "transfer-key."

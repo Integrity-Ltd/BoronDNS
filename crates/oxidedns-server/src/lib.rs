@@ -1371,11 +1371,15 @@ fn build_xot_client_config(primary: &TransferPrimaryConfig) -> Result<ClientConf
     }
 
     let builder = ClientConfig::builder().with_root_certificates(roots);
-    match (&primary.client_cert, &primary.client_key) {
-        (Some(cert_path), Some(key_path)) => {
+    match (
+        &primary.client_cert,
+        &primary.client_key,
+        &primary.client_key_pem,
+    ) {
+        (Some(cert_path), Some(key_path), None) => {
             validate_private_key_file_mode(primary.addr, key_path)?;
             let certs = load_pem_certs(cert_path)?;
-            let key = load_pem_private_key(primary.addr, key_path)?;
+            let key = load_pem_private_key_from_file(primary.addr, key_path)?;
             builder
                 .with_client_auth_cert(certs, key)
                 .map_err(|error| TransferError::XotConfig {
@@ -1383,10 +1387,20 @@ fn build_xot_client_config(primary: &TransferPrimaryConfig) -> Result<ClientConf
                     message: format!("invalid XoT client certificate/key pair: {error}"),
                 })
         }
-        (None, None) => Ok(builder.with_no_client_auth()),
+        (Some(cert_path), None, Some(key_pem)) => {
+            let certs = load_pem_certs(cert_path)?;
+            let key = load_pem_private_key_from_inline(primary.addr, key_pem)?;
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|error| TransferError::XotConfig {
+                    addr: primary.addr,
+                    message: format!("invalid XoT client certificate/key pair: {error}"),
+                })
+        }
+        (None, None, None) => Ok(builder.with_no_client_auth()),
         _ => Err(TransferError::XotConfig {
             addr: primary.addr,
-            message: "client_cert and client_key must be configured together".to_owned(),
+            message: "client_cert and exactly one of client_key or client_key_pem must be configured together".to_owned(),
         }),
     }
 }
@@ -1406,7 +1420,7 @@ fn load_pem_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, TransferEr
         })
 }
 
-fn load_pem_private_key(
+fn load_pem_private_key_from_file(
     addr: SocketAddr,
     path: &str,
 ) -> Result<PrivateKeyDer<'static>, TransferError> {
@@ -1417,6 +1431,16 @@ fn load_pem_private_key(
     PrivateKeyDer::from_pem_slice(&pem).map_err(|error| TransferError::XotConfig {
         addr,
         message: format!("failed to parse private key PEM file {path:?}: {error}"),
+    })
+}
+
+fn load_pem_private_key_from_inline(
+    addr: SocketAddr,
+    key_pem: &str,
+) -> Result<PrivateKeyDer<'static>, TransferError> {
+    PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).map_err(|error| TransferError::XotConfig {
+        addr,
+        message: format!("failed to parse inline private key PEM: {error}"),
     })
 }
 
@@ -7127,18 +7151,18 @@ mod tests {
         TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
         dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
-        load_pem_certs, load_pem_private_key, log_loading_warning, log_notify_log_summary,
-        log_rrl_summary, metrics_body, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        prepare_query_tsig_packet, query_id_from_random_bytes, record_query_response_metric,
-        record_query_termination_metric, refresh_zone_from_primaries,
-        required_file_descriptor_limit, response_category, response_opt_record,
-        response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
-        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_tsig_response, signal_notify_refresh,
-        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
-        uniform_index_from_u64, validate_file_descriptor_limit_value, validate_runtime_config,
-        write_tcp_message,
+        load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
+        log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
+        response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
+        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
+        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
+        sign_tsig_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
+        validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -10996,6 +11020,7 @@ mod tests {
             trust_anchors: vec![trust_anchor],
             client_cert: None,
             client_key: None,
+            client_key_pem: None,
         };
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let captured = CapturedEvents::new();
@@ -11480,6 +11505,71 @@ mod tests {
         .expect("valid config");
 
         validate_runtime_config(&config).expect("xot tls files should validate");
+    }
+
+    #[test]
+    fn runtime_config_validation_accepts_inline_xot_client_key() {
+        let (trust_anchor, key_path) =
+            write_self_signed_xot_cert_files_for_name("primary.example.test");
+        let key_pem = std::fs::read_to_string(&key_path).expect("read generated key PEM");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+                client_cert = "{}"
+                client_key_pem = '''
+{}'''
+            "#,
+            trust_anchor.display(),
+            trust_anchor.display(),
+            key_pem
+        ))
+        .expect("valid config with inline client key");
+
+        validate_runtime_config(&config).expect("inline xot client key should validate");
+    }
+
+    #[test]
+    fn runtime_config_validation_rejects_malformed_inline_xot_client_key_without_leaking_it() {
+        let (trust_anchor, _key_path) =
+            write_self_signed_xot_cert_files_for_name("primary.example.test");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+                client_cert = "{}"
+                client_key_pem = "inline-private-key-material"
+            "#,
+            trust_anchor.display(),
+            trust_anchor.display(),
+        ))
+        .expect("schema-valid config with malformed inline client key");
+
+        let error = validate_runtime_config(&config)
+            .expect_err("malformed inline XoT client key should fail runtime validation");
+        let message = error.to_string();
+        assert!(message.contains("failed to parse inline private key PEM"));
+        assert!(!message.contains("inline-private-key-material"));
     }
 
     #[test]

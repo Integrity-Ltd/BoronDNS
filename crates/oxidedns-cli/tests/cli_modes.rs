@@ -158,6 +158,55 @@ fn dump_config_flag_redacts_tsig_secret_material() {
 }
 
 #[test]
+fn dump_config_flag_redacts_inline_xot_client_key_material() {
+    let (cert, key_pem) = write_self_signed_xot_cert_file("dump-xot-client-key-cert");
+    let config = write_config(
+        "dump-xot-client-key",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+
+            [[zones.transfer_primaries]]
+            addr = "192.0.2.53:853"
+            transport = "xot"
+            server_name = "primary.example.test"
+            trust_anchors = ["{}"]
+            client_cert = "{}"
+            client_key_pem = '''
+{}'''
+        "#,
+            cert.display(),
+            cert.display(),
+            key_pem
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--dump-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --dump-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("client_key_pem = \"<redacted>\""));
+    assert!(stdout.contains(&format!("client_cert = \"{}\"", cert.display())));
+    assert!(!stdout.contains(&key_pem));
+
+    let _ = fs::remove_file(config);
+    let _ = fs::remove_file(cert);
+}
+
+#[test]
 fn dump_config_preserves_tsig_secret_file_path_without_secret_material() {
     let secret = write_secret_file("dump-secret-file", "c2VjcmV0LWtleQ==\n", 0o600);
     let config = write_config(
@@ -745,4 +794,13 @@ fn write_secret_file(label: &str, contents: &str, mode: u32) -> PathBuf {
     }
     let _ = mode;
     path
+}
+
+fn write_self_signed_xot_cert_file(label: &str) -> (PathBuf, String) {
+    let cert = rcgen::generate_simple_self_signed(vec!["primary.example.test".to_owned()])
+        .expect("self-signed certificate");
+    let cert_pem = cert.cert.pem();
+    let key_pem = cert.signing_key.serialize_pem();
+    let cert_path = write_config(label, &cert_pem);
+    (cert_path, key_pem)
 }

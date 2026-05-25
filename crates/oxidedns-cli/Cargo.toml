@@ -21,6 +21,7 @@ oxidedns-server = { path = "../oxidedns-server", version = "0.1.0" }
 
 [dev-dependencies]
 getrandom.workspace = true
+rcgen.workspace = true
 
 [lints]
 workspace = true

@@ -584,7 +584,9 @@ XoT:
 - Use explicit `[[zones.transfer_primaries]]` entries with
   `transport = "xot"`.
 - XoT entries require `server_name` and at least one readable trust anchor.
-- Optional mutual TLS uses paired `client_cert` and `client_key` files.
+- Optional mutual TLS uses `client_cert` with exactly one of `client_key` file
+  path or inline `client_key_pem`. `--dump-config` preserves `client_key` paths
+  and redacts inline `client_key_pem` material.
 - Runtime validation checks TLS file readability and parses trust anchors,
   client certificates, and client private keys before binding listeners.
 - TLS failures do not fall back to cleartext TCP for an XoT primary.

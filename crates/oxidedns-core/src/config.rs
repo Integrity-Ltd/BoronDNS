@@ -91,6 +91,13 @@ impl ServerConfig {
 
     pub fn to_redacted_toml(&self) -> Result<String, ConfigError> {
         let mut redacted = self.clone();
+        for zone in &mut redacted.zones {
+            for primary in &mut zone.transfer_primaries {
+                if primary.client_key_pem.is_some() {
+                    primary.client_key_pem = Some("<redacted>".to_owned());
+                }
+            }
+        }
         for key in &mut redacted.tsig_keys {
             if key.secret.is_some() {
                 key.secret = Some("<redacted>".to_owned());
@@ -1124,7 +1131,7 @@ impl ZoneConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransferPrimaryConfig {
     pub addr: SocketAddr,
@@ -1135,6 +1142,26 @@ pub struct TransferPrimaryConfig {
     pub trust_anchors: Vec<String>,
     pub client_cert: Option<String>,
     pub client_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key_pem: Option<String>,
+}
+
+impl fmt::Debug for TransferPrimaryConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransferPrimaryConfig")
+            .field("addr", &self.addr)
+            .field("transport", &self.transport)
+            .field("server_name", &self.server_name)
+            .field("trust_anchors", &self.trust_anchors)
+            .field("client_cert", &self.client_cert)
+            .field("client_key", &self.client_key)
+            .field(
+                "client_key_pem",
+                &self.client_key_pem.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 impl TransferPrimaryConfig {
@@ -1146,6 +1173,7 @@ impl TransferPrimaryConfig {
             trust_anchors: Vec::new(),
             client_cert: None,
             client_key: None,
+            client_key_pem: None,
         }
     }
 
@@ -1168,6 +1196,7 @@ impl TransferPrimaryConfig {
             || !self.trust_anchors.is_empty()
             || self.client_cert.is_some()
             || self.client_key.is_some()
+            || self.client_key_pem.is_some()
         {
             return Err(ConfigError::Invalid(format!(
                 "zone {zone_name} TCP transfer primary {} must not set XoT TLS fields",
@@ -1204,16 +1233,28 @@ impl TransferPrimaryConfig {
                 )));
             }
         }
-        match (&self.client_cert, &self.client_key) {
-            (Some(cert), Some(key)) if cert.trim().is_empty() || key.trim().is_empty() => {
+        match (&self.client_cert, &self.client_key, &self.client_key_pem) {
+            (Some(cert), Some(key), None) if cert.trim().is_empty() || key.trim().is_empty() => {
                 Err(ConfigError::Invalid(format!(
                     "zone {zone_name} XoT transfer primary {} has an empty client certificate or key path",
                     self.addr
                 )))
             }
-            (Some(_), Some(_)) | (None, None) => Ok(()),
+            (Some(cert), None, Some(key_pem))
+                if cert.trim().is_empty() || key_pem.trim().is_empty() =>
+            {
+                Err(ConfigError::Invalid(format!(
+                    "zone {zone_name} XoT transfer primary {} has an empty client certificate path or inline client key",
+                    self.addr
+                )))
+            }
+            (Some(_), Some(_), None) | (Some(_), None, Some(_)) | (None, None, None) => Ok(()),
+            (Some(_), Some(_), Some(_)) => Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} must set exactly one of client_key or client_key_pem",
+                self.addr
+            ))),
             _ => Err(ConfigError::Invalid(format!(
-                "zone {zone_name} XoT transfer primary {} requires client_cert and client_key to be configured together",
+                "zone {zone_name} XoT transfer primary {} requires client_cert and exactly one of client_key or client_key_pem to be configured together",
                 self.addr
             ))),
         }
@@ -2279,6 +2320,50 @@ mod tests {
         assert_eq!(target.trust_anchors, vec!["/etc/oxidedns/ca.pem"]);
         assert_eq!(target.client_cert.as_deref(), Some("/etc/oxidedns/client.pem"));
         assert_eq!(target.client_key.as_deref(), Some("/etc/oxidedns/client.key"));
+        assert!(target.client_key_pem.is_none());
+    }
+
+    #[test]
+    fn parses_xot_transfer_primary_with_inline_client_key() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+                client_cert = "/etc/oxidedns/client.pem"
+                client_key_pem = '''
+                -----BEGIN PRIVATE KEY-----
+                inline-private-key-material
+                -----END PRIVATE KEY-----
+                '''
+            "#,
+        )
+        .expect("valid config with inline XoT client key");
+
+        let target = &config.zones[0].transfer_primaries[0];
+        assert_eq!(target.client_cert.as_deref(), Some("/etc/oxidedns/client.pem"));
+        assert!(target.client_key.is_none());
+        assert!(
+            target
+                .client_key_pem
+                .as_deref()
+                .expect("inline key")
+                .contains("inline-private-key-material")
+        );
+        assert!(!format!("{config:?}").contains("inline-private-key-material"));
+
+        let dumped = config.to_redacted_toml().expect("redacted TOML dump");
+        assert!(dumped.contains("client_key_pem = \"<redacted>\""));
+        assert!(dumped.contains("client_cert = \"/etc/oxidedns/client.pem\""));
+        assert!(!dumped.contains("inline-private-key-material"));
     }
 
     #[test]
@@ -2386,7 +2471,57 @@ mod tests {
         )
         .expect_err("xot client certificate and key must be paired");
 
-        assert!(error.to_string().contains("configured together"));
+        assert!(error.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn rejects_xot_transfer_primary_with_both_client_key_sources() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+                client_cert = "/etc/oxidedns/client.pem"
+                client_key = "/etc/oxidedns/client.key"
+                client_key_pem = "inline-private-key-material"
+            "#,
+        )
+        .expect_err("xot client key sources must be mutually exclusive");
+
+        assert!(error.to_string().contains("exactly one"));
+        assert!(!error.to_string().contains("inline-private-key-material"));
+    }
+
+    #[test]
+    fn rejects_xot_transfer_primary_inline_client_key_without_certificate() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["/etc/oxidedns/ca.pem"]
+                client_key_pem = "inline-private-key-material"
+            "#,
+        )
+        .expect_err("xot inline client key requires client certificate");
+
+        assert!(error.to_string().contains("exactly one"));
+        assert!(!error.to_string().contains("inline-private-key-material"));
     }
 
     #[test]
