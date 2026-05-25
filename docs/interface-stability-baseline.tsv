@@ -12,6 +12,7 @@ configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/oxidedns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
 configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.
+configuration	[tsig_keys].secret_file	stable	0.1	config/oxidedns.example.toml	major	Optional TSIG secret file path source; exactly one of secret or secret_file is required.
 configuration	[cookie] policy	stable	0.1	config/oxidedns.example.toml	major	DNS Cookie policy, secret, and tolerance settings.
 configuration	[rrl] policy	stable	0.1	config/oxidedns.example.toml	major	Process-wide RRL policy.
 environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown RDS variables.

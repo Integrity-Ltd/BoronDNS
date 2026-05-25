@@ -164,4 +164,7 @@ notify_sources = ["192.0.2.53"]
 #[[tsig_keys]]
 #name = "transfer-key."
 #algorithm = "hmac-sha256" # also supports "hmac-sha1", "hmac-sha384", "hmac-sha512"
+# Use exactly one of secret or secret_file. Secret files must be readable by the
+# server process and must not be world-readable.
 #secret = "c2VjcmV0LWtleQ=="
+#secret_file = "/etc/oxidedns/tsig-transfer-key.secret"

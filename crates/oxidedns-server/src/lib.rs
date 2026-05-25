@@ -4866,7 +4866,10 @@ impl TransferPlan {
             .tsig_keys
             .iter()
             .map(|key| {
-                let key = TsigKey::from_base64(&key.name, &key.algorithm, &key.secret)
+                let secret = key
+                    .secret_base64()
+                    .expect("configuration validation rejects invalid TSIG key secret sources");
+                let key = TsigKey::from_base64(&key.name, &key.algorithm, &secret)
                     .expect("configuration validation rejects invalid TSIG keys");
                 (key.name.canonical_key(), Arc::new(key))
             })
@@ -5554,7 +5557,10 @@ impl NotifyAuthority {
             .tsig_keys
             .iter()
             .map(|key| {
-                let key = TsigKey::from_base64(&key.name, &key.algorithm, &key.secret)
+                let secret = key
+                    .secret_base64()
+                    .expect("configuration validation rejects invalid TSIG key secret sources");
+                let key = TsigKey::from_base64(&key.name, &key.algorithm, &secret)
                     .expect("configuration validation rejects invalid TSIG keys");
                 (key.name.canonical_key(), Arc::new(key))
             })
@@ -7234,6 +7240,58 @@ mod tests {
             plan.primaries[0].server_name.as_deref(),
             Some("primary.example.test")
         );
+    }
+
+    #[test]
+    fn tsig_secret_file_feeds_notify_authority_and_transfer_plan() {
+        let secret_file = unique_test_path("oxidedns-server-tsig-secret", "key");
+        std::fs::write(&secret_file, b"dG9wc2VjcmV0\n").expect("write TSIG secret file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&secret_file, std::fs::Permissions::from_mode(0o600))
+                .expect("secure TSIG secret file mode");
+        }
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect("valid TSIG secret_file config");
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+        let key_name = DomainName::from_absolute_str("transfer-key.").unwrap();
+
+        let authority = NotifyAuthority::from_config(&config);
+        assert!(
+            authority
+                .tsig_keys_by_name
+                .contains_key(&key_name.canonical_key())
+        );
+        assert!(
+            authority
+                .tsig_keys_by_zone
+                .contains_key(&zone.canonical_key())
+        );
+
+        let plan = TransferPlan::from_config(&config)
+            .expect("transfer plan")
+            .get(&zone)
+            .expect("zone transfer plan");
+        assert!(plan.tsig_key.is_some());
+        let _ = std::fs::remove_file(secret_file);
     }
 
     #[test]

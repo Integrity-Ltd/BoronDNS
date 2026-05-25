@@ -158,6 +158,93 @@ fn dump_config_flag_redacts_tsig_secret_material() {
 }
 
 #[test]
+fn dump_config_preserves_tsig_secret_file_path_without_secret_material() {
+    let secret = write_secret_file("dump-secret-file", "c2VjcmV0LWtleQ==\n", 0o600);
+    let config = write_config(
+        "dump-secret-file",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[tsig_keys]]
+            name = "transfer-key."
+            algorithm = "hmac-sha256"
+            secret_file = "{}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            tsig_key = "transfer-key."
+        "#,
+            secret.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--dump-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --dump-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("secret_file = \"{}\"", secret.display())));
+    assert!(!stdout.contains("secret = \"<redacted>\""));
+    assert!(!stdout.contains("c2VjcmV0LWtleQ=="));
+
+    let _ = fs::remove_file(config);
+    let _ = fs::remove_file(secret);
+}
+
+#[test]
+fn missing_tsig_secret_file_exits_with_ioerr() {
+    let missing = std::env::temp_dir().join("oxidedns-missing-tsig-secret-file-test.key");
+    let _ = fs::remove_file(&missing);
+    let config = write_config(
+        "missing-secret-file",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[tsig_keys]]
+            name = "transfer-key."
+            algorithm = "hmac-sha256"
+            secret_file = "{}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            tsig_key = "transfer-key."
+        "#,
+            missing.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert_eq!(output.status.code(), Some(EX_IOERR));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to read secret file"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn dump_config_includes_rds_environment_overrides() {
     let config = write_config(
         "dump-env",
@@ -645,5 +732,17 @@ fn write_config(label: &str, contents: &str) -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("oxidedns-{label}-{unique}.toml"));
     fs::write(&path, contents).expect("write test config");
+    path
+}
+
+fn write_secret_file(label: &str, contents: &str, mode: u32) -> PathBuf {
+    let path = write_config(label, contents);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode))
+            .expect("set secret file permissions");
+    }
+    let _ = mode;
     path
 }

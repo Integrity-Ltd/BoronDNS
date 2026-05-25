@@ -486,6 +486,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
         if let Some(config_error) = cause.downcast_ref::<ConfigError>() {
             return match config_error {
                 ConfigError::Invalid(_) => EX_CONFIG_INVALID,
+                ConfigError::ReadSecretFile { .. } => EX_IOERR,
                 ConfigError::Read { .. } | ConfigError::Parse(_) => EX_CONFIG,
                 ConfigError::Serialize(_) => EX_GENERAL,
             };

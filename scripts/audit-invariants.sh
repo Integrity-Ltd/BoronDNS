@@ -201,7 +201,7 @@ else:
 print()
 print("allowed_startup_file_reads:")
 allowed_reads = [
-    "crates/oxidedns-core/src/config.rs: configuration file read at startup",
+    "crates/oxidedns-core/src/config.rs: configuration and TSIG secret file reads at startup validation or config dump",
     "crates/oxidedns-server/src/lib.rs: XoT certificate/key/trust-anchor reads during startup validation or transfer setup",
 ]
 for item in allowed_reads:

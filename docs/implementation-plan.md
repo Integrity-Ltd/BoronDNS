@@ -275,7 +275,7 @@ Slice 6 has initial NOTIFY intake foundations:
 
 Slice 7 has TSIG HMAC-SHA foundations:
 
-- TSIG keys are parsed from static configuration with absolute DNS key names, supported algorithm validation, base64 secret decoding, duplicate-key rejection, and zone-to-key reference validation;
+- TSIG keys are parsed from static configuration with absolute DNS key names, supported algorithm validation, inline or file-referenced base64 secret decoding, duplicate-key rejection, file-readability and non-world-readable file-mode validation for `secret_file`, and zone-to-key reference validation;
 - HMAC-MD5 TSIG keys are rejected during configuration validation;
 - configured TSIG secrets are redacted from debug formatting and validation error messages;
 - HMAC-SHA256 signing and constant-time MAC verification are implemented against an RFC 4231 test vector.

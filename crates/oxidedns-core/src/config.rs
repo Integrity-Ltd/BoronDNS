@@ -7,6 +7,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{
     dns::{AnyResponseMode, DomainName},
@@ -17,6 +18,12 @@ use crate::{
 pub enum ConfigError {
     #[error("failed to read configuration from {path}: {source}")]
     Read {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[error("failed to read secret file {path}: {source}")]
+    ReadSecretFile {
         path: String,
         source: std::io::Error,
     },
@@ -85,7 +92,9 @@ impl ServerConfig {
     pub fn to_redacted_toml(&self) -> Result<String, ConfigError> {
         let mut redacted = self.clone();
         for key in &mut redacted.tsig_keys {
-            key.secret = "<redacted>".to_owned();
+            if key.secret.is_some() {
+                key.secret = Some("<redacted>".to_owned());
+            }
         }
         Ok(toml::to_string_pretty(&redacted)?)
     }
@@ -393,8 +402,9 @@ impl ServerConfig {
     fn validate_tsig_keys(&self) -> Result<HashSet<String>, ConfigError> {
         let mut names = HashSet::new();
         for key in &self.tsig_keys {
+            let secret = key.secret_base64()?;
             let parsed_key =
-                TsigKey::from_base64(&key.name, &key.algorithm, &key.secret).map_err(|error| {
+                TsigKey::from_base64(&key.name, &key.algorithm, &secret).map_err(|error| {
                     ConfigError::Invalid(format!("invalid TSIG key {}: {error}", key.name))
                 })?;
             if !names.insert(parsed_key.name.canonical_key()) {
@@ -1223,7 +1233,10 @@ pub enum TransferTransportConfig {
 pub struct TsigKeyConfig {
     pub name: String,
     pub algorithm: String,
-    pub secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_file: Option<String>,
 }
 
 impl fmt::Debug for TsigKeyConfig {
@@ -1233,8 +1246,57 @@ impl fmt::Debug for TsigKeyConfig {
             .field("name", &self.name)
             .field("algorithm", &self.algorithm)
             .field("secret", &"<redacted>")
+            .field("secret_file", &self.secret_file)
             .finish()
     }
+}
+
+impl TsigKeyConfig {
+    pub fn secret_base64(&self) -> Result<Zeroizing<String>, ConfigError> {
+        match (&self.secret, &self.secret_file) {
+            (Some(secret), None) => Ok(Zeroizing::new(secret.clone())),
+            (None, Some(path)) => read_secret_file(path),
+            (Some(_), Some(_)) | (None, None) => Err(ConfigError::Invalid(format!(
+                "TSIG key {} must set exactly one of secret or secret_file",
+                self.name
+            ))),
+        }
+    }
+}
+
+fn read_secret_file(path: &str) -> Result<Zeroizing<String>, ConfigError> {
+    if path.trim().is_empty() {
+        return Err(ConfigError::Invalid(
+            "TSIG secret_file path must not be empty".to_owned(),
+        ));
+    }
+    validate_secret_file_mode(path)?;
+    let secret = fs::read_to_string(path).map_err(|source| ConfigError::ReadSecretFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    Ok(Zeroizing::new(secret.trim().to_owned()))
+}
+
+#[cfg(unix)]
+fn validate_secret_file_mode(path: &str) -> Result<(), ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path).map_err(|source| ConfigError::ReadSecretFile {
+        path: path.to_owned(),
+        source,
+    })?;
+    if metadata.permissions().mode() & 0o004 != 0 {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} must not be world-readable"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_secret_file_mode(_path: &str) -> Result<(), ConfigError> {
+    Ok(())
 }
 
 fn default_log_level() -> String {
@@ -1495,6 +1557,34 @@ fn default_latency_histogram_buckets() -> Vec<LatencyHistogramBucketSeconds> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_path(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let counter = TEST_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{counter}-{nanos}.txt",
+            std::process::id()
+        ))
+    }
+
+    fn write_secret_file(secret: &str, mode: u32) -> std::path::PathBuf {
+        let path = unique_test_path("oxidedns-tsig-secret");
+        std::fs::write(&path, secret).expect("write TSIG secret file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("set TSIG secret mode");
+        }
+        let _ = mode;
+        path
+    }
 
     #[test]
     fn parses_minimal_valid_config() {
@@ -3341,6 +3431,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_tsig_secret_file_key_and_zone_reference() {
+        let secret_file = write_secret_file("c2VjcmV0LWtleQ==\n", 0o600);
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect("valid TSIG secret_file config");
+
+        assert_eq!(config.tsig_keys.len(), 1);
+        assert_eq!(
+            config.tsig_keys[0].secret_file.as_deref(),
+            Some(secret_file.to_str().expect("utf-8 temp path"))
+        );
+        assert_eq!(config.zones[0].tsig_key.as_deref(), Some("transfer-key."));
+        let _ = std::fs::remove_file(secret_file);
+    }
+
+    #[test]
     fn redacted_toml_dump_preserves_shape_without_secret_material() {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -3368,6 +3489,37 @@ mod tests {
         assert!(dumped.contains("secret = \"<redacted>\""));
         assert!(dumped.contains("nsid = \"dns-bud-1\""));
         assert!(!dumped.contains("c2VjcmV0LWtleQ=="));
+    }
+
+    #[test]
+    fn redacted_toml_dump_preserves_tsig_secret_file_path() {
+        let secret_file = write_secret_file("c2VjcmV0LWtleQ==\n", 0o600);
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect("valid TSIG secret_file config");
+
+        let dumped = config.to_redacted_toml().expect("redacted TOML dump");
+
+        assert!(dumped.contains("[[tsig_keys]]"));
+        assert!(dumped.contains(&format!("secret_file = \"{}\"", secret_file.display())));
+        assert!(!dumped.contains("secret = \"<redacted>\""));
+        assert!(!dumped.contains("c2VjcmV0LWtleQ=="));
+        let _ = std::fs::remove_file(secret_file);
     }
 
     #[test]
@@ -3443,6 +3595,118 @@ mod tests {
 
         assert!(message.contains("invalid TSIG key transfer-key."));
         assert!(!message.contains("not base64"));
+    }
+
+    #[test]
+    fn rejects_tsig_key_with_both_inline_and_file_secret_sources() {
+        let secret_file = write_secret_file("c2VjcmV0LWtleQ==\n", 0o600);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "c2VjcmV0LWtleQ=="
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect_err("duplicate TSIG secret sources must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must set exactly one of secret or secret_file")
+        );
+        assert!(!error.to_string().contains("c2VjcmV0LWtleQ=="));
+        let _ = std::fs::remove_file(secret_file);
+    }
+
+    #[test]
+    fn rejects_tsig_key_without_secret_source() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect_err("missing TSIG secret source must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must set exactly one of secret or secret_file")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_world_readable_tsig_secret_file() {
+        let secret_file = write_secret_file("c2VjcmV0LWtleQ==\n", 0o604);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect_err("world-readable TSIG secret file must fail");
+
+        assert!(error.to_string().contains("must not be world-readable"));
+        assert!(!error.to_string().contains("c2VjcmV0LWtleQ=="));
+        let _ = std::fs::remove_file(secret_file);
+    }
+
+    #[test]
+    fn rejects_missing_tsig_secret_file_without_leaking_material() {
+        let secret_file = unique_test_path("oxidedns-missing-tsig-secret");
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret_file = "{}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+            secret_file.display()
+        ))
+        .expect_err("missing TSIG secret file must fail");
+
+        assert!(matches!(error, ConfigError::ReadSecretFile { .. }));
+        assert!(!error.to_string().contains("c2VjcmV0LWtleQ=="));
     }
 
     #[test]

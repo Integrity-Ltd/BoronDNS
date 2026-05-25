@@ -209,7 +209,8 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   multiple primaries are listed, OxideDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
   later transfer attempts.
-- `[[tsig_keys]]`: static TSIG keys referenced by zones.
+- `[[tsig_keys]]`: static TSIG keys referenced by zones. Each key uses exactly
+  one of inline `secret` or filesystem `secret_file`.
 
 Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
 NSID diagnostics for anycast or load-balanced deployments. The default is empty,
@@ -570,8 +571,9 @@ TSIG:
 - Supported configured algorithms include `hmac-sha1`, `hmac-sha256`,
   `hmac-sha384`, and `hmac-sha512`.
 - HMAC-MD5 TSIG is intentionally rejected.
-- TSIG secrets are base64 encoded in configuration. Protect config files and
-  any secret-injection mechanism accordingly.
+- TSIG secrets are base64 encoded. Configure exactly one of inline `secret` or
+  `secret_file`; when using `secret_file`, the file must be readable by the
+  OxideDNS process and must not be world-readable.
 - System time must be synchronized within the TSIG fudge window or signed
   transfers and NOTIFY messages can fail authentication.
 
