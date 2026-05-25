@@ -61,6 +61,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub tsig: TsigConfig,
     #[serde(default)]
+    pub transfer: TransferConfig,
+    #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
     pub zones: Vec<ZoneConfig>,
@@ -258,11 +260,18 @@ impl ServerConfig {
         self.health.validate()?;
         self.rrl.validate()?;
         self.tsig.validate()?;
+        self.transfer.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
 
         for zone in &self.zones {
             zone.validate()?;
+            if self.transfer.require_tsig && zone.tsig_key.is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "zone {} requires tsig_key because transfer.require_tsig is true",
+                    zone.name
+                )));
+            }
             if let Some(tsig_key) = &zone.tsig_key {
                 let key_name = DomainName::from_absolute_str(tsig_key).map_err(|_| {
                     ConfigError::Invalid(format!(
@@ -280,6 +289,12 @@ impl ServerConfig {
         }
         for catalog_zone in &self.catalog_zones {
             catalog_zone.validate()?;
+            if self.transfer.require_tsig && catalog_zone.tsig_key.is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "catalog zone {} requires tsig_key because transfer.require_tsig is true",
+                    catalog_zone.name
+                )));
+            }
             if let Some(tsig_key) = &catalog_zone.tsig_key {
                 let key_name = DomainName::from_absolute_str(tsig_key).map_err(|_| {
                     ConfigError::Invalid(format!(
@@ -419,6 +434,48 @@ impl ServerConfig {
             });
         }
 
+        if self.transfer.accept_out_of_zone_glue {
+            warnings.push(ConfigWarning {
+                code: "out_of_zone_glue_tolerance_enabled",
+                parameter: "transfer.accept_out_of_zone_glue".to_owned(),
+                message: "out-of-zone A/AAAA glue tolerance is enabled; strict transfer-owner validation is relaxed for compatibility".to_owned(),
+            });
+        }
+
+        if !self.transfer.require_tsig {
+            for zone in &self.zones {
+                if zone.tsig_key.is_none() {
+                    for primary in zone.transfer_target_addrs() {
+                        warnings.push(ConfigWarning {
+                            code: "zone_transfer_unauthenticated",
+                            parameter: format!("zones.{}.primary.{}", zone.name, primary),
+                            message: format!(
+                                "zone {} transfer from primary {} is not TSIG-authenticated; set transfer.require_tsig = true for production fail-closed validation",
+                                zone.name, primary
+                            ),
+                        });
+                    }
+                }
+            }
+            for catalog_zone in &self.catalog_zones {
+                if catalog_zone.tsig_key.is_none() {
+                    for primary in catalog_zone.transfer_target_addrs() {
+                        warnings.push(ConfigWarning {
+                            code: "catalog_transfer_unauthenticated",
+                            parameter: format!(
+                                "catalog_zones.{}.primary.{}",
+                                catalog_zone.name, primary
+                            ),
+                            message: format!(
+                                "catalog zone {} transfer from primary {} is not TSIG-authenticated; catalog TSIG is mandatory for production catalog mode",
+                                catalog_zone.name, primary
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
         for key in &self.tsig_keys {
             if key.algorithm.eq_ignore_ascii_case("hmac-sha1") {
                 warnings.push(ConfigWarning {
@@ -526,6 +583,21 @@ impl TsigConfig {
                 "tsig.fudge_seconds must be at least 1".to_owned(),
             ));
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TransferConfig {
+    #[serde(default)]
+    pub require_tsig: bool,
+    #[serde(default)]
+    pub accept_out_of_zone_glue: bool,
+}
+
+impl TransferConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
         Ok(())
     }
 }
@@ -2454,6 +2526,80 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.tsig.fudge_seconds, 30);
+    }
+
+    #[test]
+    fn parses_transfer_policy_settings() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [transfer]
+                require_tsig = false
+                accept_out_of_zone_glue = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert!(!config.transfer.require_tsig);
+        assert!(config.transfer.accept_out_of_zone_glue);
+        assert!(
+            config
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "out_of_zone_glue_tolerance_enabled")
+        );
+    }
+
+    #[test]
+    fn transfer_require_tsig_rejects_unsigned_zone() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [transfer]
+                require_tsig = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("require_tsig rejects unsigned zone");
+
+        assert!(error.to_string().contains("transfer.require_tsig is true"));
+    }
+
+    #[test]
+    fn transfer_require_tsig_accepts_signed_zone() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [transfer]
+                require_tsig = true
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+            "#,
+        )
+        .expect("signed zone satisfies require_tsig");
+
+        assert!(config.transfer.require_tsig);
     }
 
     #[test]

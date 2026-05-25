@@ -75,6 +75,12 @@ zone transfers. A catalog producer controls the set of zones an OxideDNS
 instance serves, so TSIG or XoT plus tight source-address allowlisting is
 expected for production use.
 
+For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
+startup validation for missing `tsig_key` references. The v0.9 SRS draft used
+the illustrative name `zones.require_tsig`; the implemented schema keeps this
+as process-wide transfer policy under `[transfer]` because TOML reserves
+`[[zones]]` for the zone array itself.
+
 Configuration remains static for the catalog zone definitions themselves.
 Changing the set of configured catalogs, their primaries, TSIG references, or
 the `serve_catalog_zone` policy requires a process restart. The member-zone set

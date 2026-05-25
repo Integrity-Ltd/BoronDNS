@@ -204,6 +204,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   aggregate RRL summary logs and defaults to 60 seconds.
 - `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
   fudge value.
+- `[transfer]`: process-wide transfer policy. `require_tsig = true` makes
+  startup fail if a configured static zone lacks `tsig_key`.
+  `accept_out_of_zone_glue = true` is an off-by-default compatibility setting
+  for primaries that emit out-of-zone A/AAAA glue in transfer streams.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
   limits. `zsm_loading_warning_threshold_secs` defaults to 3600 and controls
   the warning threshold and repeat interval for zones stuck in LOADING.

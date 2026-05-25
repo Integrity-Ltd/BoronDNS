@@ -386,6 +386,14 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
             }
+            "ODS_TRANSFER_REQUIRE_TSIG" => {
+                let value = env_value_to_string(&name, value)?;
+                config.transfer.require_tsig = parse_env_value(&name, &value)?;
+            }
+            "ODS_TRANSFER_ACCEPT_OUT_OF_ZONE_GLUE" => {
+                let value = env_value_to_string(&name, value)?;
+                config.transfer.accept_out_of_zone_glue = parse_env_value(&name, &value)?;
+            }
             "ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
@@ -1282,6 +1290,12 @@ mod tests {
                 [[zones]]
                 name = "example.test."
                 primaries = ["192.0.2.53:53"]
+                tsig_key = "transfer-key."
+
+                [[tsig_keys]]
+                name = "transfer-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
             "#,
         )
         .expect("valid config");
@@ -1297,6 +1311,8 @@ mod tests {
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
+                ("ODS_TRANSFER_REQUIRE_TSIG", "true"),
+                ("ODS_TRANSFER_ACCEPT_OUT_OF_ZONE_GLUE", "true"),
                 ("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
                 ("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
                 ("ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS", "1200"),
@@ -1319,6 +1335,8 @@ mod tests {
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.logging.max_entry_length_bytes, 8192);
         assert_eq!(config.tsig.fudge_seconds, 30);
+        assert!(config.transfer.require_tsig);
+        assert!(config.transfer.accept_out_of_zone_glue);
         assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
         assert_eq!(config.limits.zsm_max_interval_secs, 43_200);
         assert_eq!(config.limits.zsm_loading_warning_threshold_secs, 1200);

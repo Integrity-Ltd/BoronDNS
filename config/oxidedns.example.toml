@@ -101,6 +101,14 @@ allowlist = []
 # reported as suspicious configuration warnings.
 fudge_seconds = 300
 
+[transfer]
+# Refuse startup if any static zone lacks tsig_key. Catalog zones have a
+# separate mandatory-TSIG policy in production catalog mode.
+require_tsig = false
+# Compatibility escape hatch for primaries that emit out-of-zone A/AAAA glue in
+# transfer streams. Default: false, preserving strict owner-name validation.
+accept_out_of_zone_glue = false
+
 [limits]
 # EDNS UDP payload ceiling. Default: 1232.
 max_udp_payload = 1232
