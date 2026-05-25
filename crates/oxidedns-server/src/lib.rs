@@ -357,6 +357,9 @@ impl Runtime {
             InitialLoadSettings {
                 axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                tcp_connect_timeout: Duration::from_secs(
+                    self.config.limits.tcp_connect_timeout_secs,
+                ),
                 transfer_limit: transfer_limit.clone(),
             },
         ));
@@ -370,6 +373,9 @@ impl Runtime {
             RefreshWorkerSettings {
                 axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                tcp_connect_timeout: Duration::from_secs(
+                    self.config.limits.tcp_connect_timeout_secs,
+                ),
                 transfer_limit: transfer_limit.clone(),
             },
         ));
@@ -577,6 +583,9 @@ impl Runtime {
             InitialLoadSettings {
                 axfr_timeout: Duration::from_secs(self.config.limits.axfr_timeout_secs),
                 ixfr_timeout: Duration::from_secs(self.config.limits.ixfr_timeout_secs),
+                tcp_connect_timeout: Duration::from_secs(
+                    self.config.limits.tcp_connect_timeout_secs,
+                ),
                 transfer_limit: Arc::new(Semaphore::new(max_concurrent_transfers)),
             },
         )
@@ -962,10 +971,12 @@ async fn transfer_axfr_from_target_with_tsig(
         session,
         None,
         timeout_duration,
+        timeout_duration,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn transfer_axfr_from_target_with_tsig_and_source(
     primary: &TransferPrimaryConfig,
     zone_apex: &DomainName,
@@ -974,10 +985,12 @@ async fn transfer_axfr_from_target_with_tsig_and_source(
     session: TransferSession<'_>,
     transfer_source: Option<SocketAddr>,
     timeout_duration: Duration,
+    connect_timeout: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
     let session = session.with_transfer_source(transfer_source);
     tokio::time::timeout(timeout_duration, async {
-        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, session).await
+        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, session, connect_timeout)
+            .await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -1181,6 +1194,7 @@ impl Drop for XotSessionLog {
 async fn connect_tcp_stream(
     primary: SocketAddr,
     transfer_source: Option<SocketAddr>,
+    connect_timeout: Duration,
 ) -> Result<TcpStream, TransferError> {
     let socket = match primary {
         SocketAddr::V4(_) => TcpSocket::new_v4(),
@@ -1203,9 +1217,22 @@ async fn connect_tcp_stream(
             })?;
     }
 
-    socket
-        .connect(primary)
+    tcp_connect_with_timeout(primary, connect_timeout, socket.connect(primary)).await
+}
+
+async fn tcp_connect_with_timeout<T, F>(
+    primary: SocketAddr,
+    connect_timeout: Duration,
+    connect: F,
+) -> Result<T, TransferError>
+where
+    F: Future<Output = std::io::Result<T>>,
+{
+    tokio::time::timeout(connect_timeout, connect)
         .await
+        .map_err(|_| TransferError::Timeout {
+            timeout_secs: connect_timeout.as_secs(),
+        })?
         .map_err(|source| TransferError::ConnectTcp {
             addr: primary,
             source,
@@ -1215,19 +1242,23 @@ async fn connect_tcp_stream(
 async fn connect_transfer_stream(
     primary: &TransferPrimaryConfig,
     transfer_source: Option<SocketAddr>,
+    connect_timeout: Duration,
 ) -> Result<TransferStream, TransferError> {
     match primary.transport {
         TransferTransportConfig::Tcp => {
-            let tcp = connect_tcp_stream(primary.addr, transfer_source).await?;
+            let tcp = connect_tcp_stream(primary.addr, transfer_source, connect_timeout).await?;
             Ok(TransferStream::Tcp(tcp))
         }
-        TransferTransportConfig::Xot => connect_xot_stream(primary, transfer_source).await,
+        TransferTransportConfig::Xot => {
+            connect_xot_stream(primary, transfer_source, connect_timeout).await
+        }
     }
 }
 
 async fn connect_xot_stream(
     primary: &TransferPrimaryConfig,
     transfer_source: Option<SocketAddr>,
+    connect_timeout: Duration,
 ) -> Result<TransferStream, TransferError> {
     let sni = primary
         .server_name
@@ -1245,7 +1276,7 @@ async fn connect_xot_stream(
 
     let mut client_config = build_xot_client_config(primary)?;
     client_config.alpn_protocols = vec![b"dot".to_vec()];
-    let tcp = connect_tcp_stream(primary.addr, transfer_source).await?;
+    let tcp = connect_tcp_stream(primary.addr, transfer_source, connect_timeout).await?;
     let connector = TlsConnector::from(Arc::new(client_config));
     let stream = match connector.connect(server_name, tcp).await {
         Ok(stream) => stream,
@@ -1461,10 +1492,12 @@ async fn transfer_ixfr_from_primary_with_tsig(
         current_zone,
         session,
         timeout_duration,
+        timeout_duration,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn transfer_ixfr_from_target_with_tsig(
     primary: &TransferPrimaryConfig,
     zone_apex: &DomainName,
@@ -1473,10 +1506,19 @@ async fn transfer_ixfr_from_target_with_tsig(
     current_zone: &ZoneSnapshot,
     session: TransferSession<'_>,
     timeout_duration: Duration,
+    connect_timeout: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, session)
-            .await
+        transfer_ixfr_from_primary_inner(
+            primary,
+            zone_apex,
+            qclass,
+            qid,
+            current_zone,
+            session,
+            connect_timeout,
+        )
+        .await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -1491,8 +1533,10 @@ async fn transfer_ixfr_from_primary_inner(
     qid: u16,
     current_zone: &ZoneSnapshot,
     session: TransferSession<'_>,
+    connect_timeout: Duration,
 ) -> Result<IxfrResponse, TransferError> {
-    let mut stream = connect_transfer_stream(primary, session.transfer_source).await?;
+    let mut stream =
+        connect_transfer_stream(primary, session.transfer_source, connect_timeout).await?;
 
     let current_soa = current_zone
         .soa_record(qclass)
@@ -1740,8 +1784,10 @@ async fn transfer_axfr_from_primary_inner(
     qclass: u16,
     qid: u16,
     session: TransferSession<'_>,
+    connect_timeout: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
-    let mut stream = connect_transfer_stream(primary, session.transfer_source).await?;
+    let mut stream =
+        connect_transfer_stream(primary, session.transfer_source, connect_timeout).await?;
 
     let query =
         maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), session.tsig)?;
@@ -6047,6 +6093,7 @@ async fn serve_refresh_requests(
                     .expect("transfer semaphore is not closed");
                 let axfr_timeout = settings.axfr_timeout;
                 let ixfr_timeout = settings.ixfr_timeout;
+                let tcp_connect_timeout = settings.tcp_connect_timeout;
                 let zones = zones.clone();
                 let refresh_registry = refresh_registry.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
@@ -6062,6 +6109,7 @@ async fn serve_refresh_requests(
                             metrics: &metrics,
                             ixfr_timeout,
                             axfr_timeout,
+                            tcp_connect_timeout,
                             reason: request.reason.as_str(),
                         },
                     )
@@ -6092,6 +6140,7 @@ async fn serve_refresh_requests(
 struct RefreshWorkerSettings {
     axfr_timeout: Duration,
     ixfr_timeout: Duration,
+    tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
 }
 
@@ -6099,6 +6148,7 @@ struct RefreshWorkerSettings {
 struct InitialLoadSettings {
     axfr_timeout: Duration,
     ixfr_timeout: Duration,
+    tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
 }
 
@@ -6108,6 +6158,7 @@ struct RefreshAttemptContext<'a> {
     metrics: &'a RuntimeMetrics,
     ixfr_timeout: Duration,
     axfr_timeout: Duration,
+    tcp_connect_timeout: Duration,
     reason: &'a str,
 }
 
@@ -6156,6 +6207,7 @@ async fn run_initial_zone_loads(
         let metrics = metrics.clone();
         let axfr_timeout = settings.axfr_timeout;
         let ixfr_timeout = settings.ixfr_timeout;
+        let tcp_connect_timeout = settings.tcp_connect_timeout;
         let transfer_permit = settings
             .transfer_limit
             .clone()
@@ -6174,6 +6226,7 @@ async fn run_initial_zone_loads(
                     metrics: &metrics,
                     ixfr_timeout,
                     axfr_timeout,
+                    tcp_connect_timeout,
                     reason: "initial",
                 },
             )
@@ -6436,6 +6489,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                     )
                     .with_transfer_source(transfer_source),
                     context.ixfr_timeout,
+                    context.tcp_connect_timeout,
                 )
                 .await
                 {
@@ -6510,6 +6564,7 @@ async fn refresh_zone_from_primaries_with_outcome(
             ),
             transfer_source,
             context.axfr_timeout,
+            context.tcp_connect_timeout,
         )
         .await
         {
@@ -8632,6 +8687,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tcp_connect_timeout_abandons_pending_connect_attempt() {
+        let primary = "192.0.2.53:53".parse().unwrap();
+        let error = super::tcp_connect_with_timeout(
+            primary,
+            std::time::Duration::from_millis(1),
+            std::future::pending::<std::io::Result<()>>(),
+        )
+        .await
+        .expect_err("pending TCP connect should time out");
+
+        assert!(matches!(error, TransferError::Timeout { timeout_secs: 0 }));
+    }
+
+    #[tokio::test]
     async fn transfer_axfr_enforces_ingestion_size_cap() {
         let primary = spawn_axfr_primary().await;
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
@@ -8721,6 +8790,7 @@ mod tests {
             0x1234,
             &current_zone,
             TransferSession::new(TransferTsig::unsigned(), 1),
+            std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -8987,6 +9057,7 @@ mod tests {
             0x1234,
             TransferSession::default_unsigned(),
             Some(transfer_source),
+            std::time::Duration::from_secs(5),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -10466,6 +10537,7 @@ mod tests {
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
             },
         )
@@ -10561,6 +10633,7 @@ mod tests {
             RefreshWorkerSettings {
                 axfr_timeout: std::time::Duration::from_secs(5),
                 ixfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 transfer_limit: Arc::new(tokio::sync::Semaphore::new(2)),
             },
         ));
@@ -10624,6 +10697,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -10693,6 +10767,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -10756,6 +10831,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -10872,6 +10948,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(50),
                 axfr_timeout: std::time::Duration::from_millis(50),
+                tcp_connect_timeout: std::time::Duration::from_millis(50),
                 reason: "test",
             },
         )
@@ -10929,6 +11006,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(100),
                 axfr_timeout: std::time::Duration::from_millis(100),
+                tcp_connect_timeout: std::time::Duration::from_millis(100),
                 reason: "test",
             },
         )
@@ -10985,6 +11063,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(100),
                 axfr_timeout: std::time::Duration::from_millis(100),
+                tcp_connect_timeout: std::time::Duration::from_millis(100),
                 reason: "test",
             },
         )
@@ -11052,6 +11131,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(100),
                 axfr_timeout: std::time::Duration::from_millis(100),
+                tcp_connect_timeout: std::time::Duration::from_millis(100),
                 reason: "test",
             },
         )
@@ -11108,6 +11188,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(100),
                 axfr_timeout: std::time::Duration::from_millis(100),
+                tcp_connect_timeout: std::time::Duration::from_millis(100),
                 reason: "test",
             },
         )
@@ -11167,6 +11248,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -11221,6 +11303,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_millis(100),
                 axfr_timeout: std::time::Duration::from_millis(100),
+                tcp_connect_timeout: std::time::Duration::from_millis(100),
                 reason: "test",
             },
         )
@@ -11452,6 +11535,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -11519,6 +11603,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )
@@ -11535,6 +11620,7 @@ mod tests {
                 metrics: &metrics,
                 ixfr_timeout: std::time::Duration::from_secs(5),
                 axfr_timeout: std::time::Duration::from_secs(5),
+                tcp_connect_timeout: std::time::Duration::from_secs(5),
                 reason: "test",
             },
         )

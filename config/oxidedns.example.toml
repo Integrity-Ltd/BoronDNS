@@ -98,6 +98,8 @@ max_cname_chain = 8
 tcp_idle_timeout_secs = 30
 tcp_read_timeout_secs = 30
 tcp_write_timeout_secs = 30
+# Outbound TCP connection-establishment timeout. Default: 10 seconds.
+tcp_connect_timeout_secs = 10
 # Global accepted TCP connection limit. Default: 1024.
 max_tcp_connections = 1024
 # Per-connection DNS-over-TCP in-flight query limit. Default: 64.

@@ -557,6 +557,7 @@ tcp_inflight_limit_timeout_secs = 1
 tcp_idle_timeout_secs = 1
 tcp_read_timeout_secs = 1
 tcp_write_timeout_secs = 5
+tcp_connect_timeout_secs = 10
 graceful_shutdown_secs = 2
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
@@ -637,7 +638,7 @@ ODS-FR-TCP-006	supporting-policy	not_configured_in_runtime_harness	docs/implemen
 ODS-FR-TCP-007	retained-runtime	pipelined_large_then_small_out_of_order	tcp-pipeline-summary.env; client.log	Two in-flight queries on one TCP connection return matching QIDs, and the intentionally smaller second query is answered before the larger first query.
 ODS-FR-TCP-008	retained-runtime	udp_truncation_tcp_complete_retry	client-summary.env; metrics.txt	For the same large answer, UDP returns TC=1 at the 512-octet ceiling while TCP returns an untruncated response with the complete A RRset.
 ODS-FR-TCP-009	retained-runtime	outbound_axfr_tcp_framing	fake-primary.log; oxidedns.log; client-summary.env	The fake primary accepts only length-framed TCP AXFR; successful load plus served large RRset proves the outbound transfer path used TCP framing.
-ODS-FR-TCP-010	supporting-unit	not_exercised_by_runtime_harness	docs/implementation-plan.md; crates/oxidedns-server/src/lib.rs; scripts/check.sh	This successful transfer run does not inject outbound TCP connect timeout failure; timeout handling remains covered by code/unit evidence outside this retained artifact.
+ODS-FR-TCP-010	supporting-unit-plus-runtime	successful_outbound_tcp_connect_with_configured_timeout	oxidedns.toml; crates/oxidedns-core/src/config.rs::parses_custom_tcp_idle_timeout; crates/oxidedns-core/src/config.rs::rejects_zero_tcp_read_or_write_timeout; crates/oxidedns-server/src/lib.rs::tcp_connect_timeout_abandons_pending_connect_attempt; docs/implementation-plan.md	The retained config records tcp_connect_timeout_secs=10 for outbound TCP transfer paths; focused config tests cover parsing/rejection and the pending-connect unit test proves abandoned connect attempts return a transfer timeout.
 ODS-FR-TCP-011	supporting-unit-plus-runtime	pipelining_under_configured_cap	oxidedns.toml; tcp-pipeline-summary.env; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_when_inflight_limit_stays_saturated; crates/oxidedns-core/src/config.rs::parses_custom_tcp_connection_limit	The retained config records max_tcp_inflight_queries_per_connection=64 and the harness verifies two concurrent in-flight queries below the cap; the focused saturation test holds the only per-connection permit, lets the configured timeout elapse, and proves the second query is not answered before closure.
 EOF
 

@@ -131,6 +131,11 @@ impl ServerConfig {
                 "limits.tcp_write_timeout_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.tcp_connect_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.tcp_connect_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.max_tcp_connections == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_tcp_connections must be at least 1".to_owned(),
@@ -949,6 +954,8 @@ pub struct Limits {
     pub tcp_read_timeout_secs: u64,
     #[serde(default = "default_tcp_write_timeout_secs")]
     pub tcp_write_timeout_secs: u64,
+    #[serde(default = "default_tcp_connect_timeout_secs")]
+    pub tcp_connect_timeout_secs: u64,
     #[serde(default = "default_max_tcp_connections")]
     pub max_tcp_connections: usize,
     #[serde(default = "default_max_tcp_inflight_queries_per_connection")]
@@ -993,6 +1000,7 @@ impl Default for Limits {
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
             tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
             tcp_write_timeout_secs: default_tcp_write_timeout_secs(),
+            tcp_connect_timeout_secs: default_tcp_connect_timeout_secs(),
             max_tcp_connections: default_max_tcp_connections(),
             max_tcp_inflight_queries_per_connection:
                 default_max_tcp_inflight_queries_per_connection(),
@@ -1390,6 +1398,10 @@ fn default_tcp_write_timeout_secs() -> u64 {
     30
 }
 
+fn default_tcp_connect_timeout_secs() -> u64 {
+    10
+}
+
 fn default_max_tcp_connections() -> usize {
     1024
 }
@@ -1538,6 +1550,7 @@ mod tests {
         assert_eq!(config.limits.tcp_idle_timeout_secs, 30);
         assert_eq!(config.limits.tcp_read_timeout_secs, 30);
         assert_eq!(config.limits.tcp_write_timeout_secs, 30);
+        assert_eq!(config.limits.tcp_connect_timeout_secs, 10);
         assert_eq!(config.limits.max_tcp_connections, 1024);
         assert_eq!(config.limits.max_tcp_inflight_queries_per_connection, 64);
         assert_eq!(config.limits.tcp_inflight_limit_timeout_secs, None);
@@ -2894,6 +2907,7 @@ mod tests {
                 tcp_idle_timeout_secs = 5
                 tcp_read_timeout_secs = 6
                 tcp_write_timeout_secs = 7
+                tcp_connect_timeout_secs = 8
 
                 [[zones]]
                 name = "example.test."
@@ -2905,6 +2919,7 @@ mod tests {
         assert_eq!(config.limits.tcp_idle_timeout_secs, 5);
         assert_eq!(config.limits.tcp_read_timeout_secs, 6);
         assert_eq!(config.limits.tcp_write_timeout_secs, 7);
+        assert_eq!(config.limits.tcp_connect_timeout_secs, 8);
     }
 
     #[test]
@@ -2932,6 +2947,7 @@ mod tests {
         for (key, expected) in [
             ("tcp_read_timeout_secs", "tcp_read_timeout_secs"),
             ("tcp_write_timeout_secs", "tcp_write_timeout_secs"),
+            ("tcp_connect_timeout_secs", "tcp_connect_timeout_secs"),
         ] {
             let error = ServerConfig::from_toml_str(&format!(
                 r#"

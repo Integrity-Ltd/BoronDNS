@@ -235,6 +235,7 @@ Slice 4 is in progress:
 - TCP query handling reuses the same authoritative response core as UDP;
 - idle TCP connections close after the configured `[limits].tcp_idle_timeout_secs`, defaulting to 30 seconds;
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds;
+- outbound TCP connection establishment for AXFR, IXFR, and XoT uses configurable `[limits].tcp_connect_timeout_secs`, defaulting to 10 seconds, and abandoned attempts are treated as transfer failures;
 - write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream;
 - accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level;
 - per-connection DNS-over-TCP in-flight queries are limited by `[limits].max_tcp_inflight_queries_per_connection`, defaulting to 64; when all per-connection permits are held, the read side stops reading new frames until a response is written or `[limits].tcp_inflight_limit_timeout_secs` elapses, defaulting to the TCP read timeout, after which the connection is closed with an info log.
