@@ -35,7 +35,7 @@ compliance.
 | RRL | Unit-level token bucket, first rate-limit warning, periodic aggregate summary logging, TSIG-authenticated query exemption, and metrics coverage; runtime UDP drop/slip script across all response categories with metrics checks; retained RRL evidence campaign helper | Release threshold decisions and longer-running campaign evidence |
 | EDNS v0.7 Additions | EDNS parsing, OPT response foundations, payload-limit tests, non-EDNS 512-octet truncation/no-OPT unit evidence, configured NSID response tests for `ODS-FR-EDNS-016..017`, and fake-primary runtime evidence in `scripts/interop-dnssec-serve.sh` for non-EDNS truncation plus NSID empty/non-empty request handling exist | Retain per-requirement release artifacts before Alpha signoff |
 | Zone State Machine | Startup LOADING state, AXFR initial load, refresh/retry/expire scheduling, SOA REFRESH/RETRY min/max interval enforcement, jitter, initial-load exponential backoff, IXFR cooldown, NOTIFY refresh deduplication, concurrent transfer limits, per-zone LOADING-duration metrics, repeated long-LOADING structured warning tests, and retained `scripts/capture-log-evidence.sh` JSON/logfmt running-service long-LOADING warning artifacts | Retained release artifacts for broader timing behavior under a running service |
-| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy and in-process secret rotation interval, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, metrics exposition, and BIND `dig +cookie` runtime interop have unit/runtime tests | Add broader BIND/Knot deployment interop evidence and retained MVP release artifacts |
+| DNS Cookies | RFC 9018 version-1 server-cookie construction/validation, COOKIE option parsing, startup random runtime secret with redacted fingerprint logging, configurable disabled/lenient/strict policy and in-process secret rotation interval, strict BADCOOKIE extended-RCODE responses with debug logging, lenient refresh of invalid server cookies, same-client validation, timestamp/source/tamper rejection, malformed length FORMERR handling, UDP valid-cookie RRL exemption, global and per-source-prefix cookie-case counters, BADCOOKIE counters, bounded prefix cardinality, metrics exposition, and retained `scripts/interop-dns-cookie-dig.sh` BIND `dig +cookie` runtime artifacts for client-cookie-only and valid-server-cookie exchanges | Add broader BIND/Knot deployment interop evidence and per-requirement COOKIE traceability |
 
 ## Non-Functional Evidence
 
@@ -124,6 +124,7 @@ scripts/interop-dnssec-nsec3-serve.sh
 scripts/interop-negative-responses.sh
 scripts/interop-notify-negative.sh
 scripts/interop-tcp-truncation-retry.sh
+scripts/interop-dns-cookie-dig.sh
 scripts/perf-smoke.sh
 scripts/release-evidence-snapshot.sh
 ```

@@ -15,6 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/dns-cookie-dig-$$"
+artifact_dir="${OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -54,6 +55,7 @@ PY
 fake_primary="$workdir/fake-primary.py"
 primary_log="$workdir/fake-primary.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+summary_env="$workdir/dns-cookie-summary.env"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -135,7 +137,8 @@ def axfr_response(qid):
         rr("www.alpha.test.", A, bytes([192, 0, 2, 10])),
         soa,
     ]
-    return struct.pack("!HHHHHH", qid, 0x8000, 0, len(answers), 0, 0) + b"".join(answers)
+    question = name_wire(ZONE) + struct.pack("!HH", AXFR, IN)
+    return struct.pack("!HHHHHH", qid, 0x8000, 1, len(answers), 0, 0) + question + b"".join(answers)
 
 
 def read_exact(conn, size):
@@ -218,12 +221,12 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after fake-primary AXFR" >&2
   exit 1
 fi
@@ -271,4 +274,23 @@ if ! grep -q "DNS Cookie server secret generated" "$workdir/oxidedns.log"; then
   exit 1
 fi
 
-echo "DNS Cookie dig interop passed"
+cat >"$summary_env" <<EOF
+client_cookie=$client_cookie
+response_cookie_bytes=$((${#response_cookie} / 2))
+client_only_cookie_response=1
+valid_server_cookie_response=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$primary_log" "$artifact_dir/fake-primary.log"
+  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/first-dig.out" "$artifact_dir/first-dig.out"
+  cp "$workdir/second-dig.out" "$artifact_dir/second-dig.out"
+  cp "$summary_env" "$artifact_dir/dns-cookie-summary.env"
+  printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
+fi
+
+printf 'DNS Cookie dig interop passed response_cookie_bytes=%s\n' "$((${#response_cookie} / 2))"
