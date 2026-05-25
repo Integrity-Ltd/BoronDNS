@@ -32,13 +32,13 @@ compliance.
 
 | v0.9 area | Current Evidence | Remaining Gap |
 | --- | --- | --- |
-| Zone provisioning and RFC 9432 catalog mode | `docs/catalog-zone-mvp-rfc9432.md`; `[[catalog_zones]]` config; mandatory catalog `tsig_key`; `[transfer].require_tsig`; internal catalog consumption; `catalog_member_added` / `catalog_member_removed` logs; `oxidedns_catalog_member_info` metric | Decide and document whether the v0.9 `[zone_source]` schema replaces or complements `[[catalog_zones]]`; add explicit member-zone cap if retained from the v0.9 draft |
+| Zone provisioning and RFC 9432 catalog zones | `docs/catalog-zone-mvp-rfc9432.md`; `[[zones]]` / `[[catalog_zones]]` config; mandatory catalog `tsig_key`; `[transfer].require_tsig`; internal catalog consumption; `catalog_member_added` / `catalog_member_removed` logs; `oxidedns_catalog_member_info` metric; BIND live catalog interop over TSIG and XoT+TSIG | Add explicit member-zone cap if retained from the v0.9 draft and broader release-level catalog evidence |
 | DNAME synthesis overflow | Query path returns YXDOMAIN with the DNAME and without synthesized CNAME when DNAME substitution would overflow | Add the v0.9 requirement identifier to the next traceability matrix refresh |
 | DNAME multiplicity in transfers | AXFR validation rejects multiple DNAME records at the same owner with `MultipleDnameRecords` | Add the v0.9 requirement identifier to the next traceability matrix refresh |
 | NSEC3 iteration cap | Existing DNSSEC/NSEC3 code parses and serves transferred NSEC3 data only | Implement configurable cap with default 100, startup/config warning, runtime `dnssec` warning, and an `oxidedns_*` Prometheus counter aligned with the v0.9 draft |
-| Out-of-zone A/AAAA glue tolerance | Current AXFR/IXFR validation rejects out-of-zone records fail closed | Implement an optional, off-by-default tolerance limited to out-of-zone A/AAAA glue if primary compatibility requires it; preserve fail-closed behavior for all other out-of-zone record types |
+| Out-of-zone A/AAAA glue tolerance | `[transfer].accept_out_of_zone_glue` implements an optional, off-by-default tolerance limited to out-of-zone A/AAAA glue while preserving fail-closed behavior for all other out-of-zone record types | Add broader primary-compatibility evidence if release acceptance requires it |
 | Environment override validation | CLI applies `ODS_*` overrides before invoking config validation | Add explicit traceability and regression coverage for post-override cross-field validation |
-| XoT BIND 9 interop | Knot XoT and XoT+TSIG scripts exist | Add BIND 9 XoT interop script/evidence before v0.9 acceptance |
+| XoT BIND 9 interop | Knot XoT and XoT+TSIG scripts exist; `scripts/interop-bind-xot-catalog-zone-docker.sh` covers live BIND catalog transfer over XoT+TSIG | Add broader release-retained XoT evidence before full v0.9 acceptance |
 | Alpha audit confirmations | Existing architecture, security, unsafe-boundary, logging, and privilege-drop evidence cover the confirmed topics | Refresh traceability to v0.9 identifiers once the full v0.9 SRS is normalized into the repository |
 
 ## Protocol Coverage
