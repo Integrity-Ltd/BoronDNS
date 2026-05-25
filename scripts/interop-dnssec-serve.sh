@@ -157,8 +157,9 @@ def nsec_rdata(next_name, types):
     return name_wire(next_name) + type_bitmap(types)
 
 
-def rrsig_rdata(type_covered, labels):
-    signature_len = 160 if type_covered in (NS, DS) else 720
+def rrsig_rdata(type_covered, labels, signature_len=None):
+    if signature_len is None:
+        signature_len = 160 if type_covered in (NS, DS) else 720
     signature = bytes((index % 251) + 1 for index in range(signature_len))
     return b"".join([
         struct.pack("!HBBIIIH", type_covered, 253, labels, 300, 4102444800, 1704067200, 12345),
@@ -185,6 +186,9 @@ def zone_records():
         rr("child.alpha.test.", NS, name_wire("ns.child.alpha.test.")),
         rr("ns.child.alpha.test.", A, bytes([192, 0, 2, 53])),
         rr("child.alpha.test.", DS, ds_rdata()),
+        rr("unsigned.alpha.test.", NS, name_wire("ns.unsigned.alpha.test.")),
+        rr("ns.unsigned.alpha.test.", A, bytes([192, 0, 2, 54])),
+        rr("unsigned.alpha.test.", NSEC, nsec_rdata("www.alpha.test.", [NS, RRSIG, NSEC])),
         *[
             rr("large.alpha.test.", TXT, bytes([120]) + bytes([65 + (index % 26)]) * 120)
             for index in range(8)
@@ -200,6 +204,8 @@ def zone_records():
         rr("sig.alpha.test.", RRSIG, rrsig_rdata(A, 3)),
         rr("child.alpha.test.", RRSIG, rrsig_rdata(NS, 3)),
         rr("child.alpha.test.", RRSIG, rrsig_rdata(DS, 3)),
+        rr("unsigned.alpha.test.", RRSIG, rrsig_rdata(NS, 3)),
+        rr("unsigned.alpha.test.", RRSIG, rrsig_rdata(NSEC, 3, signature_len=160)),
         soa,
     ]
 
@@ -452,6 +458,18 @@ if not signed_child_referral_do["opt_ttls"] or signed_child_referral_do["opt_ttl
 if signed_child_referral_do["ad"] or signed_child_referral_do["cd"]:
     raise AssertionError(f"signed-child referral DO response set AD/CD unexpectedly: {signed_child_referral_do}")
 
+unsigned_child_referral_do = exchange(0xD00D, "www.unsigned.alpha.test.", A, payload=4096, do=True)
+if unsigned_child_referral_do["rcode"] != 0 or unsigned_child_referral_do["answer_types"]:
+    raise AssertionError(f"unsigned-child referral DO response was not a referral: {unsigned_child_referral_do}")
+if unsigned_child_referral_do["authority_types"] != [NS, NSEC, RRSIG, RRSIG]:
+    raise AssertionError(f"unsigned-child referral DO lacked NS/NSEC/RRSIG authority: {unsigned_child_referral_do}")
+if DS in unsigned_child_referral_do["authority_types"]:
+    raise AssertionError(f"unsigned-child referral DO unexpectedly included DS proof: {unsigned_child_referral_do}")
+if not unsigned_child_referral_do["opt_ttls"] or unsigned_child_referral_do["opt_ttls"][0] & 0x8000 == 0:
+    raise AssertionError(f"unsigned-child referral DO response did not set response DO bit: {unsigned_child_referral_do}")
+if unsigned_child_referral_do["ad"] or unsigned_child_referral_do["cd"]:
+    raise AssertionError(f"unsigned-child referral DO response set AD/CD unexpectedly: {unsigned_child_referral_do}")
+
 truncated = exchange(0xD005, "www.alpha.test.", A, payload=512, do=True)
 if not truncated["tc"]:
     raise AssertionError(f"small-payload DNSSEC response was not truncated: {truncated}")
@@ -567,6 +585,7 @@ direct_rrsig_non_do_served=1
 direct_nsec_non_do_served=1
 direct_ds_do_rrsig=1
 signed_child_referral_ds_rrsig=1
+unsigned_child_referral_nsec_rrsig=1
 dnssec_truncation_checked=1
 non_edns_512_truncation_no_opt=1
 configured_nsid_empty_request=1
