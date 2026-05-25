@@ -60,6 +60,7 @@ limit_summary_path="$workdir/tcp-limit-summary.env"
 pipeline_summary_path="$workdir/tcp-pipeline-summary.env"
 drain_summary_path="$workdir/graceful-drain-summary.env"
 readyz_draining_path="$workdir/readyz-draining.txt"
+traceability_path="$workdir/tcp-transport-traceability.tsv"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -517,6 +518,8 @@ enabled = false
 max_udp_payload = 512
 max_concurrent_transfers = 1
 max_tcp_connections = 1
+max_tcp_inflight_queries_per_connection = 64
+tcp_inflight_limit_timeout_secs = 5
 tcp_idle_timeout_secs = 5
 graceful_shutdown_secs = 2
 zsm_min_interval_secs = 3600
@@ -587,6 +590,21 @@ for expected in \
   fi
 done
 
+cat >"$traceability_path" <<'EOF'
+requirement_id	evidence_state	runtime_case	artifacts	review_note
+ODS-FR-TCP-001	retained-runtime	tcp_framing_and_multi_message_exchange	client-summary.env; tcp-pipeline-summary.env; fake-primary.log	TCP client and fake primary exchange DNS messages using the two-octet length prefix; one connection carries multiple independently framed queries.
+ODS-FR-TCP-002	retained-runtime	tcp_persistence_until_shutdown	tcp-pipeline-summary.env; graceful-drain-summary.env; readyz-draining.txt; oxidedns.log	The pipelined connection remains open for subsequent queries, and an accepted TCP query completes after SIGTERM while new TCP traffic is rejected or closed.
+ODS-FR-TCP-003	supporting-unit	not_exercised_by_runtime_harness	oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout; crates/oxidedns-core/src/config.rs::parses_custom_tcp_idle_timeout	The retained config applies a five-second idle timeout, but this harness does not wait out idle closure; focused unit/config tests cover the timeout behavior.
+ODS-FR-TCP-004	supporting-unit	not_exercised_by_runtime_harness	oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/oxidedns-server/src/lib.rs::tcp_write_times_out_when_backpressured; crates/oxidedns-core/src/config.rs::rejects_zero_tcp_read_or_write_timeout	Read/write timeout enforcement is covered by focused tests; this successful interop run does not induce read or write timeout failure.
+ODS-FR-TCP-005	retained-runtime	over_limit_connection_close	tcp-limit-summary.env; oxidedns.toml; oxidedns.log	The retained config sets max_tcp_connections=1; a second accepted connection is promptly closed and the expected warning log is present.
+ODS-FR-TCP-006	supporting-policy	not_configured_in_runtime_harness	docs/implementation-plan.md; config/oxidedns.example.toml	The SRS makes per-source TCP connection limits optional with default no per-source cap; this harness does not configure a per-source cap.
+ODS-FR-TCP-007	retained-runtime	pipelined_large_then_small_out_of_order	tcp-pipeline-summary.env; client.log	Two in-flight queries on one TCP connection return matching QIDs, and the intentionally smaller second query is answered before the larger first query.
+ODS-FR-TCP-008	retained-runtime	udp_truncation_tcp_complete_retry	client-summary.env; metrics.txt	For the same large answer, UDP returns TC=1 at the 512-octet ceiling while TCP returns an untruncated response with the complete A RRset.
+ODS-FR-TCP-009	retained-runtime	outbound_axfr_tcp_framing	fake-primary.log; oxidedns.log; client-summary.env	The fake primary accepts only length-framed TCP AXFR; successful load plus served large RRset proves the outbound transfer path used TCP framing.
+ODS-FR-TCP-010	supporting-unit	not_exercised_by_runtime_harness	docs/implementation-plan.md; crates/oxidedns-server/src/lib.rs; scripts/check.sh	This successful transfer run does not inject outbound TCP connect timeout failure; timeout handling remains covered by code/unit evidence outside this retained artifact.
+ODS-FR-TCP-011	supporting-implementation	pipelining_under_configured_cap	oxidedns.toml; tcp-pipeline-summary.env; crates/oxidedns-server/src/lib.rs; crates/oxidedns-core/src/config.rs::parses_custom_tcp_connection_limit	The retained config records max_tcp_inflight_queries_per_connection=64 and the harness verifies two concurrent in-flight queries below the cap; focused config/implementation evidence covers cap parsing and semaphore enforcement.
+EOF
+
 if [[ -n "$artifact_dir" ]]; then
   mkdir -p "$artifact_dir"
   cp "$primary_log" "$artifact_dir/fake-primary.log"
@@ -598,6 +616,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$pipeline_summary_path" "$artifact_dir/tcp-pipeline-summary.env"
   cp "$drain_summary_path" "$artifact_dir/graceful-drain-summary.env"
   cp "$readyz_draining_path" "$artifact_dir/readyz-draining.txt"
+  cp "$traceability_path" "$artifact_dir/tcp-transport-traceability.tsv"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
