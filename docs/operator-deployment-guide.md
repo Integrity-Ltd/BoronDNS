@@ -311,6 +311,11 @@ If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
 HTTP 429, a `Retry-After` header, and a JSON body; `/livez`, `/readyz`, and
 `/healthz` are not rate limited.
 
+The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
+process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
+zones. It is intended for alerts around zones that have not completed initial
+transfer after startup.
+
 Basic checks:
 
 ```sh

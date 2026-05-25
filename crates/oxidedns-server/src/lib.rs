@@ -2962,7 +2962,12 @@ async fn metrics(
         return rate_limited_response(retry_after_seconds);
     }
 
-    let body = metrics_body(&state.zones, &state.metrics, &state.refresh_registry);
+    let body = metrics_body(
+        &state.zones,
+        &state.metrics,
+        &state.refresh_registry,
+        state.started_at.elapsed().as_secs(),
+    );
     if accepts_gzip(&headers) {
         match gzip_bytes(body.as_bytes()) {
             Ok(compressed) => {
@@ -3055,6 +3060,7 @@ fn metrics_body(
     zones: &ZoneStore,
     metrics: &RuntimeMetrics,
     refresh_registry: &ZoneRefreshRegistry,
+    uptime_seconds: u64,
 ) -> String {
     let snapshot = metrics.snapshot();
     let mut body = format!(
@@ -3129,7 +3135,7 @@ fn metrics_body(
     append_configuration_warning_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
-    append_zone_status_metrics(&mut body, zones);
+    append_zone_status_metrics(&mut body, zones, uptime_seconds);
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
@@ -3381,7 +3387,7 @@ fn rcode_label(rcode: u16) -> &'static str {
     }
 }
 
-fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
+fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_seconds: u64) {
     body.push_str(
         "# HELP oxidedns_zone_state Zone state, exposed as 1 for the current state and 0 for other states.\n\
          # TYPE oxidedns_zone_state gauge\n",
@@ -3409,6 +3415,30 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
     }
 
     body.push_str(
+        "# HELP oxidedns_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
+         # TYPE oxidedns_zone_loading_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let loading_seconds = zone_loading_seconds(snapshot.state, uptime_seconds);
+        body.push_str(&format!(
+            "oxidedns_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_secondary_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
+         # TYPE oxidedns_secondary_zone_loading_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let loading_seconds = zone_loading_seconds(snapshot.state, uptime_seconds);
+        body.push_str(&format!(
+            "oxidedns_secondary_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
+        ));
+    }
+
+    body.push_str(
         "# HELP oxidedns_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
          # TYPE oxidedns_zone_soa_serial gauge\n",
     );
@@ -3432,6 +3462,14 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
                 "oxidedns_secondary_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
             ));
         }
+    }
+}
+
+fn zone_loading_seconds(state: ZoneState, uptime_seconds: u64) -> u64 {
+    if state == ZoneState::Loading {
+        uptime_seconds
+    } else {
+        0
     }
 }
 
@@ -6235,9 +6273,9 @@ mod tests {
         TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
         UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
         drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
-        load_pem_private_key, log_notify_log_summary, log_rrl_summary, observe_query_metrics,
-        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-        prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        load_pem_private_key, log_notify_log_summary, log_rrl_summary, metrics_body,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
         record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
         required_file_descriptor_limit, response_category, response_opt_record,
         response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
@@ -6532,6 +6570,40 @@ mod tests {
             .expect("health listener returned an error");
     }
 
+    #[test]
+    fn metrics_body_reports_loading_duration_seconds() {
+        let zones = ZoneStore::new();
+        let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            active_origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                active_origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        ));
+        zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
+
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+        let metrics = metrics_body(&zones, &RuntimeMetrics::new(), &refresh_registry, 3600);
+
+        assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"example.test.\"} 0"));
+        assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"loading.test.\"} 3600"));
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
+        );
+    }
+
     #[tokio::test]
     async fn health_endpoint_handles_readyz_metrics_404_and_405() {
         let zones = ZoneStore::new();
@@ -6718,6 +6790,8 @@ mod tests {
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"active\"} 1"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
+        assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"example.test.\"} 0"));
+        assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"loading.test.\"} "));
         assert!(
             metrics.contains(
                 "oxidedns_secondary_zone_state{zone=\"example.test.\",state=\"active\"} 1"
@@ -6732,6 +6806,12 @@ mod tests {
             metrics.contains(
                 "oxidedns_secondary_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"
             )
+        );
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} ")
         );
         assert!(!metrics.contains("oxidedns_zone_soa_serial{zone=\"loading.test.\"}"));
         assert!(metrics.contains("oxidedns_zone_soa_serial{zone=\"example.test.\"} 1"));
