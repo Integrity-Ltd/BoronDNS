@@ -82,7 +82,13 @@ aligned with the Operator Deployment Guide.
 List interface additions, deprecations, and breaking changes for configuration,
 CLI, metrics, logs, health endpoints, and network behavior.
 
-TBD
+- Interface compatibility evidence: TBD
+- Previous accepted interface baseline: TBD
+- Current interface baseline: TBD
+- Interface additions: TBD
+- Interface deprecations: TBD
+- Interface breaking changes: TBD
+- Major-version approval rationale, if any: TBD
 
 ## Maintainability Measurements
 

@@ -90,17 +90,19 @@ cat >"$snapshot_dir/README.md" <<EOF
 - Branch: $(git -C "$repo_root" branch --show-current)
 
 This directory contains command logs captured for release review, including
-safe-Rust, maintainability, canonical log-field, and lazy log-formatting audit
-output, plus retained unsafe dependency enumeration. It is an evidence
-collection artifact, not a substitute for the SRS
+safe-Rust, maintainability, interface-compatibility, canonical log-field, and
+lazy log-formatting audit output, plus retained unsafe dependency enumeration.
+It is an evidence collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
 production benchmark reports. The default `info-verbosity-handoff/`,
-`benchmark-handoff/`, `soak-handoff/`, `reproducible-build-handoff/`, and
-`release-handoff/` artifacts are release/operations setup scaffolds for later
-production-depth info-verbosity profile, Reference Hardware/Profile benchmark,
-long-duration soak, independent reproducible-build comparison, scheduled-CI,
-signing, release-note, and external-operator execution; they are not completed
-profile, benchmark, soak, reproducible-build, or release-acceptance results.
+`interface-compatibility/`, `benchmark-handoff/`, `soak-handoff/`,
+`reproducible-build-handoff/`, and `release-handoff/` artifacts are
+release/operations setup scaffolds for later production-depth info-verbosity
+profile, release-to-release interface diff review, Reference Hardware/Profile
+benchmark, long-duration soak, independent reproducible-build comparison,
+scheduled-CI, signing, release-note, and external-operator execution; they are
+not completed profile, compatibility-diff, benchmark, soak, reproducible-build,
+or release-acceptance results.
 
 Successful real-primary interop runs copy their primary-version artifacts to
 interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
@@ -142,6 +144,7 @@ run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTA
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
 run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
 run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR='$snapshot_dir/unsafe-dependency-evidence' scripts/capture-unsafe-dependency-evidence.sh"
+run_and_capture interface-compatibility bash -lc "cd '$repo_root' && OXIDEDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility' scripts/capture-interface-compatibility-evidence.sh"
 run_and_capture info-verbosity-handoff bash -lc "cd '$repo_root' && OXIDEDNS_INFO_VERBOSITY_HANDOFF_DIR='$snapshot_dir/info-verbosity-handoff' scripts/capture-info-verbosity-handoff.sh"
 run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
 run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"

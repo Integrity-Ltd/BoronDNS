@@ -1,0 +1,59 @@
+category	element	stability	since	evidence	change_policy	notes
+configuration	[server].listen_udp	stable	0.1	config/oxidedns.example.toml	major	Legacy DNS UDP listener list remains accepted when [interfaces].dns is omitted.
+configuration	[server].listen_tcp	stable	0.1	config/oxidedns.example.toml	major	Legacy DNS TCP listener list remains accepted when [interfaces].dns is omitted.
+configuration	[interfaces].dns	stable	0.1	config/oxidedns.example.toml	major	Primary DNS query and NOTIFY reception role; optional interface name retained for future XDP planning.
+configuration	[interfaces].transfer	stable	0.1	config/oxidedns.example.toml	major	Outbound SOA poll, AXFR, IXFR, and XoT source role.
+configuration	[interfaces].mgmt	stable	0.1	config/oxidedns.example.toml	major	Health and metrics management role.
+configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
+configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
+configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
+configuration	[limits].max_tcp_connections	stable	0.1	config/oxidedns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
+configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
+configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.
+configuration	[cookie] policy	stable	0.1	config/oxidedns.example.toml	major	DNS Cookie policy, secret, and tolerance settings.
+configuration	[rrl] policy	stable	0.1	config/oxidedns.example.toml	major	Process-wide RRL policy.
+environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown RDS variables.
+cli	serve	stable	0.1	oxidedns --help	major	Default runtime mode.
+cli	check-config	stable	0.1	oxidedns --help	major	Explicit config validation command.
+cli	--config	stable	0.1	oxidedns --help	major	Configuration path selector.
+cli	--validate-config	stable	0.1	oxidedns --help	major	Validation mode alias.
+cli	--dump-config	stable	0.1	oxidedns --help	major	Redacted effective configuration output.
+cli	--example-config	stable	0.1	oxidedns --help	minor-additive	Optional example-config output mode.
+cli	--version|-V	stable	0.1	oxidedns --help	major	Build metadata output.
+cli	--help|-h	stable	0.1	oxidedns --help	major	Usage and operator pointer output.
+exit-code	0	stable	0.1	docs/operator-deployment-guide.md	major	Successful command or graceful shutdown.
+exit-code	2	stable	0.1	docs/operator-deployment-guide.md	major	Usage error.
+exit-code	64	stable	0.1	docs/operator-deployment-guide.md	major	Configuration/data error.
+exit-code	71	stable	0.1	docs/operator-deployment-guide.md	major	OS error.
+exit-code	73	stable	0.1	docs/operator-deployment-guide.md	major	Create/bind error.
+exit-code	74	stable	0.1	docs/operator-deployment-guide.md	major	I/O error.
+exit-code	78	stable	0.1	docs/operator-deployment-guide.md	major	Configuration invalid.
+signal	SIGTERM	stable	0.1	docs/operator-deployment-guide.md	major	Graceful drain and exit.
+signal	SIGINT	stable	0.1	docs/operator-deployment-guide.md	major	Graceful drain and exit.
+signal	SIGHUP	stable	0.1	docs/operator-deployment-guide.md	major	Ignored; no reload.
+signal	SIGPIPE	stable	0.1	docs/operator-deployment-guide.md	major	Ignored/disposition evidence on Linux.
+health	/livez	stable	0.1	docs/operator-deployment-guide.md	major	Liveness endpoint.
+health	/readyz	stable	0.1	docs/operator-deployment-guide.md	major	Readiness endpoint with JSON body.
+health	/healthz	deprecated	0.1	docs/operator-deployment-guide.md	major	Backward-compatible readiness alias; deprecation governed by ODS-NFR-MAINT-006.
+health	/metrics	stable	0.1	docs/operator-deployment-guide.md	major	Prometheus/OpenMetrics-compatible metrics endpoint.
+metric	oxidedns_secondary_zone_state	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and state.
+metric	oxidedns_secondary_zone_soa_serial	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
+metric	oxidedns_secondary_zone_last_refresh_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
+metric	oxidedns_secondary_zone_next_refresh_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
+metric	oxidedns_secondary_zone_refresh_failures	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
+metric	oxidedns_secondary_queries_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone where applicable.
+metric	oxidedns_secondary_query_rcode_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and rcode where applicable.
+metric	oxidedns_secondary_transfer_sessions_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone type and outcome.
+metric	oxidedns_secondary_notify_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and outcome.
+metric	oxidedns_secondary_cookie_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include cookie case and prefix where applicable.
+metric	oxidedns_secondary_configuration_warnings_total	stable	0.1	docs/operator-deployment-guide.md	major	Configuration warning counter.
+metric	oxidedns_secondary_build_info	stable	0.1	docs/operator-deployment-guide.md	major	Labels include version commit rust_version and build_timestamp.
+metric	oxidedns_secondary_query_duration_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Histogram labels include query category.
+log-field	timestamp	stable	0.1	docs/operator-deployment-guide.md	major	Core structured log field.
+log-field	level	stable	0.1	docs/operator-deployment-guide.md	major	Core structured log field.
+log-field	target	stable	0.1	docs/operator-deployment-guide.md	major	Core structured log field.
+log-field	message	stable	0.1	docs/operator-deployment-guide.md	major	Core structured log field.
+log-field	category	stable	0.1	docs/operator-deployment-guide.md	major	Event category field.
+network-role	dns	stable	0.1	config/oxidedns.example.toml	major	Configured DNS query/NOTIFY receiving role.
+network-role	transfer	stable	0.1	config/oxidedns.example.toml	major	Configured outbound transfer role.
+network-role	mgmt	stable	0.1	config/oxidedns.example.toml	major	Configured management role.

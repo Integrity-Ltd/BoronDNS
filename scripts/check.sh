@@ -10,11 +10,13 @@ python3 scripts/check-rrl-thresholds.py
 python3 -m py_compile scripts/check-operator-guide.py
 python3 -m py_compile scripts/check-unsafe-boundaries.py
 python3 -m py_compile scripts/check-unsafe-prone-dependencies.py
+python3 -m py_compile scripts/check-interface-compatibility.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
 python3 scripts/check-unsafe-boundaries.py
 python3 scripts/check-unsafe-prone-dependencies.py
+python3 scripts/check-interface-compatibility.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
@@ -29,6 +31,7 @@ bash -n scripts/capture-portability-evidence.sh
 bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/capture-unsafe-dependency-evidence.sh
+bash -n scripts/capture-interface-compatibility-evidence.sh
 bash -n scripts/capture-info-verbosity-handoff.sh
 bash -n scripts/capture-benchmark-handoff.sh
 bash -n scripts/capture-soak-handoff.sh
@@ -60,6 +63,7 @@ scripts/audit-dnssec-passive.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
+scripts/capture-interface-compatibility-evidence.sh
 scripts/capture-info-verbosity-handoff.sh
 scripts/capture-benchmark-handoff.sh
 scripts/capture-soak-handoff.sh

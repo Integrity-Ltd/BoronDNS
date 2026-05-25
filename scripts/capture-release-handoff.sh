@@ -28,6 +28,7 @@ ODS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table 
 ODS-VER-013	interop version retention	evidence-attachment-map.tsv	interop-primary-versions/INDEX.tsv and referenced primary-version files	Interop Primary Versions	setup-ready	attach every retained real-primary version artifact
 ODS-VER-014	RFC compliance assertions	release-notes-fill-plan.md	completed RFC compliance table with release evidence pointers	RFC Compliance Assertions	setup-ready	copy and update docs/rfc-compliance-assertions.md posture
 ODS-VER-015	verification roles	release-ownership.tsv; external-operator-acceptance.md	signed responsibility and external-operator rows	Verification Responsibility Sign-off	setup-ready	record named owners, scopes, and sign-off state
+ODS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed interface baseline diff and release-note change classification	Interface Changes	setup-ready	compare current interface baseline against previous accepted release and classify additions deprecations and breaking changes
 ODS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
 ODS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
 ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
@@ -172,6 +173,7 @@ Required evidence pointer sources:
 - `logs/audit-maintainability.log`
 - `logs/audit-unused-code.log`
 - `coverage-evidence/`
+- `interface-compatibility/`
 - `reproducible-build-handoff/`
 - `release-handoff/appendix-c5-decision-register.tsv`
 - `benchmark-handoff/` or completed benchmark artifacts
@@ -220,6 +222,8 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] Dependency audit and source/license checks reviewed.
 - [ ] First-party Rust source line count and coverage measurements recorded in
       release notes.
+- [ ] Interface compatibility evidence attached and release notes classify
+      additions, deprecations, and breaking changes.
 - [ ] Reproducible-build handoff attached, or completed independent
       bit-identical build comparison and artifact manifest attached.
 - [ ] Reproducible-build handoff is not treated as completed

@@ -30,7 +30,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous | `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | `cargo test --workspace`; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |
@@ -42,7 +42,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/mvp-gap-register.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
 | Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
-| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, deployment/rollback exercise, external operator acceptance | release notes, info verbosity profile, and operator acceptance records |
+| Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, external operator acceptance | release notes, interface compatibility evidence, info verbosity profile, and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
 | External operator acceptance | Gate | Production-representative external deployment and signed scope statement for MVP acceptance | MVP release notes |
 
@@ -102,6 +102,12 @@ TSV schemas, requirement traceability map, release-note snippet, and operator
 sign-off scaffold for later production-depth profiling of `info` verbosity
 under release traffic. A generated handoff directory proves the local MVP setup
 exists; it does not prove that production-depth profiling has been executed.
+
+`scripts/capture-interface-compatibility-evidence.sh` records the current
+interface baseline and policy for ODS-NFR-MAINT-006. When a previous accepted
+baseline is provided, it also runs the release-to-release compatibility diff.
+Without that previous baseline it is setup evidence only and must not be treated
+as a completed compatibility-diff review.
 
 `scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
 creates the benchmark runbook, report template, performance/resource TSV

@@ -474,16 +474,19 @@ artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
 `coverage-evidence/`, `cargo geiger` unsafe dependency enumeration under
 `unsafe-dependency-evidence/`, the production-depth info verbosity profile
-setup under `info-verbosity-handoff/`, the Reference Hardware/Profile
-benchmark setup/report scaffold under `benchmark-handoff/`, the long-run soak
-setup/report scaffold under `soak-handoff/`, the reproducible-build setup
-under `reproducible-build-handoff/`, and the release-governance setup under
+setup under `info-verbosity-handoff/`, the interface compatibility baseline
+and optional release-diff output under `interface-compatibility/`, the
+Reference Hardware/Profile benchmark setup/report scaffold under
+`benchmark-handoff/`, the long-run soak setup/report scaffold under
+`soak-handoff/`, the reproducible-build setup under
+`reproducible-build-handoff/`, and the release-governance setup under
 `release-handoff/`. The unsafe dependency evidence records scanner caveats and
 must be reviewed before it is treated as complete. The info verbosity,
-benchmark, soak, reproducible-build, and release-governance handoffs are not
-completed profile, benchmark, soak, bit-identical build, or release-acceptance
-evidence; they are release/operations template sets for the later delegated
-runs. Set
+interface-compatibility, benchmark, soak, reproducible-build, and
+release-governance handoffs are not completed profile, release-to-release
+compatibility-diff, benchmark, soak, bit-identical build, or release-acceptance
+evidence unless their release-specific inputs are supplied; they are
+release/operations template sets for the later delegated runs. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
 and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence

@@ -41,6 +41,7 @@ for heading in \
   "## Failed Requirement Decisions" \
   "## Appendix C.5 Decision Review" \
   "## RFC Compliance Assertions" \
+  "## Interface Changes" \
   "## Long-Running Evidence Handoff" \
   "## Release/Operations Handoff" \
   "## Verification Responsibility Sign-off"; do
@@ -116,6 +117,17 @@ for maintainability_field in \
   "Coverage summary" \
   "Reproducible-build handoff or completed bit-identical comparison"; do
   require_text "$maintainability_field"
+done
+
+for interface_field in \
+  "Interface compatibility evidence" \
+  "Previous accepted interface baseline" \
+  "Current interface baseline" \
+  "Interface additions" \
+  "Interface deprecations" \
+  "Interface breaking changes" \
+  "Major-version approval rationale"; do
+  require_text "$interface_field"
 done
 
 for security_field in \
