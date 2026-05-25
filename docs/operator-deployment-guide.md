@@ -261,11 +261,16 @@ curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/metrics
 ```
 
-Metrics currently include configured and active zone gauges, per-zone state,
-SOA serials, refresh timestamps, transfer counters, query counters, RCODE
-counters, truncation counters, CNAME limit/loop counters, NOTIFY counters, TSIG
-verification outcomes for authorized NOTIFY, global and per-source-prefix DNS
-Cookie case/BADCOOKIE counters, RRL counters, the
+Metrics currently include configured and active zone gauges, SRS v0.7
+per-zone status series (`oxidedns_secondary_zone_state`,
+`oxidedns_secondary_zone_soa_serial`,
+`oxidedns_secondary_zone_last_refresh_seconds`,
+`oxidedns_secondary_zone_next_refresh_seconds`,
+`oxidedns_secondary_zone_refresh_failures`, and
+`oxidedns_secondary_queries_total{zone="..."}`), transfer counters, query
+counters, RCODE counters, truncation counters, CNAME limit/loop counters,
+NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
+per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram.
 

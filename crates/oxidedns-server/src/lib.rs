@@ -2772,6 +2772,19 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
     }
 
     body.push_str(
+        "# HELP oxidedns_secondary_zone_state Zone state, exposed as 1 for the current state and 0 for other states.\n\
+         # TYPE oxidedns_secondary_zone_state gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        for (state, value) in zone_state_samples(snapshot.state) {
+            body.push_str(&format!(
+                "oxidedns_secondary_zone_state{{zone=\"{zone}\",state=\"{state}\"}} {value}\n"
+            ));
+        }
+    }
+
+    body.push_str(
         "# HELP oxidedns_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
          # TYPE oxidedns_zone_soa_serial gauge\n",
     );
@@ -2780,6 +2793,19 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore) {
             let zone = prometheus_label_value(&snapshot.origin.to_string());
             body.push_str(&format!(
                 "oxidedns_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
+            ));
+        }
+    }
+
+    body.push_str(
+        "# HELP oxidedns_secondary_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
+         # TYPE oxidedns_secondary_zone_soa_serial gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        if let Some(serial) = snapshot.serial {
+            let zone = prometheus_label_value(&snapshot.origin.to_string());
+            body.push_str(&format!(
+                "oxidedns_secondary_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
             ));
         }
     }
@@ -2810,6 +2836,23 @@ fn append_zone_scheduler_metrics(
     }
 
     body.push_str(
+        "# HELP oxidedns_secondary_zone_last_refresh_seconds Unix timestamp of the most recent successful refresh or transfer.\n\
+         # TYPE oxidedns_secondary_zone_last_refresh_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+            continue;
+        };
+        let Some(last_success) = status.last_success_unix_secs else {
+            continue;
+        };
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        body.push_str(&format!(
+            "oxidedns_secondary_zone_last_refresh_seconds{{zone=\"{zone}\"}} {last_success}\n"
+        ));
+    }
+
+    body.push_str(
         "# HELP oxidedns_zone_next_refresh_timestamp_seconds Unix timestamp of the next scheduled refresh attempt.\n\
          # TYPE oxidedns_zone_next_refresh_timestamp_seconds gauge\n",
     );
@@ -2827,6 +2870,23 @@ fn append_zone_scheduler_metrics(
     }
 
     body.push_str(
+        "# HELP oxidedns_secondary_zone_next_refresh_seconds Unix timestamp of the next scheduled refresh attempt.\n\
+         # TYPE oxidedns_secondary_zone_next_refresh_seconds gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+            continue;
+        };
+        let Some(next_refresh) = status.next_refresh_unix_secs else {
+            continue;
+        };
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        body.push_str(&format!(
+            "oxidedns_secondary_zone_next_refresh_seconds{{zone=\"{zone}\"}} {next_refresh}\n"
+        ));
+    }
+
+    body.push_str(
         "# HELP oxidedns_zone_refresh_failures_since_success Refresh failures since the most recent successful refresh or transfer.\n\
          # TYPE oxidedns_zone_refresh_failures_since_success gauge\n",
     );
@@ -2837,6 +2897,20 @@ fn append_zone_scheduler_metrics(
             .map_or(0, |status| status.failures_since_success);
         body.push_str(&format!(
             "oxidedns_zone_refresh_failures_since_success{{zone=\"{zone}\"}} {failures}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_secondary_zone_refresh_failures Refresh failures since the most recent successful refresh or transfer.\n\
+         # TYPE oxidedns_secondary_zone_refresh_failures gauge\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let failures = statuses
+            .get(&snapshot.origin.canonical_key())
+            .map_or(0, |status| status.failures_since_success);
+        body.push_str(&format!(
+            "oxidedns_secondary_zone_refresh_failures{{zone=\"{zone}\"}} {failures}\n"
         ));
     }
 }
@@ -2853,6 +2927,19 @@ fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &Run
         let count = query_counts.get(&zone_key).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_zone_queries_total{{zone=\"{zone}\"}} {count}\n"
+        ));
+    }
+
+    body.push_str(
+        "# HELP oxidedns_secondary_queries_total Queries received for each configured zone.\n\
+         # TYPE oxidedns_secondary_queries_total counter\n",
+    );
+    for snapshot in zones.snapshots() {
+        let zone_key = snapshot.origin.canonical_key();
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let count = query_counts.get(&zone_key).copied().unwrap_or_default();
+        body.push_str(&format!(
+            "oxidedns_secondary_queries_total{{zone=\"{zone}\"}} {count}\n"
         ));
     }
 }
@@ -5664,19 +5751,49 @@ mod tests {
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"active\"} 1"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0"));
         assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
+        assert!(
+            metrics.contains(
+                "oxidedns_secondary_zone_state{zone=\"example.test.\",state=\"active\"} 1"
+            )
+        );
+        assert!(
+            metrics.contains(
+                "oxidedns_secondary_zone_state{zone=\"example.test.\",state=\"loading\"} 0"
+            )
+        );
+        assert!(
+            metrics.contains(
+                "oxidedns_secondary_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"
+            )
+        );
         assert!(!metrics.contains("oxidedns_zone_soa_serial{zone=\"loading.test.\"}"));
         assert!(metrics.contains("oxidedns_zone_soa_serial{zone=\"example.test.\"} 1"));
+        assert!(!metrics.contains("oxidedns_secondary_zone_soa_serial{zone=\"loading.test.\"}"));
+        assert!(metrics.contains("oxidedns_secondary_zone_soa_serial{zone=\"example.test.\"} 1"));
         assert!(metrics.contains(
             "oxidedns_zone_last_success_timestamp_seconds{zone=\"example.test.\"} 1700000000"
         ));
         assert!(metrics.contains(
+            "oxidedns_secondary_zone_last_refresh_seconds{zone=\"example.test.\"} 1700000000"
+        ));
+        assert!(metrics.contains(
             "oxidedns_zone_next_refresh_timestamp_seconds{zone=\"example.test.\"} 1700003600"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_zone_next_refresh_seconds{zone=\"example.test.\"} 1700003600"
         ));
         assert!(
             !metrics.contains("oxidedns_zone_last_success_timestamp_seconds{zone=\"loading.test.\"}")
         );
+        assert!(
+            !metrics
+                .contains("oxidedns_secondary_zone_last_refresh_seconds{zone=\"loading.test.\"}")
+        );
         assert!(metrics.contains(
             "oxidedns_zone_next_refresh_timestamp_seconds{zone=\"loading.test.\"} 1700000060"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_zone_next_refresh_seconds{zone=\"loading.test.\"} 1700000060"
         ));
         assert!(
             metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"example.test.\"} 0")
@@ -5684,8 +5801,16 @@ mod tests {
         assert!(
             metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"loading.test.\"} 1")
         );
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_refresh_failures{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_secondary_zone_refresh_failures{zone=\"loading.test.\"} 1")
+        );
         assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"example.test.\"} 2"));
         assert!(metrics.contains("oxidedns_zone_queries_total{zone=\"loading.test.\"} 0"));
+        assert!(metrics.contains("oxidedns_secondary_queries_total{zone=\"example.test.\"} 2"));
+        assert!(metrics.contains("oxidedns_secondary_queries_total{zone=\"loading.test.\"} 0"));
 
         let compressed_metrics =
             http_request_with_headers(addr, "GET", "/metrics", &[("Accept-Encoding", "gzip")])
