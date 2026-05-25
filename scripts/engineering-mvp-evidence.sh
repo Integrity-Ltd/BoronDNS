@@ -2,21 +2,33 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/evidence-artifacts.sh"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_root="${OXIDEDNS_ENGINEERING_MVP_EVIDENCE_DIR:-$repo_root/target/evidence/engineering-mvp}"
 snapshot_dir="$evidence_root/$timestamp"
-mkdir -p "$snapshot_dir/logs"
+mkdir -p "$snapshot_dir/logs" "$snapshot_dir/interop-primary-versions"
+printf 'source_path\tsnapshot_path\n' >"$snapshot_dir/interop-primary-versions/INDEX.tsv"
 
 run_and_capture() {
   local name="$1"
   shift
   local log="$snapshot_dir/logs/$name.log"
+  local before="$snapshot_dir/logs/$name.primary-version.before"
+  list_primary_version_artifacts "$repo_root" >"$before"
+
+  set +e
   {
     printf '$'
     printf ' %q' "$@"
     printf '\n\n'
     "$@"
   } >"$log" 2>&1
+  local status=$?
+  set -e
+
+  capture_new_primary_version_artifacts "$repo_root" "$snapshot_dir" "$name" "$before"
+  rm -f "$before"
+  return "$status"
 }
 
 cat >"$snapshot_dir/README.md" <<EOF
@@ -29,6 +41,9 @@ cat >"$snapshot_dir/README.md" <<EOF
 
 This snapshot captures the narrow Engineering MVP evidence profile. It is not
 the full SRS ODS-VER-008 acceptance matrix.
+
+Successful real-primary interop runs copy their primary-version artifacts to
+interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
 EOF
 
 git -C "$repo_root" status --short >"$snapshot_dir/git-status.txt"

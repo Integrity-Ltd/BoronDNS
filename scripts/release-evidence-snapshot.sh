@@ -2,21 +2,33 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/evidence-artifacts.sh"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_root="${OXIDEDNS_EVIDENCE_DIR:-$repo_root/target/evidence}"
 snapshot_dir="$evidence_root/$timestamp"
-mkdir -p "$snapshot_dir/logs"
+mkdir -p "$snapshot_dir/logs" "$snapshot_dir/interop-primary-versions"
+printf 'source_path\tsnapshot_path\n' >"$snapshot_dir/interop-primary-versions/INDEX.tsv"
 
 run_and_capture() {
   local name="$1"
   shift
   local log="$snapshot_dir/logs/$name.log"
+  local before="$snapshot_dir/logs/$name.primary-version.before"
+  list_primary_version_artifacts "$repo_root" >"$before"
+
+  set +e
   {
     printf '$'
     printf ' %q' "$@"
     printf '\n\n'
     "$@"
   } >"$log" 2>&1
+  local status=$?
+  set -e
+
+  capture_new_primary_version_artifacts "$repo_root" "$snapshot_dir" "$name" "$before"
+  rm -f "$before"
+  return "$status"
 }
 
 record_version() {
@@ -48,6 +60,9 @@ This directory contains command logs captured for release review, including
 safe-Rust and maintainability audit output. It is an evidence collection
 artifact, not a substitute for the SRS traceability matrix, 24-hour fuzzing
 campaigns, soak testing, or production benchmark reports.
+
+Successful real-primary interop runs copy their primary-version artifacts to
+interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
 EOF
 
 git -C "$repo_root" status --short >"$snapshot_dir/git-status.txt"

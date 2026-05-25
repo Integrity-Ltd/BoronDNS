@@ -339,8 +339,9 @@ Interop harness foundations:
   emit `primary-version.txt` in their `target/interop/...` workdir. The artifact
   records test timestamp, primary implementation/version output, primary OS or
   container package context, configuration profile, transfer transport/security
-  mode, and retained configuration artifact hashes. Skipped scripts do not count
-  as successful `ODS-VER-013` evidence.
+  mode, and retained configuration artifact hashes. Evidence snapshot scripts
+  copy new primary-version artifacts into `interop-primary-versions/` with an
+  index. Skipped scripts do not count as successful `ODS-VER-013` evidence.
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-bind-tsig-axfr.sh` starts a BIND 9 primary whose AXFR is restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-bind-notify-refresh.sh` starts a BIND 9 primary configured to send NOTIFY, updates the primary zone serial, observes the BIND-generated NOTIFY packet through a UDP forwarding probe, verifies that OxideDNS accepts the compressed embedded SOA, and confirms that OxideDNS refreshes and republishes the newer serial and data.

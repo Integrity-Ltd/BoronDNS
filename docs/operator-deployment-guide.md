@@ -380,10 +380,11 @@ scripts/engineering-mvp-evidence.sh
 ```
 
 Successful real-primary interop runs write `primary-version.txt` under their
-`target/interop/...` workdir. Retain that file with the script log: it binds the
-pass/fail result to the tested primary implementation version, OS or container
-package context, configuration artifacts, transport, and security mode. A script
-skip is missing evidence, not passing interop evidence.
+`target/interop/...` workdir. The evidence snapshot scripts copy new files into
+`interop-primary-versions/` with an index, binding each pass/fail result to the
+tested primary implementation version, OS or container package context,
+configuration artifacts, transport, and security mode. A script skip is missing
+evidence, not passing interop evidence.
 
 `scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
 under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
