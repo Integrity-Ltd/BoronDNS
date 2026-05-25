@@ -158,8 +158,13 @@ fields. The `/metrics` endpoint exposes the startup warning count as
 The example configuration in `config/oxidedns.example.toml` is the current schema
 reference. The major sections are:
 
-- `[server]`: UDP/TCP listeners, optional health endpoint, log level, and log
-  format.
+- `[server]`: UDP/TCP DNS listeners, optional health endpoint, log level, and
+  log format.
+- `[interfaces]`: optional additional listener roles. Currently
+  `interfaces.notify` opens extra UDP/TCP sockets for primary-originated NOTIFY
+  traffic; ordinary DNS queries received on those sockets are still answered
+  normally. Notify addresses must not overlap `[server].listen_udp` or
+  `[server].listen_tcp`.
 - `[query]`: query response policy, including QTYPE ANY behavior.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`) and
   timestamp tolerance windows.

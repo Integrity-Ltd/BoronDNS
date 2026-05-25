@@ -35,6 +35,8 @@ pub enum ConfigError {
 pub struct ServerConfig {
     pub server: ServerSettings,
     #[serde(default)]
+    pub interfaces: InterfacesConfig,
+    #[serde(default)]
     pub health: HealthConfig,
     #[serde(default)]
     pub query: QuerySettings,
@@ -89,6 +91,7 @@ impl ServerConfig {
                 "at least one UDP or TCP listener is required".to_owned(),
             ));
         }
+        self.interfaces.validate(&self.server)?;
 
         if self.zones.is_empty() {
             return Err(ConfigError::Invalid(
@@ -205,6 +208,24 @@ impl ServerConfig {
         }
 
         Ok(())
+    }
+
+    pub fn udp_listeners(&self) -> Vec<SocketAddr> {
+        self.server
+            .listen_udp
+            .iter()
+            .chain(self.interfaces.notify.iter())
+            .copied()
+            .collect()
+    }
+
+    pub fn tcp_listeners(&self) -> Vec<SocketAddr> {
+        self.server
+            .listen_tcp
+            .iter()
+            .chain(self.interfaces.notify.iter())
+            .copied()
+            .collect()
     }
 
     pub fn configuration_warnings(&self) -> Vec<ConfigWarning> {
@@ -335,6 +356,44 @@ pub struct ServerSettings {
     pub log_level: String,
     #[serde(default)]
     pub log_format: LogFormatConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub struct InterfacesConfig {
+    #[serde(default)]
+    pub notify: Vec<SocketAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xot: Option<Vec<SocketAddr>>,
+}
+
+impl InterfacesConfig {
+    fn validate(&self, server: &ServerSettings) -> Result<(), ConfigError> {
+        if self.xot.is_some() {
+            return Err(ConfigError::Invalid(
+                "interfaces.xot is obsolete; use per-primary transfer_primaries transport = \"xot\" and future interfaces.transfer settings instead"
+                    .to_owned(),
+            ));
+        }
+
+        for notify in &self.notify {
+            for dns in &server.listen_udp {
+                if socket_addrs_overlap(*notify, *dns) {
+                    return Err(ConfigError::Invalid(format!(
+                        "interfaces.notify listener {notify} overlaps DNS UDP listener {dns}; notify and DNS listeners must use distinct sockets"
+                    )));
+                }
+            }
+            for dns in &server.listen_tcp {
+                if socket_addrs_overlap(*notify, *dns) {
+                    return Err(ConfigError::Invalid(format!(
+                        "interfaces.notify listener {notify} overlaps DNS TCP listener {dns}; notify and DNS listeners must use distinct sockets"
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -876,6 +935,22 @@ fn validate_ip_prefix(prefix: &str) -> Result<(), &'static str> {
     }
 }
 
+fn socket_addrs_overlap(left: SocketAddr, right: SocketAddr) -> bool {
+    if left.port() != right.port() {
+        return false;
+    }
+
+    match (left.ip(), right.ip()) {
+        (IpAddr::V4(left), IpAddr::V4(right)) => {
+            left.is_unspecified() || right.is_unspecified() || left == right
+        }
+        (IpAddr::V6(left), IpAddr::V6(right)) => {
+            left.is_unspecified() || right.is_unspecified() || left == right
+        }
+        _ => false,
+    }
+}
+
 fn validate_xot_server_name(name: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 253 {
         return Err("expected non-empty DNS name of at most 253 octets");
@@ -1014,6 +1089,9 @@ mod tests {
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
+        assert!(config.interfaces.notify.is_empty());
+        assert_eq!(config.udp_listeners(), config.server.listen_udp);
+        assert_eq!(config.tcp_listeners(), config.server.listen_tcp);
         assert_eq!(config.health.metrics_rate_limit_per_minute, 60);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 300);
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
@@ -1059,6 +1137,116 @@ mod tests {
                 53
             )))]
         );
+    }
+
+    #[test]
+    fn parses_notify_interface_listeners() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = ["127.0.0.1:5301"]
+
+                [interfaces]
+                notify = ["127.0.0.1:5302", "[::1]:5302"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(
+            config.interfaces.notify,
+            vec![
+                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
+                "[::1]:5302".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            config.udp_listeners(),
+            vec![
+                "127.0.0.1:5300".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
+                "[::1]:5302".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            config.tcp_listeners(),
+            vec![
+                "127.0.0.1:5301".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
+                "[::1]:5302".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_notify_interface_overlap_with_dns_listeners() {
+        for (label, config) in [
+            (
+                "udp exact",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+                    listen_tcp = []
+
+                    [interfaces]
+                    notify = ["127.0.0.1:5300"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ),
+            (
+                "tcp wildcard",
+                r#"
+                    [server]
+                    listen_udp = []
+                    listen_tcp = ["0.0.0.0:5300"]
+
+                    [interfaces]
+                    notify = ["127.0.0.1:5300"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ),
+        ] {
+            let error = ServerConfig::from_toml_str(config).expect_err(label);
+            assert!(
+                error.to_string().contains("interfaces.notify listener"),
+                "{label}: {error}"
+            );
+            assert!(
+                error.to_string().contains("overlaps DNS"),
+                "{label}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_obsolete_xot_interface_key() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [interfaces]
+                xot = ["127.0.0.1:853"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("obsolete interface key must fail validation");
+
+        assert!(error.to_string().contains("interfaces.xot is obsolete"));
     }
 
     #[test]

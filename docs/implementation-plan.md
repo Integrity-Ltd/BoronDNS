@@ -269,6 +269,7 @@ DNSSEC work is partially started:
 Slice 8 has health endpoint foundations:
 
 - optional `[server].health` binds a separate plain HTTP/1 listener when configured, and opens no HTTP listener when unset;
+- optional `[interfaces].notify` opens additional UDP and TCP listeners that reuse the normal DNS query/NOTIFY handlers; configuration validation rejects notify listeners that overlap DNS UDP or TCP listener sockets and rejects obsolete `interfaces.xot`;
 - `GET /livez` reports JSON liveness with HTTP 200 whenever the process can answer the probe, including LOADING and draining states;
 - `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
 - `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;

@@ -128,8 +128,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             println!(
                 "configuration ok: {} zone(s), {} UDP listener(s), {} TCP listener(s)",
                 loaded.config.zones.len(),
-                loaded.config.server.listen_udp.len(),
-                loaded.config.server.listen_tcp.len()
+                loaded.config.udp_listeners().len(),
+                loaded.config.tcp_listeners().len()
             );
         }
         Mode::DumpConfig(config) => {

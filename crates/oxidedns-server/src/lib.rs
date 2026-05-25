@@ -249,8 +249,9 @@ impl Runtime {
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
 
         info!(
-            udp_listeners = self.config.server.listen_udp.len(),
-            tcp_listeners = self.config.server.listen_tcp.len(),
+            udp_listeners = self.config.udp_listeners().len(),
+            tcp_listeners = self.config.tcp_listeners().len(),
+            notify_listeners = self.config.interfaces.notify.len(),
             zones = self.zones.len(),
             "OxideDNS runtime initialized"
         );
@@ -336,13 +337,10 @@ impl Runtime {
                 },
             ));
         }
-        for addr in &self.config.server.listen_udp {
+        for addr in self.config.udp_listeners() {
             let socket = UdpSocket::bind(addr)
                 .await
-                .map_err(|source| RuntimeError::BindUdp {
-                    addr: *addr,
-                    source,
-                })?;
+                .map_err(|source| RuntimeError::BindUdp { addr, source })?;
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;
@@ -371,14 +369,10 @@ impl Runtime {
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
-        for addr in &self.config.server.listen_tcp {
-            let listener =
-                TcpListener::bind(addr)
-                    .await
-                    .map_err(|source| RuntimeError::BindTcp {
-                        addr: *addr,
-                        source,
-                    })?;
+        for addr in self.config.tcp_listeners() {
+            let listener = TcpListener::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindTcp { addr, source })?;
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;
@@ -6291,6 +6285,61 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn runtime_serves_queries_and_notify_on_configured_notify_interface() {
+        let primary = spawn_axfr_primary().await;
+        let notify_addr = unused_udp_tcp_addr().await;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:0"]
+                listen_tcp = []
+                health = "127.0.0.1:0"
+
+                [interfaces]
+                notify = ["{notify_addr}"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+                notify_sources = ["127.0.0.1"]
+            "#
+        ))
+        .expect("valid config");
+        let runtime = Runtime::new(config);
+        let (server, health_addr) = spawn_runtime_with_bound_health(runtime).await;
+
+        let ready = eventually_health_body(
+            health_addr,
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(ready.starts_with("HTTP/1.1 200 OK"));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let request = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        client.send_to(&request, notify_addr).await.unwrap();
+        let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("query response on notify interface");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(header.id, 0x1234);
+        assert_eq!(header.ancount, 1);
+        assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
+
+        let notify = notify_packet(0x5678, "example.test.", RecordType::Soa as u16, 1);
+        client.send_to(&notify, notify_addr).await.unwrap();
+        let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+            .await
+            .expect("NOTIFY response on notify interface");
+        let header = Header::parse(&response).unwrap();
+        assert_eq!(header.id, 0x5678);
+        assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
+
+        server.abort();
+    }
+
     #[test]
     fn signed_notify_is_verified_stripped_and_response_signed() {
         let config = ServerConfig::from_toml_str(
@@ -10839,6 +10888,24 @@ mod tests {
         let addr = socket.local_addr().unwrap();
         drop(socket);
         addr
+    }
+
+    async fn unused_udp_tcp_addr() -> std::net::SocketAddr {
+        for _ in 0..32 {
+            let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = tcp.local_addr().unwrap();
+            match UdpSocket::bind(addr).await {
+                Ok(udp) => {
+                    drop(udp);
+                    drop(tcp);
+                    return addr;
+                }
+                Err(_) => {
+                    drop(tcp);
+                }
+            }
+        }
+        panic!("could not find an address free for both UDP and TCP");
     }
 
     fn health_state(zones: ZoneStore) -> HealthEndpointState {

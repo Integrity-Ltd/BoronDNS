@@ -44,6 +44,43 @@ fn validate_config_flag_succeeds_with_valid_config() {
 }
 
 #[test]
+fn validate_config_counts_notify_interface_listeners() {
+    let config = write_config(
+        "notify-interface-count",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [interfaces]
+            notify = ["127.0.0.1:5301"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("configuration ok: 1 zone(s), 2 UDP listener(s), 1 TCP listener(s)")
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn dump_config_flag_redacts_tsig_secret_material() {
     let config = write_config(
         "dump",
