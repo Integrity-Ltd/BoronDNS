@@ -261,6 +261,7 @@ DNSSEC work is partially started:
 - explicit RRSIG, NSEC, and NSEC3 queries return the requested DNSSEC RRset even when DO=0, without treating the answer as DNSSEC augmentation for the response OPT DO bit.
 - QTYPE ANY responses do not return RRSIG, NSEC, or NSEC3 RRsets as ordinary data when those types were not explicitly queried, preserving the non-DO DNSSEC augmentation boundary.
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
+- AXFR parsing accepts DS, DNSKEY, and RRSIG records with synthetic private/reserved algorithm numbers and preserves the transferred RDATA opaquely.
 - NSEC3 denial proof augmentation supports transferred SHA-1 NSEC3 records for exact hash matches and covering hash ranges without generating or validating DNSSEC material.
 - `scripts/audit-dnssec-passive.sh` records static evidence that the first-party runtime only parses transferred DNSSEC RDATA and selects stored DNSSEC RRsets for serving, with no DNSSEC signing, signature validation, key-management, RFC 5011 rollover, or DNSSEC record-generation surface in production code.
 - response header construction unconditionally clears AD and CD bits.

@@ -1289,10 +1289,30 @@ mod tests {
         rdata
     }
 
+    fn ds_rdata(algorithm: u8) -> Vec<u8> {
+        let mut rdata = vec![0x12, 0x34, algorithm, 2];
+        rdata.extend([0xaa; 32]);
+        rdata
+    }
+
     fn rrsig_rdata(signer: Vec<u8>) -> Vec<u8> {
+        rrsig_rdata_with_algorithm(RecordType::A, 8, signer)
+    }
+
+    fn rrsig_rdata_with_algorithm(
+        type_covered: RecordType,
+        algorithm: u8,
+        signer: Vec<u8>,
+    ) -> Vec<u8> {
         let mut rdata = vec![0; 18];
+        rdata[0..2].copy_from_slice(&(type_covered as u16).to_be_bytes());
+        rdata[2] = algorithm;
         rdata.extend(signer);
         rdata
+    }
+
+    fn dnskey_rdata(algorithm: u8) -> Vec<u8> {
+        vec![1, 0, 3, algorithm, 0xde, 0xad, 0xbe, 0xef]
     }
 
     fn nsec_rdata(next_name: Vec<u8>) -> Vec<u8> {
@@ -1543,6 +1563,54 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(rdatas, vec![Vec::new(), vec![0xc0, 0x0c, 0, 255]]);
+    }
+
+    #[test]
+    fn accepts_axfr_dnssec_algorithm_numbers_opaquely() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ds = record("child.example.test.", RecordType::Ds as u16, ds_rdata(253));
+        let dnskey = record(
+            "example.test.",
+            RecordType::Dnskey as u16,
+            dnskey_rdata(254),
+        );
+        let rrsig = record(
+            "example.test.",
+            RecordType::Rrsig as u16,
+            rrsig_rdata_with_algorithm(RecordType::Dnskey, 255, name_rdata("example.test.")),
+        );
+
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[message(
+                0x1234,
+                vec![
+                    soa.clone(),
+                    apex_ns(),
+                    ds.clone(),
+                    dnskey.clone(),
+                    rrsig.clone(),
+                    soa,
+                ],
+            )],
+        )
+        .expect("AXFR should preserve DNSSEC algorithm fields opaquely");
+
+        assert_eq!(
+            first_rdata(&snapshot, "child.example.test.", RecordType::Ds as u16),
+            ds.rdata
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "example.test.", RecordType::Dnskey as u16),
+            dnskey.rdata
+        );
+        assert_eq!(
+            first_rdata(&snapshot, "example.test.", RecordType::Rrsig as u16),
+            rrsig.rdata
+        );
     }
 
     #[test]
