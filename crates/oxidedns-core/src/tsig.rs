@@ -1472,6 +1472,93 @@ mod tests {
     }
 
     #[test]
+    fn accepts_tcp_response_stream_with_ninety_nine_unsigned_message_gap() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first_message = sample_response_with_id_and_serial(0x1234, 1);
+        let first = key
+            .sign_response(
+                &first_message,
+                &request.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let unsigned_messages = (2..=100)
+            .map(|serial| sample_response_with_id_and_serial(0x1234, serial))
+            .collect::<Vec<_>>();
+        let final_message = sample_response_with_id_and_serial(0x1234, 101);
+        let mut signed_window = unsigned_messages.clone();
+        signed_window.push(final_message.clone());
+        let final_signed = signed_tcp_response_for_messages(
+            &key,
+            &first.mac,
+            &signed_window,
+            1_700_000_002,
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap();
+
+        let mut stream = Vec::new();
+        stream.push(first.message);
+        stream.extend(unsigned_messages.clone());
+        stream.push(final_signed.message);
+        let verified = key
+            .verify_tcp_response_stream(&stream, &request.mac, 1_700_000_002)
+            .expect("99 unsigned messages between TSIG records are allowed");
+
+        let mut expected = Vec::new();
+        expected.push(first_message);
+        expected.extend(unsigned_messages);
+        expected.push(final_message);
+        assert_eq!(verified, expected);
+    }
+
+    #[test]
+    fn rejects_tcp_response_stream_with_one_hundred_unsigned_message_gap() {
+        let secret = STANDARD.encode(b"topsecret");
+        let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
+        let request = key
+            .sign_request(&sample_soa_query(), 1_700_000_000, DEFAULT_TSIG_FUDGE_SECS)
+            .unwrap();
+        let first = key
+            .sign_response(
+                &sample_response_with_id_and_serial(0x1234, 1),
+                &request.mac,
+                1_700_000_001,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let unsigned_messages = (2..=101)
+            .map(|serial| sample_response_with_id_and_serial(0x1234, serial))
+            .collect::<Vec<_>>();
+        let final_message = sample_response_with_id_and_serial(0x1234, 102);
+        let mut signed_window = unsigned_messages.clone();
+        signed_window.push(final_message);
+        let final_signed = signed_tcp_response_for_messages(
+            &key,
+            &first.mac,
+            &signed_window,
+            1_700_000_002,
+            DEFAULT_TSIG_FUDGE_SECS,
+        )
+        .unwrap();
+
+        let mut stream = Vec::new();
+        stream.push(first.message);
+        stream.extend(unsigned_messages);
+        stream.push(final_signed.message);
+        let error = key
+            .verify_tcp_response_stream(&stream, &request.mac, 1_700_000_002)
+            .expect_err("100 unsigned messages between TSIG records must fail");
+
+        assert_eq!(error, TsigError::TooManyUnsignedMessages);
+    }
+
+    #[test]
     fn rejects_tcp_response_stream_without_terminal_tsig() {
         let secret = STANDARD.encode(b"topsecret");
         let key = TsigKey::from_base64("transfer-key.example.", "hmac-sha256.", &secret).unwrap();
