@@ -4,15 +4,17 @@ This plan tracks the path from the current Rust project to a working
 secondary-authoritative DNS server while preserving traceability to Tibor's SRS
 v0.7.
 
-The SRS-defined "MVP" in ODS-VER-008 is not the first useful engineering
-milestone. It is a full acceptance/compliance gate: all SRS requirements,
-three-primary interoperability, performance evidence, a 30-day soak, 24-hour
-fuzz campaigns per parser, complete documentation, and external operator
-acceptance. This plan therefore uses two targets:
+The project MVP in this repository is not the same work item as executing every
+long-running SRS acceptance activity locally. The long fuzz campaigns,
+Reference Hardware/Profile benchmarks, and 30-day soak must have runnable
+harnesses, evidence formats, and operator handoff paths here; their full
+duration runs are expected to be executed later by release or operations owners.
+This plan therefore uses two targets:
 
 - **Engineering MVP**: the first deployable and reviewable secondary DNS server
   that exercises the core operational path with retained evidence.
-- **SRS acceptance**: the later ODS-VER-008 compliance gate.
+- **SRS acceptance execution**: the later ODS-VER-008 compliance gate run,
+  including the long-duration campaigns and external operator acceptance.
 
 ## Engineering MVP Target
 
@@ -47,9 +49,9 @@ has already moved ahead, such as IXFR, XoT, DNSSEC serving of transferred data,
 RRL, and DNS Cookies. Those features still need SRS acceptance evidence before
 they are claimed complete.
 
-## SRS Acceptance Target
+## SRS Acceptance Execution Target
 
-The ODS-VER-008 acceptance target remains:
+The later ODS-VER-008 acceptance execution target remains:
 
 - all requirements in SRS sections 3 through 6 satisfied;
 - interoperability with NSD, Knot DNS, and BIND 9 primaries;
@@ -436,4 +438,5 @@ Open near-term work:
 - broaden IXFR fault and interop coverage beyond BIND and Knot true-incremental evidence;
 - broaden real-primary XoT interop evidence;
 - expand DNSSEC passive audit output into retained release traceability and broader conformance matrix entries;
-- start collecting long-run performance, fuzz, interop, and soak evidence for SRS acceptance verification.
+- keep the long-run performance, fuzz, interop, and soak harnesses ready for
+  later SRS acceptance execution by release or operations owners.

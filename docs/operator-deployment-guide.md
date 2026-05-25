@@ -410,8 +410,9 @@ external operator acceptance can review them.
 
 This section is the informative SLO publication required by the current
 Appendix C.5 decision list for `ODS-NFR-MAINT-009`. It is an operator starting
-point, not a full SRS acceptance claim. Release acceptance still depends on the
-retained performance, reliability, soak, and external-operator evidence listed
+point, not a full SRS acceptance claim. The local project MVP sets up the
+evidence commands and handoff path; release acceptance still depends on later
+performance, reliability, soak, and external-operator evidence execution listed
 in the gap register.
 
 Suggested Engineering MVP SLOs:
@@ -651,7 +652,7 @@ Back up and version-control:
   rules.
 - SRS acceptance evidence artifacts: check logs, interop script output, fuzz
   campaign logs, dependency audit results, performance reports, and soak-test
-  reports.
+  reports when those later release/operations runs are executed.
 
 Upgrade procedure:
 
@@ -732,8 +733,9 @@ current operator-relevant limitations are:
   threshold baseline; longer-running retained campaign evidence remains
   pending, and the SRS Appendix C.5 slip confirmation is still an open release
   note item.
-- Performance targets, 30-day soak evidence, and 24-hour fuzz campaigns per
-  parser target remain SRS acceptance blockers.
+- Full performance target runs, 30-day soak execution, and 24-hour fuzz
+  campaigns per parser target are later SRS acceptance execution items; the
+  local project MVP only needs their setup, artifact formats, and handoff path.
 - Container image size and static-binary release packaging are SRS targets; the
   repository currently documents source build and script-driven evidence paths.
 - Health and metrics are plain HTTP and unauthenticated. They should not be

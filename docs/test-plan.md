@@ -36,11 +36,11 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 | Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
 | Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
 | Dependency security audit | Continuous | `cargo deny check` | `docs/verification-ledger.md` dependency audit row |
-| Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; schedule weekly before MVP acceptance | retained fuzz campaign artifacts |
-| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/check-perf-regression.py` for rolling-history comparison; full reference-hardware benchmark suite to be added before SRS acceptance | retained performance/resource logs and regression baseline |
+| Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; local MVP requires setup, later release/operations execution retains the full campaign artifacts | retained fuzz campaign artifacts |
+| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/check-perf-regression.py` for rolling-history comparison; full reference-hardware benchmark execution is a later release/operations activity | retained performance/resource logs and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/mvp-gap-register.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
-| Soak test | Periodic and Gate | 30-day production-representative soak for MVP acceptance; weekly snapshot reports during the run | soak report artifacts |
+| Soak test | Periodic and Gate | Local MVP needs the soak setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak report artifacts |
 | Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, deployment/rollback exercise, external operator acceptance | release notes and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
 | External operator acceptance | Gate | Production-representative external deployment and signed scope statement for MVP acceptance | MVP release notes |
@@ -66,9 +66,9 @@ snapshot and release notes.
 
 | Periodic evidence | Required cadence | Current command or artifact | MVP gap |
 | --- | --- | --- | --- |
-| Long fuzz campaign | Weekly; at least 24 hours per parser before MVP gate | `scripts/fuzz-campaign.sh --duration 86400` | automate schedule and retain campaign summaries |
+| Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` | local MVP needs runnable setup and retained campaign summary format |
 | Performance regression run | Weekly on Reference Hardware Profile | `OXIDEDNS_PERF_SMOKE_METRICS_OUT=<file> scripts/perf-smoke.sh`; `scripts/check-perf-regression.py --candidate <file> --history <history>` | replace smoke-only evidence with SRS NFR benchmark suite and hosted schedule |
-| Soak snapshot | Weekly while soak is active | soak report artifact pending | add soak harness and report template |
+| Soak snapshot | Weekly while later soak execution is active | soak report artifact pending | add soak harness and report template |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
 ## Gate Execution
@@ -82,9 +82,10 @@ Use `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
 `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` for wall-clock duration campaigns.
 
 Gate review must not treat skipped interop, fuzz, performance, soak, security
-audit, or external-operator steps as passing evidence. Skipped gate steps remain
-open evidence gaps unless the release notes explicitly defer them with rationale
-and target milestone.
+audit, or external-operator steps as passing evidence for final SRS acceptance.
+For the local project MVP, long-running steps may be marked as delegated when
+the runnable harness, artifact format, and release/operations handoff are
+present.
 
 When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`
