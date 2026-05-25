@@ -1,6 +1,6 @@
 # OxideDNS Test Plan
 
-This Test Plan is the sibling document required by SRS v0.7 section 7.6. It
+This Test Plan is the sibling document required by SRS v0.9 section 7.6. It
 records the current verification harnesses, their SRS method classifications,
 and their execution cadence. It is intentionally a living plan: individual test
 case inventories will become more granular as Appendix A expands from
@@ -8,7 +8,7 @@ family-level traceability to per-requirement traceability.
 
 ## Scope
 
-- Normative source: `docs/OxideDNS-Secondary-SRS-v0.7.md`.
+- Normative source: `docs/OxideDNS-Secondary-SRS-v0.9.md`.
 - Working evidence ledger: `docs/verification-ledger.md`.
 - Family traceability matrix: `docs/appendix-a-traceability-matrix.md`.
 - Release evidence snapshot: `scripts/release-evidence-snapshot.sh`.
@@ -20,7 +20,7 @@ family-level requirement range.
 
 ## Cadence Classes
 
-The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
+The project uses the SRS v0.9 ODS-VER-011 cadence vocabulary exactly:
 
 - **Continuous**: build-blocking checks for every main-branch candidate.
 - **Periodic**: scheduled checks independent of a specific commit.

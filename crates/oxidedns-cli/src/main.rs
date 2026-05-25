@@ -222,7 +222,7 @@ fn default_config_path() -> PathBuf {
 
 fn version_text() -> String {
     format!(
-        "oxidedns {BUILD_VERSION}\nbuild commit: {BUILD_COMMIT}\nbuild timestamp: {BUILD_TIMESTAMP}\nrustc: {BUILD_RUST_VERSION}\nSRS: OxideDNS Secondary SRS v0.7\nRole: secondary-only authoritative DNS server\nLicense: {}",
+        "oxidedns {BUILD_VERSION}\nbuild commit: {BUILD_COMMIT}\nbuild timestamp: {BUILD_TIMESTAMP}\nrustc: {BUILD_RUST_VERSION}\nSRS: OxideDNS Secondary SRS v0.9\nRole: secondary-only authoritative DNS server\nLicense: {}",
         env!("CARGO_PKG_LICENSE")
     )
 }
@@ -1028,7 +1028,7 @@ mod tests {
         assert!(text.contains("\nbuild commit: "));
         assert!(text.contains("\nbuild timestamp: "));
         assert!(text.contains("\nrustc: rustc "));
-        assert!(text.contains("\nSRS: OxideDNS Secondary SRS v0.7"));
+        assert!(text.contains("\nSRS: OxideDNS Secondary SRS v0.9"));
     }
 
     #[test]

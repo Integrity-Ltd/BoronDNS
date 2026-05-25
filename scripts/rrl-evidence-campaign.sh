@@ -180,7 +180,7 @@ The campaign also writes aggregate.tsv and aggregate-summary.env so release
 review can inspect per-run and campaign-total RRL evidence without opening each
 raw artifact directory.
 
-threshold-decision.tsv records the current SRS v0.7 RRL baseline used for
+threshold-decision.tsv records the current SRS v0.9 RRL baseline used for
 release review. The slip value follows the SRS body default, but Appendix C.5
 confirmation remains pending and must be handled in release notes.
 EOF

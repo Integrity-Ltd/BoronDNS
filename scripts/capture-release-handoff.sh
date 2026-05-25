@@ -35,7 +35,7 @@ ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security 
 SRS-C5	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending C.5 item before claiming MVP acceptance
 EOF
 
-python3 - "$repo_root/docs/OxideDNS-Secondary-SRS-v0.7.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
+python3 - "$repo_root/docs/OxideDNS-Secondary-SRS-v0.9.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
 import sys
 from pathlib import Path
 

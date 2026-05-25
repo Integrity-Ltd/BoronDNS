@@ -4,7 +4,7 @@ Status: Engineering MVP operator guide and SRS acceptance evidence artifact
 
 This guide describes how to deploy and operate OxideDNS as a secondary-only
 authoritative DNS server for Engineering MVP validation and later SRS
-acceptance review. It is derived from SRS v0.7, the implementation plan, gap
+acceptance review. It is derived from SRS v0.9, the implementation plan, gap
 register, repository README, example configuration, and interoperability
 scripts.
 
@@ -91,7 +91,7 @@ sudo install -d -m 0755 /etc/oxidedns-secondary
 sudo install -m 0640 config/oxidedns.example.toml /etc/oxidedns-secondary/config.toml
 ```
 
-Validate the config before starting service. The SRS v0.7 CLI mode validates
+Validate the config before starting service. The SRS v0.9 CLI mode validates
 the same startup configuration path without binding sockets:
 
 ```sh
@@ -126,7 +126,7 @@ When `--config` is omitted, OxideDNS reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
 `--validate-config`, `--dump-config`, `check-config`, and `serve`.
 
-OxideDNS also supports an SRS v0.7-style `ODS_<SECTION>_<KEY>` environment override
+OxideDNS also supports an SRS v0.9-style `ODS_<SECTION>_<KEY>` environment override
 subset for scalar process settings. These values take precedence over the file
 and are included in `--dump-config` output:
 
@@ -380,7 +380,7 @@ curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/metrics
 ```
 
-Metrics currently include configured and active zone gauges, SRS v0.7
+Metrics currently include configured and active zone gauges, SRS v0.9
 per-zone status series (`oxidedns_secondary_zone_state`,
 `oxidedns_secondary_zone_soa_serial`,
 `oxidedns_secondary_zone_last_refresh_seconds`,
@@ -398,11 +398,11 @@ per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
 bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
-seconds and default to the SRS v0.7 bucket list.
+seconds and default to the SRS v0.9 bucket list.
 
 The `/metrics` endpoint returns gzip-compressed output when the scrape request
 includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
-default. SRS v0.7 still requires retained release evidence for build-info label
+default. SRS v0.9 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained
 health response-time evidence, and rate-limit behavior under
 production-representative scrape traffic. Treat those as pending until the gap
@@ -760,7 +760,7 @@ configuration rollback followed by zone reacquisition from the primary.
 The canonical structured RFC compliance assertion list for the current
 Engineering MVP posture is maintained in `docs/rfc-compliance-assertions.md`.
 This guide treats that file as the single-source synchronized Operator
-Deployment Guide section required by SRS v0.7 `ODS-VER-014`; release notes must
+Deployment Guide section required by SRS v0.9 `ODS-VER-014`; release notes must
 copy that structured list, update evidence pointers to the release snapshot,
 and retain this primary-documentation sync pointer.
 
@@ -777,9 +777,9 @@ Current operator-facing posture:
 The gap register is the live source for remaining acceptance gaps. The
 current operator-relevant limitations are:
 
-- The implementation is now aligned to SRS v0.7. Some protocol
+- The implementation is now aligned to SRS v0.9. Some protocol
   areas have partial evidence rather than full release traceability.
-- SRS v0.7 Alpha adds NSID, configuration warning/dump/validate modes,
+- SRS v0.9 Alpha adds NSID, configuration warning/dump/validate modes,
   canonical log fields, sysexits-style CLI behavior, and process `--version` /
   `--help` / `--example-config` requirements. The CLI now has local evidence
   for the core configuration/usage exit-code paths, listen-socket bind

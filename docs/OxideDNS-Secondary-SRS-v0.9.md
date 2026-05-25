@@ -2,9 +2,9 @@
 
 ## OxideDNS-Secondary
 
-**Document Version:** v0.7 (Draft 7)
-**Date:** 24 May 2026
-**Status:** Draft — Audit cycle closure
+**Document Version:** v0.9 (Draft 9)
+**Date:** 25 May 2026
+**Status:** Draft — Alpha implementation audit closure
 
 ---
 
@@ -14,8 +14,8 @@
 |---|---|
 | Project | OxideDNS-Secondary |
 | Document | Software Requirements Specification (SRS) |
-| Version | v0.7 |
-| Date | 24 May 2026 |
+| Version | v0.9 |
+| Date | 25 May 2026 |
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
@@ -29,9 +29,11 @@
 | v0.2 | 24 May 2026 | DT | Added three-interface segregation as MVP requirement (ODS-IF-NET-005, -006, -007; ODS-IF-CONF-003 extended). Added post-MVP / v2 scope section (Appendix C.6) covering XDP/eBPF kernel bypass, optimised packed-binary zone store, and pre-baked response cache. |
 | v0.3 | 24 May 2026 | DT | Functional audit closure. Cross-reference fix in ODS-FR-QRY-002. Specification gaps: non-EDNS UDP ceiling, AA bit completeness, CNAME chain limit/loop semantics, TCP per-connection in-flight cap, AXFR/IXFR zone-size cap, pseudo-RR rejection. Design decisions: UDP IXFR removed; minimal-ANY deterministic selection; XoT revocation posture explicit; NOTIFY discard log rate-limiting; max effective REFRESH; long-LOADING warning; multi-primary randomized initial selection. New MVP scope: DNS Cookies (§4.19), NSID (ODS-FR-EDNS-016), per-zone counters. |
 | v0.4 | 24 May 2026 | DT | Non-functional audit closure. Reference Hardware Profile (Dual Xeon Gold 6230R) and Reference Query Mix introduced (Appendix E); all PERF/RES targets now reference it. New NFRs: PERF-006/-007/-008, REL-006/-007, SEC-007, MAINT-006/-007/-008/-009, OBS-006/-007, RES-006. SEC-004 elevated SHOULD→MUST. MAINT-004 elevated SHOULD→MUST with CI enforcement. OBS-004 split into `/livez` and `/readyz`. |
-| v0.5 | 24 May 2026 | DT | Interface audit closure. **Network interfaces**: renamed `interface.xot` → `interface.transfer` (covers AXFR/IXFR/SOA-poll/XoT outbound traffic); new ODS-IF-NET-008 for optional separated inbound NOTIFY interface; NET-005 clarifies health-endpoint binding relationship with `interface.mgmt`. **Configuration interface**: new CONF-008 (warning-level configuration issues, non-aborting), CONF-009 (`--dump-config` CLI mode), CONF-010 (`--validate-config` CLI mode), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention); CONF-001 extended to explicitly exclude include directives; CONF-004 note added for external secret stores; CONF-003 explicit constraint against interface-name bindings. **Logging interface**: new LOG-005 (canonical structured field names), LOG-006 (bootstrap logging before config parsed), LOG-007 (log entry maximum size), LOG-008 (lazy formatting in hot paths). **Health/metrics endpoint**: HEALTH-001 and HEALTH-002 clarified for relationship with `interface.mgmt`; HEALTH-002 extended with explicit response body content; new HEALTH-005 (response time bounds, gzip support), HEALTH-006 (per-source rate limit on `/metrics`). **Process signals**: SIG-001 extended to reference REL-005 100-ms signal-to-action latency; SIG-004 amended to permit SIGPIPE ignore disposition. **New §6.6 Process Lifecycle and Command-Line Interface**: PROC area code allocated. New requirements PROC-001 (exit code convention per `sysexits.h` style), PROC-002 (`--version` / `-V`), PROC-003 (`--help` / `-h`), PROC-004 (`--example-config`, optional). Appendix C.5 updated. Glossary D.5.2 updated with PROC area code. |
+| v0.5 | 24 May 2026 | DT | Interface audit closure. **Network interfaces**: renamed `interface.xot` -> `interface.transfer` (covers AXFR/IXFR/SOA-poll/XoT outbound traffic); ODS-IF-NET-008 records the MVP decision to reject a fourth active NOTIFY interface role and receive authorized NOTIFY on DNS listeners; NET-005 clarifies health-endpoint binding relationship with `interface.mgmt`. **Configuration interface**: new CONF-008 (warning-level configuration issues, non-aborting), CONF-009 (`--dump-config` CLI mode), CONF-010 (`--validate-config` CLI mode), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention); CONF-001 extended to explicitly exclude include directives; CONF-004 note added for external secret stores; CONF-003 explicit constraint against interface-name bindings. **Logging interface**: new LOG-005 (canonical structured field names), LOG-006 (bootstrap logging before config parsed), LOG-007 (log entry maximum size), LOG-008 (lazy formatting in hot paths). **Health/metrics endpoint**: HEALTH-001 and HEALTH-002 clarified for relationship with `interface.mgmt`; HEALTH-002 extended with explicit response body content; new HEALTH-005 (response time bounds, gzip support), HEALTH-006 (per-source rate limit on `/metrics`). **Process signals**: SIG-001 extended to reference REL-005 100-ms signal-to-action latency; SIG-004 amended to permit SIGPIPE ignore disposition. **New §6.6 Process Lifecycle and Command-Line Interface**: PROC area code allocated. New requirements PROC-001 (exit code convention per `sysexits.h` style), PROC-002 (`--version` / `-V`), PROC-003 (`--help` / `-h`), PROC-004 (`--example-config`, optional). Appendix C.5 updated. Glossary D.5.2 updated with PROC area code. |
 | v0.6 | 24 May 2026 | DT | Architectural invariants audit closure. **Precision refinements to existing invariants**: ODS-INV-001 (Secondary-Only Operation) tightened terminology ("authoritative state" → "in-memory zone store of any authoritatively-served zone"), explicit handling of NOTIFY-borne SOA, verification corrected to NOTIMP-only; ODS-INV-002 (Memory-Resident Zone Data) "query-serving path" scope explicit (startup-time configuration reading excluded, /proc introspection permitted); ODS-INV-003 (Atomic Zone Refresh) multi-delta IXFR atomicity clarified; ODS-INV-004 (No Persistent Operational State) /tmp coverage added (server runnable with /tmp absent or read-only); ODS-INV-005 (Static Configuration) environment-variable and file sources clarified as additive with env precedence, runtime-derived state explicitly excluded from "configuration"; ODS-INV-006 (Memory Safety Discipline) first-party vs third-party dependency boundary clarified, panic-freedom discipline added. **Three new foundational invariants**: ODS-INV-007 (Authoritative-Only Response Composition) elevating the established NEG-007/-008 + QRY-020 constraints to invariant level; ODS-INV-008 (Single-Process Architecture) prohibiting fork/exec/subprocess invocation; ODS-INV-009 (Static Composition; No Runtime Code Loading) prohibiting plugin loading and embedded interpreters. **Section structure**: new §3.7, §3.8, §3.9 added; §3 introductory text amended with conflict-resolution policy between invariants. **Status fields** updated from "Draft" to "Reviewed v0.6 (architectural invariants audit closure)" or "Introduced v0.6" as appropriate. Cross-references to ODS-INV-007 added to ODS-NEG-007 and ODS-NEG-008. Appendix C.5 updated with audit-resolution entries. |
 | v0.7 | 24 May 2026 | DT | **Verification strategy audit closure — final audit cycle revision.** §7 intro updated (removed obsolete "future revision" note regarding VER category, which was registered in earlier revisions). **Method catalog (§7.1) expanded** with four new methods: Property-based test, Differential test, Static analysis (elevated as distinct method from Inspection), Security audit. **ODS-VER-001 reformulated** from self-referential tautology to a coherence requirement (Verification fields must reference methods enumerated in §7.1). **Six new VER requirements**: ODS-VER-010 (pre-release verification gate with release-notes capture); ODS-VER-011 (Continuous / Periodic / Gate verification classification); ODS-VER-012 (regression detection and triage policy, with configurable performance-regression threshold); ODS-VER-013 (interoperability primary version recording for reproducibility); ODS-VER-014 (RFC compliance assertion publication in release notes and primary documentation); ODS-VER-015 (verification responsibility allocation). **ODS-VER-007 (Alpha milestone) corrected**: v0.3 reference clarified to v0.1–v0.3 single-endpoint model; §6.6 PROC requirements added to Alpha scope (PROC-001/-002/-003); §6.1 NET-008 marked optional; §6.2 CONF-008–-012 included in Alpha; §5.6 OBS-005 added to Alpha. **ODS-VER-009 (traceability matrix) extended** with explicit update cadence (synchronous with each release). **Appendix C.5 updated** with v0.7 resolutions. **Closing audit-cycle note** added at end of §7. With this revision the audit cycle initiated at v0.2 is complete: functional (§4) in v0.3, non-functional (§5) in v0.4, interface (§6) in v0.5, architectural invariants (§3) in v0.6, verification (§7) in v0.7. |
+| v0.8 | 25 May 2026 | DT | **Zone Provisioning feature addition; CIA-driven security expansion.** **New §4.20 Zone Provisioning** introduces the ZoneProvider abstraction, allowing the set of zones served by a server instance to be derived from one of two configurable sources: a static list in the configuration file (`mode = "static"`, prior behaviour, default) or a DNS Catalog Zone per RFC 9432 (`mode = "catalog"`). New area code **PROV** allocated. New requirements ODS-FR-PROV-001 through ODS-FR-PROV-014 covering both modes, catalog parsing, member-zone lifecycle (provisioning, de-provisioning), security constraints, and resource limits. **ODS-INV-005 (Static Configuration) clarified**: catalog-derived member-zone set added to the enumerated examples of runtime-derived state explicitly excluded from the "configuration" scope of the invariant. The invariant's *Implications* paragraph extended to note that the *mode selection* itself (static vs catalog) is statically configured, while in catalog mode the *derived member-zone set* is runtime-derived state akin to zone contents and the zone state machine state. **Appendix C.3.9 (DNS Catalog Zones) removed** from the exclusions list and promoted to in-scope; the rationale-for-exclusion has been resolved by the §4.20 design which preserves ODS-INV-005 by isolating the statically-configured mode selection from the runtime-derived member set. **New security requirements from CIA threat-model analysis (§5.3)**: ODS-NFR-SEC-008 (TSIG key material loadable from environment variables with zeroization at load), ODS-NFR-SEC-009 (transfer authentication advisory and `require_tsig` flag), ODS-NFR-SEC-010 (mandatory catalog-zone TSIG authentication; refusal to start in catalog mode without TSIG key), ODS-NFR-SEC-011 (catalog must not redirect member-zone primary coordinates), ODS-NFR-SEC-012 (multi-primary catalog support for SPOF mitigation), ODS-NFR-SEC-013 (`max_member_zones` resource exhaustion cap), ODS-NFR-SEC-014 (per-transfer-session timeout for tarpit defence), ODS-NFR-SEC-015 (catalog member-zone name syntactic validation). **New observability requirement ODS-NFR-OBS-008**: catalog-specific Prometheus metrics catalogue. **§6.2 extended**: new ODS-IF-CONF-013 specifies the `[zone_source]` configuration subtree (mode selection, static-mode zone list, catalog-mode catalog-zone coordinates, defaults inheritance for member zones). **§6.4 extended**: ODS-NFR-OBS-004 `/readyz` semantics updated to include catalog-zone state when in catalog mode. **Appendix D.5.2 area code registry updated** with PROV. **Note on audit feedback**: the in-progress code audit of the OxideDNS Alpha implementation is being tracked in a separate workstream; its findings will be incorporated in a subsequent revision (v0.9, scope TBD). |
+| v0.9 | 25 May 2026 | DT | **Alpha implementation audit closure.** Incorporates findings from the structured functional review of the OxideDNS Alpha (MVP 1.0) implementation conducted against this SRS. The audit confirmed that the implementation faithfully realises the requirements of v0.8 in the wire-protocol, transfer-client, NOTIFY, TSIG, XoT, EDNS, TCP, DNSSEC-serving, zone state machine, RRL, DNS Cookies, configuration, logging, health/metrics, process-security, and zone-provisioning layers, with a small set of functional gaps and a small set of clarifications to existing requirements. **Functional additions from audit:** ODS-FR-DNSSEC-014 (NSEC3 iteration count cap per RFC 9276 / BCP 236) addresses a CPU-amplification risk in serving zones signed with high-iteration NSEC3 parameters; the cap value is configurable per ODS-IF-CONF-015 and a configuration warning `nsec3_iterations_large` is added to the §6.2 warning catalogue when the configured cap exceeds the BCP 236 recommended ceiling. ODS-FR-QRY-025 (DNAME synthesis name-length overflow handling per RFC 6672 §5.3.1) requires the server to return YXDOMAIN (RCODE 6) when CNAME synthesis from a DNAME would produce a name exceeding the 255-octet domain-name length limit; the prior text of ODS-FR-QRY-014 was silent on this specific failure mode. ODS-FR-AXFR-025 (out-of-zone glue tolerance, optional) introduces a configuration-controlled option, off by default, to relax the strict out-of-zone owner-name rejection of ODS-FR-AXFR-012 for compatibility with primary configurations that emit traditional out-of-zone glue; the relaxation is bounded to A/AAAA records only and is logged when exercised. ODS-FR-AXFR-026 (DNAME multiplicity validation per RFC 6672 §2.4) requires the transfer ingestion layer to reject AXFR or IXFR streams that present more than one DNAME RR at the same owner name within the same zone. **Configuration interface additions from audit:** ODS-IF-CONF-014 (environment-variable override re-validation) requires the configuration validator to re-run the structural and cross-field validation after applying environment-variable overrides per ODS-IF-CONF-012, ensuring that an override cannot place the configuration outside the validity envelope established at TOML parse time. ODS-IF-CONF-015 (NSEC3 max iterations parameter) and ODS-IF-CONF-016 (out-of-zone glue tolerance parameter) provide the configuration surface for ODS-FR-DNSSEC-014 and ODS-FR-AXFR-025 respectively. **Interoperability matrix extension:** ODS-VER-003 extended to require XoT interop coverage against BIND 9 in addition to the already-required Knot DNS XoT coverage, reflecting BIND 9's stable XoT server support from version 9.18 onward. **Implementation evidence confirmations from audit:** the audit recorded confirmations against several existing requirements that are noted in Appendix C.5 (the implementation enforces the panic-freedom and `unsafe`-discipline of ODS-INV-006 with zero `unwrap()` and zero `panic!()` invocations in production code paths; the bind-then-drop privilege model of ODS-NFR-SEC-004 is enforced via a process_signals + privilege module with audited POSIX FFI; secret material is held in zeroizing wrappers and redacted in structured-log Debug formatters per ODS-NFR-SEC-001 / ODS-IF-LOG-005; the NOTIFY discard logging rate-limit per ODS-FR-NOTIFY-009 is implemented with per-source-prefix granularity). These confirmations do not change the requirements; they record that the requirements are met by the Alpha implementation. **Appendix C.5 updated** with the audit-closure entries. **No invariant changes**: §3 (ODS-INV-001 through ODS-INV-009) is unchanged. **No NEG changes**: §4.18 is unchanged. |
 
 ---
 
@@ -69,6 +71,7 @@
    - 4.17 Response Rate Limiting
    - 4.18 Negative Requirements
    - 4.19 DNS Cookies
+   - 4.20 Zone Provisioning *(new in v0.8)*
 5. [Non-Functional Requirements](#5-non-functional-requirements)
    - 5.1 Performance
    - 5.2 Reliability and Availability
@@ -418,6 +421,8 @@ The server MUST be runnable with both the root filesystem and `/tmp` (and any ot
 
 *Implications.* No SIGHUP handler for configuration reload (per ODS-IF-CONF-007 and ODS-IF-SIG-003). No partial-reload semantics to specify or test. The orchestrator (or operator) is responsible for restarting the process to apply configuration changes, with the graceful-shutdown behaviour required by ODS-NFR-REL-001 supporting rolling restart deployment patterns.
 
+The §4.20 Zone Provisioning subsystem operates within this invariant by isolating the *mode selection* from the *derived zone set*: the choice of `zone_source.mode` (static or catalog), the catalog-zone coordinates (apex name, primary IPs, TSIG key reference), and the per-mode defaults inheritance are statically configured per ODS-IF-CONF-013 and are not altered during process lifetime. In `mode = "catalog"`, the resulting member-zone set itself is runtime-derived state (enumerated below), updated whenever the catalog zone is successfully transferred or incrementally updated.
+
 "Configuration" in this invariant refers exclusively to the parameters supplied at startup per the cited sources, governing the server's policies, bindings, and operating thresholds. **Runtime-derived state** — operational data generated by the server during its lifetime — is not "configuration" in the sense of this invariant; such state evolves during operation and is intentionally not persisted (per ODS-INV-004). Examples of runtime-derived state explicitly outside the scope of this invariant include:
 
 - the DNS Cookie secret of ODS-FR-COOKIE-004 (generated fresh at each process start, held in memory for the process lifetime, zeroed at termination per ODS-NFR-SEC-003);
@@ -425,13 +430,14 @@ The server MUST be runnable with both the root filesystem and `/tmp` (and any ot
 - TSIG counters, query counters, transfer-session counters (per §5.6);
 - in-flight TCP connections and their per-connection state;
 - the zone state machine's current state for each zone (per §4.16);
-- the in-memory zone store contents (per §3.2; updated by zone transfer per §3.1).
+- the in-memory zone store contents (per §3.2; updated by zone transfer per §3.1);
+- in `mode = "catalog"` (per §4.20.2 and ODS-FR-PROV-002), the set of member zones derived from the catalog zone's contents, including additions and removals occurring during process lifetime as the catalog zone is updated by the primary.
 
 Such state may legitimately change during process lifetime without violating this invariant.
 
-*Verification.* Code review shall confirm that configuration parsing occurs once during startup and that no code path re-reads configuration sources thereafter (no file watchers on the configuration file, no periodic re-evaluation of environment variables). Behavioural tests shall confirm that signals other than SIGTERM and SIGINT produce no configuration effect.
+*Verification.* Code review shall confirm that configuration parsing occurs once during startup and that no code path re-reads configuration sources thereafter (no file watchers on the configuration file, no periodic re-evaluation of environment variables). Behavioural tests shall confirm that signals other than SIGTERM and SIGINT produce no configuration effect. For `mode = "catalog"` (§4.20.2), code review shall confirm that the catalog transfer pathway alters only the runtime member-zone set and never re-reads or alters the static configuration sources.
 
-*Status.* Reviewed v0.6 (architectural invariants audit closure).
+*Status.* Reviewed v0.8 (catalog-mode runtime-state clarification).
 
 ## 3.6 Memory Safety Discipline
 
@@ -732,13 +738,18 @@ This procedure produces a stable, predictable selection for a given zone state, 
 
 ### DNAME handling
 
-**ODS-FR-QRY-014.** Where the QNAME falls strictly beneath a name carrying a DNAME RRset in the served zone (and is not the DNAME owner name itself), the server MUST include the DNAME record in the answer section and MUST synthesise a CNAME record per RFC 6672 §3.2 mapping the original QNAME to a name constructed by substituting the DNAME target for the DNAME owner in the QNAME.
+**ODS-FR-QRY-014.** Where the QNAME falls strictly beneath a name carrying a DNAME RRset in the served zone (and is not the DNAME owner name itself), the server MUST include the DNAME record in the answer section and MUST synthesise a CNAME record per RFC 6672 §3.2 mapping the original QNAME to a name constructed by substituting the DNAME target for the DNAME owner in the QNAME. If the resulting synthesised name exceeds the 255-octet domain-name length limit, the server MUST follow ODS-FR-QRY-025 below.
 *Source.* RFC 6672 §3.
 *Verification.* Lookup tests against zones containing DNAME records, including the edge cases of RFC 6672 §3.3 (DNAME at apex, DNAME above a delegation, name-length overflow on synthesis).
 
 **ODS-FR-QRY-015.** After CNAME synthesis from a DNAME, the server MUST proceed with CNAME chain resolution per ODS-FR-QRY-010 through ODS-FR-QRY-013, treating the synthesised CNAME as if it had been present in the zone authoritatively.
 *Source.* RFC 6672 §3.
 *Verification.* Lookup tests including DNAME-to-CNAME chains terminating both within and outside served zones.
+
+**ODS-FR-QRY-025.** Where DNAME synthesis under ODS-FR-QRY-014 would produce a target name whose wire-format encoding exceeds 255 octets (the domain-name length limit of RFC 1035 §2.3.4), the server MUST respond with RCODE = 6 (YXDOMAIN) per RFC 6672 §5.3.1. The response MUST include the DNAME record itself in the answer section (since the DNAME RRset's existence has been determined and is correctly returned) but MUST NOT include any synthesised CNAME for the overflowing QNAME. The synthesised name is not constructed and is not used.
+*Source.* RFC 6672 §5.3.1; RFC 1035 §2.3.4.
+*Note.* RCODE = 6 was assigned by RFC 2136 for the dynamic-update setting where a name "exists when it should not"; RFC 6672 §5.3.1 reuses the same RCODE value for the present semantic of "QNAME would exceed 255 octets after DNAME substitution". The reuse is normative.
+*Verification.* Lookup tests with DNAME owner names whose targets, when substituted into the QNAME, exceed 255 octets; verify YXDOMAIN response, DNAME RR included in answer, no CNAME synthesised. *Added in v0.9.*
 
 ### Empty non-terminal handling
 
@@ -1065,6 +1076,22 @@ The area code **AXFR** is allocated.
 *Source.* Defence against memory-exhaustion attacks from a compromised, misconfigured, or hostile primary delivering an unbounded transfer stream.
 *Note.* The default limit is generous (a 4 GiB zone in wire format is larger than any operational zone known to the project at this writing), and the limit is per-session rather than across sessions. The configurable nature allows operators of unusually large zones to raise the limit; the existence of the limit prevents an unbounded-allocation DoS even with that flexibility.
 *Verification.* AXFR tests with primaries delivering oversized transfer streams; verify abort behaviour, log entry, and memory release after abort.
+
+**ODS-FR-AXFR-025.** The server MAY support an optional, off-by-default, configuration parameter (per ODS-IF-CONF-016) that relaxes the strict out-of-zone owner-name rejection of ODS-FR-AXFR-012 for compatibility with primary configurations that emit traditional out-of-zone glue (typically NS targets and their A/AAAA records that lie outside the transferred zone's apex subtree). Where this option is enabled:
+- A and AAAA records whose owner names lie outside the zone apex subtree MUST be retained in the in-memory zone store as glue candidates and MAY be used in the additional section of referral responses per ODS-FR-QRY-017;
+- Records of any other type with owner names outside the zone apex subtree MUST continue to cause the AXFR session to be aborted per ODS-FR-AXFR-019;
+- Each tolerated out-of-zone A/AAAA record MUST be logged at debug level with the zone name, the owner name, and a structured field `category = "transfer"`, `event = "out_of_zone_glue_accepted"`;
+- A configuration warning `out_of_zone_glue_tolerance_enabled` MUST be emitted at startup per ODS-IF-CONF-008 when the option is enabled, to record the deviation from the default strict policy in the operator's observability surface.
+
+Where the option is disabled (default behaviour, equivalent to v0.8 semantics), out-of-zone records of any type cause the AXFR session to be aborted per ODS-FR-AXFR-019 as in v0.8.
+*Source.* RFC 1034 §6.2 (the traditional glue concept includes glue that lies outside the transferred zone); operational requirement for interoperability with primary configurations that historically emit such glue.
+*Note.* The strict rejection of v0.8 corresponds to RFC 5936 §2.2.4's narrower notion of glue (only records below child-zone delegation points within the transferred zone). The option introduced here permits the broader RFC 1034 §6.2 notion when the operator explicitly opts in. The default remains strict.
+*Verification.* AXFR tests with out-of-zone A/AAAA glue records, with the option both disabled and enabled; verify rejection in the former case, acceptance and additional-section inclusion in the latter; verify the configuration warning is emitted and the per-record debug log entries are produced. *Added in v0.9.*
+
+**ODS-FR-AXFR-026.** The transfer ingestion layer MUST reject AXFR or IXFR transfer streams that present more than one DNAME RR at the same owner name within the same zone. RFC 6672 §2.4 prohibits the coexistence of multiple DNAME records at the same owner; this requirement enforces that prohibition at the secondary's ingestion boundary, abandoning the transfer per ODS-FR-AXFR-019 with the abort cause "dname_multiplicity_violation" recorded in the log entry.
+*Source.* RFC 6672 §2.4.
+*Note.* The same-owner-name DNAME prohibition is distinct from the DNAME chain prohibitions of RFC 6672 §3.3 (DNAMEs in the path between QNAME and the served zone), which are query-time concerns. This requirement is a zone-data structural constraint enforced at ingest. A zone delivered by a misconfigured primary that contains such a structure is rejected at transfer time; the previously-published zone version remains in service per ODS-INV-003.
+*Verification.* AXFR and IXFR tests with constructed transfer streams containing multiple DNAME records at the same owner name; verify rejection, log entry, and unchanged previous zone state. *Added in v0.9.*
 
 ## 4.7 IXFR Incremental Zone Transfer
 
@@ -1755,6 +1782,19 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 *Note.* This requirement is the DNSSEC-specific restatement of the architectural invariant. It is cross-referenced from §4.18 (Negative Requirements) for the explicit catalogue of prohibitions.
 *Verification.* Static analysis of the codebase; no code path producing DNSSEC records exists outside the zone-transfer ingestion layer.
 
+### NSEC3 iteration cap
+
+**ODS-FR-DNSSEC-014.** Where a query against an NSEC3-signed zone requires the server to traverse NSEC3 chain records to compose a negative-existence proof (per ODS-FR-DNSSEC-004 or ODS-FR-DNSSEC-005), and the zone's NSEC3PARAM RDATA specifies an iteration count exceeding a configurable cap (per ODS-IF-CONF-015, default 100 per RFC 9276 / BCP 236 §2.4), the server MUST treat the affected response composition as follows:
+- The negative response itself MUST still be returned per ODS-FR-CORE-022 (NODATA) or ODS-FR-CORE-023 (NXDOMAIN); the request is not refused;
+- The NSEC3 records (and their RRSIGs) that would constitute the denial-of-existence proof MAY be omitted from the response — the response then carries the negative answer without DNSSEC authentication for the negative proof;
+- The server MUST emit a warning-level log entry on the first such omission per zone since process startup, with `category = "dnssec"`, `event = "nsec3_iterations_exceed_cap"`, and structured fields recording the zone name, the iteration count present in NSEC3PARAM, and the configured cap;
+- The per-zone counter `oxidedns_dnssec_nsec3_cap_exceeded_total{zone="..."}` (per §5.6) MUST be incremented for each affected response.
+
+This requirement is a CPU-amplification defence against adversarial or misconfigured zones whose NSEC3PARAM specifies very high iteration counts. RFC 9276 §2 establishes that any iteration count greater than zero is unnecessary in practice; the §2.4 recommendation of 0 (with a soft ceiling of 100 for legacy zones) is the operational guidance. The cap value is configurable to allow operators to accept legacy zones if they are willing to absorb the CPU cost, but the default is the RFC 9276 ceiling.
+*Source.* RFC 9276 §2, §2.4 (BCP 236); RFC 5155 §10.3.
+*Note.* The relaxation is bounded to the negative-proof case; positive responses against NSEC3-signed zones do not require chain traversal and are not affected by the cap. Where the operator has expressly configured `nsec3_max_iterations = 0` (or any value below the zone's actual iteration count), the affected zone is served without NSEC3-authenticated negative proofs but otherwise correctly; the cap does not deny service.
+*Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify response composition behaviour, warning emission cadence (once per zone per process), and metric increment. *Added in v0.9.*
+
 ## 4.14 RR Type Parsing and Serving
 
 This subsection establishes the catalogue of resource record types for which the server implements type-aware parsing, validation, storage, and serving. Records of types not enumerated here are handled under the unknown-type semantics of §4.4 — accepted opaquely, preserved bit-for-bit, and served on direct query without type-specific interpretation.
@@ -2268,6 +2308,81 @@ These counters MUST be exposable globally and per-source-prefix per §5.6 and §
 *Source.* Operational visibility; RFC 8906.
 *Verification.* Counter inspection under controlled cookie traffic.
 
+## 4.20 Zone Provisioning
+
+This subsection specifies the mechanism by which the server learns the set of zones it is to serve. Two modes are supported, selectable at startup via a single configuration parameter (`zone_source.mode` per ODS-IF-CONF-013): a **static** mode in which the zones are enumerated explicitly in the configuration file, and a **catalog** mode in which the zones are derived at runtime from a DNS Catalog Zone (RFC 9432) transferred from a configured primary. The two modes share the same downstream zone-management machinery — the zone state machine (§4.16), the AXFR/IXFR client (§4.6, §4.7), the in-memory zone store (§4.15) — and differ only in how the *set* of zones is determined and maintained.
+
+The architectural separation is expressed as a **ZoneProvider abstraction**: a common interface that yields the initial zone set and emits incremental change events (zone additions, zone removals) over the process lifetime. The static-mode provider yields its zones once and emits no further events. The catalog-mode provider yields the initial zones from the first successful catalog transfer and emits change events as the catalog is updated. The downstream consumer (the zone manager) is mode-agnostic; this property is the central design intent of the area and is what permits the two modes to coexist without conditional code in the hot path.
+
+The area code **PROV** is allocated.
+
+### Mode selection and shared invariants
+
+**ODS-FR-PROV-001.** The configuration MUST select exactly one zone-provisioning mode at startup via the `zone_source.mode` parameter (per ODS-IF-CONF-013), with permitted values `"static"` (default) and `"catalog"`. Switching modes during operation MUST NOT be possible per ODS-INV-005; mode changes are applied only via process restart with updated configuration.
+*Source.* ODS-INV-005; design intent of the ZoneProvider abstraction.
+*Verification.* Configuration round-trip tests across both modes; tests confirming attempts to alter `zone_source.mode` during runtime (e.g., via signal, via configuration-file modification) have no effect.
+
+**ODS-FR-PROV-002.** Regardless of mode, every zone surfaced by the provider — whether statically configured or catalog-derived — MUST proceed through the standard zone state machine of §4.16 (initial AXFR via §4.6, subsequent SOA polling and IXFR refresh via §4.7, NOTIFY processing per §4.8). The zone-acquisition mechanism, TSIG authentication (§4.9), XoT transport (§4.10), and all functional behaviours specified elsewhere in §4 are unchanged by the choice of mode. No mode-specific code path MUST exist in the query-serving path (§4.1, §4.2).
+*Source.* Design intent; preservation of existing functional requirements across the new abstraction.
+*Verification.* Code review confirming the mode-agnostic property of the zone manager and the query-serving path; functional regression tests confirming identical behaviour across modes for equivalent zone sets.
+
+**ODS-FR-PROV-003.** Each zone surfaced by the provider MUST carry its primary-server coordinates as part of the `ZoneSpec`: the apex name, the ordered list of primary IP addresses with optional port, the TSIG key reference (if any), and the per-zone XoT configuration (if any). In `mode = "static"`, these coordinates are taken directly from the configuration file. In `mode = "catalog"`, the coordinates are taken from the per-mode defaults established in the configuration (per ODS-IF-CONF-013) and applied uniformly to all catalog-derived member zones, subject to the constraint of ODS-NFR-SEC-011.
+*Source.* Operational requirement; per-zone primary specification.
+*Verification.* Provider unit tests confirming `ZoneSpec` composition under each mode.
+
+### Static mode (`zone_source.mode = "static"`)
+
+**ODS-FR-PROV-004.** In `mode = "static"`, the set of zones served by the process MUST be exactly the set enumerated in the `zone_source.zones` configuration array (per ODS-IF-CONF-013). The set is fixed for the process lifetime per ODS-INV-005. The provider yields all configured zones during process startup and emits no further change events. This mode is the default and corresponds to the v0.1 through v0.7 behaviour of this server.
+*Source.* ODS-INV-005; backward compatibility.
+*Verification.* Tests with various static zone configurations; confirmation that the served zone set matches the configuration exactly and remains unchanged across SIGHUP, configuration-file modification, and indefinite runtime.
+
+### Catalog mode (`zone_source.mode = "catalog"`)
+
+**ODS-FR-PROV-005.** In `mode = "catalog"`, the server MUST transfer a catalog zone (RFC 9432) from the primary specified in the configuration (`zone_source.catalog.primary`, per ODS-IF-CONF-013) using the AXFR protocol per §4.6, authenticated by TSIG per §4.9 with the key referenced by `zone_source.catalog.tsig_key`. The catalog zone MUST be processed per RFC 9432 §3 and §4: the version property `version.<catalog-apex>` MUST be verified to contain the TXT value `"2"` (other version values cause the catalog transfer to be rejected with an error logged); member zones MUST be enumerated from the `<unique-id>.zones.<catalog-apex>` PTR records.
+*Source.* RFC 9432 §3, §4.
+*Verification.* Tests with catalog zones containing valid version=2 properties; tests with absent or non-"2" version properties (expecting rejection); tests with valid and invalid PTR record structures.
+
+**ODS-FR-PROV-006.** The catalog zone itself MUST be subject to SOA-driven refresh (§4.7) and NOTIFY-driven refresh (§4.8) on the same terms as any other zone — the catalog zone is, mechanically, an additional zone transferred by this server. Successful catalog refresh MUST trigger reconciliation: the server computes the difference between the previously-known member-zone set and the newly-derived member-zone set, and emits `ZoneSetDelta::Add(...)` and `ZoneSetDelta::Remove(...)` events to the zone manager for each changed member.
+*Source.* RFC 9432 §6; design integration with §4.16 zone state machine.
+*Verification.* Tests with catalog updates adding and removing member zones; confirm correct delta emission and downstream zone manager response.
+
+**ODS-FR-PROV-007.** On `ZoneSetDelta::Add(zone_spec)` from the catalog provider, the zone manager MUST initiate the standard zone-acquisition pathway per §4.16: the new zone enters the LOADING state, an initial AXFR is attempted against the primary specified in the `ZoneSpec` (which, per ODS-NFR-SEC-011, comes from the static configuration's catalog defaults, not from the catalog zone's own contents). Successful AXFR completion transitions the zone to ACTIVE; failure modes follow the normal zone state machine.
+*Source.* Design integration with §4.16.
+*Verification.* End-to-end tests adding a member zone to the catalog and observing the standard LOADING→ACTIVE transition for the new zone.
+
+**ODS-FR-PROV-008.** On `ZoneSetDelta::Remove(zone_name)` from the catalog provider, the zone manager MUST de-provision the zone: any in-progress transfer for the zone MUST be aborted (treated as a normal transfer abort per §4.6 and §4.7), the zone's entry in the in-memory zone store MUST be removed atomically per ODS-INV-003 (subsequent queries for the zone receive REFUSED or, where the orphaned zone-cut produces a non-authoritative state, the appropriate response per §4.3), and the zone state machine state for the zone MUST be discarded. The de-provisioning MUST be logged at info level with the zone name and the catalog refresh that triggered it.
+*Source.* RFC 9432 §5.2; operational requirement for clean removal.
+*Verification.* Tests removing a member zone from the catalog and confirming the zone becomes unservable from the secondary within one catalog-refresh interval, without affecting other zones.
+
+**ODS-FR-PROV-009.** The catalog zone's contents — specifically the per-member PTR records and any RFC 9432 property records associated with member zones — MUST NOT be served by this server as authoritative content. The catalog zone is consumed internally by the provisioning subsystem and is not part of the server's published-zone set. The catalog zone's apex name MUST NOT appear in responses to client queries; queries for names within the catalog zone MUST receive REFUSED.
+*Source.* RFC 9432 §5.1 (catalog zones are not served to clients); operational separation of provisioning data from served data.
+*Verification.* Functional tests querying the catalog apex and member-property names directly; verify REFUSED response.
+
+**ODS-FR-PROV-010.** The catalog zone MUST be acquired into a separate internal data structure from the regular zone store. The catalog zone's contents MUST NOT pollute the per-query lookup path of §4.2. The atomicity guarantee of ODS-INV-003 applies to the catalog zone's own contents independently (a partially-transferred catalog MUST NOT be used for reconciliation); the catalog provider derives its member-zone set only from a fully-committed catalog version.
+*Source.* ODS-INV-003; clean architectural separation.
+*Verification.* Code review of the catalog data structure isolation; tests with deliberately failed catalog transfers confirming no partial commits.
+
+### Bootstrap and dependency ordering
+
+**ODS-FR-PROV-011.** In `mode = "catalog"`, process startup MUST proceed as follows: (1) the catalog zone is transferred and processed; (2) the initial member-zone set is determined; (3) the zone manager begins concurrent AXFR for the member zones up to the limit of ODS-FR-AXFR-022; (4) the `/readyz` endpoint (per ODS-NFR-OBS-004) reports `ready` once at least one member zone has reached ACTIVE state per the standard criterion. If the initial catalog transfer fails, the server MUST retry with exponential backoff (parameter `zone_source.catalog.bootstrap_retry`, defaults: initial 1 second, factor 2, max 60 seconds) and `/readyz` MUST report `not-ready` for the entire retry period.
+*Source.* Operational requirement; orchestrator-friendly bootstrap.
+*Verification.* Startup-sequence tests with reachable and unreachable catalog primaries; verify `/readyz` transitions; verify retry behaviour.
+
+**ODS-FR-PROV-012.** If the catalog primary becomes unreachable after the initial successful transfer, the catalog zone MUST follow the normal zone state machine: SOA-poll failures accumulate per §4.16, and after the catalog zone's own SOA EXPIRE time is exceeded, the catalog zone transitions to EXPIRED. While the catalog is in EXPIRED state, the most recently known member-zone set MUST remain in service (the server does NOT de-provision all member zones merely because the catalog has expired); each member zone independently continues its own SOA polling and lifecycle. Recovery of the catalog (successful subsequent refresh) MUST resume normal reconciliation behaviour, with any member-zone deltas that accrued during the EXPIRED period applied at recovery time.
+*Source.* Operational requirement; isolation of catalog availability from member-zone availability; ODS-NFR-SEC-012.
+*Verification.* Tests with catalog primary going unreachable for periods exceeding the catalog's SOA EXPIRE; verify member zones continue to refresh from their own primaries; verify recovery and reconciliation.
+
+### Catalog content constraints
+
+**ODS-FR-PROV-013.** The catalog zone provider MUST validate each candidate member-zone name from the catalog's PTR records per the syntactic rules of RFC 1035 §2.3.1 (allowed character set, label length 1–63 octets, total name length not exceeding 255 octets). Names failing validation MUST be rejected with a warning-level log entry identifying the offending PTR record; the rest of the catalog's contents MUST be processed normally. The validation requirements of ODS-NFR-SEC-015 (catalog-apex containment exclusion) apply additionally.
+*Source.* RFC 1035 §2.3.1; defensive engineering against malformed catalog contents.
+*Verification.* Tests with catalog zones containing syntactically invalid PTR targets; verify rejection-with-warning behaviour and continued processing of the remainder.
+
+**ODS-FR-PROV-014.** The catalog zone MAY contain per-member property records permitted by RFC 9432 §5 (e.g., `primaries.<unique-id>.zones.<catalog-apex>`, `coo.<unique-id>.zones.<catalog-apex>`, `group.<unique-id>.zones.<catalog-apex>`). In this version of the server, **all such per-member property records MUST be ignored** — specifically, the `primaries` property (RFC 9432 §5.1) MUST NOT alter the primary coordinates used for member-zone transfer, per the security constraint of ODS-NFR-SEC-011. Encountered property records MUST be logged at debug level for operator awareness; their presence MUST NOT cause the catalog to be rejected. Support for selected properties may be added in a future revision subject to security review.
+*Source.* RFC 9432 §5; ODS-NFR-SEC-011.
+*Note.* The decision to ignore `primaries` properties is a deliberate security stance, not an oversight. Honouring `primaries` would allow a compromised catalog primary to redirect member-zone transfers to attacker-controlled hosts. The catalog mode here is intentionally narrower than the full RFC 9432 specification permits.
+*Verification.* Tests with catalog zones containing `primaries` properties; verify the static-configuration defaults are used and the properties are ignored.
+
 # 5. Non-Functional Requirements
 
 This section specifies properties of the system beyond its functional behaviour: how fast it must be, how reliable, how secure, how maintainable, how portable, how observable, and what resource bounds it must respect. The functional requirements of §4 specify *what* the server does; the non-functional requirements of this section specify *under what constraints*.
@@ -2413,6 +2528,49 @@ The policy MUST be referenced from the project's primary repository README and p
 *Source.* Standard practice for production-grade infrastructure software; pre-emptive provision for the vulnerability handling lifecycle.
 *Verification.* Repository inspection at release time; policy completeness check against the enumerated elements.
 
+### Security additions from the v0.8 CIA threat-model analysis
+
+The following requirements (ODS-NFR-SEC-008 through ODS-NFR-SEC-015) were introduced in v0.8 as a result of a Confidentiality / Integrity / Availability (CIA) threat-model analysis of the system, conducted in conjunction with the introduction of the Zone Provisioning subsystem (§4.20). The threat model considered the system both as it stands and with the new catalog-mode zone provisioning enabled; requirements herein are stated as applying to the relevant mode(s).
+
+**ODS-NFR-SEC-008.** *(Confidentiality of key material at rest in configuration.)* The configuration loader MUST accept TSIG shared secrets — both for the regular zone-transfer TSIG keys (§4.9) and for the catalog-zone TSIG key (ODS-FR-PROV-005, ODS-NFR-SEC-010) — from environment variables (per ODS-IF-CONF-006 and the naming convention of ODS-IF-CONF-012) in addition to inline or file-path values per ODS-IF-CONF-004. Where the secret is loaded from an environment variable, the configuration loader MUST zero the source environment-variable storage in process memory (`unsetenv` plus best-effort zeroization of the prior value via the `zeroize` crate or equivalent) immediately after copying the secret into the TSIG engine's key store. Where the secret is loaded from a file, the in-memory buffer used to read the file MUST be similarly zeroed after the secret has been copied to the key store. Operator-facing documentation (per ODS-NFR-MAINT-009) MUST identify environment-variable secret provisioning as the preferred mechanism for Kubernetes and similar orchestrated deployments.
+*Source.* CIA-C1 threat analysis; standard cryptographic key-handling hygiene; ODS-FR-TSIG-006.
+*Verification.* Tests loading TSIG keys via environment variables and verifying the environment is cleared post-load; memory inspection (e.g., `gcore` followed by string-search for the known secret) after process startup confirms the secret does not persist in the configuration data structures or buffer caches.
+
+**ODS-NFR-SEC-009.** *(Integrity — transfer authentication advisory.)* For every configured (zone, primary) tuple where TSIG authentication is NOT configured per §4.9, the server MUST emit a warning-level log entry at process startup identifying the affected tuple and noting that the zone transfer is unauthenticated. The server MUST additionally expose a configuration parameter `zones.require_tsig` (default `false` for backward compatibility; the schema MUST recommend setting it to `true` for production deployments). Where `zones.require_tsig = true`, the server MUST refuse to start if any configured zone (or, in catalog mode, the default primary for member zones) lacks a configured TSIG key, with a startup-validation failure per ODS-IF-CONF-005.
+*Source.* CIA-I1 threat analysis; RFC 8945 §1.
+*Verification.* Tests with mixed-TSIG configurations and verification of warning emission; tests with `require_tsig = true` and incomplete TSIG configuration expecting startup failure.
+
+**ODS-NFR-SEC-010.** *(Integrity — mandatory catalog-zone authentication.)* In `mode = "catalog"` per §4.20.2, TSIG authentication of the catalog-zone transfer (ODS-FR-PROV-005) is MANDATORY, not optional. The server MUST refuse to start in catalog mode if `zone_source.catalog.tsig_key` is unset or references a non-existent key, with a startup-validation failure per ODS-IF-CONF-005 identifying the missing configuration. The TSIG-`require_tsig` flag of ODS-NFR-SEC-009 does NOT govern the catalog zone; the catalog zone's TSIG requirement is unconditional. Additionally, if XoT (§4.10) is not configured for the catalog primary, the configuration validator MUST emit a warning per ODS-IF-CONF-008 noting that catalog contents traverse the network in cleartext (the TSIG MAC authenticates the contents but does not encrypt them).
+*Source.* CIA-IX2 threat analysis; the catalog zone is a cross-cutting integrity-critical artifact whose compromise affects all member zones.
+*Note.* This requirement is intentionally stricter than the general zone-transfer TSIG posture (which is operator-elected per ODS-NFR-SEC-009). The catalog zone's blast-radius asymmetry justifies the asymmetry in the requirement.
+*Verification.* Tests starting the server in catalog mode without a TSIG key (expecting startup failure with a clear diagnostic); tests with catalog TSIG configured but XoT absent (expecting startup warning); tests with both configured (expecting clean startup).
+
+**ODS-NFR-SEC-011.** *(Integrity — catalog must not redirect member primaries.)* In catalog mode, the primary-server coordinates used for member-zone transfers (per ODS-FR-PROV-003) MUST be taken exclusively from the statically configured `zone_source.catalog.defaults` per ODS-IF-CONF-013. Per-member primary overrides — specifically, the RFC 9432 §5.1 `primaries.<unique-id>.zones.<catalog-apex>` property — MUST NOT be honoured by this server (per ODS-FR-PROV-014). Were these to be honoured, a compromised catalog primary could redirect member-zone transfers to attacker-controlled hosts, replacing legitimate zone contents with arbitrary attacker content; this attack vector is foreclosed at specification level by the present prohibition.
+*Source.* CIA-IX3 threat analysis; deliberate security narrowing of the RFC 9432 catalog mechanism.
+*Verification.* Code review of the catalog-property processing path confirming `primaries` properties are ignored; tests with catalog zones containing crafted `primaries` properties (expecting the static-configuration defaults to be used and a debug-level log entry for the ignored property).
+
+**ODS-NFR-SEC-012.** *(Availability — catalog SPOF mitigation.)* The catalog-mode configuration MUST permit specification of multiple primary servers for the catalog zone (`zone_source.catalog.primaries` as an ordered list, per ODS-IF-CONF-013), with selection semantics identical to the multi-primary behaviour for regular zones per §4.16. This permits operators to mitigate the single-point-of-failure character that the catalog provider would otherwise have within the catalog-mode architecture.
+*Source.* CIA-AX1 threat analysis; standard reliability practice for critical configuration sources.
+*Verification.* Tests with multi-primary catalog configurations under various primary-availability scenarios.
+
+**ODS-NFR-SEC-013.** *(Availability — catalog resource exhaustion bound.)* In catalog mode, the number of member zones derived from the catalog zone MUST be bounded by a configurable maximum (`zone_source.catalog.max_member_zones`, per ODS-IF-CONF-013, default 10,000). Catalog contents specifying member zones beyond this limit MUST cause the excess PTR records to be ignored (the first N accepted, the remainder dropped) and an error-level log entry to be emitted naming the limit and the count of dropped entries. The configured limit MUST be enforced jointly with ODS-NFR-RES-003 (10,000 zones at 16 GiB RAM); operators raising one should consider raising the other.
+*Source.* CIA-AX2 threat analysis; defence against a compromised or misconfigured catalog provider.
+*Verification.* Tests with synthetic catalogs exceeding the limit; verify cap enforcement, error logging, and continued operation with the accepted subset.
+
+**ODS-NFR-SEC-014.** *(Availability — slow-transfer tarpit defence.)* Every individual AXFR or IXFR transfer session — both regular zone transfers (§4.6, §4.7) and the catalog zone's own transfer in catalog mode — MUST be subject to a configurable per-session maximum duration (parameter `transfer.session_timeout_seconds`, default 300 seconds). When the timeout expires, the session MUST be aborted as per the normal abort path of §4.6 or §4.7 (the session counts as a failure for state-machine accounting). The timeout is independent of the connection-level idle timeouts of §4.12 and applies to the wall-clock duration of the transfer regardless of activity. This bounds the resource cost of a hostile or pathologically slow primary occupying the limited concurrent-transfer slots of ODS-FR-AXFR-022.
+*Source.* CIA-AX3 threat analysis; defence against TCP-slow-loris-style attacks adapted to zone transfer.
+*Verification.* Tests with a slow primary emulator (deliberately introducing delays in AXFR response stream); verify session abort at the configured timeout; verify the transfer slot is released for use by other transfers; verify state-machine accounting treats the timeout as a failure.
+
+**ODS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation.)* In catalog mode, every candidate member-zone name derived from the catalog's PTR records MUST be subjected to syntactic and semantic validation before being surfaced to the zone manager per ODS-FR-PROV-007:
+- syntactic validation per RFC 1035 §2.3.1 (per ODS-FR-PROV-013);
+- the member-zone name MUST NOT be equal to, nor subordinate to, the catalog zone's own apex name (preventing pathological recursive provisioning);
+- the member-zone name MUST NOT be the root zone (`.`) nor any of the IANA-reserved zone names enumerated in the schema documentation;
+- the member-zone name MUST NOT contain wildcard labels (`*`).
+
+Names failing any of these checks MUST be rejected with an error-level log entry identifying the rejection reason and the offending PTR record. The remainder of the catalog's contents MUST continue to be processed normally; one bad PTR MUST NOT cause the whole catalog to be rejected.
+*Source.* CIA-IX2 / IX3 threat analysis; defensive engineering against catalog-injection variants.
+*Verification.* Tests with catalogs containing each prohibited name pattern; verify rejection with appropriate diagnostic.
+
 ## 5.4 Maintainability
 
 The area code **MAINT** is allocated.
@@ -2530,8 +2688,8 @@ Label cardinality MUST be bounded: per-source-prefix labels use the same /24 (IP
 - **`/livez` (liveness probe).** Reports whether the process is running and responsive: returns HTTP 200 with a small JSON or plain-text body whenever the process can answer the probe at all. Returns failure (HTTP 5xx or no response) only if the process is unable to respond within a configurable liveness-probe timeout (parameter `health.livez_timeout_ms`, default 1000 ms). The intent is to support orchestrator restart-on-deadlock semantics; a healthy process answers `/livez` even when zones are still in LOADING state or during graceful shutdown.
 
 - **`/readyz` (readiness probe).** Reports whether the server should receive traffic, in one of three states:
-  - **ready** (HTTP 200): at least one configured zone is in ACTIVE state (per ODS-FR-ZONE-006), and the process is not draining.
-  - **not-ready** (HTTP 503): no configured zone is yet in ACTIVE state (i.e., all zones are LOADING or EXPIRED).
+  - **ready** (HTTP 200): at least one configured zone is in ACTIVE state (per ODS-FR-ZONE-006), and the process is not draining. In `mode = "catalog"` per §4.20.2, **ready** additionally requires that the initial catalog transfer has completed successfully and at least one member zone derived from it has reached ACTIVE state per the same criterion.
+  - **not-ready** (HTTP 503): no configured zone is yet in ACTIVE state (i.e., all zones are LOADING or EXPIRED). In `mode = "catalog"`, the bootstrap-retry phase before initial catalog acquisition (ODS-FR-PROV-011) also reports **not-ready**.
   - **draining** (HTTP 503): SIGTERM has been received and graceful shutdown is in progress per ODS-NFR-REL-001 and ODS-NFR-REL-005.
 
 State transitions MUST be observable on `/readyz` within 100 milliseconds of the actual state change (e.g., the transition to **draining** within 100 ms of SIGTERM receipt per ODS-NFR-REL-005).
@@ -2564,6 +2722,20 @@ Separate histogram series MUST be maintained for the following query categories,
 A per-zone disaggregated variant SHOULD be available via a `zone` label, subject to label-cardinality bounds (recommended: omit the `zone` label for deployments serving more than 1,000 zones to avoid label explosion). The label inclusion is operator-configurable (parameter `metrics.latency_histogram_per_zone`, default `false`).
 *Source.* Operational requirement; ODS-NFR-PERF-002 and ODS-NFR-PERF-003 verification depends on a histogram metric.
 *Verification.* Endpoint inspection; histogram-percentile calculation against the published buckets.
+
+**ODS-NFR-OBS-008.** *(Catalog-mode observability.)* When operating in `mode = "catalog"` per §4.20.2, the metrics endpoint MUST additionally expose the following metrics, each labelled with the catalog apex name (`catalog="<apex>"`) to permit future support for multiple catalogs:
+
+- `oxidedns_secondary_catalog_member_zones` (Gauge) — current count of member zones derived from the catalog;
+- `oxidedns_secondary_catalog_last_transfer_timestamp_seconds` (Gauge) — Unix timestamp of most recent successful catalog transfer (AXFR or IXFR);
+- `oxidedns_secondary_catalog_transfer_failures_total` (Counter) — cumulative count of catalog transfer failures, with a `reason` label (`tsig`, `network`, `parse`, `version`, `timeout`);
+- `oxidedns_secondary_catalog_member_additions_total` (Counter) — cumulative count of member zones added via catalog updates since process start;
+- `oxidedns_secondary_catalog_member_removals_total` (Counter) — cumulative count of member zones removed via catalog updates since process start;
+- `oxidedns_secondary_catalog_members_rejected_total` (Counter) — cumulative count of catalog PTR records rejected for validation failure per ODS-NFR-SEC-015, with a `reason` label (`syntax`, `catalog_apex_overlap`, `reserved`, `wildcard`);
+- `oxidedns_secondary_catalog_state` (Gauge with `state` label) — the catalog zone's own zone-state-machine state (LOADING / ACTIVE / EXPIRED), reported on the same convention as the per-zone state metric of ODS-NFR-OBS-005.
+
+In `mode = "static"`, these metrics MUST NOT be emitted (their absence signals to monitoring that catalog mode is not active). The metric naming follows the conventions of ODS-NFR-OBS-003.
+*Source.* CIA threat analysis observability requirements; standard practice for operationally significant subsystems.
+*Verification.* Endpoint inspection in both modes; functional tests inducing each counter increment and gauge state change.
 
 ## 5.7 Resource Limits
 
@@ -2625,7 +2797,7 @@ The area code **NET** is allocated.
 
 **ODS-IF-NET-005.** The server MUST support the configuration of distinct logical interface roles, each bound to a separate set of addresses:
 
-- **DNS query interface** (`interface.dns`): the address or addresses on which the server receives and answers DNS queries (UDP and TCP, default port 53). This is the high-traffic, externally reachable interface. It MUST be possible to configure it independently of the other interfaces. The DNS query interface also receives inbound NOTIFY messages from primaries (NOTIFY is delivered to UDP/53 or TCP/53 per RFC 1996); accepted NOTIFY sources remain controlled by per-zone authorization.
+- **DNS query interface** (`interface.dns`): the address or addresses on which the server receives and answers DNS queries (UDP and TCP, default port 53). This is the high-traffic, externally reachable interface. It MUST be possible to configure it independently of the other interfaces. The DNS query interface also receives inbound NOTIFY messages from primaries (NOTIFY is delivered to UDP/53 or TCP/53 per RFC 1996).
 - **Management interface** (`interface.mgmt`): the address or addresses associated with operator-facing access. The health and metrics endpoint of §6.4 binds to this address by default; the operator MAY override the health endpoint's bind address via the explicit `health.bind_address` configuration parameter (see ODS-IF-HEALTH-001), in which case the override takes precedence. The management interface MUST NOT bind the DNS query port (53) unless the operator explicitly sets `interface.dns` and `interface.mgmt` to the same address, which signals intentional co-location.
 - **Transfer interface** (`interface.transfer`) *(optional)*: the source address used for ALL outbound DNS-protocol traffic the secondary initiates toward configured primaries: AXFR queries, IXFR queries, SOA poll queries, and XoT-tunnelled variants of these. When configured, the server MUST bind outbound transfer sockets to this address. When omitted, the operating system selects the outbound source address as per ODS-IF-NET-003. The name reflects the broader scope (formerly `interface.xot` in v0.2–v0.4, which misleadingly suggested XoT-only applicability); the renaming is a schema breaking change recorded in the v0.5 revision history and addressed prior to MVP release. The old key name `interface.xot` MUST NOT be silently accepted by the configuration parser; if present, the parser MUST emit an error and exit per ODS-IF-CONF-005, directing the operator to the new name.
 
@@ -2638,14 +2810,14 @@ All three interface roles MAY be satisfied by the same address (wildcard or spec
 *Verification.* Deployment Guide review confirming explicit statement of the ICMP requirement for the DNS query interface; firewall-configuration checklist inspection.
 
 **ODS-IF-NET-007.** The configuration schema (§6.2) MUST provide an `[interfaces]` section with sub-keys `dns`, `mgmt`, and `transfer` — all optional, defaulting to wildcard / OS-selected as specified in ODS-IF-NET-005. Each key accepts a list of (address, port) pairs. The server MUST validate that addresses assigned to `dns` and `mgmt` do not overlap unless the operator explicitly sets them equal (signalling intentional co-location), emitting a warning at startup when overlap is detected. Overlapping `transfer` with `dns` or `mgmt` is permitted without warning, as the transfer interface is outbound-only and does not bind a listening socket.
-*Source.* ODS-IF-NET-005; ODS-IF-CONF-003 (configuration schema completeness); MVP clarification that the active interface roles are DNS, zone transfer, and management.
-*Verification.* Schema validation tests covering disjoint, intentionally overlapping, and unintentionally overlapping address assignments; warning-log inspection for the overlap case.
+*Source.* ODS-IF-NET-005; ODS-IF-NET-008; ODS-IF-CONF-003 (configuration schema completeness).
+*Verification.* Schema validation tests covering disjoint, intentionally overlapping, and unintentionally overlapping address assignments; warning-log inspection for the overlap case; error-emission tests for the notify-vs-dns same-socket conflict.
 
 **ODS-IF-NET-008.** The MVP configuration MUST NOT expose a fourth active **NOTIFY interface** role. NOTIFY reception is part of the DNS query interface for this release, and accepted sources are restricted by the zone's configured primaries and `notify_sources`. If an operator supplies `interface.notify` or `interfaces.notify`, the configuration parser MUST reject it per ODS-IF-CONF-005 and direct the operator to receive NOTIFY on `interfaces.dns`.
 
 A future revision MAY reintroduce a separate NOTIFY listener role if the project explicitly accepts the operational complexity and documents its firewalling, overlap, and query-handling semantics. That future work is not part of the MVP interface model.
-*Source.* Operational clarification for MVP interface separation: DNS, zone transfer, and management are the three active interface roles.
-*Verification.* Configuration tests confirming `interfaces.notify` is rejected; runtime tests confirming NOTIFY messages from authorized primaries are accepted over UDP and TCP on the DNS query interface.
+*Source.* MVP interface-scope decision; security isolation is provided by source authorization, TSIG where configured, and network firewalling around the DNS listener rather than by a fourth configured listener role.
+*Verification.* Configuration tests with `interface.notify` and `interfaces.notify` present; verify both are rejected. Runtime tests verify authorized NOTIFY messages are accepted on DNS listeners.
 
 ## 6.2 Configuration Interface
 
@@ -2728,16 +2900,67 @@ The complete naming convention, plus the per-parameter type and default value, i
 *Source.* Operational requirement; resolution of v0.4 audit finding about configuration parameter naming consistency.
 *Verification.* Schema documentation review confirming uniform conformance; configuration parsing tests rejecting parameters violating the convention as unknown keys per the schema.
 
-**ODS-IF-CONF-012.** Environment variable names corresponding to configuration parameters per ODS-IF-CONF-006 MUST follow the pattern `ODS_<SECTION>_<KEY>`, with both `<SECTION>` and `<KEY>` uppercased and dots replaced by underscores. Examples:
-- `[tsig] fudge_seconds = 300` becomes `ODS_TSIG_FUDGE_SECONDS=300`.
-- `[shutdown] grace_period_seconds = 30` becomes `ODS_SHUTDOWN_GRACE_PERIOD_SECONDS=30`.
-- `[health] livez_timeout_ms = 1000` becomes `ODS_HEALTH_LIVEZ_TIMEOUT_MS=1000`.
+**ODS-IF-CONF-012.** Environment variable names corresponding to configuration parameters per ODS-IF-CONF-006 MUST follow the pattern `RDS_<SECTION>_<KEY>`, with both `<SECTION>` and `<KEY>` uppercased and dots replaced by underscores. Examples:
+- `[tsig] fudge_seconds = 300` becomes `RDS_TSIG_FUDGE_SECONDS=300`.
+- `[shutdown] grace_period_seconds = 30` becomes `RDS_SHUTDOWN_GRACE_PERIOD_SECONDS=30`.
+- `[health] livez_timeout_ms = 1000` becomes `RDS_HEALTH_LIVEZ_TIMEOUT_MS=1000`.
 
 Where a configuration parameter is nested deeper than two levels (per-zone or per-key tables), environment-variable equivalents are NOT supported; such parameters are configured only via the file.
 
-Unrecognised environment variables matching the `ODS_*` pattern but not corresponding to any known configuration parameter MUST be detected at startup and emitted as warnings per ODS-IF-CONF-008 (likely operator typo), but MUST NOT prevent startup. Environment variables not matching the `ODS_*` pattern are ignored regardless of content.
+Unrecognised environment variables matching the `RDS_*` pattern but not corresponding to any known configuration parameter MUST be detected at startup and emitted as warnings per ODS-IF-CONF-008 (likely operator typo), but MUST NOT prevent startup. Environment variables not matching the `RDS_*` pattern are ignored regardless of content.
 *Source.* Operational requirement; resolution of v0.4 audit finding about environment variable naming.
-*Verification.* Configuration tests with each parameter overridden via the corresponding `ODS_*` environment variable; tests with deliberately misspelled `ODS_*` variables (expecting warning); tests with non-`ODS_*` variables (expecting silent ignore).
+*Verification.* Configuration tests with each parameter overridden via the corresponding `RDS_*` environment variable; tests with deliberately misspelled `RDS_*` variables (expecting warning); tests with non-`RDS_*` variables (expecting silent ignore).
+
+**ODS-IF-CONF-013.** *(Zone Provisioning configuration subtree.)* The configuration MUST express the zone-provisioning mode and its parameters via a `[zone_source]` section. The schema is:
+
+```toml
+[zone_source]
+mode = "static"   # or "catalog"; default "static"
+
+# For mode = "static":
+[[zone_source.zones]]
+name = "example.com."
+primaries = ["10.0.0.1", "10.0.0.2"]
+tsig_key = "key-example"     # optional unless require_tsig = true
+# Per-zone XoT configuration optional; per ODS-FR-XOT-* applies
+
+# For mode = "catalog":
+[zone_source.catalog]
+apex = "catalog.dns.example.com."
+primaries = ["10.0.0.1", "10.0.0.2"]     # per ODS-NFR-SEC-012
+tsig_key = "catalog-tsig-key"            # MANDATORY per ODS-NFR-SEC-010
+max_member_zones = 10000                 # per ODS-NFR-SEC-013, optional, default 10000
+bootstrap_retry = { initial_seconds = 1, factor = 2.0, max_seconds = 60 }
+
+[zone_source.catalog.defaults]
+primaries = ["10.0.0.1", "10.0.0.2"]     # used for all member zones; per ODS-NFR-SEC-011
+tsig_key = "member-tsig-key"             # optional, applies to all members uniformly
+```
+
+The configuration validator (per ODS-IF-CONF-005) MUST verify:
+- `mode` is one of the two permitted values;
+- in `mode = "static"`, `zone_source.zones` is non-empty;
+- in `mode = "catalog"`, `zone_source.catalog.apex`, `primaries`, and `tsig_key` are all set; `defaults.primaries` is non-empty;
+- mode-mismatched configuration (e.g., `zone_source.zones` present when `mode = "catalog"`) MUST be detected and rejected with a startup-validation failure per ODS-IF-CONF-005.
+
+The interaction with TSIG key definitions (the separately-defined `[[tsig_keys]]` table, unchanged from prior revisions) is by reference: `tsig_key` values in the `[zone_source]` subtree name keys defined in the TSIG key table.
+*Source.* §4.20; ODS-NFR-SEC-010 through ODS-NFR-SEC-013.
+*Verification.* Configuration round-trip tests for both modes; tests for each validator condition (expecting startup failure with a clear diagnostic in each case); tests for the mode-mismatch condition.
+
+**ODS-IF-CONF-014.** After applying environment-variable overrides per ODS-IF-CONF-012 to the configuration parsed from the TOML configuration file per ODS-IF-CONF-001, the configuration validator (per ODS-IF-CONF-005) MUST re-run all structural and cross-field validation against the post-override configuration. Environment-variable overrides MUST NOT bypass the validation envelope established at TOML parse time: a value that would have been rejected if present in the TOML file (e.g., a numeric value below an established minimum, a string outside an enumerated set, a cross-field combination violating a stated constraint) MUST equally be rejected when supplied via environment variable. The process MUST fail to start with a clear diagnostic identifying the offending parameter name (including its `RDS_*` environment variable spelling), the supplied value, and the constraint that was violated.
+*Source.* Resolution of Alpha audit finding F4 (environment-override post-validation gap); coherence with ODS-IF-CONF-005 validation envelope.
+*Note.* The original TOML-only validation occurred before environment-variable overrides were applied, allowing an override to place a structurally valid TOML configuration into an out-of-envelope state. This requirement closes that gap. Implementations MAY satisfy this requirement by structuring the validator as a single function over the post-merge configuration value, rather than running the validator twice.
+*Verification.* Tests with TOML configurations that validate cleanly and environment-variable overrides that introduce out-of-envelope values; verify startup failure with the expected diagnostic. *Added in v0.9.*
+
+**ODS-IF-CONF-015.** The server MUST accept a configurable maximum NSEC3 iteration count (per ODS-FR-DNSSEC-014) under the `[dnssec]` configuration subtree or equivalent. The parameter name MUST be `nsec3_max_iterations`, an unsigned integer in the inclusive range 0–65535. The default value MUST be 100, the soft ceiling recommended by RFC 9276 / BCP 236 §2.4 for legacy NSEC3 zones. Where the configured value exceeds 100, the configuration warning `nsec3_iterations_large` MUST be emitted at startup per ODS-IF-CONF-008, recording the configured value and the BCP 236 ceiling.
+*Source.* ODS-FR-DNSSEC-014; RFC 9276 §2.4.
+*Note.* A value of 0 means that NSEC3 chain proofs are omitted from negative responses for any zone whose NSEC3PARAM iteration count is greater than zero — i.e., the strictest setting, consistent with RFC 9276's recommendation that new NSEC3 deployments use zero iterations.
+*Verification.* Configuration round-trip tests across the range; warning emission test for values above 100; tests for the boundary values (0, 100, 101). *Added in v0.9.*
+
+**ODS-IF-CONF-016.** The server MUST accept a configurable boolean parameter that, when enabled, relaxes the strict out-of-zone owner-name rejection of ODS-FR-AXFR-012 as specified in ODS-FR-AXFR-025. The parameter name MUST be `accept_out_of_zone_glue`, under the `[transfer]` configuration subtree or equivalent. The default value MUST be `false` (strict v0.8 behaviour). Where the parameter is set to `true`, the configuration warning `out_of_zone_glue_tolerance_enabled` MUST be emitted at startup per ODS-IF-CONF-008 to make the deviation from the default policy observable in the operator's observability surface.
+*Source.* ODS-FR-AXFR-025.
+*Note.* The parameter is process-global rather than per-zone in MVP 1.0 scope; per-zone selectivity is a deliberate non-goal and would be evaluated in a future revision should an operational need arise.
+*Verification.* Configuration round-trip tests for both values; warning emission test for the `true` case; behavioural test confirming the AXFR-time effect per ODS-FR-AXFR-025. *Added in v0.9.*
 
 ## 6.3 Logging Interface
 
@@ -2751,7 +2974,7 @@ The area code **LOG** is allocated.
 *Source.* ODS-NFR-OBS-001.
 *Verification.* Per ODS-NFR-OBS-001.
 
-**ODS-IF-LOG-003.** Log level MUST be configurable via the configuration file per §6.2 and via environment variable (`ODS_LOG_LEVEL` or equivalent) per ODS-IF-CONF-006. The default log level MUST be info per ODS-NFR-OBS-002.
+**ODS-IF-LOG-003.** Log level MUST be configurable via the configuration file per §6.2 and via environment variable (`RDS_LOG_LEVEL` or equivalent) per ODS-IF-CONF-006. The default log level MUST be info per ODS-NFR-OBS-002.
 *Source.* ODS-NFR-OBS-002.
 *Verification.* Per ODS-NFR-OBS-002.
 
@@ -3040,9 +3263,9 @@ For each (server, primary) pair, the test matrix MUST cover:
 - IXFR incremental refresh including IXFR-to-AXFR fallback per §4.7;
 - NOTIFY receipt and refresh triggering per §4.8;
 - TSIG-authenticated transfers per §4.9 with at least the HMAC-SHA256 algorithm;
-- XoT-secured transfers per §4.10, against any primary in the list that supports XoT at the time of testing (Knot DNS at minimum as of 2026).
+- XoT-secured transfers per §4.10, against each primary in the list that supports XoT at the time of testing. As of 2026 this comprises Knot DNS (stable XoT server support since 3.1) and BIND 9 (stable XoT server support since 9.18); the matrix MUST cover both. NSD does not implement XoT server-side at the time of writing and is therefore exempt from the XoT row.
 
-*Source.* PID §6; operational requirement for production interoperability.
+*Source.* PID §6; operational requirement for production interoperability; resolution of Alpha audit finding regarding XoT coverage gap against BIND 9. *XoT-against-BIND-9 coverage added in v0.9.*
 *Verification.* Interop test pipeline execution per the matrix.
 
 **ODS-VER-004.** The interoperability matrix MUST exercise zones of operationally representative complexity:
@@ -3098,8 +3321,9 @@ The PID establishes Alpha and MVP milestones. The acceptance criteria for each a
 - Interface requirements: §6.1 in full — three-interface segregation per ODS-IF-NET-005 through -007, plus the ODS-IF-NET-008 prohibition on exposing a fourth active NOTIFY interface role. §6.2 (CONF) in full, including the v0.5-introduced CONF-008 (warning catalogue), CONF-009 (`--dump-config`), CONF-010 (`--validate-config`), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention). §6.3 in full, including the v0.5-introduced LOG-005 through LOG-008. §6.4 (HEALTH): the v0.1–v0.3 single-endpoint `/healthz` model is acceptable at Alpha — the `/livez`+`/readyz` split of HEALTH-002 (introduced in v0.4) and the new HEALTH-005 / HEALTH-006 are deferred to MVP. §6.5 in full, including the v0.5-introduced SIGPIPE handling clarification. §6.6 (PROC): ODS-IF-PROC-001 (exit code convention), ODS-IF-PROC-002 (`--version`), and ODS-IF-PROC-003 (`--help`) are required for Alpha; ODS-IF-PROC-004 (`--example-config`, MAY-level) is optional in Alpha as it is in MVP.
 - Non-functional requirements: §5.2 (REL) -001 to -005 (REL-006 overload behaviour, REL-007 clock-skew tolerance deferred to MVP), §5.3 (SEC) -001 to -005 (SEC-006 continuous dependency audit, SEC-007 CVE policy deferred to MVP), §5.4 (MAINT) -001, -003, -004 (MAINT-002 module organisation, MAINT-005 reproducible builds, MAINT-006 backward-compat, MAINT-007 test coverage, MAINT-008 signed releases, MAINT-009 Operator Deployment Guide deferred to MVP), §5.5 (PORT) -001 to -004 (PORT-005 init-system independence verified at MVP), §5.6 (OBS) -001, -002, -004 (single-endpoint variant per above), -005 (per-zone status metrics — basic operational visibility at Alpha), §5.7 (RES) -001 (container image size);
 - Interoperability per §7.2 with **at least one** of {NSD, Knot DNS, BIND 9} as primary; the specific primary version tested MUST be recorded per ODS-VER-013.
+- Zone Provisioning (§4.20): ODS-FR-PROV-001, -002, -003, -004 covering `mode = "static"` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-mode requirements ODS-FR-PROV-005 through ODS-FR-PROV-014 and the catalog-related security NFRs ODS-NFR-SEC-010 through ODS-NFR-SEC-015 are deferred to MVP. ODS-NFR-SEC-008 (TSIG environment-variable loading) and ODS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
 
-Deferred from Alpha to MVP: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XOT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, the `/livez`+`/readyz` split (Alpha may use single `/healthz`), HEALTH-005 (response time bounds), HEALTH-006 (rate limit), all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extensions ODS-NFR-OBS-003 full metric naming convention, OBS-006 build_info, OBS-007 latency histogram, resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`).
+Deferred from Alpha to MVP: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XOT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, the `/livez`+`/readyz` split (Alpha may use single `/healthz`), HEALTH-005 (response time bounds), HEALTH-006 (rate limit), all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extensions ODS-NFR-OBS-003 full metric naming convention, OBS-006 build_info, OBS-007 latency histogram, ODS-NFR-OBS-008 (catalog metrics, deferred because catalog mode itself is deferred), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), §4.20 catalog-mode requirements and associated NFRs as enumerated above.
 *Source.* PID §6.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of ODS-VER-011 (Gate methods).
 
@@ -3169,7 +3393,7 @@ The SRS has been subjected to a structured per-section audit cycle initiated in 
 |---|---|---|---|
 | Functional | v0.3 | §4 | Closed specification gaps (non-EDNS UDP ceiling, AA bit completeness, CNAME chain semantics, TCP in-flight cap, AXFR/IXFR size cap, pseudo-RR rejection); new MVP-scope §4.19 DNS Cookies (RFC 7873/9018) and NSID (RFC 5001). |
 | Non-functional | v0.4 | §5 | Reference Hardware Profile and Reference Query Mix introduced (Appendix E); 13 new NFRs covering TCP/TSIG/DNSSEC throughput targets, overload behaviour, clock-skew tolerance, CVE policy, test coverage, signed releases, Operator Deployment Guide deliverable, build_info and latency-histogram metrics, idle-CPU bound. |
-| Interface | v0.5 | §6 | `interface.xot` → `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
+| Interface | v0.5 | §6 | `interface.xot` -> `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
 | Architectural invariants | v0.6 | §3 | Precision refinements to ODS-INV-001 through -006; three new foundational invariants (Authoritative-Only Response Composition, Single-Process Architecture, Static Composition). |
 | Verification | v0.7 (this revision) | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; ODS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
 
@@ -4057,15 +4281,11 @@ These items could be added in a future version without violating any architectur
 
 *Enforcement.* Not implemented; per ODS-INV-001 the secondary serves what the primary delivers.
 
-### C.3.9 DNS Catalog Zones (RFC 9432)
+### C.3.9 DNS Catalog Zones (RFC 9432) — *promoted to in-scope in v0.8*
 
-*Description.* The mechanism by which a primary publishes a "catalog zone" listing the zones that secondaries should serve, allowing dynamic zone provisioning by adding entries to the catalog.
+*Status.* This item was excluded in v0.1 through v0.7 on the grounds that ODS-INV-005 (Static Configuration) precluded catalog-driven dynamic zone provisioning. The v0.8 introduction of §4.20 Zone Provisioning resolves the exclusion by isolating the *mode selection* (statically configured) from the *derived member-zone set* (runtime-derived state, expressly admitted by the updated ODS-INV-005). Catalog zones are now supported under `zone_source.mode = "catalog"` per ODS-FR-PROV-005 et seq., with the security narrowings of ODS-NFR-SEC-010 through ODS-NFR-SEC-015 (mandatory TSIG on the catalog, prohibition of `primaries` property honouring, bounded member count, validation of member-zone names, mandatory per-transfer timeout).
 
-*Engineering MVP update.* Catalog Zones are now a new post-SRS Engineering MVP target. Static configuration still applies to the catalog definitions, transfer primaries, TSIG references, listeners, and management settings. The member-zone set inside a successfully transferred RFC 9432 catalog is intentionally dynamic.
-
-*Enforcement.* See `docs/catalog-zone-mvp-rfc9432.md`. The default `serve_catalog_zone = false` policy allows OxideDNS to transfer and process the management catalog without answering external DNS queries for the catalog zone itself.
-
-*Note.* This is an Engineering MVP extension to SRS v0.7 and should be carried into the next full SRS revision.
+The entry is preserved in this register, with this updated status, per the identifier-stability discipline of §1.4.4 — readers of earlier revisions following a reference to C.3.9 reach a current statement of where the topic now lives.
 
 ### C.3.10 EDNS Expire (RFC 7314)
 
@@ -4134,9 +4354,10 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 | 8484 | DNS-over-HTTPS | Current-scope exclusion | C.3.4 |
 | 8914 | EDNS Extended DNS Errors | Current-scope exclusion (flagged) | C.3.15 |
 | 9250 | DNS-over-QUIC | Current-scope exclusion | C.3.5 |
-| 9432 | DNS Catalog Zones | Engineering MVP extension after v0.7; see C.3.9 update | C.3.9 |
 
 *Note.* RFC 7873 (DNS Cookies) was listed in this table in v0.1 and v0.2 as a current-scope exclusion. As of v0.3 it has been brought into MVP scope (§4.19) and is therefore removed from this table.
+
+*Note.* RFC 9432 (DNS Catalog Zones) was listed in this table in v0.1 through v0.7 as a current-scope exclusion incompatible with ODS-INV-005. As of v0.8 it has been brought into scope (§4.20.2, `mode = "catalog"`) under the architectural reconciliation described in the updated ODS-INV-005 and in Appendix C.3.9; it is therefore removed from this table.
 
 ## C.5 Items Flagged for Project Decision
 
@@ -4168,7 +4389,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | `--version` and `--help` CLI flags | §6.6, ODS-IF-PROC-002 / -003 | Standard CLI convention | **Resolved (v0.5): added; ODS-IF-PROC-002 / -003** |
 | `--example-config` CLI flag | §6.6, ODS-IF-PROC-004 | Optional (MAY) | **Resolved (v0.5): MAY-level; ODS-IF-PROC-004** |
 | Configuration parameter naming convention | §6.2, ODS-IF-CONF-011 | Specify snake_case + unit suffix | **Resolved (v0.5): specified; ODS-IF-CONF-011** |
-| Environment variable naming convention (`ODS_<SECTION>_<KEY>`) | §6.2, ODS-IF-CONF-012 | Specify | **Resolved (v0.5): specified; ODS-IF-CONF-012** |
+| Environment variable naming convention (`RDS_<SECTION>_<KEY>`) | §6.2, ODS-IF-CONF-012 | Specify | **Resolved (v0.5): specified; ODS-IF-CONF-012** |
 | Configuration warning catalogue (non-aborting) | §6.2, ODS-IF-CONF-008 | Implement | **Resolved (v0.5): specified; ODS-IF-CONF-008** |
 | Canonical log field names | §6.3, ODS-IF-LOG-005 | Specify uniform field set | **Resolved (v0.5): specified; ODS-IF-LOG-005** |
 | Bootstrap (pre-config) logging | §6.3, ODS-IF-LOG-006 | JSON + info level by default | **Resolved (v0.5): specified; ODS-IF-LOG-006** |
@@ -4210,6 +4431,18 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Traceability matrix update cadence | §7.5, ODS-VER-009 | Synchronous with each release | **Resolved (v0.7): specified; ODS-VER-009** |
 | ODS-VER-007 Alpha milestone PROC scope | §7.4 | PROC-001/-002/-003 in Alpha | **Resolved (v0.7): specified; ODS-VER-007** |
 | ODS-VER-007 Alpha milestone v0.3 reference precision | §7.4 | Clarify to v0.1–v0.3 | **Resolved (v0.7): clarified; ODS-VER-007** |
+| NSEC3 iteration count cap (RFC 9276 / BCP 236) | §4.13, ODS-FR-DNSSEC-014 | Add as defence against CPU amplification | **Resolved (v0.9): added; ODS-FR-DNSSEC-014, ODS-IF-CONF-015** |
+| DNAME synthesis name-length overflow (RFC 6672 §5.3.1) | §4.2, ODS-FR-QRY-014 / ODS-FR-QRY-025 | Specify YXDOMAIN response | **Resolved (v0.9): specified; ODS-FR-QRY-025** |
+| DNAME multiplicity at the same owner (RFC 6672 §2.4) | §4.6, ODS-FR-AXFR-026 | Reject at ingest | **Resolved (v0.9): specified; ODS-FR-AXFR-026** |
+| Out-of-zone glue tolerance (compatibility option) | §4.6, ODS-FR-AXFR-025; §6.2, ODS-IF-CONF-016 | Add optional, off-by-default tolerance | **Resolved (v0.9): added; ODS-FR-AXFR-025, ODS-IF-CONF-016** |
+| Environment-variable override re-validation gap | §6.2, ODS-IF-CONF-014 | Re-run validator after override | **Resolved (v0.9): specified; ODS-IF-CONF-014** |
+| XoT interoperability coverage against BIND 9 | §7.2, ODS-VER-003 | Add BIND 9 to XoT row of matrix | **Resolved (v0.9): added; ODS-VER-003** |
+| Implementation confirmation: zero `unwrap()` / `panic!()` in Alpha production code | §3.6, ODS-INV-006 | Audit confirmation of panic-freedom discipline | **Confirmed (v0.9): Alpha implementation; ODS-INV-006** |
+| Implementation confirmation: bind-then-drop privilege model | §5.3, ODS-NFR-SEC-004 | Audit confirmation of privilege drop ordering | **Confirmed (v0.9): Alpha implementation; ODS-NFR-SEC-004** |
+| Implementation confirmation: secret zeroization and Debug redaction | §5.3, ODS-NFR-SEC-001; §6.3, ODS-IF-LOG-005 | Audit confirmation of secret handling | **Confirmed (v0.9): Alpha implementation; ODS-NFR-SEC-001, ODS-IF-LOG-005** |
+| Implementation confirmation: NOTIFY discard log rate-limit per source prefix | §4.8, ODS-FR-NOTIFY-009 | Audit confirmation of rate-limit granularity | **Confirmed (v0.9): Alpha implementation; ODS-FR-NOTIFY-009** |
+| Property-based testing in Alpha scope | §7.1 | Add `proptest`-based invariant rules to parser/zone-lookup paths | **Pending (Alpha audit recommendation): non-normative, tracked in Test Plan** |
+| Server module decomposition (server/lib.rs monolith) | §5.4, ODS-NFR-MAINT-002 | Decompose `server::health` and `server::transfer` from monolithic `server/lib.rs` | **Pending (Alpha audit recommendation): non-normative; module organisation per ODS-NFR-MAINT-002 to be tracked in Architecture Document** |
 | `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | Pending |
 | PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | Pending |
 | External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | Pending |
@@ -4641,6 +4874,7 @@ Area codes are short uppercase mnemonics (3–6 characters) registered in the ta
 | ZSM | §4.16 | Zone state machine |
 | RRL | §4.17 | Response Rate Limiting |
 | COOKIE | §4.19 | DNS Cookies (RFC 7873, RFC 9018) |
+| PROV | §4.20 | Zone Provisioning (static and catalog modes, RFC 9432) |
 
 #### Non-functional area codes (ODS-NFR-`AREA`-NNN)
 

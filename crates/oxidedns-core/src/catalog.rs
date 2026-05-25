@@ -7,6 +7,12 @@ use crate::{
     zone::ZoneSnapshot,
 };
 
+// ODS-NFR-MAINT-004 principal functional requirement references for RFC 9432
+// catalog-zone parsing and provisioned member-zone derivation:
+// - ODS-FR-PROV-001 ODS-FR-PROV-002 ODS-FR-PROV-003 ODS-FR-PROV-004
+// - ODS-FR-PROV-005 ODS-FR-PROV-006 ODS-FR-PROV-007 ODS-FR-PROV-008
+// - ODS-FR-PROV-009 ODS-FR-PROV-010 ODS-FR-PROV-011 ODS-FR-PROV-012
+// - ODS-FR-PROV-013 ODS-FR-PROV-014
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogMember {
     pub member_node: DomainName,

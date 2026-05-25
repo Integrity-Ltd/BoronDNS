@@ -5,7 +5,7 @@ release review. It is not final approval of the SRS Appendix C.5 pending
 decision for `Slip = 2`; release notes must continue to list that item as
 pending until the project decision is closed.
 
-The baseline follows `docs/OxideDNS-Secondary-SRS-v0.7.md` section 4.17 and is
+The baseline follows `docs/OxideDNS-Secondary-SRS-v0.9.md` section 4.17 and is
 mirrored by `config/oxidedns.example.toml`.
 
 | Setting | Baseline | SRS requirement | Release-review status |
