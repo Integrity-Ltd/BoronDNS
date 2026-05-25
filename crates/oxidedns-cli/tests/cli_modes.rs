@@ -9,6 +9,7 @@ use std::{
 const EX_CONFIG_INVALID: i32 = 2;
 const EX_USAGE: i32 = 64;
 const EX_CANTCREAT: i32 = 73;
+const EX_IOERR: i32 = 74;
 const EX_CONFIG: i32 = 78;
 
 #[test]
@@ -222,6 +223,42 @@ fn unreadable_or_unparseable_config_exits_with_config() {
         .expect("run oxidedns --validate-config");
 
     assert_eq!(output.status.code(), Some(EX_CONFIG));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn unreadable_xot_tls_file_exits_with_ioerr() {
+    let config = write_config(
+        "missing-xot-file",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "example.test."
+
+            [[zones.transfer_primaries]]
+            addr = "127.0.0.1:853"
+            transport = "xot"
+            server_name = "primary.example.test"
+            trust_anchors = ["/definitely/missing/oxidedns-xot-ca.pem"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config with unreadable XoT file");
+
+    assert_eq!(output.status.code(), Some(EX_IOERR));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to read XoT TLS file"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let _ = fs::remove_file(config);
 }

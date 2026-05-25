@@ -9,13 +9,16 @@ use tracing_subscriber::EnvFilter;
 use oxidedns_core::{ConfigError, LogFormatConfig, ServerConfig};
 use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
+    TransferError,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/oxidedns-secondary/config.toml";
 const EX_CONFIG_INVALID: u8 = 2;
 const EX_USAGE: u8 = 64;
 const EX_GENERAL: u8 = 1;
+const EX_OSERR: u8 = 71;
 const EX_CANTCREAT: u8 = 73;
+const EX_IOERR: u8 = 74;
 const EX_CONFIG: u8 = 78;
 const HELP_FOOTER: &str = concat!(
     "Configuration: default path /etc/oxidedns-secondary/config.toml",
@@ -283,11 +286,25 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | RuntimeError::BindTcp { .. }
                 | RuntimeError::BindHealth { .. } => EX_CANTCREAT,
                 RuntimeError::InvalidRuntimeConfig(_) => EX_CONFIG_INVALID,
-                RuntimeError::Udp(_)
-                | RuntimeError::Tcp(_)
-                | RuntimeError::Health(_)
-                | RuntimeError::ShutdownSignal(_)
-                | RuntimeError::DnsCookieSecret(_) => EX_GENERAL,
+                RuntimeError::ShutdownSignal(_) | RuntimeError::DnsCookieSecret(_) => EX_OSERR,
+                RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
+            };
+        }
+        if let Some(transfer_error) = cause.downcast_ref::<TransferError>() {
+            return match transfer_error {
+                TransferError::ReadTlsFile { .. } => EX_IOERR,
+                TransferError::XotConfig { .. } => EX_CONFIG_INVALID,
+                TransferError::BindUdp { .. } => EX_CANTCREAT,
+                TransferError::Io { .. } => EX_IOERR,
+                TransferError::ConnectTcp { .. }
+                | TransferError::Timeout { .. }
+                | TransferError::Axfr(_)
+                | TransferError::Ixfr(_)
+                | TransferError::Soa(_)
+                | TransferError::RandomQueryId(_)
+                | TransferError::Tsig(_)
+                | TransferError::TlsHandshake { .. }
+                | TransferError::XotAlpn { .. } => EX_GENERAL,
             };
         }
     }
@@ -457,6 +474,31 @@ mod tests {
         })
         .context("starting runtime");
         assert_eq!(exit_code_for_error(&health), EX_CANTCREAT);
+    }
+
+    #[test]
+    fn startup_runtime_validation_errors_map_to_srs_exit_codes() {
+        let addr = "127.0.0.1:5300".parse().expect("socket address");
+
+        let invalid_xot = anyhow!(TransferError::XotConfig {
+            addr,
+            message: "server_name is required".to_owned(),
+        })
+        .context("validating runtime configuration");
+        assert_eq!(exit_code_for_error(&invalid_xot), EX_CONFIG_INVALID);
+
+        let unreadable_tls = anyhow!(TransferError::ReadTlsFile {
+            path: "/missing/trust-anchor.pem".to_owned(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        })
+        .context("validating runtime configuration");
+        assert_eq!(exit_code_for_error(&unreadable_tls), EX_IOERR);
+
+        let startup_os = anyhow!(RuntimeError::ShutdownSignal(std::io::Error::other(
+            "signal setup failed",
+        )))
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&startup_os), EX_OSERR);
     }
 
     #[test]
