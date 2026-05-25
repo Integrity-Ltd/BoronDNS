@@ -110,6 +110,7 @@ and are included in `--dump-config` output:
 - `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
 - `ODS_TSIG_FUDGE_SECONDS`
 - `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
+- `ODS_LIMITS_ZSM_MAX_INTERVAL_SECS`
 
 Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
 `category=configuration_warning` messages and ignored. Variables outside the

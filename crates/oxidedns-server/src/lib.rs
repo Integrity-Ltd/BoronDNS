@@ -231,6 +231,7 @@ impl Runtime {
         let transfer_plan = TransferPlan::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
+            Duration::from_secs(self.config.limits.zsm_max_interval_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_secs),
             Duration::from_secs(self.config.limits.zsm_initial_retry_max_secs),
         );
@@ -3961,6 +3962,7 @@ impl RefreshReason {
 #[derive(Debug, Clone)]
 struct ZoneRefreshRegistry {
     min_interval: Duration,
+    max_interval: Duration,
     initial_retry: Duration,
     initial_retry_max: Duration,
     jitter: Jitter,
@@ -4081,9 +4083,15 @@ impl IxfrCooldownKey {
 }
 
 impl ZoneRefreshRegistry {
-    fn new(min_interval: Duration, initial_retry: Duration, initial_retry_max: Duration) -> Self {
+    fn new(
+        min_interval: Duration,
+        max_interval: Duration,
+        initial_retry: Duration,
+        initial_retry_max: Duration,
+    ) -> Self {
         Self {
             min_interval,
+            max_interval,
             initial_retry,
             initial_retry_max,
             jitter: Jitter::new(jitter_seed()),
@@ -4097,8 +4105,24 @@ impl ZoneRefreshRegistry {
         initial_retry: Duration,
         initial_retry_max: Duration,
     ) -> Self {
+        Self::without_jitter_with_max(
+            min_interval,
+            Duration::from_secs(86_400),
+            initial_retry,
+            initial_retry_max,
+        )
+    }
+
+    #[cfg(test)]
+    fn without_jitter_with_max(
+        min_interval: Duration,
+        max_interval: Duration,
+        initial_retry: Duration,
+        initial_retry_max: Duration,
+    ) -> Self {
         Self {
             min_interval,
+            max_interval,
             initial_retry,
             initial_retry_max,
             jitter: Jitter::none(),
@@ -4250,8 +4274,10 @@ impl ZoneRefreshRegistry {
     }
 
     fn effective_interval(&self, seconds: u32) -> Duration {
-        self.jitter
-            .apply(Duration::from_secs(seconds as u64).max(self.min_interval))
+        let interval = Duration::from_secs(seconds as u64)
+            .max(self.min_interval)
+            .min(self.max_interval);
+        self.jitter.apply(interval)
     }
 
     fn initial_retry_delay(&self, failure_count: u32) -> Duration {
@@ -5406,7 +5432,7 @@ mod tests {
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
             TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigKey,
         },
-        zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
+        zone::{ResourceRecord, Rrset, SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
     };
 
     use super::{
@@ -7634,6 +7660,55 @@ mod tests {
         assert_eq!(status.last_success_unix_secs, Some(1_700_004_200));
         assert_eq!(status.next_refresh_unix_secs, Some(1_700_007_800));
         assert_eq!(status.failures_since_success, 0);
+    }
+
+    #[test]
+    fn refresh_registry_clamps_soa_intervals_to_configured_bounds() {
+        let registry = ZoneRefreshRegistry::without_jitter_with_max(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(1_000),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(180),
+        );
+        let now = std::time::Instant::now();
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let mut snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        );
+        snapshot.soa_timers = Some(SoaTimers {
+            refresh: 10_000,
+            retry: 10_000,
+            expire: 86_400,
+            minimum: 300,
+        });
+
+        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+        let status = registry
+            .snapshots_by_zone()
+            .remove(&origin.canonical_key())
+            .expect("zone refresh status");
+        assert_eq!(status.next_refresh_unix_secs, Some(1_700_001_000));
+
+        registry.record_failure_at_with_timestamp(
+            &origin,
+            Some(Arc::new(snapshot)),
+            now + std::time::Duration::from_secs(1_000),
+            1_700_001_000,
+        );
+        let status = registry
+            .snapshots_by_zone()
+            .remove(&origin.canonical_key())
+            .expect("zone refresh status");
+        assert_eq!(status.next_refresh_unix_secs, Some(1_700_002_000));
+        assert_eq!(status.failures_since_success, 1);
     }
 
     #[test]

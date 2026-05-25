@@ -57,6 +57,7 @@ max_transfer_ingest_bytes = 4294967296
 notify_dedup_secs = 1
 max_concurrent_transfers = 4
 zsm_min_interval_secs = 60
+zsm_max_interval_secs = 86400
 zsm_initial_retry_secs = 60
 zsm_initial_retry_max_secs = 3600
 

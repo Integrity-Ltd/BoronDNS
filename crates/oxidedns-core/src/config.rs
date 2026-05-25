@@ -147,6 +147,17 @@ impl ServerConfig {
                 "limits.zsm_min_interval_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.zsm_max_interval_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.zsm_max_interval_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.zsm_max_interval_secs < self.limits.zsm_min_interval_secs {
+            return Err(ConfigError::Invalid(
+                "limits.zsm_max_interval_secs must be at least limits.zsm_min_interval_secs"
+                    .to_owned(),
+            ));
+        }
         if self.limits.zsm_initial_retry_secs == 0 {
             return Err(ConfigError::Invalid(
                 "limits.zsm_initial_retry_secs must be at least 1".to_owned(),
@@ -545,6 +556,8 @@ pub struct Limits {
     pub max_concurrent_transfers: usize,
     #[serde(default = "default_zsm_min_interval_secs")]
     pub zsm_min_interval_secs: u64,
+    #[serde(default = "default_zsm_max_interval_secs")]
+    pub zsm_max_interval_secs: u64,
     #[serde(default = "default_zsm_initial_retry_secs")]
     pub zsm_initial_retry_secs: u64,
     #[serde(default = "default_zsm_initial_retry_max_secs")]
@@ -569,6 +582,7 @@ impl Default for Limits {
             notify_dedup_secs: default_notify_dedup_secs(),
             max_concurrent_transfers: default_max_concurrent_transfers(),
             zsm_min_interval_secs: default_zsm_min_interval_secs(),
+            zsm_max_interval_secs: default_zsm_max_interval_secs(),
             zsm_initial_retry_secs: default_zsm_initial_retry_secs(),
             zsm_initial_retry_max_secs: default_zsm_initial_retry_max_secs(),
         }
@@ -951,6 +965,10 @@ fn default_zsm_min_interval_secs() -> u64 {
     60
 }
 
+fn default_zsm_max_interval_secs() -> u64 {
+    86_400
+}
+
 fn default_zsm_initial_retry_secs() -> u64 {
     60
 }
@@ -1031,6 +1049,7 @@ mod tests {
         );
         assert_eq!(config.limits.max_concurrent_transfers, 4);
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
+        assert_eq!(config.limits.zsm_max_interval_secs, 86_400);
         assert_eq!(config.limits.zsm_initial_retry_secs, 60);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 3600);
         assert_eq!(
@@ -2015,6 +2034,7 @@ mod tests {
 
                 [limits]
                 zsm_min_interval_secs = 120
+                zsm_max_interval_secs = 86400
                 zsm_initial_retry_secs = 30
                 zsm_initial_retry_max_secs = 900
 
@@ -2026,6 +2046,7 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.limits.zsm_min_interval_secs, 120);
+        assert_eq!(config.limits.zsm_max_interval_secs, 86_400);
         assert_eq!(config.limits.zsm_initial_retry_secs, 30);
         assert_eq!(config.limits.zsm_initial_retry_max_secs, 900);
     }
@@ -2325,6 +2346,7 @@ mod tests {
     fn rejects_zero_zsm_intervals() {
         for (key, expected) in [
             ("zsm_min_interval_secs", "zsm_min_interval_secs"),
+            ("zsm_max_interval_secs", "zsm_max_interval_secs"),
             ("zsm_initial_retry_secs", "zsm_initial_retry_secs"),
         ] {
             let error = ServerConfig::from_toml_str(&format!(
@@ -2344,6 +2366,27 @@ mod tests {
 
             assert!(error.to_string().contains(expected));
         }
+    }
+
+    #[test]
+    fn rejects_zsm_max_interval_below_min_interval() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                zsm_min_interval_secs = 120
+                zsm_max_interval_secs = 119
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("ZSM max interval below min interval must fail");
+
+        assert!(error.to_string().contains("zsm_max_interval_secs"));
     }
 
     #[test]

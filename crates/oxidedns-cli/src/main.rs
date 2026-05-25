@@ -267,6 +267,10 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
             }
+            "ODS_LIMITS_ZSM_MAX_INTERVAL_SECS" => {
+                let value = env_value_to_string(&name, value)?;
+                config.limits.zsm_max_interval_secs = parse_env_value(&name, &value)?;
+            }
             _ if name.starts_with("ODS_") => {
                 warnings.push(ConfigWarning {
                     code: "unrecognised_rds_environment_variable",
@@ -633,6 +637,7 @@ mod tests {
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
                 ("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
+                ("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
             ]
             .into_iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
@@ -652,6 +657,7 @@ mod tests {
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.tsig.fudge_seconds, 30);
         assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
+        assert_eq!(config.limits.zsm_max_interval_secs, 43_200);
     }
 
     #[test]

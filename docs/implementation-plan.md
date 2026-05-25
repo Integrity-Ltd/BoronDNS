@@ -182,10 +182,10 @@ Slice 5 is in progress:
 
 Slice 6 has a preliminary AXFR-backed zone state machine:
 
-- successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to a 60-second minimum interval;
+- successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to configurable minimum and maximum effective intervals;
 - failed refresh transfers schedule retry from the transferred SOA RETRY field where available;
 - failed initial transfers for LOADING zones use exponential backoff starting at `[limits].zsm_initial_retry_secs`, defaulting to 60 seconds, and capped by `[limits].zsm_initial_retry_max_secs`, defaulting to 3600 seconds;
-- `[limits].zsm_min_interval_secs` configures the 60-second minimum effective SOA REFRESH/RETRY interval;
+- `[limits].zsm_min_interval_secs` configures the 60-second minimum effective SOA REFRESH/RETRY interval, and `[limits].zsm_max_interval_secs` configures the 86400-second maximum effective interval; original SOA timer values are preserved unchanged for serving;
 - scheduled REFRESH, RETRY, and initial-load backoff intervals receive independently sampled ±10% jitter;
 - the scheduler marks zones EXPIRED when elapsed time reaches the transferred SOA EXPIRE field; queries against EXPIRED zones return SERVFAIL through the normal non-ACTIVE zone path;
 - due scheduled refreshes and accepted non-duplicate NOTIFY refreshes share the same transfer worker and atomic publication path;
@@ -278,7 +278,7 @@ Slice 8 has health endpoint foundations:
 - focused tests cover `/livez` and `/readyz` responses within the SRS 100 ms health-probe bound under starting and draining states.
 - CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
 - `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
-- `ODS_<SECTION>_<KEY>` environment overrides cover the current scalar server/health/limits/TSIG subset (`server.health`, log level/format, NSID, health metrics rate-limit knobs, `limits.max_transfer_ingest_bytes`, and `tsig.fudge_seconds`), take precedence before runtime validation, are reflected by `--dump-config`, and emit non-fatal `configuration_warning` stderr messages for unrecognised `ODS_*` variables;
+- `ODS_<SECTION>_<KEY>` environment overrides cover the current scalar server/health/limits/TSIG subset (`server.health`, log level/format, NSID, health metrics rate-limit knobs, `limits.max_transfer_ingest_bytes`, `limits.zsm_max_interval_secs`, and `tsig.fudge_seconds`), take precedence before runtime validation, are reflected by `--dump-config`, and emit non-fatal `configuration_warning` stderr messages for unrecognised `ODS_*` variables;
 - the current suspicious-configuration warning catalogue covers DNS Cookies disabled, RRL allowlist entries `0.0.0.0/0` and `::/0`, TSIG fudge values above 60 seconds, TSIG keys using HMAC-SHA1, TCP idle timeouts above 120 seconds, AXFR/IXFR transfer ingestion caps below 100 MiB, and XoT trust anchors expiring within 30 days; warnings are non-fatal, use `category=configuration_warning`, are emitted by CLI validation/dump modes and as structured startup logs during `serve`, and are counted by `oxidedns_configuration_warnings_total`;
 - `[tsig].fudge_seconds` defaults to 300 seconds, is validated as non-zero, is exposed through `ODS_TSIG_FUDGE_SECONDS`, is reflected in `--dump-config`, and is used for TSIG-signed transfer queries plus NOTIFY TSIG responses and error responses;
 - `[limits].max_transfer_ingest_bytes` defaults to 4 GiB, is validated as non-zero, is exposed through `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`, is reflected in `--dump-config`, and aborts AXFR/IXFR sessions when cumulative received DNS transfer message payload octets exceed the configured cap before a new transfer snapshot is published;
