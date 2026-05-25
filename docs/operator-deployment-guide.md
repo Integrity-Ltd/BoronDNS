@@ -96,10 +96,21 @@ oxidedns --dump-config /etc/oxidedns-secondary/config.toml
 
 When `--config` is omitted, OxideDNS reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
-`--validate-config`, `--dump-config`, `check-config`, and `serve`. SRS v0.7
-standardizes broader environment overrides under the `ODS_<SECTION>_<KEY>`
-naming convention; full schema support for that convention is tracked in the
-gap register.
+`--validate-config`, `--dump-config`, `check-config`, and `serve`.
+
+OxideDNS also supports an SRS v0.7-style `ODS_<SECTION>_<KEY>` environment override
+subset for scalar process settings. These values take precedence over the file
+and are included in `--dump-config` output:
+
+- `ODS_SERVER_HEALTH`
+- `ODS_SERVER_LOG_LEVEL`
+- `ODS_SERVER_LOG_FORMAT`
+- `ODS_SERVER_NSID`
+- `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
+- `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
+
+Full warning-catalogue handling for unrecognised `ODS_*` variables and any
+future schema-wide expansion remains tracked in the gap register.
 
 ## Configuration
 

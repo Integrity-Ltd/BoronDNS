@@ -1,5 +1,7 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
@@ -149,10 +151,77 @@ fn default_config_path() -> PathBuf {
 }
 
 fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
-    let config =
+    let mut config =
         ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
+    apply_environment_overrides(&mut config).context("applying environment overrides")?;
+    config
+        .validate()
+        .context("validating effective configuration")?;
     oxidedns_server::validate_runtime_config(&config).context("validating runtime configuration")?;
     Ok(config)
+}
+
+fn apply_environment_overrides(config: &mut ServerConfig) -> Result<(), ConfigError> {
+    apply_environment_overrides_from(config, std::env::vars_os())
+}
+
+fn apply_environment_overrides_from<I>(
+    config: &mut ServerConfig,
+    vars: I,
+) -> Result<(), ConfigError>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    for (name, value) in vars {
+        let Ok(name) = name.into_string() else {
+            continue;
+        };
+        let value = env_value_to_string(&name, value)?;
+        match name.as_str() {
+            "ODS_SERVER_HEALTH" => config.server.health = Some(parse_env_value(&name, &value)?),
+            "ODS_SERVER_LOG_LEVEL" => config.server.log_level = value,
+            "ODS_SERVER_LOG_FORMAT" => config.server.log_format = parse_log_format(&name, &value)?,
+            "ODS_SERVER_NSID" => config.server.nsid = value,
+            "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
+                config.health.metrics_rate_limit_per_minute = parse_env_value(&name, &value)?;
+            }
+            "ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS" => {
+                config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn env_value_to_string(name: &str, value: OsString) -> Result<String, ConfigError> {
+    value.into_string().map_err(|_| {
+        ConfigError::Invalid(format!(
+            "environment variable {name} must contain valid UTF-8"
+        ))
+    })
+}
+
+fn parse_env_value<T>(name: &str, value: &str) -> Result<T, ConfigError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    value.parse::<T>().map_err(|error| {
+        ConfigError::Invalid(format!(
+            "environment variable {name} has invalid value: {error}"
+        ))
+    })
+}
+
+fn parse_log_format(name: &str, value: &str) -> Result<LogFormatConfig, ConfigError> {
+    match value {
+        "json" => Ok(LogFormatConfig::Json),
+        "plain" => Ok(LogFormatConfig::Plain),
+        _ => Err(ConfigError::Invalid(format!(
+            "environment variable {name} must be either json or plain"
+        ))),
+    }
 }
 
 fn exit_code_for_error(error: &anyhow::Error) -> u8 {
@@ -311,5 +380,84 @@ mod tests {
         log_filter("info,oxidedns_server=debug").expect("valid env filter");
         let error = log_filter("oxidedns_server=notalevel").expect_err("invalid env filter");
         assert!(error.to_string().contains("invalid log level"));
+    }
+
+    #[test]
+    fn rds_environment_overrides_supported_scalar_config() {
+        let mut config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                log_level = "info"
+                log_format = "json"
+                nsid = "file-nsid"
+
+                [health]
+                metrics_rate_limit_per_minute = 60
+                metrics_rate_limit_idle_seconds = 300
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        apply_environment_overrides_from(
+            &mut config,
+            [
+                ("ODS_SERVER_HEALTH", "127.0.0.1:8081"),
+                ("ODS_SERVER_LOG_LEVEL", "debug"),
+                ("ODS_SERVER_LOG_FORMAT", "plain"),
+                ("ODS_SERVER_NSID", "env-nsid"),
+                ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
+                ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
+            ]
+            .into_iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        )
+        .expect("env overrides");
+        config.validate().expect("effective config is valid");
+
+        assert_eq!(
+            config.server.health,
+            Some("127.0.0.1:8081".parse().unwrap())
+        );
+        assert_eq!(config.server.log_level, "debug");
+        assert_eq!(config.server.log_format, LogFormatConfig::Plain);
+        assert_eq!(config.server.nsid, "env-nsid");
+        assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
+        assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+    }
+
+    #[test]
+    fn invalid_rds_environment_override_reports_config_error() {
+        let mut config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        let error = apply_environment_overrides_from(
+            &mut config,
+            [(
+                OsString::from("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE"),
+                OsString::from("not-a-number"),
+            )],
+        )
+        .expect_err("invalid env override must fail");
+
+        assert!(matches!(error, ConfigError::Invalid(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
+        );
     }
 }

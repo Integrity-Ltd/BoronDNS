@@ -80,6 +80,78 @@ fn dump_config_flag_redacts_tsig_secret_material() {
 }
 
 #[test]
+fn dump_config_includes_rds_environment_overrides() {
+    let config = write_config(
+        "dump-env",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [health]
+            metrics_rate_limit_per_minute = 60
+            metrics_rate_limit_idle_seconds = 300
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--dump-config")
+        .arg(&config)
+        .env("ODS_SERVER_NSID", "env-nsid")
+        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120")
+        .env("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45")
+        .output()
+        .expect("run oxidedns --dump-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nsid = \"env-nsid\""));
+    assert!(stdout.contains("metrics_rate_limit_per_minute = 120"));
+    assert!(stdout.contains("metrics_rate_limit_idle_seconds = 45"));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn invalid_rds_environment_override_exits_with_config_invalid() {
+    let config = write_config(
+        "invalid-env",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "not-a-number")
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE")
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn semantically_invalid_config_exits_with_config_invalid() {
     let config = write_config(
         "invalid",
