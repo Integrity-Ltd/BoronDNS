@@ -755,12 +755,15 @@ impl HealthConfig {
 pub struct MetricsConfig {
     #[serde(default = "default_latency_histogram_buckets")]
     pub latency_histogram_buckets: Vec<LatencyHistogramBucketSeconds>,
+    #[serde(default)]
+    pub pipeline_timing_enabled: bool,
 }
 
 impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
             latency_histogram_buckets: default_latency_histogram_buckets(),
+            pipeline_timing_enabled: false,
         }
     }
 }
@@ -2931,6 +2934,7 @@ mod tests {
 
                 [metrics]
                 latency_histogram_buckets = [0.0002, 0.001, 0.01]
+                pipeline_timing_enabled = true
 
                 [[zones]]
                 name = "example.test."
@@ -2943,6 +2947,7 @@ mod tests {
             config.metrics.latency_histogram_buckets_seconds(),
             vec![0.0002, 0.001, 0.01]
         );
+        assert!(config.metrics.pipeline_timing_enabled);
     }
 
     #[test]

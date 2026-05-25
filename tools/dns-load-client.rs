@@ -1,11 +1,14 @@
+use std::collections::VecDeque;
 use std::env;
-use std::net::UdpSocket;
+use std::io::{Read, Write};
+use std::net::{TcpStream, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct Config {
+    transport: Transport,
     server: String,
     port: u16,
     threads: usize,
@@ -13,6 +16,21 @@ struct Config {
     window: usize,
     names: usize,
     timeout: Duration,
+}
+
+#[derive(Clone, Copy)]
+enum Transport {
+    Udp,
+    Tcp,
+}
+
+impl Transport {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -73,6 +91,7 @@ fn main() {
     println!(
         concat!(
             "dns_load_client_summary ",
+            "transport={transport} ",
             "duration_seconds={elapsed:.3} ",
             "server={server} port={port} ",
             "threads={threads} window={window} names={names} ",
@@ -86,6 +105,7 @@ fn main() {
             "latency_us_p999={lat_p999:.1} ",
             "latency_us_max={lat_max:.1}"
         ),
+        transport = config.transport.as_str(),
         elapsed = elapsed,
         server = config.server,
         port = config.port,
@@ -108,6 +128,13 @@ fn main() {
 }
 
 fn run_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
+    match config.transport {
+        Transport::Udp => run_udp_worker(worker_id, config, deadline),
+        Transport::Tcp => run_tcp_worker(worker_id, config, deadline),
+    }
+}
+
+fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
     let socket = UdpSocket::bind("127.0.0.1:0").expect("bind UDP client socket");
     socket
         .connect((config.server.as_str(), config.port))
@@ -209,6 +236,171 @@ fn run_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStat
     stats
 }
 
+fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
+    let mut stream =
+        TcpStream::connect((config.server.as_str(), config.port)).expect("connect TCP client");
+    stream.set_nodelay(true).expect("set TCP_NODELAY");
+    stream
+        .set_nonblocking(true)
+        .expect("set TCP client stream nonblocking");
+
+    let mut stats = WorkerStats::default();
+    let mut qid = (worker_id as u16).wrapping_mul(997);
+    let mut next_name = worker_id;
+    let mut sent_at: Vec<Option<Instant>> = vec![None; 65536];
+    let mut in_flight = 0usize;
+    let mut write_queue = VecDeque::new();
+    let mut read_buffer = Vec::new();
+    let mut scratch = [0u8; 8192];
+
+    while Instant::now() < deadline {
+        while in_flight < config.window && Instant::now() < deadline {
+            if sent_at[qid as usize].is_some() {
+                qid = qid.wrapping_add(1);
+                continue;
+            }
+            let packet = query_packet(qid, next_name % config.names);
+            let length = u16::try_from(packet.len()).expect("query fits DNS-over-TCP frame");
+            write_queue.extend(length.to_be_bytes());
+            write_queue.extend(packet);
+            sent_at[qid as usize] = Some(Instant::now());
+            stats.sent += 1;
+            in_flight += 1;
+            qid = qid.wrapping_add(1);
+            next_name += config.threads;
+        }
+
+        let wrote = flush_tcp_writes(&mut stream, &mut write_queue, &mut stats);
+        let received = read_tcp_responses(
+            &mut stream,
+            &mut read_buffer,
+            &mut scratch,
+            &mut sent_at,
+            &mut in_flight,
+            &mut stats,
+        );
+        expire_old(&mut sent_at, &mut in_flight, config.timeout);
+        if !wrote && !received && in_flight >= config.window {
+            thread::yield_now();
+        }
+    }
+
+    let drain_until = Instant::now() + Duration::from_millis(500);
+    while in_flight > 0 && Instant::now() < drain_until {
+        let wrote = flush_tcp_writes(&mut stream, &mut write_queue, &mut stats);
+        let received = read_tcp_responses(
+            &mut stream,
+            &mut read_buffer,
+            &mut scratch,
+            &mut sent_at,
+            &mut in_flight,
+            &mut stats,
+        );
+        expire_old(&mut sent_at, &mut in_flight, config.timeout);
+        if !wrote && !received {
+            thread::yield_now();
+        }
+    }
+
+    stats
+}
+
+fn flush_tcp_writes(
+    stream: &mut TcpStream,
+    write_queue: &mut VecDeque<u8>,
+    stats: &mut WorkerStats,
+) -> bool {
+    let mut wrote_any = false;
+    while !write_queue.is_empty() {
+        let (front, _) = write_queue.as_slices();
+        match stream.write(front) {
+            Ok(0) => break,
+            Ok(count) => {
+                wrote_any = true;
+                for _ in 0..count {
+                    write_queue.pop_front();
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => {
+                stats.errors += 1;
+                break;
+            }
+        }
+    }
+    wrote_any
+}
+
+fn read_tcp_responses(
+    stream: &mut TcpStream,
+    read_buffer: &mut Vec<u8>,
+    scratch: &mut [u8; 8192],
+    sent_at: &mut [Option<Instant>],
+    in_flight: &mut usize,
+    stats: &mut WorkerStats,
+) -> bool {
+    let mut received_any = false;
+    loop {
+        match stream.read(scratch) {
+            Ok(0) => break,
+            Ok(count) => {
+                received_any = true;
+                read_buffer.extend_from_slice(&scratch[..count]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => {
+                stats.errors += 1;
+                break;
+            }
+        }
+    }
+
+    let mut offset = 0usize;
+    while read_buffer.len().saturating_sub(offset) >= 2 {
+        let length = u16::from_be_bytes([read_buffer[offset], read_buffer[offset + 1]]) as usize;
+        if read_buffer.len().saturating_sub(offset) < 2 + length {
+            break;
+        }
+        handle_response(
+            &read_buffer[offset + 2..offset + 2 + length],
+            sent_at,
+            in_flight,
+            stats,
+        );
+        offset += 2 + length;
+    }
+    if offset > 0 {
+        read_buffer.drain(..offset);
+    }
+
+    received_any
+}
+
+fn handle_response(
+    packet: &[u8],
+    sent_at: &mut [Option<Instant>],
+    in_flight: &mut usize,
+    stats: &mut WorkerStats,
+) {
+    if packet.len() < 12 {
+        stats.errors += 1;
+        return;
+    }
+    let response_qid = u16::from_be_bytes([packet[0], packet[1]]);
+    let flags = u16::from_be_bytes([packet[2], packet[3]]);
+    let ancount = u16::from_be_bytes([packet[6], packet[7]]);
+    if flags & 0x000f != 0 || ancount == 0 {
+        stats.errors += 1;
+    }
+    if let Some(sent) = sent_at[response_qid as usize].take() {
+        *in_flight = in_flight.saturating_sub(1);
+        stats.received += 1;
+        stats.latencies_ns.push(sent.elapsed().as_nanos() as u64);
+    } else {
+        stats.errors += 1;
+    }
+}
+
 fn expire_old(sent_at: &mut [Option<Instant>], in_flight: &mut usize, timeout: Duration) {
     let now = Instant::now();
     for slot in sent_at.iter_mut().filter(|slot| {
@@ -259,6 +451,7 @@ fn latency_us(latencies: &[u64], percentile: f64) -> f64 {
 
 fn parse_args() -> Result<Config, String> {
     let mut config = Config {
+        transport: Transport::Udp,
         server: "127.0.0.1".to_owned(),
         port: 5300,
         threads: 8,
@@ -275,6 +468,13 @@ fn parse_args() -> Result<Config, String> {
                 .ok_or_else(|| format!("missing value for argument {arg}"))
         };
         match arg.as_str() {
+            "--transport" => {
+                config.transport = match value()?.as_str() {
+                    "udp" => Transport::Udp,
+                    "tcp" => Transport::Tcp,
+                    value => return Err(format!("invalid value for --transport: {value}")),
+                };
+            }
             "--server" => config.server = value()?,
             "--port" => config.port = parse_value("--port", &value()?)?,
             "--threads" => config.threads = parse_value("--threads", &value()?)?,
@@ -319,11 +519,12 @@ fn usage() {
     eprintln!(concat!(
         "Usage: dns-load-client [OPTIONS]\n\n",
         "Options:\n",
+        "  --transport <udp|tcp>  DNS transport, default udp\n",
         "  --server <IP>       DNS server IP, default 127.0.0.1\n",
         "  --port <PORT>       DNS server UDP port, default 5300\n",
         "  --threads <N>       client worker threads, default 8\n",
         "  --duration <SEC>    benchmark duration, default 10\n",
-        "  --window <N>        outstanding UDP queries per worker, default 64\n",
+        "  --window <N>        outstanding queries per worker, default 64\n",
         "  --names <N>         host000000..hostNNNNNN names, default 10000\n",
         "  --timeout-ms <MS>   response timeout before a query is considered dropped, default 250\n",
     ));
