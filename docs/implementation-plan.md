@@ -262,6 +262,7 @@ DNSSEC work is partially started:
 - QTYPE ANY responses do not return RRSIG, NSEC, or NSEC3 RRsets as ordinary data when those types were not explicitly queried, preserving the non-DO DNSSEC augmentation boundary.
 - direct DNSKEY and NSEC3PARAM queries preserve and serve unknown or private algorithm numbers opaquely.
 - NSEC3 denial proof augmentation supports transferred SHA-1 NSEC3 records for exact hash matches and covering hash ranges without generating or validating DNSSEC material.
+- `scripts/audit-dnssec-passive.sh` records static evidence that the first-party runtime only parses transferred DNSSEC RDATA and selects stored DNSSEC RRsets for serving, with no DNSSEC signing, signature validation, key-management, RFC 5011 rollover, or DNSSEC record-generation surface in production code.
 - response header construction unconditionally clears AD and CD bits.
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
 - authorized NOTIFY messages missing required TSIG, or with BADKEY, BADSIG, BADALG, or BADTRUNC verification failures, receive NOTAUTH responses carrying zero-MAC TSIG error records; BADTIME failures receive signed NOTAUTH TSIG error records with server-time other data.
@@ -351,6 +352,7 @@ Non-functional evidence foundations:
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.
 - `scripts/audit-maintainability.sh` records the first-party Rust source line count and module map, and reports the current ODS-NFR-MAINT-001 line-count target status for release review.
+- `scripts/audit-dnssec-passive.sh` records repeatable static evidence for SRS v0.7 `ODS-FR-DNSSEC-013`, and is included in `scripts/check.sh` plus release evidence snapshots.
 - `crates/oxidedns-server/build.rs` embeds build commit, Rust compiler version, and build timestamp labels for `oxidedns_secondary_build_info`; `crates/oxidedns-server/src/lib.rs` metrics tests cover build-info exposition and latency histogram bucket/count/sum output.
 
 Fuzzing foundations:
@@ -365,5 +367,5 @@ Open near-term work:
 
 - broaden IXFR fault and interop coverage beyond BIND and Knot true-incremental evidence;
 - broaden real-primary XoT interop evidence;
-- split DNSSEC evidence into release traceability and broader conformance matrix entries;
+- expand DNSSEC passive audit output into retained release traceability and broader conformance matrix entries;
 - start collecting long-run performance, fuzz, interop, and soak evidence for SRS acceptance verification.

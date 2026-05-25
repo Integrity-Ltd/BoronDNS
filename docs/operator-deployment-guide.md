@@ -558,9 +558,10 @@ current operator-relevant limitations are:
 - XoT has in-process TLS success, fault, structured logging, and revocation
   posture audit coverage plus a Knot XoT script; additional real-primary
   evidence remains pending.
-- DNSSEC serving has unit, fake-primary runtime, and Knot signed-primary
-  runtime coverage for NSEC and NSEC3 paths; release traceability remains
-  pending.
+- DNSSEC serving has unit, fake-primary runtime, Knot signed-primary runtime
+  coverage for NSEC and NSEC3 paths, and a passive audit covering the
+  secondary-only no-signing/no-validation/no-key-management posture; release
+  traceability remains pending.
 - RRL has runtime behavior and metrics coverage; release threshold decisions
   and longer-running evidence remain pending.
 - Performance targets, 30-day soak evidence, and 24-hour fuzz campaigns per
