@@ -5,6 +5,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace_manifest="$repo_root/Cargo.toml"
 unsafe_boundary_registry="$repo_root/docs/unsafe-boundaries.tsv"
 
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'missing required tool: rg\n' >&2
+  printf 'install ripgrep before running the safe-Rust audit\n' >&2
+  exit 1
+fi
+
 python3 - "$workspace_manifest" <<'PY'
 import sys
 from pathlib import Path

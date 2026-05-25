@@ -37,6 +37,7 @@ run_geiger_json() {
     printf '$ CARGO_TARGET_DIR=%q cargo geiger --manifest-path %q --locked --all-targets --all-dependencies --output-format Json\n\n' "$target_dir" "$manifest"
   } >"$artifact_dir/$root-geiger.command"
 
+  set +e
   CARGO_TARGET_DIR="$target_dir" cargo geiger \
     --manifest-path "$manifest" \
     --locked \
@@ -45,6 +46,14 @@ run_geiger_json() {
     --output-format Json \
     >"$json_out" \
     2>"$stderr_out"
+  local geiger_status=$?
+  set -e
+
+  printf '%s\n' "$geiger_status" >"$artifact_dir/$root-geiger.exit-status"
+  if [[ "$geiger_status" -ne 0 && ! -s "$json_out" ]]; then
+    printf 'cargo geiger failed before producing JSON evidence for %s; see %s\n' "$root" "$stderr_out" >&2
+    return "$geiger_status"
+  fi
 }
 
 {
@@ -107,6 +116,16 @@ for json_path in sorted(artifact_dir.glob("*-geiger.json")):
         for line in stderr_path.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("Failed to ") or "warning" in line.lower():
                 stderr_warnings.append((root, line))
+    exit_status_path = artifact_dir / f"{root}-geiger.exit-status"
+    if exit_status_path.exists():
+        exit_status = exit_status_path.read_text(encoding="utf-8", errors="replace").strip()
+        if exit_status and exit_status != "0":
+            stderr_warnings.append(
+                (
+                    root,
+                    f"cargo geiger exited with status {exit_status}; JSON evidence was retained and parsed",
+                )
+            )
 
     for entry in payload.get("packages", []):
         package_id = entry["package"]["id"]
@@ -216,6 +235,7 @@ with (artifact_dir / "README.md").open("w", encoding="utf-8") as out:
     for name in [
         "tool-versions.env",
         "geiger-roots.tsv",
+        "*-geiger.exit-status",
         "geiger-summary.env",
         "geiger-packages.tsv",
         "first-party-geiger.tsv",
