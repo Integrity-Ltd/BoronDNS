@@ -39,6 +39,37 @@ fn serve_ignores_sighup() {
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn serve_survives_closed_stdout_and_stderr_consumers() {
+    let config_path = write_test_config();
+    let mut child = spawn_server(&config_path);
+
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    wait_until_running(&mut child, Duration::from_millis(150));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        child
+            .try_wait()
+            .expect("poll child after closing standard stream consumers")
+            .is_none(),
+        "oxidedns should continue running after stdout/stderr consumers close"
+    );
+
+    send_signal("-TERM", child.id());
+    let status = wait_for_exit(
+        &mut child,
+        Duration::from_secs(2),
+        "-TERM after closed standard streams",
+    );
+    assert!(
+        status.success(),
+        "oxidedns should exit successfully after SIGTERM, got {status}"
+    );
+
+    let _ = fs::remove_file(config_path);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn serve_installs_only_required_signal_dispositions_and_handlers() {

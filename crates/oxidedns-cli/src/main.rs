@@ -82,7 +82,9 @@ enum Command {
 fn main() -> ExitCode {
     #[cfg(unix)]
     if let Err(error) = oxidedns_server::install_process_signal_dispositions() {
-        eprintln!("failed to install process signal dispositions: {error}");
+        write_stderr_line(&format!(
+            "failed to install process signal dispositions: {error}"
+        ));
         return ExitCode::from(EX_OSERR);
     }
 
@@ -92,7 +94,7 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("failed to initialise async runtime: {error}");
+            write_stderr_line(&format!("failed to initialise async runtime: {error}"));
             return ExitCode::from(EX_OSERR);
         }
     };
@@ -113,7 +115,7 @@ async fn async_main() -> ExitCode {
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error:#}");
+            write_stderr_line(&format!("{error:#}"));
             ExitCode::from(exit_code_for_error(&error))
         }
     }
@@ -122,26 +124,29 @@ async fn async_main() -> ExitCode {
 async fn run(cli: Cli) -> anyhow::Result<()> {
     match selected_mode(cli)? {
         Mode::Version => {
-            println!("{}", version_text());
+            write_stdout_text(&format!("{}\n", version_text()))
+                .context("writing version output")?;
         }
         Mode::CheckConfig(config) | Mode::ValidateConfig(config) => {
             let loaded = load_config(&config)?;
             emit_config_warnings_to_stderr(&loaded.warnings);
             init_logging(&loaded.config)?;
-            println!(
+            write_stdout_text(&format!(
                 "configuration ok: {} zone(s), {} UDP listener(s), {} TCP listener(s)",
                 loaded.config.zones.len(),
                 loaded.config.udp_listeners().len(),
                 loaded.config.tcp_listeners().len()
-            );
+            ))
+            .context("writing validation output")?;
+            write_stdout_text("\n").context("writing validation output")?;
         }
         Mode::DumpConfig(config) => {
             let loaded = load_config(&config)?;
             emit_config_warnings_to_stderr(&loaded.warnings);
-            print!("{}", loaded.config.to_redacted_toml()?);
+            write_stdout_text(&loaded.config.to_redacted_toml()?).context("writing config dump")?;
         }
         Mode::ExampleConfig => {
-            print!("{EXAMPLE_CONFIG}");
+            write_stdout_text(EXAMPLE_CONFIG).context("writing example config")?;
         }
         Mode::Serve(config) => {
             let loaded = load_config(&config)?;
@@ -273,7 +278,7 @@ fn bootstrap_log_error(message: &str, fields: &[(&str, String)]) {
 }
 
 fn bootstrap_log(level: &str, message: &str, fields: &[(&str, String)]) {
-    eprintln!("{}", bootstrap_log_entry(level, message, fields));
+    write_stderr_line(&bootstrap_log_entry(level, message, fields));
 }
 
 fn bootstrap_log_entry(level: &str, message: &str, fields: &[(&str, String)]) -> String {
@@ -395,7 +400,7 @@ where
 
 fn emit_config_warnings_to_stderr(warnings: &[ConfigWarning]) {
     for warning in warnings {
-        eprintln!("{}", config_warning_line(warning));
+        write_stderr_line(&config_warning_line(warning));
     }
 }
 
@@ -418,6 +423,19 @@ fn config_warning_line(warning: &ConfigWarning) -> String {
         warning.parameter,
         warning.message.replace('"', "\\\"")
     )
+}
+
+fn write_stdout_text(text: &str) -> io::Result<()> {
+    write_all_ignoring_broken_pipe(io::stdout(), text.as_bytes())
+}
+
+fn write_stderr_line(line: &str) {
+    let _ = write_all_ignoring_broken_pipe(io::stderr(), format!("{line}\n").as_bytes());
+}
+
+fn write_all_ignoring_broken_pipe<W: Write>(mut writer: W, bytes: &[u8]) -> io::Result<()> {
+    ignore_broken_pipe(writer.write_all(bytes))?;
+    ignore_broken_pipe(writer.flush())
 }
 
 fn env_value_to_string(name: &str, value: OsString) -> Result<String, ConfigError> {
@@ -557,11 +575,10 @@ impl<W> LogEntryLimitWriter<W> {
 impl<W: Write> LogEntryLimitWriter<W> {
     fn write_entry(&mut self, entry: &[u8]) -> io::Result<()> {
         if entry.len() <= self.max_entry_length_bytes {
-            self.inner.write_all(entry)?;
-            return Ok(());
+            return ignore_broken_pipe(self.inner.write_all(entry));
         }
         let truncated = truncated_log_entry(self.format, entry, self.max_entry_length_bytes);
-        self.inner.write_all(&truncated)
+        ignore_broken_pipe(self.inner.write_all(&truncated))
     }
 }
 
@@ -580,7 +597,14 @@ impl<W: Write> Write for LogEntryLimitWriter<W> {
             let entry = std::mem::take(&mut self.buffer);
             self.write_entry(&entry)?;
         }
-        self.inner.flush()
+        ignore_broken_pipe(self.inner.flush())
+    }
+}
+
+fn ignore_broken_pipe(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
     }
 }
 
@@ -1095,5 +1119,27 @@ mod tests {
         }
 
         assert_eq!(output, b"{\"message\":\"short\"}\n");
+    }
+
+    #[test]
+    fn log_entry_limit_writer_ignores_broken_pipe() {
+        let mut writer = LogEntryLimitWriter::new(BrokenPipeWriter, 128, LogFormatConfig::Json);
+
+        writer
+            .write_all(b"{\"message\":\"short\"}\n")
+            .expect("broken pipe is non-fatal");
+        writer.flush().expect("broken pipe flush is non-fatal");
+    }
+
+    struct BrokenPipeWriter;
+
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+        }
     }
 }
