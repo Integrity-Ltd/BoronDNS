@@ -172,6 +172,9 @@ write_readme() {
 
 This retained artifact wraps scripts/interop-rrl-udp.sh and records repeated
 runtime UDP RRL drop/slip evidence. Any failed interop run fails the campaign.
+The campaign also writes aggregate.tsv and aggregate-summary.env so release
+review can inspect per-run and campaign-total RRL evidence without opening each
+raw artifact directory.
 EOF
 }
 
@@ -180,16 +183,21 @@ run_one() {
   local run_id
   local run_log
   local command_file
+  local run_summary_file
   local artifact_dir
   local status
   local started
   local finished
+  local started_epoch
+  local finished_epoch
+  local elapsed_seconds
   local -a cmd
 
   printf -v run_id 'run-%03d' "$run_number"
   run_log="$evidence_dir/logs/$run_id.log"
   command_file="$evidence_dir/logs/$run_id.command"
   artifact_dir="$evidence_dir/artifacts/$run_id"
+  run_summary_file="$artifact_dir/run-summary.env"
   cmd=("$bash_bin" "$interop_script")
   mkdir -p "$artifact_dir"
 
@@ -201,6 +209,7 @@ run_one() {
   } >"$command_file"
 
   printf 'Running %s; log: %s\n' "$run_id" "$run_log"
+  started_epoch="$(date +%s)"
   started="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   set +e
   (
@@ -209,12 +218,23 @@ run_one() {
   ) >"$run_log" 2>&1
   status=$?
   set -e
+  finished_epoch="$(date +%s)"
   finished="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  elapsed_seconds=$((finished_epoch - started_epoch))
 
   {
     printf 'run=%s status=%s started=%s finished=%s log=%s\n' \
       "$run_id" "$status" "$started" "$finished" "$run_log"
   } >>"$evidence_dir/summary.txt"
+
+  {
+    printf 'run=%s\n' "$run_id"
+    printf 'status=%s\n' "$status"
+    printf 'started=%s\n' "$started"
+    printf 'finished=%s\n' "$finished"
+    printf 'elapsed_seconds=%s\n' "$elapsed_seconds"
+    printf 'log=%s\n' "$run_log"
+  } >"$run_summary_file"
 
   if ((status != 0)); then
     printf 'RRL evidence %s failed with exit %s\n' "$run_id" "$status" >&2
@@ -222,6 +242,102 @@ run_one() {
     tail -160 "$run_log" >&2 || true
     return "$status"
   fi
+}
+
+env_value() {
+  local key="$1"
+  local path="$2"
+  awk -F= -v key="$key" '$1 == key { print $2; found = 1; exit } END { if (!found) print "" }' "$path"
+}
+
+write_aggregate() {
+  local aggregate_tsv="$evidence_dir/aggregate.tsv"
+  local aggregate_summary="$evidence_dir/aggregate-summary.env"
+  local commit
+  local artifact_dir
+  local run_summary
+  local client_summary
+  local metrics_summary
+  local run_id
+  local run_count=0
+  local status
+  local started
+  local finished
+  local elapsed_seconds
+  local attempts
+  local responses
+  local dropped
+  local truncated
+  local rrl_subject_total
+  local rrl_dropped_total
+  local rrl_truncated_total
+  local queries_truncated_total
+  local rrl_keys_tracked
+  local rrl_categories_checked
+
+  commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+  printf 'run\tstatus\tstarted\tfinished\telapsed_seconds\tcommit\trequirements\tattempts\tresponses\tdropped\ttruncated\trrl_subject_total\trrl_dropped_total\trrl_truncated_total\tqueries_truncated_total\trrl_keys_tracked\trrl_categories_checked\n' >"$aggregate_tsv"
+
+  for artifact_dir in "$evidence_dir"/artifacts/run-*; do
+    [[ -d "$artifact_dir" ]] || continue
+    run_count=$((run_count + 1))
+    run_summary="$artifact_dir/run-summary.env"
+    client_summary="$artifact_dir/client-summary.env"
+    metrics_summary="$artifact_dir/metrics-summary.env"
+    run_id="$(basename "$artifact_dir")"
+
+    status="$(env_value status "$run_summary")"
+    started="$(env_value started "$run_summary")"
+    finished="$(env_value finished "$run_summary")"
+    elapsed_seconds="$(env_value elapsed_seconds "$run_summary")"
+    attempts="$(env_value attempts "$client_summary")"
+    responses="$(env_value responses "$client_summary")"
+    dropped="$(env_value dropped "$client_summary")"
+    truncated="$(env_value truncated "$client_summary")"
+    rrl_subject_total="$(env_value rrl_subject_total "$metrics_summary")"
+    rrl_dropped_total="$(env_value rrl_dropped_total "$metrics_summary")"
+    rrl_truncated_total="$(env_value rrl_truncated_total "$metrics_summary")"
+    queries_truncated_total="$(env_value queries_truncated_total "$metrics_summary")"
+    rrl_keys_tracked="$(env_value rrl_keys_tracked "$metrics_summary")"
+    rrl_categories_checked="$(env_value rrl_categories_checked "$metrics_summary")"
+
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$run_id" "$status" "$started" "$finished" "$elapsed_seconds" "$commit" \
+      "ODS-FR-RRL-001..ODS-FR-RRL-012" "$attempts" "$responses" "$dropped" \
+      "$truncated" "$rrl_subject_total" "$rrl_dropped_total" "$rrl_truncated_total" \
+      "$queries_truncated_total" "$rrl_keys_tracked" "$rrl_categories_checked" \
+      >>"$aggregate_tsv"
+  done
+
+  if ((run_count == 0)); then
+    die "no RRL run artifacts found to aggregate"
+  fi
+
+  awk -F'\t' '
+    NR > 1 {
+      runs++
+      attempts += $8
+      responses += $9
+      dropped += $10
+      truncated += $11
+      subject += $12
+      metric_dropped += $13
+      metric_truncated += $14
+      queries_truncated += $15
+    }
+    END {
+      printf "aggregate_runs=%d\n", runs
+      printf "aggregate_attempts=%d\n", attempts
+      printf "aggregate_responses=%d\n", responses
+      printf "aggregate_client_dropped=%d\n", dropped
+      printf "aggregate_client_truncated=%d\n", truncated
+      printf "aggregate_metric_subject=%d\n", subject
+      printf "aggregate_metric_dropped=%d\n", metric_dropped
+      printf "aggregate_metric_truncated=%d\n", metric_truncated
+      printf "aggregate_queries_truncated=%d\n", queries_truncated
+      printf "requirements=ODS-FR-RRL-001..ODS-FR-RRL-012\n"
+    }
+  ' "$aggregate_tsv" >"$aggregate_summary"
 }
 
 run_campaign() {
@@ -246,6 +362,7 @@ run_campaign() {
   fi
 
   printf 'rrl_runs_completed=%s\n' "$run_count" >>"$evidence_dir/summary.txt"
+  write_aggregate
 }
 
 main() {
