@@ -33,6 +33,11 @@ plus already-started MVP protocol work:
 - SRS v0.7 architectural invariants INV-001 through INV-009, including
   authoritative-only response composition, single-process operation, and no
   runtime code loading;
+- no eBPF/XDP, AF_XDP, io_uring, NSD-style packed arena, or hot response-cache
+  backend in the MVP runtime; these remain post-MVP optimization tracks that
+  require isolated safe adapters, `/// # Safety` API documentation,
+  `// SAFETY:` block rationales, dependency-gate promotion, and
+  adapter-specific fault tests before implementation;
 - SRS v0.7 Alpha interface surface: static configuration including validation
   and dump modes, canonical structured logging, process exit/help/version
   behavior, health/metrics, and graceful shutdown;

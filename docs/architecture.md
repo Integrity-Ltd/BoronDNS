@@ -98,12 +98,13 @@ gate rejects first-party Rust references outside those paths.
 Future XDP/eBPF, AF_XDP, io_uring, packed-binary zone-store, or cache backends
 are expected to require `unsafe` or unsafe-heavy dependencies. They must remain
 outside the safe DNS parser, transfer parser, TSIG, and response-composition
-core. Any first-party `unsafe` must be confined to a dedicated adapter module or
-crate with local `#![allow(unsafe_code)]`; unsafe public or private APIs must
-carry `/// # Safety` documentation; unsafe blocks, impls, traits, or extern
-blocks must carry a local `// SAFETY:` rationale explaining the soundness
-invariants; and release evidence must include static unsafe enumeration plus
-targeted adapter tests before the backend can be enabled.
+core. An optional feature flag by itself is not an acceptable boundary: any
+first-party `unsafe` must be confined to a dedicated adapter module or crate
+with local `#![allow(unsafe_code)]`; unsafe public or private APIs must carry
+`/// # Safety` documentation; unsafe blocks, impls, traits, or extern blocks
+must carry a local `// SAFETY:` rationale explaining the soundness invariants;
+and release evidence must include static unsafe enumeration plus targeted
+adapter fault tests before the backend can be enabled.
 
 The current MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed arena, or
 hot response-cache backend. Those features are post-MVP optimization tracks,
@@ -117,8 +118,10 @@ entry gate is:
 - an explicit `scripts/audit-safe-rust.sh` allowlist entry for the adapter file
   or crate, with the architecture document, `docs/unsafe-boundaries.tsv`, and
   `docs/unsafe-prone-dependencies.tsv` updated in the same change;
-- unit and integration tests proving the adapter's safe API preserves buffer
-  ownership, lifetime, bounds, concurrency, and fallback behavior;
+- unit, integration, property, differential, or backend-specific fault tests as
+  appropriate for the adapter, proving its safe API preserves buffer ownership,
+  lifetime, bounds, concurrency, cancellation, invalidation, and fallback
+  behavior;
 - retained release evidence from `scripts/check-unsafe-boundaries.py`,
   `scripts/check-unsafe-prone-dependencies.py`, `scripts/audit-safe-rust.sh`,
   transitive unsafe enumeration, and backend-specific fault tests before
