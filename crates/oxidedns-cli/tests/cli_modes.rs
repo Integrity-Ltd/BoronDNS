@@ -396,6 +396,10 @@ fn help_flags_print_operational_pointers() {
         );
         assert!(stdout.contains("--dump-config"), "{flag} stdout={stdout}");
         assert!(
+            stdout.contains("--example-config"),
+            "{flag} stdout={stdout}"
+        );
+        assert!(
             stdout.contains("/etc/oxidedns-secondary/config.toml"),
             "{flag} stdout={stdout}"
         );
@@ -405,6 +409,45 @@ fn help_flags_print_operational_pointers() {
         );
         assert!(stdout.contains("Project:"), "{flag} stdout={stdout}");
     }
+}
+
+#[test]
+fn example_config_flag_prints_valid_configuration_without_reading_input() {
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--example-config")
+        .env("OXIDEDNS_CONFIG", "/definitely/missing/oxidedns-config.toml")
+        .output()
+        .expect("run oxidedns --example-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[server]"), "stdout={stdout}");
+    assert!(stdout.contains("[[zones]]"), "stdout={stdout}");
+    assert!(stdout.contains("primaries = ["), "stdout={stdout}");
+
+    let config = write_config("example-config-output", &stdout);
+    let validate = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("validate generated example config");
+
+    assert!(
+        validate.status.success(),
+        "generated example config should validate, stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let _ = fs::remove_file(config);
 }
 
 #[test]

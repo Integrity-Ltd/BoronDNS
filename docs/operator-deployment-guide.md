@@ -94,6 +94,21 @@ operators can audit deployment wiring:
 oxidedns --dump-config /etc/oxidedns-secondary/config.toml
 ```
 
+The binary can print the maintained example configuration without reading a
+configuration file or opening network sockets:
+
+```sh
+oxidedns --example-config
+```
+
+That output is valid TOML and can be validated directly after saving or
+redirecting it to a file:
+
+```sh
+oxidedns --example-config > /tmp/oxidedns.example.toml
+oxidedns --validate-config /tmp/oxidedns.example.toml
+```
+
 When `--config` is omitted, OxideDNS reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
 `--validate-config`, `--dump-config`, `check-config`, and `serve`.
@@ -505,10 +520,11 @@ current operator-relevant limitations are:
   areas have partial evidence rather than full release traceability.
 - SRS v0.7 Alpha adds NSID, configuration warning/dump/validate modes,
   canonical log fields, sysexits-style CLI behavior, and process `--version` /
-  `--help` requirements. The CLI now has local evidence for the core
-  configuration/usage exit-code paths, listen-socket bind failures, XoT
-  TLS-file read failures, OS-startup mapping, and version/help output shape;
-  retained release artifacts and rarer runtime sysexits coverage are still
+  `--help` / `--example-config` requirements. The CLI now has local evidence
+  for the core configuration/usage exit-code paths, listen-socket bind
+  failures, XoT TLS-file read failures, OS-startup mapping, version/help output
+  shape, and generated example-config validation; retained release artifacts
+  and rarer runtime sysexits coverage are still
   pending.
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
   validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and

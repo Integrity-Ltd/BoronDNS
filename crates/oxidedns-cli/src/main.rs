@@ -27,6 +27,7 @@ const HELP_FOOTER: &str = concat!(
     "Operator Deployment Guide: docs/operator-deployment-guide.md\n",
     "Project: internal OxideDNS repository; see README.md and docs/."
 );
+const EXAMPLE_CONFIG: &str = include_str!("../../../config/oxidedns.example.toml");
 
 #[derive(Debug, Parser)]
 #[command(
@@ -55,6 +56,9 @@ struct Cli {
         help = "Print the validated effective configuration with secret material redacted"
     )]
     dump_config: Option<Option<PathBuf>>,
+
+    #[arg(long, action = ArgAction::SetTrue, help = "Print an example configuration and exit")]
+    example_config: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -133,6 +137,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             emit_config_warnings_to_stderr(&loaded.warnings);
             print!("{}", loaded.config.to_redacted_toml()?);
         }
+        Mode::ExampleConfig => {
+            print!("{EXAMPLE_CONFIG}");
+        }
         Mode::Serve(config) => {
             let loaded = load_config(&config)?;
             init_logging(&loaded.config)?;
@@ -150,6 +157,7 @@ enum Mode {
     CheckConfig(PathBuf),
     ValidateConfig(PathBuf),
     DumpConfig(PathBuf),
+    ExampleConfig,
     Serve(PathBuf),
 }
 
@@ -164,6 +172,9 @@ fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
     }
     if let Some(config) = cli.dump_config {
         selected.push(Mode::DumpConfig(config_path(config)));
+    }
+    if cli.example_config {
+        selected.push(Mode::ExampleConfig);
     }
     if let Some(command) = cli.command {
         selected.push(match command {
@@ -488,6 +499,12 @@ mod tests {
         let error = selected_mode(cli).expect_err("ambiguous mode must fail");
 
         assert!(error.to_string().contains("select exactly one"));
+
+        let cli = Cli::try_parse_from(["oxidedns", "--example-config", "--version"])
+            .expect("CLI parses before mode validation");
+        let error = selected_mode(cli).expect_err("ambiguous mode must fail");
+
+        assert!(error.to_string().contains("select exactly one"));
     }
 
     #[test]
@@ -497,6 +514,12 @@ mod tests {
 
         let cli = Cli::try_parse_from(["oxidedns", "-V"]).expect("short version CLI");
         assert_eq!(selected_mode(cli).expect("mode"), Mode::Version);
+    }
+
+    #[test]
+    fn example_config_flag_selects_example_config_mode() {
+        let cli = Cli::try_parse_from(["oxidedns", "--example-config"]).expect("example config CLI");
+        assert_eq!(selected_mode(cli).expect("mode"), Mode::ExampleConfig);
     }
 
     #[test]

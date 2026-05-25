@@ -1,18 +1,27 @@
 [server]
 # Omit listen_udp/listen_tcp to use the SRS defaults:
 # ["0.0.0.0:53", "[::]:53"] for UDP and TCP.
+# UDP sockets that serve authoritative DNS queries and receive NOTIFY.
 listen_udp = ["0.0.0.0:5300", "[::]:5300"]
+# TCP sockets that serve DNS-over-TCP queries and zone-transfer-style framing.
 listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
+# Optional plain HTTP health/metrics listener. Omit to disable HTTP endpoints.
 health = "127.0.0.1:8080"
+# Runtime log level. Default: "info".
 log_level = "info"
+# Runtime log format. Default: "json"; set to "plain" for local debugging.
 log_format = "json"
+# Optional NSID response payload. Default: empty, which disables NSID responses.
 nsid = "oxidedns-example"
 
 [health]
+# Per-source scrape budget for /metrics. Default: 60 requests per minute.
 metrics_rate_limit_per_minute = 60
+# Idle seconds before a metrics rate-limit bucket can be evicted. Default: 300.
 metrics_rate_limit_idle_seconds = 300
 
 [query]
+# ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.
 any_response = "minimal"
 
 [cookie]
@@ -24,16 +33,22 @@ timestamp_past_tolerance_seconds = 3600
 timestamp_future_tolerance_seconds = 300
 
 [rrl]
+# Enable UDP response-rate limiting. Default: true.
 enabled = true
+# Source prefix lengths used for RRL accounting. Defaults: 24 and 56.
 ipv4_prefix_len = 24
 ipv6_prefix_len = 56
+# Per-category UDP response rates, in responses per second.
 positive_per_second = 20
 nxdomain_per_second = 5
 nodata_per_second = 10
 referral_per_second = 10
 error_per_second = 5
+# Slip value for limited UDP responses. Default: 2.
 slip = 2
+# Maximum tracked RRL accounting keys. Default: 100000.
 max_keys = 100000
+# Source prefixes exempt from RRL. Default: empty.
 allowlist = []
 
 [tsig]
@@ -42,29 +57,45 @@ allowlist = []
 fudge_seconds = 300
 
 [limits]
+# EDNS UDP payload ceiling. Default: 1232.
 max_udp_payload = 1232
+# Maximum followed CNAME/DNAME chain depth. Default: 8.
 max_cname_chain = 8
+# TCP idle/read/write timeout seconds. Defaults: 30 seconds each.
 tcp_idle_timeout_secs = 30
 tcp_read_timeout_secs = 30
 tcp_write_timeout_secs = 30
+# Global accepted TCP connection limit. Default: 1024.
 max_tcp_connections = 1024
+# Graceful shutdown drain budget. Default: 30 seconds.
 graceful_shutdown_secs = 30
+# EDNS padding block size. Default: 0, which disables response padding.
 edns_padding_block_size = 0
+# AXFR and IXFR session timeouts. Defaults: 300 and 60 seconds.
 axfr_timeout_secs = 300
 ixfr_timeout_secs = 60
+# Cooldown after IXFR is found unsupported. Default: 3600 seconds.
 ixfr_disabled_cooldown_secs = 3600
+# AXFR/IXFR cumulative received payload cap. Default: 4 GiB.
 max_transfer_ingest_bytes = 4294967296
+# Per-zone accepted NOTIFY deduplication window. Default: 1 second.
 notify_dedup_secs = 1
+# Maximum concurrent transfer sessions. Default: 4.
 max_concurrent_transfers = 4
+# Effective SOA REFRESH/RETRY scheduling bounds and initial-load retry policy.
 zsm_min_interval_secs = 60
 zsm_max_interval_secs = 86400
 zsm_initial_retry_secs = 60
 zsm_initial_retry_max_secs = 3600
 
 [[zones]]
+# Zone apex in absolute DNS name form.
 name = "example.test."
+# DNS class. Default: "IN".
 class = "IN"
+# Plain TCP transfer primaries. Use transfer_primaries for per-primary settings.
 primaries = ["192.0.2.53:53"]
+# Extra NOTIFY source IP addresses authorized for this zone.
 notify_sources = ["192.0.2.53"]
 #tsig_key = "transfer-key."
 

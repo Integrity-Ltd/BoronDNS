@@ -71,7 +71,8 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 - DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS including NSID, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
 - a TSIG HMAC-SHA256 interop subset;
 - network, configuration, logging, health, signal, and process/CLI interfaces,
-  including `--version`, `--help`, `--dump-config`, and `--validate-config`;
+  including `--version`, `--help`, `--dump-config`, `--validate-config`, and
+  `--example-config`;
 - selected reliability, maintainability, portability, observability, and
   resource NFRs, including per-zone status metrics;
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
@@ -80,8 +81,8 @@ Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG,
 XoT, DNSSEC serving, RRL, full DNS Cookies, expanded RR catalogue, `/livez` and
 `/readyz` split conformance, health response-time and metrics rate-limit
 requirements, performance NFR conformance, full security/maintainability
-verification, reliability/resource/observability extensions, second and third
-primary interop, and optional `--example-config`.
+verification, reliability/resource/observability extensions, and second and
+third primary interop.
 
 ## Implementation Slices
 
@@ -284,7 +285,7 @@ Slice 8 has health endpoint foundations:
 - `[limits].max_transfer_ingest_bytes` defaults to 4 GiB, is validated as non-zero, is exposed through `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`, is reflected in `--dump-config`, and aborts AXFR/IXFR sessions when cumulative received DNS transfer message payload octets exceed the configured cap before a new transfer snapshot is published;
 - process exit-code mapping follows the SRS v0.7 table for tested CLI/config and startup paths: usage errors exit 64, semantically invalid configuration and XoT runtime-configuration validation errors exit 2, unreadable/unparseable configuration exits 78, UDP/TCP/health bind failures exit 73 (`EX_CANTCREAT`), unreadable XoT TLS files exit 74 (`EX_IOERR`), and OS startup failures such as signal setup or randomness failures map to 71 (`EX_OSERR`);
 - process startup installs explicit SIGHUP and SIGPIPE `SIG_IGN` dispositions before Tokio worker threads start; binary-level signal tests cover graceful SIGTERM/SIGINT exit, continued operation after SIGHUP, Linux `/proc/<pid>/status` `SigIgn` evidence for SIGHUP and SIGPIPE, and `SigCgt` evidence that SIGHUP, SIGPIPE, SIGQUIT, SIGUSR1, and SIGUSR2 have no installed handlers;
-- `--version` and `-V` print multi-line SRS build metadata from the same embedded build constants used by `oxidedns_secondary_build_info`, including version, build commit, RFC 3339 build timestamp, and Rust compiler version; `--help` and `-h` print usage, flag descriptions, default configuration path, Operator Deployment Guide pointer, and project pointer;
+- `--version` and `-V` print multi-line SRS build metadata from the same embedded build constants used by `oxidedns_secondary_build_info`, including version, build commit, RFC 3339 build timestamp, and Rust compiler version; `--help` and `-h` print usage, flag descriptions, default configuration path, Operator Deployment Guide pointer, and project pointer; `--example-config` prints the checked-in example TOML without reading a configuration file and that output validates successfully through `--validate-config`;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.
 
 RRL foundations are started:
