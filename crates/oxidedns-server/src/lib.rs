@@ -15,6 +15,7 @@ use std::{
 };
 
 mod privilege;
+mod process_hardening;
 mod process_signals;
 mod resource_limits;
 
@@ -143,6 +144,9 @@ pub enum RuntimeError {
 
     #[error("failed to inspect file-descriptor rlimit: {0}")]
     FileDescriptorLimit(std::io::Error),
+
+    #[error("failed to apply process hardening: {0}")]
+    ProcessHardening(std::io::Error),
 
     #[error("{0}")]
     PrivilegeDrop(String),
@@ -392,14 +396,27 @@ impl Runtime {
                 .map_err(|source| RuntimeError::BindTcp { addr, source })?;
             bound_tcp_listeners.push(listener);
         }
+        let disabled_core_dumps =
+            process_hardening::disable_core_dumps_if_configured(&self.config.process)
+                .map_err(RuntimeError::ProcessHardening)?;
         if let Some(identity) = run_as_user {
             privilege::drop_to_user(&identity)?;
+            process_hardening::disable_core_dumps_if_configured(&self.config.process)
+                .map_err(RuntimeError::ProcessHardening)?;
             info!(
                 user = %identity.name,
                 uid = identity.uid,
                 gid = identity.gid,
                 "dropped process privileges"
             );
+        }
+        if disabled_core_dumps {
+            info!("disabled process core dumps");
+        }
+        if process_hardening::apply_no_new_privileges_if_configured(&self.config.process)
+            .map_err(RuntimeError::ProcessHardening)?
+        {
+            info!("enabled process no-new-privileges hardening");
         }
 
         background_tasks.spawn(serve_notify_log_summaries(

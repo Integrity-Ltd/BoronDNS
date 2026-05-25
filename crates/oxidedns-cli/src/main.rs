@@ -503,6 +503,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | RuntimeError::PrimaryRotationRandom(_)
                 | RuntimeError::InsufficientFileDescriptorLimit { .. }
                 | RuntimeError::FileDescriptorLimit(_)
+                | RuntimeError::ProcessHardening(_)
                 | RuntimeError::PrivilegeDrop(_) => EX_OSERR,
                 RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
             };
@@ -1145,6 +1146,12 @@ mod tests {
         let privilege_drop = anyhow!(RuntimeError::PrivilegeDrop("setresuid failed".to_owned()))
             .context("starting runtime");
         assert_eq!(exit_code_for_error(&privilege_drop), EX_OSERR);
+
+        let process_hardening = anyhow!(RuntimeError::ProcessHardening(std::io::Error::other(
+            "prctl failed",
+        )))
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&process_hardening), EX_OSERR);
     }
 
     #[test]

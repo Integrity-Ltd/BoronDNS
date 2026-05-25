@@ -623,6 +623,11 @@ Network and process hardening:
   unprivileged account; startup binds configured listeners, drops to that user
   irrevocably, and only then starts DNS, transfer, health, and background
   workers.
+- Leave `[process].disable_core_dumps = true` and
+  `[process].no_new_privileges = true` unless a local debugging session requires
+  disabling them. Core-dump suppression protects in-memory TSIG/XoT material and
+  zone data from crash artifacts; on Linux, no-new-privileges is applied after
+  socket binding and any configured privilege drop.
 - Store TSIG and TLS private key material outside world-readable paths.
 - Prefer read-only filesystems and minimal service capabilities.
 - `ODS-FR-XOT-012` means OxideDNS does not perform real-time XoT revocation

@@ -530,11 +530,25 @@ impl TsigConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_as_user: Option<String>,
+    #[serde(default = "default_true")]
+    pub disable_core_dumps: bool,
+    #[serde(default = "default_true")]
+    pub no_new_privileges: bool,
+}
+
+impl Default for ProcessConfig {
+    fn default() -> Self {
+        Self {
+            run_as_user: None,
+            disable_core_dumps: true,
+            no_new_privileges: true,
+        }
+    }
 }
 
 impl ProcessConfig {
@@ -550,6 +564,10 @@ impl ProcessConfig {
         }
         Ok(())
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1774,6 +1792,8 @@ mod tests {
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
         assert_eq!(config.process.run_as_user, None);
+        assert!(config.process.disable_core_dumps);
+        assert!(config.process.no_new_privileges);
         assert_eq!(config.logging.max_entry_length_bytes, 16_384);
         assert!(config.interfaces.dns.is_none());
         assert!(config.interfaces.mgmt.is_empty());
@@ -1876,6 +1896,8 @@ mod tests {
 
                 [process]
                 run_as_user = "oxidedns"
+                disable_core_dumps = false
+                no_new_privileges = false
 
                 [[zones]]
                 name = "example.test."
@@ -1885,6 +1907,8 @@ mod tests {
         .expect("valid process config");
 
         assert_eq!(config.process.run_as_user.as_deref(), Some("oxidedns"));
+        assert!(!config.process.disable_core_dumps);
+        assert!(!config.process.no_new_privileges);
     }
 
     #[test]

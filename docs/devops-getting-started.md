@@ -146,6 +146,8 @@ For privileged port 53, prefer one of:
 - let systemd grant the capability;
 - start as root only long enough to bind sockets and configure
   `[process].run_as_user`.
+- keep `[process].disable_core_dumps` and `[process].no_new_privileges` at their
+  secure defaults unless you are doing a controlled local debugging run.
 
 OxideDNS ignores `SIGHUP`; configuration changes require a process restart.
 `SIGTERM` and `SIGINT` trigger graceful shutdown.

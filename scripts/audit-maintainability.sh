@@ -91,6 +91,7 @@ module_map = [
     ("crates/oxidedns-core/src/lib.rs", "core crate public API boundary"),
     ("crates/oxidedns-server/src/lib.rs", "runtime listeners, refresh scheduling, health/metrics, interop-facing behavior"),
     ("crates/oxidedns-server/src/privilege.rs", "audited POSIX privilege-drop FFI boundary"),
+    ("crates/oxidedns-server/src/process_hardening.rs", "audited POSIX process-hardening FFI boundary"),
     ("crates/oxidedns-server/src/process_signals.rs", "audited POSIX signal disposition FFI boundary"),
     ("crates/oxidedns-server/src/resource_limits.rs", "audited POSIX file-descriptor limit FFI boundary"),
     ("crates/oxidedns-server/build.rs", "build metadata embedding for version and metrics labels"),

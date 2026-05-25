@@ -5,6 +5,8 @@ configuration	[interfaces].dns	stable	0.1	config/oxidedns.example.toml	major	Pri
 configuration	[interfaces].transfer	stable	0.1	config/oxidedns.example.toml	major	Outbound SOA poll, AXFR, IXFR, and XoT source role.
 configuration	[interfaces].mgmt	stable	0.1	config/oxidedns.example.toml	major	Health and metrics management role.
 configuration	[process].run_as_user	stable	0.1	config/oxidedns.example.toml	major	Optional unprivileged account used for startup privilege drop when invoked as root.
+configuration	[process].disable_core_dumps	stable	0.1	config/oxidedns.example.toml	major	Startup hardening toggle for suppressing core dumps; defaults to true.
+configuration	[process].no_new_privileges	stable	0.1	config/oxidedns.example.toml	major	Linux startup hardening toggle for PR_SET_NO_NEW_PRIVS; defaults to true.
 configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.

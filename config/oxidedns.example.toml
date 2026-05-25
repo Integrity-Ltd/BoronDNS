@@ -15,6 +15,12 @@ nsid = "oxidedns-example"
 # a configured unprivileged target and drops to it before processing network
 # input. Prefer running directly as this user with CAP_NET_BIND_SERVICE instead.
 # run_as_user = "oxidedns"
+# Disable process core dumps during startup so in-memory TSIG/XoT material and
+# transferred zone data are not written to crash artifacts. Default: true.
+disable_core_dumps = true
+# On Linux, set PR_SET_NO_NEW_PRIVS after socket binding and any configured
+# privilege drop, before network workers process input. Default: true.
+no_new_privileges = true
 
 [interfaces]
 # DNS query sockets for both UDP and TCP. These sockets also receive inbound

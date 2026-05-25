@@ -31,6 +31,7 @@ with unsafe_registry.open(newline="", encoding="utf-8") as handle:
     }
 expected_current_unsafe_adapters = {
     Path("crates/oxidedns-server/src/privilege.rs"),
+    Path("crates/oxidedns-server/src/process_hardening.rs"),
     Path("crates/oxidedns-server/src/process_signals.rs"),
     Path("crates/oxidedns-server/src/resource_limits.rs"),
 }
