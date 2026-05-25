@@ -64,6 +64,16 @@ latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01
 # ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.
 any_response = "minimal"
 
+[edns]
+# Extended DNS Errors per RFC 8914. Default: "off". Use "minimal" to include
+# diagnostic EDE codes for selected operational states, without extra text.
+extended_dns_errors = "off"
+
+[dnssec]
+# Maximum NSEC3 iterations accepted when composing negative DNSSEC proofs.
+# Default: 100, the legacy soft ceiling from RFC 9276 / BCP 236.
+nsec3_max_iterations = 100
+
 [cookie]
 # policy = "lenient" accepts normal first responses and returns a fresh server
 # cookie. Use "strict" to require retry with a valid server cookie, or

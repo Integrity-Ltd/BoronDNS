@@ -193,6 +193,14 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   ephemeral source-port selection. `interfaces.notify` is rejected by current
   builds; it is not a fourth interface role.
 - `[query]`: query response policy, including QTYPE ANY behavior.
+- `[edns]`: EDNS diagnostics. `extended_dns_errors = "off"` is the default;
+  `minimal` enables RFC 8914 EDE INFO-CODE 14 for not-ready zones and
+  INFO-CODE 27 for NSEC3 iteration-cap downgrades when the client sent an OPT
+  RR.
+- `[dnssec]`: DNSSEC serving safeguards. `nsec3_max_iterations = 100` limits
+  NSEC3 denial-proof hashing work; responses above the cap keep the base RCODE
+  but may omit NSEC3 proof RRsets and, with minimal EDE enabled, include EDE
+  INFO-CODE 27.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
   timestamp tolerance windows, and optional in-process server-secret rotation.
   A non-zero `secret_rotation_interval_secs` invalidates previously issued
@@ -276,6 +284,13 @@ Production configuration notes:
   metrics HTTP endpoint is not an authenticated administration interface.
 - Set `[limits].edns_padding_block_size = 0` unless padding is intentionally
   required and tested.
+- Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
+  diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
+  downgrades. The `minimal` profile emits numeric EDE codes only, with no
+  EXTRA-TEXT.
+- Keep `[dnssec].nsec3_max_iterations = 100` for legacy compatibility, or lower
+  it toward `0` where the primary estate is known to follow RFC 9276 guidance.
+  Values above 100 are accepted but produce `nsec3_iterations_large`.
 - Keep `[rrl].enabled = true` for Internet-facing UDP service unless an
   upstream mitigation layer has been validated.
 - Ensure the service soft file-descriptor limit is at least
@@ -400,7 +415,8 @@ counters, global and per-zone RCODE counters
 truncation counters, CNAME limit/loop counters,
 NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
 per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
-`oxidedns_secondary_build_info` gauge, and the
+`oxidedns_secondary_build_info` gauge, the
+`oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
 bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
 seconds and default to the SRS v0.9 bucket list.

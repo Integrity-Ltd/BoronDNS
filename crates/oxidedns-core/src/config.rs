@@ -10,7 +10,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::{
-    dns::{AnyResponseMode, DomainName},
+    dns::{AnyResponseMode, DomainName, ExtendedDnsErrorsMode},
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
 };
 
@@ -54,6 +54,10 @@ pub struct ServerConfig {
     pub metrics: MetricsConfig,
     #[serde(default)]
     pub query: QuerySettings,
+    #[serde(default)]
+    pub edns: EdnsConfig,
+    #[serde(default)]
+    pub dnssec: DnssecConfig,
     #[serde(default)]
     pub cookie: CookieConfig,
     #[serde(default)]
@@ -129,6 +133,7 @@ impl ServerConfig {
         }
         self.logging.validate()?;
         self.metrics.validate()?;
+        self.dnssec.validate()?;
 
         if self.zones.is_empty() && self.catalog_zones.is_empty() {
             return Err(ConfigError::Invalid(
@@ -439,6 +444,18 @@ impl ServerConfig {
                 code: "out_of_zone_glue_tolerance_enabled",
                 parameter: "transfer.accept_out_of_zone_glue".to_owned(),
                 message: "out-of-zone A/AAAA glue tolerance is enabled; strict transfer-owner validation is relaxed for compatibility".to_owned(),
+            });
+        }
+
+        if self.dnssec.nsec3_max_iterations > default_nsec3_max_iterations() {
+            warnings.push(ConfigWarning {
+                code: "nsec3_iterations_large",
+                parameter: "dnssec.nsec3_max_iterations".to_owned(),
+                message: format!(
+                    "NSEC3 iteration cap {} exceeds the RFC 9276 / BCP 236 soft ceiling of {}",
+                    self.dnssec.nsec3_max_iterations,
+                    default_nsec3_max_iterations()
+                ),
             });
         }
 
@@ -970,6 +987,59 @@ impl Default for QuerySettings {
     fn default() -> Self {
         Self {
             any_response: AnyResponseConfig::Minimal,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EdnsConfig {
+    #[serde(default)]
+    pub extended_dns_errors: ExtendedDnsErrorsConfig,
+}
+
+impl EdnsConfig {
+    pub fn extended_dns_errors_mode(&self) -> ExtendedDnsErrorsMode {
+        match self.extended_dns_errors {
+            ExtendedDnsErrorsConfig::Off => ExtendedDnsErrorsMode::Off,
+            ExtendedDnsErrorsConfig::Minimal => ExtendedDnsErrorsMode::Minimal,
+        }
+    }
+}
+
+impl Default for EdnsConfig {
+    fn default() -> Self {
+        Self {
+            extended_dns_errors: ExtendedDnsErrorsConfig::Off,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtendedDnsErrorsConfig {
+    #[default]
+    Off,
+    Minimal,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DnssecConfig {
+    #[serde(default = "default_nsec3_max_iterations")]
+    pub nsec3_max_iterations: u16,
+}
+
+impl DnssecConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        Ok(())
+    }
+}
+
+impl Default for DnssecConfig {
+    fn default() -> Self {
+        Self {
+            nsec3_max_iterations: default_nsec3_max_iterations(),
         }
     }
 }
@@ -1624,6 +1694,10 @@ fn default_rrl_summary_log_interval_secs() -> u64 {
 
 fn default_tsig_fudge_seconds() -> u16 {
     DEFAULT_TSIG_FUDGE_SECS
+}
+
+fn default_nsec3_max_iterations() -> u16 {
+    100
 }
 
 fn default_health_port() -> u16 {
@@ -2581,6 +2655,62 @@ mod tests {
                 .configuration_warnings()
                 .iter()
                 .any(|warning| warning.code == "out_of_zone_glue_tolerance_enabled")
+        );
+    }
+
+    #[test]
+    fn parses_edns_and_dnssec_settings() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [edns]
+                extended_dns_errors = "minimal"
+
+                [dnssec]
+                nsec3_max_iterations = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(
+            config.edns.extended_dns_errors,
+            ExtendedDnsErrorsConfig::Minimal
+        );
+        assert_eq!(
+            config.edns.extended_dns_errors_mode(),
+            ExtendedDnsErrorsMode::Minimal
+        );
+        assert_eq!(config.dnssec.nsec3_max_iterations, 0);
+    }
+
+    #[test]
+    fn warns_on_large_nsec3_iteration_cap() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [dnssec]
+                nsec3_max_iterations = 101
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert!(
+            config
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "nsec3_iterations_large")
         );
     }
 

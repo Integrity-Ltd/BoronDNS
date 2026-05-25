@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
-use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
+use oxidedns_core::{
+    ConfigError, ConfigWarning, LogFormatConfig, ServerConfig, config::ExtendedDnsErrorsConfig,
+};
 use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
     TransferError,
@@ -394,6 +396,14 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.transfer.accept_out_of_zone_glue = parse_env_value(&name, &value)?;
             }
+            "ODS_EDNS_EXTENDED_DNS_ERRORS" => {
+                let value = env_value_to_string(&name, value)?;
+                config.edns.extended_dns_errors = parse_extended_dns_errors(&name, &value)?;
+            }
+            "ODS_DNSSEC_NSEC3_MAX_ITERATIONS" => {
+                let value = env_value_to_string(&name, value)?;
+                config.dnssec.nsec3_max_iterations = parse_env_value(&name, &value)?;
+            }
             "ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
@@ -486,6 +496,19 @@ fn parse_log_format(name: &str, value: &str) -> Result<LogFormatConfig, ConfigEr
         "plain" => Ok(LogFormatConfig::Plain),
         _ => Err(ConfigError::Invalid(format!(
             "environment variable {name} must be json, logfmt, or plain"
+        ))),
+    }
+}
+
+fn parse_extended_dns_errors(
+    name: &str,
+    value: &str,
+) -> Result<ExtendedDnsErrorsConfig, ConfigError> {
+    match value {
+        "off" => Ok(ExtendedDnsErrorsConfig::Off),
+        "minimal" => Ok(ExtendedDnsErrorsConfig::Minimal),
+        _ => Err(ConfigError::Invalid(format!(
+            "environment variable {name} must be off or minimal"
         ))),
     }
 }
@@ -1310,6 +1333,8 @@ mod tests {
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
+                ("ODS_EDNS_EXTENDED_DNS_ERRORS", "minimal"),
+                ("ODS_DNSSEC_NSEC3_MAX_ITERATIONS", "0"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
                 ("ODS_TRANSFER_REQUIRE_TSIG", "true"),
                 ("ODS_TRANSFER_ACCEPT_OUT_OF_ZONE_GLUE", "true"),
@@ -1334,6 +1359,11 @@ mod tests {
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
         assert_eq!(config.logging.max_entry_length_bytes, 8192);
+        assert_eq!(
+            config.edns.extended_dns_errors,
+            ExtendedDnsErrorsConfig::Minimal
+        );
+        assert_eq!(config.dnssec.nsec3_max_iterations, 0);
         assert_eq!(config.tsig.fudge_seconds, 30);
         assert!(config.transfer.require_tsig);
         assert!(config.transfer.accept_out_of_zone_glue);

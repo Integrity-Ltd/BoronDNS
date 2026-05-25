@@ -15,7 +15,7 @@ HEADER = [
     "remaining_release_gap",
 ]
 
-REQUIRED_IDS = {f"ODS-FR-DNSSEC-{index:03d}" for index in range(1, 14)}
+REQUIRED_IDS = {f"ODS-FR-DNSSEC-{index:03d}" for index in range(1, 15)}
 VALID_PHASES = {"MVP"}
 VALID_STATUSES = {"partial"}
 VALID_METHODS = {"conformance-test", "static-analysis"}

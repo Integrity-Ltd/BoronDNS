@@ -30,7 +30,7 @@ use crate::zone::{ResourceRecord, Rrset, ZoneState, ZoneStore};
 // - ODS-FR-EDNS-005 ODS-FR-EDNS-006 ODS-FR-EDNS-007 ODS-FR-EDNS-008
 // - ODS-FR-EDNS-009 ODS-FR-EDNS-010 ODS-FR-EDNS-011 ODS-FR-EDNS-012
 // - ODS-FR-EDNS-013 ODS-FR-EDNS-014 ODS-FR-EDNS-015 ODS-FR-EDNS-016
-// - ODS-FR-EDNS-017
+// - ODS-FR-EDNS-017 ODS-FR-EDNS-018
 // - ODS-FR-DNSSEC-001 ODS-FR-DNSSEC-002 ODS-FR-DNSSEC-003
 // - ODS-FR-DNSSEC-004 ODS-FR-DNSSEC-005 ODS-FR-DNSSEC-006
 // - ODS-FR-DNSSEC-007 ODS-FR-DNSSEC-008 ODS-FR-DNSSEC-009
@@ -50,6 +50,9 @@ const EDNS_NSID_OPTION: u16 = 3;
 const EDNS_COOKIE_OPTION: u16 = 10;
 const EDNS_TCP_KEEPALIVE_OPTION: u16 = 11;
 const EDNS_PADDING_OPTION: u16 = 12;
+const EDNS_EXTENDED_DNS_ERROR_OPTION: u16 = 15;
+const EDE_NOT_READY: u16 = 14;
+const EDE_UNSUPPORTED_NSEC3_ITERATIONS: u16 = 27;
 const DNS_COOKIE_CLIENT_LEN: usize = 8;
 const DNS_COOKIE_SERVER_V1_LEN: usize = 16;
 const DNS_COOKIE_VERSION_1: u8 = 1;
@@ -423,11 +426,20 @@ pub struct AnswerOptions<'a> {
     pub transport: Transport,
     pub max_udp_payload: u16,
     pub max_cname_chain: usize,
+    pub nsec3_max_iterations: u16,
     pub tcp_keepalive_timeout_secs: u64,
     pub edns_padding_block_size: u16,
+    pub extended_dns_errors: ExtendedDnsErrorsMode,
     pub any_response: AnyResponseMode,
     pub nsid: &'a [u8],
     pub dns_cookie: Option<DnsCookieContext<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtendedDnsErrorsMode {
+    #[default]
+    Off,
+    Minimal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,8 +485,10 @@ impl AnswerOptions<'_> {
             transport: Transport::Udp,
             max_udp_payload,
             max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+            nsec3_max_iterations: 100,
             tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
             edns_padding_block_size: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
             dns_cookie: None,
@@ -486,8 +500,10 @@ impl AnswerOptions<'_> {
             transport: Transport::Tcp,
             max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
             max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+            nsec3_max_iterations: 100,
             tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
             edns_padding_block_size: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
             dns_cookie: None,
@@ -722,7 +738,7 @@ fn answer_query_message(
             &[],
             &[],
             &[],
-            metadata,
+            metadata.with_extended_dns_error(ExtendedDnsError::NotReady),
             options,
         ));
     }
@@ -734,15 +750,21 @@ fn answer_query_message(
         options.max_cname_chain,
         options.any_response,
     );
-    let (lookup, dnssec_augmented) = if metadata.dnssec_requested() {
+    let (lookup, dnssec_augmented, nsec3_iterations_exceeded) = if metadata.dnssec_requested() {
         zone.augment_lookup_result_with_dnssec(
             lookup,
             &question.qname,
             question.qtype,
             question.qclass,
+            options.nsec3_max_iterations,
         )
     } else {
-        (lookup, false)
+        (lookup, false, false)
+    };
+    let metadata = if nsec3_iterations_exceeded {
+        metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations)
+    } else {
+        metadata
     };
     query_answered(&lookup);
     DatagramAction::Respond(build_response(
@@ -1025,6 +1047,7 @@ fn build_response_inner(
             edns,
             metadata.extended_rcode,
             metadata.dnssec_augmented,
+            metadata.extended_dns_error,
             options,
             metadata.udp_ceiling(options),
             &mut response,
@@ -1050,10 +1073,29 @@ fn build_truncated_response(
     let mut kept_answers = answers.to_vec();
     let mut kept_authorities = authorities.to_vec();
     let mut kept_additionals = additionals.to_vec();
+    let mut metadata = *metadata;
+    if metadata.extended_dns_error.is_some() {
+        metadata = metadata.without_extended_dns_error();
+        let response = build_response_inner(
+            header,
+            rcode,
+            authoritative,
+            true,
+            question,
+            &kept_answers,
+            &kept_authorities,
+            &kept_additionals,
+            &metadata,
+            options,
+        );
+        if response.len() <= ceiling {
+            return response;
+        }
+    }
 
     loop {
-        let metadata = metadata.with_dnssec_augmented(truncated_dnssec_augmented(
-            metadata,
+        let response_metadata = metadata.with_dnssec_augmented(truncated_dnssec_augmented(
+            &metadata,
             &kept_answers,
             &kept_authorities,
             &kept_additionals,
@@ -1067,7 +1109,7 @@ fn build_truncated_response(
             &kept_answers,
             &kept_authorities,
             &kept_additionals,
-            &metadata,
+            &response_metadata,
             options,
         );
         if response.len() <= ceiling {
@@ -1275,11 +1317,18 @@ fn encode_opt_record(
     edns: EdnsMetadata,
     extended_rcode: u16,
     dnssec_augmented: bool,
+    extended_dns_error: Option<ExtendedDnsError>,
     options: AnswerOptions,
     udp_ceiling: usize,
     response: &mut Vec<u8>,
 ) {
-    let rdata = encode_edns_response_options(edns, options, response.len(), udp_ceiling);
+    let rdata = encode_edns_response_options(
+        edns,
+        options,
+        extended_dns_error,
+        response.len(),
+        udp_ceiling,
+    );
 
     response.push(0);
     response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
@@ -1294,6 +1343,7 @@ fn encode_opt_record(
 fn encode_edns_response_options(
     edns: EdnsMetadata,
     options: AnswerOptions,
+    extended_dns_error: Option<ExtendedDnsError>,
     response_len_before_opt: usize,
     udp_ceiling: usize,
 ) -> Vec<u8> {
@@ -1324,6 +1374,14 @@ fn encode_edns_response_options(
         );
         rdata.extend_from_slice(&cookie.client);
         rdata.extend_from_slice(&server_cookie);
+    }
+
+    if options.extended_dns_errors == ExtendedDnsErrorsMode::Minimal
+        && let Some(error) = extended_dns_error
+    {
+        rdata.extend_from_slice(&EDNS_EXTENDED_DNS_ERROR_OPTION.to_be_bytes());
+        rdata.extend_from_slice(&2u16.to_be_bytes());
+        rdata.extend_from_slice(&error.info_code().to_be_bytes());
     }
 
     if edns.padding_requested && options.edns_padding_block_size > 0 {
@@ -1493,6 +1551,22 @@ struct RequestMetadata {
     edns: Option<EdnsMetadata>,
     extended_rcode: u16,
     dnssec_augmented: bool,
+    extended_dns_error: Option<ExtendedDnsError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtendedDnsError {
+    NotReady,
+    UnsupportedNsec3Iterations,
+}
+
+impl ExtendedDnsError {
+    fn info_code(self) -> u16 {
+        match self {
+            Self::NotReady => EDE_NOT_READY,
+            Self::UnsupportedNsec3Iterations => EDE_UNSUPPORTED_NSEC3_ITERATIONS,
+        }
+    }
 }
 
 impl RequestMetadata {
@@ -1501,6 +1575,7 @@ impl RequestMetadata {
             edns: None,
             extended_rcode: 0,
             dnssec_augmented: false,
+            extended_dns_error: None,
         }
     }
 
@@ -1545,6 +1620,7 @@ impl RequestMetadata {
                         edns: Some(metadata),
                         extended_rcode: 0,
                         dnssec_augmented: false,
+                        extended_dns_error: None,
                     }));
                 }
                 edns = Some(metadata);
@@ -1559,6 +1635,7 @@ impl RequestMetadata {
             edns,
             extended_rcode: 0,
             dnssec_augmented: false,
+            extended_dns_error: None,
         })
     }
 
@@ -1569,6 +1646,16 @@ impl RequestMetadata {
 
     fn with_dnssec_augmented(mut self, dnssec_augmented: bool) -> Self {
         self.dnssec_augmented = dnssec_augmented;
+        self
+    }
+
+    fn with_extended_dns_error(mut self, error: ExtendedDnsError) -> Self {
+        self.extended_dns_error = Some(error);
+        self
+    }
+
+    fn without_extended_dns_error(mut self) -> Self {
+        self.extended_dns_error = None;
         self
     }
 
@@ -2199,6 +2286,27 @@ mod tests {
         None
     }
 
+    fn response_ede_info_codes(response: &[u8]) -> Vec<u16> {
+        let Some(rdata) = response_opt_rdata(response) else {
+            return Vec::new();
+        };
+        let mut codes = Vec::new();
+        let mut offset = 0usize;
+        while offset + 4 <= rdata.len() {
+            let option_code = u16::from_be_bytes([rdata[offset], rdata[offset + 1]]);
+            let option_len = u16::from_be_bytes([rdata[offset + 2], rdata[offset + 3]]) as usize;
+            offset += 4;
+            assert!(offset + option_len <= rdata.len());
+            if option_code == EDNS_EXTENDED_DNS_ERROR_OPTION {
+                assert!(option_len >= 2);
+                codes.push(u16::from_be_bytes([rdata[offset], rdata[offset + 1]]));
+                assert_eq!(option_len, 2);
+            }
+            offset += option_len;
+        }
+        codes
+    }
+
     fn hex_to_vec(hex: &str) -> Vec<u8> {
         assert_eq!(hex.len() % 2, 0);
         (0..hex.len())
@@ -2379,8 +2487,12 @@ mod tests {
     }
 
     fn nsec3_rdata(hash_algorithm: u8) -> Vec<u8> {
+        nsec3_rdata_with_iterations(hash_algorithm, 1)
+    }
+
+    fn nsec3_rdata_with_iterations(hash_algorithm: u8, iterations: u16) -> Vec<u8> {
         let mut rdata = vec![hash_algorithm, 0];
-        rdata.extend_from_slice(&1u16.to_be_bytes());
+        rdata.extend_from_slice(&iterations.to_be_bytes());
         rdata.push(0);
         rdata.push(4);
         rdata.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
@@ -3143,8 +3255,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
                 dns_cookie: None,
@@ -3211,8 +3325,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
                 dns_cookie: None,
@@ -3549,6 +3665,67 @@ mod tests {
     }
 
     #[test]
+    fn nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled() {
+        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
+        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    missing_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+
+        let response = store_response_with_options(
+            &packet,
+            &store,
+            AnswerOptions {
+                nsec3_max_iterations: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+                ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(
+            response_ede_info_codes(&response),
+            vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
+        );
+    }
+
+    #[test]
     fn non_do_nxdomain_omits_nsec_dnssec_augmentation() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -3836,8 +4013,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: 1,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: None,
@@ -5394,8 +5573,10 @@ mod tests {
                 transport: Transport::Tcp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: 5,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: None,
@@ -5441,8 +5622,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
                 dns_cookie: None,
@@ -5488,8 +5671,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
                 dns_cookie: None,
@@ -5518,8 +5703,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: Some(context),
@@ -5555,8 +5742,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: Some(context),
@@ -5666,8 +5855,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: Some(context),
@@ -5705,8 +5896,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: Some(context),
@@ -5747,8 +5940,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: Some(context),
@@ -6078,6 +6273,32 @@ mod tests {
     }
 
     #[test]
+    fn ede_not_ready_is_opt_in_for_loading_zones() {
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[]);
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let default_response = store_response(&packet, &store);
+        let ede_response = store_response_with_options(
+            &packet,
+            &store,
+            AnswerOptions {
+                extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+                ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
+            },
+        );
+
+        assert_eq!(default_response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(
+            response_ede_info_codes(&default_response),
+            Vec::<u16>::new()
+        );
+        assert_eq!(ede_response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(response_ede_info_codes(&ede_response), vec![EDE_NOT_READY]);
+    }
+
+    #[test]
     fn configured_edns_padding_aligns_response_to_block_size() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0, &[0, EDNS_PADDING_OPTION as u8, 0, 0]);
@@ -6089,8 +6310,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 32,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: None,
@@ -6121,8 +6344,10 @@ mod tests {
                 transport: Transport::Udp,
                 max_udp_payload: 512,
                 max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: 600,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
                 dns_cookie: None,

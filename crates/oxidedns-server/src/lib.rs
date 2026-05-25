@@ -37,10 +37,10 @@ use oxidedns_core::{
     },
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DnsCookieContext, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
-        LookupResult, LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
-        answer_message_with_notify_hooks_and_query_observer, dns_cookie_request_status,
-        request_has_valid_dns_server_cookie,
+        DnsCookieContext, DnsCookiePolicy, DnsCookieRequestStatus, DomainName,
+        ExtendedDnsErrorsMode, Header, LookupResult, LookupTermination, Opcode, Question, Rcode,
+        RecordType, Transport, answer_message_with_notify_hooks_and_query_observer,
+        dns_cookie_request_status, request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -92,6 +92,8 @@ pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
 pub const BUILD_RUST_VERSION: &str = env!("OXIDEDNS_BUILD_RUST_VERSION");
 pub const BUILD_TIMESTAMP: &str = env!("OXIDEDNS_BUILD_TIMESTAMP");
+const EDNS_EXTENDED_DNS_ERROR_OPTION: u16 = 15;
+const EDE_UNSUPPORTED_NSEC3_ITERATIONS: u16 = 27;
 
 #[cfg(unix)]
 pub use process_signals::install_process_signal_dispositions;
@@ -500,7 +502,9 @@ impl Runtime {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;
+            let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
+            let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
             let notify_authority = notify_authority.clone();
@@ -512,7 +516,9 @@ impl Runtime {
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
+                nsec3_max_iterations,
                 edns_padding_block_size,
+                extended_dns_errors,
                 any_response,
                 nsid,
                 dns_cookie_secrets: dns_cookie_secrets.clone(),
@@ -531,6 +537,7 @@ impl Runtime {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let max_cname_chain = self.config.limits.max_cname_chain;
+            let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
             let tcp_idle_timeout = Duration::from_secs(self.config.limits.tcp_idle_timeout_secs);
             let tcp_read_timeout = Duration::from_secs(self.config.limits.tcp_read_timeout_secs);
             let tcp_write_timeout = Duration::from_secs(self.config.limits.tcp_write_timeout_secs);
@@ -545,6 +552,7 @@ impl Runtime {
                     .unwrap_or(self.config.limits.tcp_read_timeout_secs),
             );
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
+            let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
             let tcp_connections = tcp_connections.clone();
@@ -552,6 +560,7 @@ impl Runtime {
             let tcp_settings = TcpServerSettings {
                 max_udp_payload,
                 max_cname_chain,
+                nsec3_max_iterations,
                 idle_timeout: tcp_idle_timeout,
                 read_timeout: tcp_read_timeout,
                 write_timeout: tcp_write_timeout,
@@ -560,6 +569,7 @@ impl Runtime {
                 max_inflight_queries_per_connection: max_tcp_inflight_queries_per_connection,
                 inflight_limit_timeout: tcp_inflight_limit_timeout,
                 edns_padding_block_size,
+                extended_dns_errors,
                 any_response,
                 nsid,
                 dns_cookie_secrets: dns_cookie_secrets.clone(),
@@ -2857,8 +2867,10 @@ async fn serve_udp(
                 transport: Transport::Udp,
                 max_udp_payload: settings.max_udp_payload,
                 max_cname_chain: settings.max_cname_chain,
+                nsec3_max_iterations: settings.nsec3_max_iterations,
                 tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
                 edns_padding_block_size: settings.edns_padding_block_size,
+                extended_dns_errors: settings.extended_dns_errors,
                 any_response: settings.any_response,
                 nsid: &settings.nsid,
                 dns_cookie,
@@ -3080,6 +3092,9 @@ fn record_query_response_metric(
     if let Some(zone_key) = &observation.zone_key {
         metrics.record_zone_query_response_rcode(zone_key, rcode);
     }
+    if response_has_ede_info_code(response, &header, EDE_UNSUPPORTED_NSEC3_ITERATIONS) {
+        metrics.record_nsec3_iterations_exceed_cap();
+    }
     metrics.record_query_latency(
         query_latency_category(observation, response, &header),
         observation.started_at.elapsed(),
@@ -3226,6 +3241,39 @@ fn response_has_dnssec_augmentation(response: &[u8], header: &Header) -> bool {
     ttl & 0x8000 != 0
 }
 
+fn response_has_ede_info_code(response: &[u8], header: &Header, expected_info_code: u16) -> bool {
+    let Some(opt) = response_opt_record(response, header) else {
+        return false;
+    };
+    if opt.len() < 11 {
+        return false;
+    }
+    let rdlength = u16::from_be_bytes([opt[9], opt[10]]) as usize;
+    let end = 11 + rdlength;
+    if opt.len() < end {
+        return false;
+    }
+
+    let mut offset = 11usize;
+    while offset + 4 <= end {
+        let option_code = u16::from_be_bytes([opt[offset], opt[offset + 1]]);
+        let option_len = u16::from_be_bytes([opt[offset + 2], opt[offset + 3]]) as usize;
+        offset += 4;
+        if offset + option_len > end {
+            return false;
+        }
+        if option_code == EDNS_EXTENDED_DNS_ERROR_OPTION && option_len >= 2 {
+            let info_code = u16::from_be_bytes([opt[offset], opt[offset + 1]]);
+            if info_code == expected_info_code {
+                return true;
+            }
+        }
+        offset += option_len;
+    }
+
+    false
+}
+
 fn response_answer_contains_type(response: &[u8], header: &Header, types: &[u16]) -> bool {
     let Some(mut offset) = response_question_end(response, header) else {
         return false;
@@ -3335,7 +3383,9 @@ fn skip_response_record(response: &[u8], offset: usize) -> Option<usize> {
 struct UdpServerSettings {
     max_udp_payload: u16,
     max_cname_chain: usize,
+    nsec3_max_iterations: u16,
     edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secrets: DnsCookieSecretStore,
@@ -3403,11 +3453,13 @@ async fn serve_tcp(
                 settings.idle_timeout,
                 settings.max_udp_payload,
                 settings.max_cname_chain,
+                settings.nsec3_max_iterations,
                 settings.read_timeout,
                 settings.write_timeout,
                 settings.max_inflight_queries_per_connection,
                 settings.inflight_limit_timeout,
                 settings.edns_padding_block_size,
+                settings.extended_dns_errors,
                 settings.any_response,
                 settings.nsid,
                 settings.dns_cookie_secrets,
@@ -3704,6 +3756,7 @@ fn metrics_body(
     append_dns_cookie_metrics(&mut body, snapshot);
     append_dns_cookie_prefix_metrics(&mut body, metrics);
     append_configuration_warning_metrics(&mut body, snapshot);
+    append_dnssec_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_catalog_member_metrics(&mut body, catalog_manager);
@@ -3887,6 +3940,17 @@ fn append_configuration_warning_metrics(body: &mut String, snapshot: RuntimeMetr
     body.push_str(&format!(
         "oxidedns_secondary_configuration_warnings_total {}\n",
         snapshot.configuration_warnings
+    ));
+}
+
+fn append_dnssec_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_dnssec_nsec3_iterations_exceed_cap_total DNSSEC negative responses that omitted NSEC3 denial proofs because the zone iteration count exceeded dnssec.nsec3_max_iterations.\n\
+         # TYPE oxidedns_dnssec_nsec3_iterations_exceed_cap_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_dnssec_nsec3_iterations_exceed_cap_total {}\n",
+        snapshot.nsec3_iterations_exceed_cap
     ));
 }
 
@@ -4684,6 +4748,7 @@ struct RuntimeMetricsInner {
     dns_cookie_invalid_server: AtomicU64,
     dns_cookie_badcookie: AtomicU64,
     configuration_warnings: AtomicU64,
+    nsec3_iterations_exceed_cap: AtomicU64,
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
@@ -4729,6 +4794,7 @@ struct RuntimeMetricsSnapshot {
     dns_cookie_invalid_server: u64,
     dns_cookie_badcookie: u64,
     configuration_warnings: u64,
+    nsec3_iterations_exceed_cap: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -5138,6 +5204,12 @@ impl RuntimeMetrics {
             .store(count, Ordering::Relaxed);
     }
 
+    fn record_nsec3_iterations_exceed_cap(&self) {
+        self.inner
+            .nsec3_iterations_exceed_cap
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_dns_cookie_badcookie_for_source(
         &self,
         source: IpAddr,
@@ -5354,6 +5426,10 @@ impl RuntimeMetrics {
             dns_cookie_invalid_server: self.inner.dns_cookie_invalid_server.load(Ordering::Relaxed),
             dns_cookie_badcookie: self.inner.dns_cookie_badcookie.load(Ordering::Relaxed),
             configuration_warnings: self.inner.configuration_warnings.load(Ordering::Relaxed),
+            nsec3_iterations_exceed_cap: self
+                .inner
+                .nsec3_iterations_exceed_cap
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -5372,6 +5448,7 @@ enum NotifyTsigResult {
 struct TcpServerSettings {
     max_udp_payload: u16,
     max_cname_chain: usize,
+    nsec3_max_iterations: u16,
     idle_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -5380,6 +5457,7 @@ struct TcpServerSettings {
     max_inflight_queries_per_connection: usize,
     inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secrets: DnsCookieSecretStore,
@@ -7762,11 +7840,13 @@ async fn handle_tcp_connection(
     idle_timeout: Duration,
     max_udp_payload: u16,
     max_cname_chain: usize,
+    nsec3_max_iterations: u16,
     read_timeout: Duration,
     write_timeout: Duration,
     max_inflight_queries_per_connection: usize,
     inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secrets: DnsCookieSecretStore,
@@ -7785,11 +7865,13 @@ async fn handle_tcp_connection(
         idle_timeout,
         max_udp_payload,
         max_cname_chain,
+        nsec3_max_iterations,
         read_timeout,
         write_timeout,
         max_inflight_queries_per_connection,
         inflight_limit_timeout,
         edns_padding_block_size,
+        extended_dns_errors,
         any_response,
         nsid,
         dns_cookie_secrets,
@@ -7813,11 +7895,13 @@ async fn handle_tcp_connection_with_query_hook(
     idle_timeout: Duration,
     max_udp_payload: u16,
     max_cname_chain: usize,
+    nsec3_max_iterations: u16,
     read_timeout: Duration,
     write_timeout: Duration,
     max_inflight_queries_per_connection: usize,
     inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secrets: DnsCookieSecretStore,
@@ -7872,7 +7956,9 @@ async fn handle_tcp_connection_with_query_hook(
             idle_timeout,
             max_udp_payload,
             max_cname_chain,
+            nsec3_max_iterations,
             edns_padding_block_size,
+            extended_dns_errors,
             any_response,
             nsid.clone(),
             dns_cookie_secrets.clone(),
@@ -7947,7 +8033,9 @@ async fn handle_tcp_packet(
     idle_timeout: Duration,
     max_udp_payload: u16,
     max_cname_chain: usize,
+    nsec3_max_iterations: u16,
     edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
     dns_cookie_secrets: DnsCookieSecretStore,
@@ -8030,8 +8118,10 @@ async fn handle_tcp_packet(
             transport: Transport::Tcp,
             max_udp_payload,
             max_cname_chain,
+            nsec3_max_iterations,
             tcp_keepalive_timeout_secs: idle_timeout.as_secs(),
             edns_padding_block_size,
+            extended_dns_errors,
             any_response,
             nsid: &nsid,
             dns_cookie,
@@ -8197,8 +8287,8 @@ mod tests {
         axfr::{IxfrResponse, frame_tcp_message},
         config::{HealthConfig, RrlConfig, TransferPrimaryConfig, TransferTransportConfig},
         dns::{
-            AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
-            LookupTermination, Opcode, Rcode, RecordType, Transport,
+            AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName,
+            ExtendedDnsErrorsMode, Header, LookupTermination, Opcode, Rcode, RecordType, Transport,
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -8222,8 +8312,9 @@ mod tests {
     use super::{
         CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
         DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS,
-        DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
-        LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
+        DnsCookieRuntimeSettings, DnsCookieSecretStore, EDE_UNSUPPORTED_NSEC3_ITERATIONS,
+        EDNS_EXTENDED_DNS_ERROR_OPTION, HealthEndpointState, IxfrCooldownRegistry, LoadingWarning,
+        MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
         NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage,
         QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation, QueryPipelineStage,
         RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
@@ -9008,6 +9099,7 @@ mod tests {
             "192.0.2.10".parse().unwrap(),
             cookie_prefix_metrics,
         );
+        metrics_state.record_nsec3_iterations_exceed_cap();
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -9108,6 +9200,7 @@ mod tests {
             "oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix=\"192.0.2.0/24\"} 1"
         ));
         assert!(metrics.contains("oxidedns_secondary_configuration_warnings_total 4"));
+        assert!(metrics.contains("oxidedns_dnssec_nsec3_iterations_exceed_cap_total 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(
@@ -10614,16 +10707,39 @@ mod tests {
         let mut badvers = noerror.clone();
         badvers[11] = 1;
         badvers.extend_from_slice(&[0, 0, 41, 4, 208, 1, 0, 0, 0, 0, 0]);
+        let mut nsec3_ede = noerror.clone();
+        nsec3_ede[11] = 1;
+        nsec3_ede.extend_from_slice(&[
+            0,
+            0,
+            41,
+            4,
+            208,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6,
+            0,
+            EDNS_EXTENDED_DNS_ERROR_OPTION as u8,
+            0,
+            2,
+            0,
+            EDE_UNSUPPORTED_NSEC3_ITERATIONS as u8,
+        ]);
 
         record_query_response_metric(&observation, &noerror, &metrics);
         record_query_response_metric(&observation, &nxdomain, &metrics);
         record_query_response_metric(&observation, &truncated, &metrics);
         record_query_response_metric(&observation, &badvers, &metrics);
+        record_query_response_metric(&observation, &nsec3_ede, &metrics);
         record_query_response_metric(&non_query_observation, &truncated, &metrics);
 
         assert_eq!(metrics.snapshot().queries_truncated, 1);
+        assert_eq!(metrics.snapshot().nsec3_iterations_exceed_cap, 1);
         let rcodes = metrics.query_rcode_counts();
-        assert_eq!(rcodes.get(&0), Some(&2));
+        assert_eq!(rcodes.get(&0), Some(&3));
         assert_eq!(rcodes.get(&3), Some(&1));
         assert_eq!(rcodes.get(&16), Some(&1));
         assert_eq!(
@@ -10631,7 +10747,7 @@ mod tests {
                 .query_latency_histograms()
                 .get(&QueryLatencyCategory::UdpDirect)
                 .map(QueryLatencyHistogram::count),
-            Some(4)
+            Some(5)
         );
     }
 
@@ -11127,7 +11243,9 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 max_cname_chain: 1,
+                nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
@@ -11261,7 +11379,9 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 max_cname_chain: 8,
+                nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
@@ -11346,7 +11466,9 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 max_cname_chain: 8,
+                nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
@@ -13431,11 +13553,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13515,11 +13639,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13591,11 +13717,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13674,11 +13802,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 1,
                 std::time::Duration::from_millis(25),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13736,11 +13866,13 @@ mod tests {
                 std::time::Duration::from_millis(25),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13781,11 +13913,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_millis(25),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13840,11 +13974,13 @@ mod tests {
                 std::time::Duration::from_secs(5),
                 1232,
                 8,
+                100,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
                 64,
                 std::time::Duration::from_secs(5),
                 0,
+                ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
                 dns_cookie_secret_store_for_test(),
@@ -13886,6 +14022,7 @@ mod tests {
             TcpServerSettings {
                 max_udp_payload: 1232,
                 max_cname_chain: 8,
+                nsec3_max_iterations: 100,
                 idle_timeout: std::time::Duration::from_secs(30),
                 read_timeout: std::time::Duration::from_secs(30),
                 write_timeout: std::time::Duration::from_secs(30),
@@ -13894,6 +14031,7 @@ mod tests {
                 max_inflight_queries_per_connection: 64,
                 inflight_limit_timeout: std::time::Duration::from_secs(30),
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
@@ -13944,6 +14082,7 @@ mod tests {
             TcpServerSettings {
                 max_udp_payload: 1232,
                 max_cname_chain: 8,
+                nsec3_max_iterations: 100,
                 idle_timeout: std::time::Duration::from_secs(30),
                 read_timeout: std::time::Duration::from_secs(30),
                 write_timeout: std::time::Duration::from_secs(30),
@@ -13952,6 +14091,7 @@ mod tests {
                 max_inflight_queries_per_connection: 64,
                 inflight_limit_timeout: std::time::Duration::from_secs(30),
                 edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
@@ -15266,7 +15406,9 @@ mod tests {
         UdpServerSettings {
             max_udp_payload: 1232,
             max_cname_chain: 8,
+            nsec3_max_iterations: 100,
             edns_padding_block_size: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: Vec::new(),
             dns_cookie_secrets: dns_cookie_secret_store_for_test(),

@@ -1522,11 +1522,11 @@ Certificate material and private key material MUST NOT appear in any log entry. 
 
 ## 4.11 EDNS0
 
-This subsection specifies the server's implementation of Extension Mechanisms for DNS (EDNS0). The governing standards are RFC 6891 (base EDNS0), RFC 7828 (edns-tcp-keepalive option), and RFC 7830 (EDNS(0) Padding option). EDNS0 extends DNS messages to carry larger UDP payloads, signal protocol-version capabilities, and convey extensible options between requestor and responder.
+This subsection specifies the server's implementation of Extension Mechanisms for DNS (EDNS0). The governing standards are RFC 6891 (base EDNS0), RFC 7828 (edns-tcp-keepalive option), RFC 7830 (EDNS(0) Padding option), and RFC 8914 (Extended DNS Errors). EDNS0 extends DNS messages to carry larger UDP payloads, signal protocol-version capabilities, and convey extensible options between requestor and responder.
 
 The interaction between EDNS0 UDP payload negotiation and TCP fallback is governed jointly by this subsection and §4.12; the response truncation behaviour (TC bit setting and message construction under size constraints) is specified in §4.12, while the determination of the applicable UDP size ceiling is specified here.
 
-EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in scope per PID Appendix A. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above.
+EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in scope per PID Appendix A. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
 
 The area code **EDNS** is allocated.
 
@@ -1621,6 +1621,16 @@ The area code **EDNS** is allocated.
 **ODS-FR-EDNS-017.** The NSID value MUST be configurable per §6.2 as either an inline string or an octet sequence. The default value MUST be empty (no NSID configured). When no NSID is configured, NSID requests in inbound queries MUST be silently ignored — the server MUST NOT include an NSID option in responses to such queries.
 *Source.* RFC 5001 §2.4 (NSID response is optional).
 *Verification.* Configuration round-trip tests; behavioural tests with NSID configured and not configured.
+
+### Extended DNS Errors (RFC 8914)
+
+**ODS-FR-EDNS-018.** The server MUST support an operator-configurable minimal Extended DNS Errors profile per RFC 8914. The default profile MUST be `off`. When the profile is `minimal`, and the inbound query contained an OPT RR, the response OPT RR MAY include an Extended DNS Error option (option code 15) with no EXTRA-TEXT for the following server-local diagnostic conditions:
+- `Not Ready` (INFO-CODE 14) when the matching zone exists but is not yet ACTIVE, including LOADING and EXPIRED zone-state-machine states;
+- `Unsupported NSEC3 Iterations` (INFO-CODE 27) when NSEC3 denial-of-existence proof records are omitted because the zone's NSEC3 iteration count exceeds the configured `dnssec.nsec3_max_iterations` cap per ODS-FR-DNSSEC-014.
+
+The EDE option MUST NOT change the base DNS RCODE selected by the underlying response condition. The server MUST NOT emit EDE in responses to non-EDNS queries. If a UDP response must be truncated to fit the applicable payload ceiling, the server MAY omit the EDE option before omitting DNS resource records.
+*Source.* RFC 8914 §2, §4; RFC 9276 §2.4.
+*Verification.* Wire-format tests for profile off/on, LOADING-zone SERVFAIL with INFO-CODE 14, NSEC3-over-cap negative response with INFO-CODE 27, non-EDNS omission, and truncation behaviour. *Added in v0.9 implementation alignment.*
 
 ## 4.12 TCP Transport
 
@@ -1787,6 +1797,7 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 **ODS-FR-DNSSEC-014.** Where a query against an NSEC3-signed zone requires the server to traverse NSEC3 chain records to compose a negative-existence proof (per ODS-FR-DNSSEC-004 or ODS-FR-DNSSEC-005), and the zone's NSEC3PARAM RDATA specifies an iteration count exceeding a configurable cap (per ODS-IF-CONF-015, default 100 per RFC 9276 / BCP 236 §2.4), the server MUST treat the affected response composition as follows:
 - The negative response itself MUST still be returned per ODS-FR-CORE-022 (NODATA) or ODS-FR-CORE-023 (NXDOMAIN); the request is not refused;
 - The NSEC3 records (and their RRSIGs) that would constitute the denial-of-existence proof MAY be omitted from the response — the response then carries the negative answer without DNSSEC authentication for the negative proof;
+- Where the minimal EDE profile is enabled per ODS-FR-EDNS-018 and the inbound query contained an OPT RR, the response SHOULD include EDE INFO-CODE 27 (`Unsupported NSEC3 Iterations`) without EXTRA-TEXT to make the downgrade observable to diagnostic clients;
 - The server MUST emit a warning-level log entry on the first such omission per zone since process startup, with `category = "dnssec"`, `event = "nsec3_iterations_exceed_cap"`, and structured fields recording the zone name, the iteration count present in NSEC3PARAM, and the configured cap;
 - The per-zone counter `oxidedns_dnssec_nsec3_cap_exceeded_total{zone="..."}` (per §5.6) MUST be incremented for each affected response.
 
@@ -2737,6 +2748,10 @@ When no catalog zones are configured, these metrics MUST NOT be emitted (their a
 *Source.* CIA threat analysis observability requirements; standard practice for operationally significant subsystems.
 *Verification.* Endpoint inspection in both modes; functional tests inducing each counter increment and gauge state change.
 
+**ODS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses where NSEC3 denial-of-existence proof records were omitted because the configured iteration cap was exceeded. The Engineering MVP implementation metric is `oxidedns_dnssec_nsec3_iterations_exceed_cap_total`; release acceptance SHOULD additionally provide the per-zone series required by ODS-FR-DNSSEC-014 or document why the global counter is sufficient for the deployed zone-count model.
+*Source.* ODS-FR-DNSSEC-014; ODS-FR-EDNS-018.
+*Verification.* Metric endpoint inspection after a query that triggers EDE INFO-CODE 27. *Added in v0.9 implementation alignment.*
+
 ## 5.7 Resource Limits
 
 The area code **RES** is allocated.
@@ -2958,6 +2973,10 @@ The interaction with TSIG key definitions (the separately-defined `[[tsig_keys]]
 *Source.* ODS-FR-AXFR-025.
 *Note.* The parameter is process-global rather than per-zone in MVP 1.0 scope; per-zone selectivity is a deliberate non-goal and would be evaluated in a future revision should an operational need arise.
 *Verification.* Configuration round-trip tests for both values; warning emission test for the `true` case; behavioural test confirming the AXFR-time effect per ODS-FR-AXFR-025. *Added in v0.9.*
+
+**ODS-IF-CONF-017.** The server MUST accept a configurable Extended DNS Errors profile under the `[edns]` configuration subtree or equivalent. The parameter name MUST be `extended_dns_errors`; accepted values are `off` and `minimal`. The default value MUST be `off`. The `minimal` value enables only the bounded diagnostic mappings specified in ODS-FR-EDNS-018 and MUST NOT enable arbitrary policy disclosure or free-form EXTRA-TEXT.
+*Source.* ODS-FR-EDNS-018; RFC 8914 §2.
+*Verification.* Configuration round-trip tests for both values; environment-override tests; wire-format tests confirming that `off` suppresses EDE and `minimal` enables only the specified mappings. *Added in v0.9 implementation alignment.*
 
 ## 6.3 Logging Interface
 
@@ -3316,7 +3335,7 @@ The PID establishes Alpha and MVP milestones. The acceptance criteria for each a
 **ODS-VER-007 — Alpha Milestone.** The Alpha milestone is achieved when the following are demonstrably satisfied:
 
 - All ODS-INV requirements (§3), including the v0.6-introduced ODS-INV-007, ODS-INV-008, ODS-INV-009;
-- Functional requirements: §4.1 (CORE) in full; §4.2 (QRY) excluding RFC 8482 minimal-ANY (ODS-FR-QRY-003 through -007 deferred); §4.3 (NRESP) in full; §4.4 (URR) in full; §4.5 (SPOOF) in full; §4.6 (AXFR) in full; §4.8 (NOTIFY) in full; §4.11 (EDNS) in full including NSID per ODS-FR-EDNS-016/-017; §4.12 (TCP) in full; §4.14 (RR) restricted to RFC 1035 types plus AAAA; §4.15 (ZONE) in full; §4.16 (ZSM) in full;
+- Functional requirements: §4.1 (CORE) in full; §4.2 (QRY) excluding RFC 8482 minimal-ANY (ODS-FR-QRY-003 through -007 deferred); §4.3 (NRESP) in full; §4.4 (URR) in full; §4.5 (SPOOF) in full; §4.6 (AXFR) in full; §4.8 (NOTIFY) in full; §4.11 (EDNS) in full including NSID per ODS-FR-EDNS-016/-017 and the bounded EDE profile in ODS-FR-EDNS-018; §4.12 (TCP) in full; §4.14 (RR) restricted to RFC 1035 types plus AAAA; §4.15 (ZONE) in full; §4.16 (ZSM) in full;
 - TSIG (§4.9): minimum subset sufficient for HMAC-SHA256 interop with at least one TSIG-configured primary (ODS-FR-TSIG-001, -005 through -012, -017);
 - Interface requirements: §6.1 in full — three-interface segregation per ODS-IF-NET-005 through -007, plus the ODS-IF-NET-008 prohibition on exposing a fourth active NOTIFY interface role. §6.2 (CONF) in full, including the v0.5-introduced CONF-008 (warning catalogue), CONF-009 (`--dump-config`), CONF-010 (`--validate-config`), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention). §6.3 in full, including the v0.5-introduced LOG-005 through LOG-008. §6.4 (HEALTH) in full, including `/livez`, `/readyz`, the `/healthz` readiness alias, response time bounds, and metrics rate limiting. §6.5 in full, including the v0.5-introduced SIGPIPE handling clarification. §6.6 (PROC): ODS-IF-PROC-001 (exit code convention), ODS-IF-PROC-002 (`--version`), and ODS-IF-PROC-003 (`--help`) are required for Alpha; ODS-IF-PROC-004 (`--example-config`, MAY-level) is optional in Alpha as it is in MVP.
 - Non-functional requirements: §5.2 (REL) -001 to -005 (REL-006 overload behaviour, REL-007 clock-skew tolerance deferred to MVP), §5.3 (SEC) -001 to -005 (SEC-006 continuous dependency audit, SEC-007 CVE policy deferred to MVP), §5.4 (MAINT) -001, -003, -004 (MAINT-002 module organisation, MAINT-005 reproducible builds, MAINT-006 backward-compat, MAINT-007 test coverage, MAINT-008 signed releases, MAINT-009 Operator Deployment Guide deferred to MVP), §5.5 (PORT) -001 to -004 (PORT-005 init-system independence verified at MVP), §5.6 (OBS) -001, -002, -004, -005, -006, and -007, §5.7 (RES) -001 (container image size);
@@ -4331,11 +4350,11 @@ The entry is preserved in this register, with this updated status, per the ident
 
 *Description.* The EDE (Extended DNS Errors) EDNS option carries fine-grained error-condition information from the responder to the requestor, complementing the coarse-grained RCODE field. Defined error codes cover conditions such as "Stale Answer" (RFC 8767), "DNSSEC Bogus", "DNSKEY Missing", "Stale NXDomain", "Filtered", and many others.
 
-*Rationale for exclusion.* Out of PID scope. Materially improves operational diagnostics in DNSSEC-aware deployments and resolver-side debugging, but is not required for protocol correctness. The implementation cost is moderate: one new EDNS option encoder, a mapping from internal failure categories to EDE codes, and (if Stale Answer support is added later) interaction with cache-staleness semantics.
+*Current scope.* Partially implemented as a bounded, operator-enabled diagnostic profile in ODS-FR-EDNS-018. The current profile emits only INFO-CODE 14 (`Not Ready`) for zone-state-machine not-ready responses and INFO-CODE 27 (`Unsupported NSEC3 Iterations`) for NSEC3 cap downgrades. It deliberately omits EXTRA-TEXT and does not expose policy, filtering, validator, stale-cache, or recursive-resolution EDE mappings that are outside this secondary-only authoritative scope.
 
-*Enforcement.* Not implemented in this version.
+*Enforcement.* Implemented only for ODS-FR-EDNS-018. Other RFC 8914 codes remain out of current scope unless explicitly added by a future requirement.
 
-*Note.* Recommended candidate for the v2 scope decision queue. Flagged via Appendix C.5. Particularly valuable if XoT or DNSSEC-related operational issues arise during MVP deployment, where the diagnostic gap between "SERVFAIL" and the actual cause (e.g., missing DNSKEY at primary) becomes operationally painful.
+*Note.* Operators should treat EDE as diagnostic metadata only; it does not alter the DNS RCODE and must not be required by clients for correctness.
 
 ## C.4 Standards Referenced but Not Implemented
 
@@ -4352,7 +4371,6 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 | 7858 | DNS-over-TLS (client queries) | Current-scope exclusion | C.3.3 |
 | 7871 | EDNS Client Subnet | Current-scope exclusion | C.3.2 |
 | 8484 | DNS-over-HTTPS | Current-scope exclusion | C.3.4 |
-| 8914 | EDNS Extended DNS Errors | Current-scope exclusion (flagged) | C.3.15 |
 | 9250 | DNS-over-QUIC | Current-scope exclusion | C.3.5 |
 
 *Note.* RFC 7873 (DNS Cookies) was listed in this table in v0.1 and v0.2 as a current-scope exclusion. As of v0.3 it has been brought into MVP scope (§4.19) and is therefore removed from this table.
@@ -4366,7 +4384,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Item | Flagged at | Recommendation | Decision |
 |---|---|---|---|
 | DNS Cookies (RFC 7873) | §4.5, §4.11 | Bring into scope | **Resolved (v0.3): in MVP scope, §4.19** |
-| EDNS Extended DNS Errors (RFC 8914) | §4.13, C.3.15 | Add to v2 scope | Pending |
+| EDNS Extended DNS Errors (RFC 8914) | §4.11, §4.13, C.3.15 | Add minimal authoritative diagnostics | **Resolved (v0.9 implementation alignment): bounded profile added; ODS-FR-EDNS-018, ODS-IF-CONF-017** |
 | NOTIFY-over-TLS reception | §4.10 | Remain out of scope (current) | Pending |
 | Per-zone RRL configuration | §4.17 | Remain out of scope (current) | Pending |
 | mTLS for XoT as MUST | §4.10 | Remain MAY | Pending |
@@ -4623,7 +4641,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **ECS.** EDNS Client Subnet (RFC 7871). Not implemented; see Appendix C.3.2.
 
-**EDE.** Extended DNS Errors (RFC 8914). An EDNS option carrying fine-grained error condition information from the responder to the requestor. Not implemented in this version; see Appendix C.3.15. Flagged as a v2 scope candidate.
+**EDE.** Extended DNS Errors (RFC 8914). An EDNS option carrying fine-grained error condition information from the responder to the requestor. Implemented only for the bounded profile in ODS-FR-EDNS-018.
 
 **EDNS, EDNS0.** Extension Mechanisms for DNS, version 0 (RFC 6891). Implemented in §4.11.
 
