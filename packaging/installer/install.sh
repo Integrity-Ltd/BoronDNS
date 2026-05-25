@@ -64,7 +64,7 @@ as_root_required() {
 confirm() {
     local prompt="$1"
     if ((ASSUME_YES)); then
-        return 0
+        return 1
     fi
     local answer
     read -r -p "$prompt [y/N] " answer

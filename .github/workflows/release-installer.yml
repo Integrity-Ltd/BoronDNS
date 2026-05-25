@@ -1,0 +1,98 @@
+name: Release installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    name: Build x86_64 musl installer
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install shell tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust target
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Check release tag matches Cargo version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
+          tag="${GITHUB_REF_NAME#v}"
+          test "$tag" = "$version"
+
+      - name: Shell checks
+        run: scripts/check-shell-scripts.sh
+
+      - name: Build installer
+        run: scripts/package-installer.sh
+
+      - name: Docker installer smoke
+        run: scripts/test-installer-docker.sh
+
+      - name: Verify static binary
+        run: |
+          ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin | tee target/dist/release-binary-ldd.txt
+          grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-binary-ldd.txt
+          target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin --version
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxidedns-x86_64-unknown-linux-musl
+          path: |
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl/manifest.txt
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd.txt
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl/file.txt
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          notes="target/dist/release-notes-$version.md"
+          tarball="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
+          binary="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.bin"
+
+          cat > "$notes" <<EOF
+          OxideDNS $version
+
+          Assets:
+          - Installer archive: $(basename "$tarball")
+          - Static binary: $(basename "$binary")
+          - SHA256 files are attached for both assets.
+
+          Target: x86_64-unknown-linux-musl
+          EOF
+
+          gh release create "$tag" \
+            --verify-tag \
+            --title "OxideDNS $version" \
+            --notes-file "$notes" \
+            "$tarball" \
+            "$tarball.sha256" \
+            "$binary" \
+            "$binary.sha256"

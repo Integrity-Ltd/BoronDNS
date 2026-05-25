@@ -10,6 +10,7 @@ commit="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'u
 archive_root="$package_name-$version-$target_triple"
 staging="$dist_dir/$archive_root"
 archive="$dist_dir/$archive_root.tar.xz"
+binary_asset="$dist_dir/$archive_root.bin"
 
 missing=()
 for tool in cargo rustup tar xz python3; do
@@ -49,12 +50,15 @@ install -m 0644 "$repo_root/config/oxidedns.example.toml" "$staging/share/oxided
 install -m 0644 "$repo_root/LICENSE-MIT" "$staging/LICENSE-MIT"
 install -m 0644 "$repo_root/LICENSE-APACHE" "$staging/LICENSE-APACHE"
 
-sha256_tool=""
-if command -v sha256sum >/dev/null 2>&1; then
-    sha256_tool="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-    sha256_tool="shasum -a 256"
-fi
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1"
+    else
+        return 1
+    fi
+}
 
 {
     printf 'name=%s\n' "$package_name"
@@ -63,9 +67,8 @@ fi
     printf 'commit=%s\n' "$commit"
     printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'binary=bin/oxidedns\n'
-    if [[ -n "$sha256_tool" ]]; then
-        # shellcheck disable=SC2086
-        $sha256_tool "$staging/bin/oxidedns" | awk '{print "binary_sha256="$1}'
+    if sha256_file "$staging/bin/oxidedns" >/dev/null 2>&1; then
+        sha256_file "$staging/bin/oxidedns" | awk '{print "binary_sha256="$1}'
     fi
 } >"$staging/manifest.txt"
 
@@ -83,15 +86,18 @@ if command -v file >/dev/null 2>&1; then
     file "$staging/bin/oxidedns" >"$staging/file.txt"
 fi
 
-rm -f "$archive" "$archive.sha256"
+rm -f "$archive" "$archive.sha256" "$binary_asset" "$binary_asset.sha256"
+install -m 0755 "$binary" "$binary_asset"
 tar -C "$dist_dir" -cJf "$archive" "$archive_root"
-if [[ -n "$sha256_tool" ]]; then
+if sha256_file "$archive" >/dev/null 2>&1; then
     (
         cd "$dist_dir"
-        # shellcheck disable=SC2086
-        $sha256_tool "$(basename "$archive")" >"$(basename "$archive").sha256"
+        sha256_file "$(basename "$archive")" >"$(basename "$archive").sha256"
+        sha256_file "$(basename "$binary_asset")" >"$(basename "$binary_asset").sha256"
     )
 fi
 
 printf 'created %s\n' "$archive"
 [[ -f "$archive.sha256" ]] && printf 'created %s\n' "$archive.sha256"
+printf 'created %s\n' "$binary_asset"
+[[ -f "$binary_asset.sha256" ]] && printf 'created %s\n' "$binary_asset.sha256"
