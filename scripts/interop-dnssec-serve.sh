@@ -189,6 +189,7 @@ def zone_records():
         rr("unsigned.alpha.test.", NS, name_wire("ns.unsigned.alpha.test.")),
         rr("ns.unsigned.alpha.test.", A, bytes([192, 0, 2, 54])),
         rr("unsigned.alpha.test.", NSEC, nsec_rdata("www.alpha.test.", [NS, RRSIG, NSEC])),
+        rr("*.alpha.test.", A, bytes([192, 0, 2, 20])),
         *[
             rr("large.alpha.test.", TXT, bytes([120]) + bytes([65 + (index % 26)]) * 120)
             for index in range(8)
@@ -416,7 +417,7 @@ if positive_non_do["answer_types"] != [A]:
 if positive_non_do["opt_ttls"] and positive_non_do["opt_ttls"][0] & 0x8000:
     raise AssertionError(f"non-DO response set response DO bit: {positive_non_do}")
 
-nxdomain_do = exchange(0xD003, "missing.alpha.test.", A, payload=4096, do=True)
+nxdomain_do = exchange(0xD003, "missing.www.alpha.test.", A, payload=4096, do=True)
 if nxdomain_do["rcode"] != 3:
     raise AssertionError(f"NXDOMAIN DO did not return NXDOMAIN: {nxdomain_do}")
 if SOA not in nxdomain_do["authority_types"] or NSEC not in nxdomain_do["authority_types"] or RRSIG not in nxdomain_do["authority_types"]:
@@ -424,7 +425,7 @@ if SOA not in nxdomain_do["authority_types"] or NSEC not in nxdomain_do["authori
 if not nxdomain_do["opt_ttls"] or nxdomain_do["opt_ttls"][0] & 0x8000 == 0:
     raise AssertionError(f"NXDOMAIN DO response did not set response DO bit: {nxdomain_do}")
 
-nxdomain_non_do = exchange(0xD00E, "missing.alpha.test.", A, payload=4096, do=False)
+nxdomain_non_do = exchange(0xD00E, "missing.www.alpha.test.", A, payload=4096, do=False)
 if nxdomain_non_do["rcode"] != 3 or nxdomain_non_do["answer_types"] or nxdomain_non_do["authority_types"] != [SOA]:
     raise AssertionError(f"NXDOMAIN non-DO response did not suppress DNSSEC augmentation: {nxdomain_non_do}")
 if nxdomain_non_do["opt_ttls"] and nxdomain_non_do["opt_ttls"][0] & 0x8000:
@@ -435,6 +436,24 @@ if nodata_non_do["rcode"] != 0 or nodata_non_do["answer_types"] or nodata_non_do
     raise AssertionError(f"NODATA non-DO response did not suppress DNSSEC augmentation: {nodata_non_do}")
 if nodata_non_do["opt_ttls"] and nodata_non_do["opt_ttls"][0] & 0x8000:
     raise AssertionError(f"NODATA non-DO response set response DO bit: {nodata_non_do}")
+
+wildcard_do = exchange(0xD012, "wild.alpha.test.", A, payload=4096, do=True)
+if wildcard_do["rcode"] != 0 or wildcard_do["tc"] or wildcard_do["answer_types"] != [A]:
+    raise AssertionError(f"wildcard DO response did not synthesize an A answer: {wildcard_do}")
+if wildcard_do["authority_types"] != [NSEC, RRSIG]:
+    raise AssertionError(f"wildcard DO response lacked NSEC/RRSIG exact-name absence proof: {wildcard_do}")
+if not wildcard_do["opt_ttls"] or wildcard_do["opt_ttls"][0] & 0x8000 == 0:
+    raise AssertionError(f"wildcard DO response did not set response DO bit: {wildcard_do}")
+if wildcard_do["ad"] or wildcard_do["cd"]:
+    raise AssertionError(f"wildcard DO response set AD/CD unexpectedly: {wildcard_do}")
+
+wildcard_non_do = exchange(0xD013, "wild.alpha.test.", A, payload=4096, do=False)
+if wildcard_non_do["rcode"] != 0 or wildcard_non_do["tc"] or wildcard_non_do["answer_types"] != [A]:
+    raise AssertionError(f"wildcard non-DO response did not synthesize an A answer: {wildcard_non_do}")
+if wildcard_non_do["authority_types"]:
+    raise AssertionError(f"wildcard non-DO response did not suppress DNSSEC proof material: {wildcard_non_do}")
+if wildcard_non_do["opt_ttls"] and wildcard_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"wildcard non-DO response set response DO bit: {wildcard_non_do}")
 
 dnskey = exchange(0xD004, "alpha.test.", DNSKEY, payload=4096, do=False)
 if dnskey["answer_types"] != [DNSKEY]:
@@ -610,6 +629,8 @@ positive_non_do_suppresses_rrsig=1
 nxdomain_do_nsec_rrsig=1
 nxdomain_non_do_suppresses_dnssec=1
 nodata_non_do_suppresses_dnssec=1
+wildcard_do_nsec_rrsig=1
+wildcard_non_do_suppresses_dnssec=1
 direct_dnskey_served=1
 direct_rrsig_non_do_served=1
 direct_nsec_non_do_served=1
