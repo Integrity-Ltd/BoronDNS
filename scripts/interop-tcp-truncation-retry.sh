@@ -324,9 +324,14 @@ pipeline_queries = [
     query(0x6101, LARGE_QNAME),
     query(0x6102, SMALL_QNAME),
 ]
+pipeline_start = time.monotonic()
 pipeline.sendall(b"".join(frame(packet) for packet in pipeline_queries))
-pipeline_responses = [read_tcp_response(pipeline), read_tcp_response(pipeline)]
+first_pipeline_response = read_tcp_response(pipeline)
+first_pipeline_ms = int((time.monotonic() - pipeline_start) * 1000)
+second_pipeline_response = read_tcp_response(pipeline)
+second_pipeline_ms = int((time.monotonic() - pipeline_start) * 1000)
 pipeline.close()
+pipeline_responses = [first_pipeline_response, second_pipeline_response]
 pipeline_ids = [response_id(packet) for packet in pipeline_responses]
 if sorted(pipeline_ids) != [0x6101, 0x6102]:
     raise AssertionError(f"pipelined TCP response IDs did not match requests: {pipeline_ids}")
@@ -336,10 +341,16 @@ if pipeline_answer_counts[0x6101] < 80:
 if pipeline_answer_counts[0x6102] != 1:
     raise AssertionError(f"pipelined small answer count mismatch: {pipeline_answer_counts[0x6102]}")
 pipeline_out_of_order = 1 if pipeline_ids == [0x6102, 0x6101] else 0
+if pipeline_out_of_order != 1:
+    raise AssertionError(f"pipelined responses were not inverted for large-then-small query evidence: {pipeline_ids}")
 pipeline_summary = (
-    "pipelined_queries=2 pipelined_responses=2 "
+    "pipelined_queries=2 pipelined_responses=2 intentional_first_large_second_small=1 "
     f"pipelined_response_ids={','.join(hex(item) for item in pipeline_ids)} "
     f"pipelined_out_of_order={pipeline_out_of_order} "
+    f"pipelined_first_response_ms={first_pipeline_ms} "
+    f"pipelined_second_response_ms={second_pipeline_ms} "
+    f"pipelined_first_response_bytes={len(first_pipeline_response)} "
+    f"pipelined_second_response_bytes={len(second_pipeline_response)} "
     f"pipelined_large_a_answers={pipeline_answer_counts[0x6101]} "
     f"pipelined_small_a_answers={pipeline_answer_counts[0x6102]}"
 )
