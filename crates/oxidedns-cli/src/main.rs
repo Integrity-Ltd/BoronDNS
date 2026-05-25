@@ -211,6 +211,10 @@ fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
         .context("validating effective configuration")?;
     oxidedns_server::validate_runtime_config(&config).context("validating runtime configuration")?;
     warnings.extend(config.configuration_warnings());
+    warnings.extend(
+        oxidedns_server::runtime_config_warnings(&config)
+            .context("collecting runtime configuration warnings")?,
+    );
     Ok(LoadedConfig { config, warnings })
 }
 

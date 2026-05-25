@@ -36,5 +36,6 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+x509-parser = "0.18.1"
 zeroize = "1.8"
 rcgen = "0.14.8"

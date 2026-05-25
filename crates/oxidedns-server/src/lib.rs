@@ -41,7 +41,7 @@ use tokio_rustls::{
 };
 use tracing::{debug, info, warn};
 use oxidedns_core::{
-    ServerConfig,
+    ConfigWarning, ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
     config::{
         CookieConfig, CookiePolicyConfig, HealthConfig, RrlConfig, TransferPrimaryConfig,
@@ -61,6 +61,7 @@ use oxidedns_core::{
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
+use x509_parser::parse_x509_certificate;
 
 pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
@@ -187,6 +188,7 @@ const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
 const RUNTIME_STATUS_RUNNING: u8 = 0;
 const RUNTIME_STATUS_DRAINING: u8 = 1;
 const RUNTIME_STATUS_UNHEALTHY: u8 = 2;
+const XOT_TRUST_ANCHOR_EXPIRY_WARNING_SECS: i64 = 30 * 24 * 60 * 60;
 
 impl Runtime {
     pub fn new(config: ServerConfig) -> Self {
@@ -236,7 +238,12 @@ impl Runtime {
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
         let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(self.config.rrl.max_keys);
-        metrics.set_configuration_warnings(self.config.configuration_warnings().len() as u64);
+        let startup_warning_count = self.config.configuration_warnings().len().saturating_add(
+            runtime_config_warnings(&self.config)
+                .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?
+                .len(),
+        );
+        metrics.set_configuration_warnings(startup_warning_count as u64);
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
 
         info!(
@@ -505,6 +512,73 @@ pub fn validate_runtime_config(config: &ServerConfig) -> Result<(), TransferErro
         }
     }
     Ok(())
+}
+
+pub fn runtime_config_warnings(config: &ServerConfig) -> Result<Vec<ConfigWarning>, TransferError> {
+    runtime_config_warnings_at(config, current_unix_time_secs_i64())
+}
+
+fn runtime_config_warnings_at(
+    config: &ServerConfig,
+    now_unix_secs: i64,
+) -> Result<Vec<ConfigWarning>, TransferError> {
+    let mut warnings = Vec::new();
+    for zone in &config.zones {
+        for primary in zone.transfer_targets() {
+            if primary.transport != TransferTransportConfig::Xot {
+                continue;
+            }
+            warnings.extend(xot_trust_anchor_expiry_warnings(
+                &zone.name,
+                &primary,
+                now_unix_secs,
+            )?);
+        }
+    }
+    Ok(warnings)
+}
+
+fn xot_trust_anchor_expiry_warnings(
+    zone_name: &str,
+    primary: &TransferPrimaryConfig,
+    now_unix_secs: i64,
+) -> Result<Vec<ConfigWarning>, TransferError> {
+    let mut warnings = Vec::new();
+    let warning_deadline = now_unix_secs.saturating_add(XOT_TRUST_ANCHOR_EXPIRY_WARNING_SECS);
+    for trust_anchor in &primary.trust_anchors {
+        let certs = load_pem_certs_for_primary(primary.addr, trust_anchor)?;
+        for (index, cert) in certs.iter().enumerate() {
+            let (_, parsed) = parse_x509_certificate(cert.as_ref()).map_err(|error| {
+                TransferError::XotConfig {
+                    addr: primary.addr,
+                    message: format!(
+                        "failed to parse trust anchor certificate {trust_anchor:?}: {error}"
+                    ),
+                }
+            })?;
+            let not_after = parsed.validity().not_after.timestamp();
+            if not_after <= warning_deadline {
+                warnings.push(ConfigWarning {
+                    code: "xot_trust_anchor_expiring_soon",
+                    parameter: format!(
+                        "zones[{zone_name}].transfer_primaries[{}].trust_anchors[{trust_anchor}][{index}]",
+                        primary.addr
+                    ),
+                    message: format!(
+                        "XoT trust anchor expires at Unix timestamp {not_after}, within 30 days of process startup"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(warnings)
+}
+
+fn current_unix_time_secs_i64() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default()
 }
 
 fn validate_xot_transfer_target(primary: &TransferPrimaryConfig) -> Result<(), TransferError> {
@@ -5348,10 +5422,10 @@ mod tests {
         poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
         query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
         refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
-        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
-        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-        transfer_query_id, validate_runtime_config, write_tcp_message,
+        response_rcode, rrl_truncated_response, runtime_config_warnings_at, serial_after,
+        serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
+        sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -8434,6 +8508,42 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_warnings_report_expiring_xot_trust_anchors() {
+        let (trust_anchor, _key_path) =
+            write_expiring_self_signed_xot_cert_files_for_name("primary.example.test");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{}"]
+            "#,
+            trust_anchor.display()
+        ))
+        .expect("valid config");
+
+        let warnings = runtime_config_warnings_at(&config, 1_779_667_200)
+            .expect("xot warning collection succeeds");
+
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "xot_trust_anchor_expiring_soon");
+        assert!(
+            warnings[0]
+                .parameter
+                .contains("zones[example.test.].transfer_primaries[192.0.2.53:853]")
+        );
+        assert!(warnings[0].message.contains("within 30 days"));
+    }
+
+    #[test]
     fn runtime_config_validation_rejects_missing_xot_trust_anchor_file() {
         let missing_trust_anchor = unique_test_path("missing-xot-ca", "pem");
         let config = ServerConfig::from_toml_str(&format!(
@@ -9443,6 +9553,20 @@ mod tests {
         let cert = params
             .self_signed(&key_pair)
             .expect("expired self-signed certificate");
+        write_xot_cert_files(cert.pem(), key_pair.serialize_pem())
+    }
+
+    fn write_expiring_self_signed_xot_cert_files_for_name(
+        dns_name: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let mut params =
+            rcgen::CertificateParams::new(vec![dns_name.to_owned()]).expect("certificate params");
+        params.not_before = rcgen::date_time_ymd(2026, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2026, 6, 1);
+        let key_pair = rcgen::KeyPair::generate().expect("generate key pair");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("expiring self-signed certificate");
         write_xot_cert_files(cert.pem(), key_pair.serialize_pem())
     }
 

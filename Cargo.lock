@@ -1309,6 +1309,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "oxidedns-core",
+ "x509-parser",
 ]
 
 [[package]]

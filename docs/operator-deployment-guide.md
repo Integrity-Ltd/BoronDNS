@@ -126,6 +126,8 @@ implemented warning catalogue is:
 - `tsig_hmac_sha1`: a configured TSIG key uses `hmac-sha1`.
 - `transfer_ingest_cap_low`: `[limits] max_transfer_ingest_bytes` is below
   100 MiB.
+- `xot_trust_anchor_expiring_soon`: a configured XoT trust-anchor certificate
+  expires within 30 days of process startup.
 
 `--validate-config` and `--dump-config` print these warnings to stderr. `serve`
 emits them as structured startup logs. The `/metrics` endpoint exposes the
