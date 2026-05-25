@@ -397,6 +397,9 @@ compile check, cargo-deny output, tool versions, git state, and the current
 verification command list. Set `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz
 campaign helper inside the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to
 run the interop commands listed in the gap register as part of the snapshot.
+Set `OXIDEDNS_RELEASE_NOTES` to a completed release notes markdown file to run the
+release-note gate and verify that retained primary-version artifact paths are
+published in the notes.
 
 Primary AXFR coverage:
 

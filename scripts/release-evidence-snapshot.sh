@@ -95,6 +95,18 @@ run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit
 run_and_capture audit-xot-revocation bash -lc "cd '$repo_root' && scripts/audit-xot-revocation.sh"
 run_and_capture audit-dnssec-passive bash -lc "cd '$repo_root' && scripts/audit-dnssec-passive.sh"
 
+if [[ -n "${OXIDEDNS_RELEASE_NOTES:-}" ]]; then
+  run_and_capture release-notes-gate bash -lc \
+    "cd '$repo_root' && scripts/check-release-notes.sh '$OXIDEDNS_RELEASE_NOTES' '$snapshot_dir'"
+else
+  cat >"$snapshot_dir/logs/release-notes-gate-skipped.log" <<'EOF'
+Release notes gate was not run by default.
+
+Set OXIDEDNS_RELEASE_NOTES to a completed release notes markdown file to run
+scripts/check-release-notes.sh against this evidence snapshot.
+EOF
+fi
+
 if [[ "${OXIDEDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
   fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
   if [[ ! "$fuzz_duration" =~ ^[1-9][0-9]*$ ]]; then
