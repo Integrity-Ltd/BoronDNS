@@ -31,6 +31,22 @@ FORBIDDEN_CHECK_COMMANDS = [
     "scripts/capture-release-handoff.sh",
 ]
 
+REQUIRED_EVIDENCE_COMMANDS = [
+    "scripts/check-security-policy.sh",
+    "scripts/capture-cli-evidence.sh",
+    "scripts/capture-log-evidence.sh",
+    "scripts/capture-signal-evidence.sh",
+    "scripts/capture-health-metrics-evidence.sh",
+    "scripts/capture-malformed-query-evidence.sh",
+    "scripts/capture-portability-evidence.sh",
+    "scripts/capture-resource-evidence.sh",
+    "scripts/capture-coverage-evidence.sh",
+    "scripts/capture-unsafe-dependency-evidence.sh",
+    "scripts/capture-interface-compatibility-evidence.sh",
+    "scripts/audit-unused-code.sh",
+    "scripts/check-functional-requirement-references.py",
+]
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -76,6 +92,12 @@ def main() -> None:
         "scripts/fuzz-campaign.sh --dry-run" in check,
         f"{CHECK}: expected only dry-run fuzz campaign wiring in local checks",
     )
+    evidence = EVIDENCE.read_text(encoding="utf-8")
+    for command in REQUIRED_EVIDENCE_COMMANDS:
+        require(
+            command in evidence,
+            f"{EVIDENCE}: Engineering MVP evidence profile must include {command}",
+        )
 
     print("engineering_mvp_scope_check=passed")
 

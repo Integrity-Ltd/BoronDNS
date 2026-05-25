@@ -53,12 +53,16 @@ git -C "$repo_root" diff --check >"$snapshot_dir/git-diff-check.txt"
 
 cat >"$snapshot_dir/commands.txt" <<'EOF'
 ./scripts/check.sh
+scripts/check-security-policy.sh
+scripts/capture-cli-evidence.sh
 cargo check --manifest-path fuzz/Cargo.toml
 scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh
+scripts/audit-spoof-evidence.py
 scripts/audit-log-fields.py
 scripts/audit-log-lazy-formatting.py
 scripts/audit-unused-code.sh
+scripts/check-functional-requirement-references.py
 scripts/capture-log-evidence.sh
 scripts/capture-signal-evidence.sh
 scripts/capture-health-metrics-evidence.sh
@@ -66,6 +70,8 @@ scripts/capture-malformed-query-evidence.sh
 scripts/capture-portability-evidence.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
+scripts/capture-unsafe-dependency-evidence.sh
+scripts/capture-interface-compatibility-evidence.sh
 scripts/perf-smoke.sh
 scripts/interop-negative-responses.sh
 scripts/interop-notify-negative.sh
@@ -85,6 +91,8 @@ scripts/interop-bind-notify-refresh.sh
 EOF
 
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
+run_and_capture security-policy bash -lc "cd '$repo_root' && scripts/check-security-policy.sh"
+run_and_capture cli-evidence bash -lc "cd '$repo_root' && OXIDEDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
 run_and_capture log-evidence bash -lc "cd '$repo_root' && OXIDEDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
 run_and_capture signal-evidence bash -lc "cd '$repo_root' && OXIDEDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
 run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && OXIDEDNS_HEALTH_METRICS_EVIDENCE_DIR='$snapshot_dir/health-metrics-evidence' scripts/capture-health-metrics-evidence.sh"
@@ -92,6 +100,8 @@ run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_M
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
 run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
+run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR='$snapshot_dir/unsafe-dependency-evidence' scripts/capture-unsafe-dependency-evidence.sh"
+run_and_capture interface-compatibility-evidence bash -lc "cd '$repo_root' && OXIDEDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility-evidence' scripts/capture-interface-compatibility-evidence.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' OXIDEDNS_READONLY_RUNTIME_CONTAINER=\"\${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"
@@ -99,6 +109,7 @@ run_and_capture audit-spoof-evidence bash -lc "cd '$repo_root' && scripts/audit-
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
 run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
 run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
+run_and_capture functional-requirement-references bash -lc "cd '$repo_root' && scripts/check-functional-requirement-references.py"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"
 run_and_capture negative-responses bash -lc "cd '$repo_root' && OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR='$snapshot_dir/negative-response-artifacts' scripts/interop-negative-responses.sh"
 run_and_capture notify-negative bash -lc "cd '$repo_root' && OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR='$snapshot_dir/notify-negative-artifacts' scripts/interop-notify-negative.sh"
