@@ -82,7 +82,9 @@ record_docker_primary_version() {
     docker exec "$container" sh -c 'cat /etc/os-release'
     printf 'os_release_end\n'
     printf 'package_versions_begin\n'
-    docker exec "$container" sh -c "apk info -vv $package"
+    if ! docker exec "$container" sh -c "apk info -vv $package"; then
+      printf 'package_version_command_failed=%s\n' "apk info -vv $package"
+    fi
     printf 'package_versions_end\n'
     printf 'version_output_begin\n'
     docker exec "$container" sh -c "$version_command"

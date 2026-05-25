@@ -22,6 +22,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/interop-version-evidence.sh"
 workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
 container="oxidedns-nsd-notify-refresh-$$"
+artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -58,6 +59,9 @@ nsd_conf="$workdir/nsd.conf"
 notify_proxy="$workdir/notify-proxy.py"
 notify_proxy_log="$workdir/notify-proxy.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+metrics_out="$workdir/metrics.txt"
+summary_tsv="$workdir/nsd-notify-refresh-summary.tsv"
+traceability_tsv="$workdir/nsd-notify-traceability.tsv"
 
 write_zone() {
   local serial="$1"
@@ -200,7 +204,7 @@ ixfr_timeout_secs = 5
 zsm_min_interval_secs = 1
 zsm_initial_retry_secs = 1
 zsm_initial_retry_max_secs = 2
-notify_dedup_secs = 0
+notify_dedup_secs = 1
 graceful_shutdown_secs = 2
 
 [[zones]]
@@ -216,12 +220,12 @@ docker exec "$container" sh -c '/repo/target/debug/oxidedns serve --config /work
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after initial NSD AXFR" >&2
   exit 1
 fi
@@ -264,6 +268,7 @@ if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"1
   echo "OxideDNS did not publish updated A response after NSD NOTIFY" >&2
   exit 1
 fi
+updated_address="$(awk '/www[.]alpha[.]test[.]/ { print $NF; exit }' <<<"$updated_answer")"
 
 updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
@@ -272,6 +277,7 @@ if [[ "$updated_soa" != *"2026052402"* ]]; then
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402' \
   'oxidedns_notify_messages_received_total' \
@@ -302,6 +308,45 @@ fi
 if ! grep -q "response_from_oxidedns rcode=0" "$notify_proxy_log"; then
   echo "NSD NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
   exit 1
+fi
+
+if ! grep 'accepted NOTIFY' "$workdir/oxidedns.log" | grep -q 'alpha.test.'; then
+  echo "OxideDNS log missing accepted NSD NOTIFY event" >&2
+  exit 1
+fi
+
+{
+  printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_primary_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
+  printf 'NSD\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$primary_soa" \
+    "$initial_soa" \
+    "$primary_updated_soa" \
+    "$updated_soa" \
+    "$notify_received" \
+    "$notify_signalled" \
+    "$updated_address"
+} >"$summary_tsv"
+
+cat >"$traceability_tsv" <<'EOF'
+requirement_id	evidence_state	runtime_case	artifacts	review_note
+ODS-FR-NOTIFY-001	retained-real-primary	nsd_udp_notify_reception	notify-proxy.log; primary-version.txt	The NSD primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and OxideDNS receives them on the DNS listener.
+ODS-FR-NOTIFY-006	retained-real-primary	nsd_notify_response	notify-proxy.log	The forwarding proxy observes a successful OxideDNS NOTIFY response with RCODE=0 for NSD-generated NOTIFY.
+ODS-FR-NOTIFY-007	retained-real-primary	nsd_refresh_signal	metrics.txt; nsd-notify-refresh-summary.tsv	OxideDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
+ODS-FR-NOTIFY-010	retained-real-primary	nsd_notify_logging	oxidedns.log	OxideDNS emits an accepted NOTIFY log for the real-primary NSD message, including source, zone, and refresh action.
+ODS-FR-ZSM-003	retained-real-primary	nsd_notify_triggered_refresh	nsd-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and OxideDNS republishes the updated SOA serial and A record.
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+  cp "$nsd_conf" "$artifact_dir/nsd.conf"
+  cp "$zone_file" "$artifact_dir/alpha.test.zone"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
+  cp "$metrics_out" "$artifact_dir/metrics.txt"
+  cp "$summary_tsv" "$artifact_dir/nsd-notify-refresh-summary.tsv"
+  cp "$traceability_tsv" "$artifact_dir/nsd-notify-traceability.tsv"
 fi
 
 echo "NSD NOTIFY refresh Docker interop passed"
