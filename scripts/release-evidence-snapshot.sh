@@ -90,6 +90,7 @@ run_and_capture test-plan-check bash -lc "cd '$repo_root' && scripts/check-test-
 run_and_capture security-policy-check bash -lc "cd '$repo_root' && scripts/check-security-policy.sh"
 run_and_capture cli-evidence bash -lc "cd '$repo_root' && OXIDEDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
 run_and_capture log-evidence bash -lc "cd '$repo_root' && OXIDEDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
+run_and_capture signal-evidence bash -lc "cd '$repo_root' && OXIDEDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"

@@ -56,6 +56,8 @@ cat >"$snapshot_dir/commands.txt" <<'EOF'
 cargo check --manifest-path fuzz/Cargo.toml
 scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh
+scripts/capture-log-evidence.sh
+scripts/capture-signal-evidence.sh
 scripts/perf-smoke.sh
 scripts/interop-tcp-truncation-retry.sh
 scripts/interop-bind-axfr.sh
@@ -65,6 +67,7 @@ EOF
 
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture log-evidence bash -lc "cd '$repo_root' && OXIDEDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
+run_and_capture signal-evidence bash -lc "cd '$repo_root' && OXIDEDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
 run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' scripts/audit-readonly-runtime.sh"
