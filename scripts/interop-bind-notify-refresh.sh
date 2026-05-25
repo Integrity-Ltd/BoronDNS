@@ -14,6 +14,7 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-notify.conf.template"
 workdir="$repo_root/target/interop/bind-notify-refresh-$$"
 mkdir -p "$workdir"
@@ -166,6 +167,7 @@ options {
 EOF
 
 named-checkconf -z "$named_conf" >/dev/null
+record_bind_primary_version "$workdir" "bind-notify-refresh" "udp-notify+tcp-axfr" "none" "$named_conf" "$workdir/alpha.test.zone" "$rndc_conf"
 
 cat >"$oxidedns_conf" <<EOF
 [server]

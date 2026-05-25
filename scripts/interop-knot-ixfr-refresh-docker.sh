@@ -19,6 +19,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 workdir="$repo_root/target/interop/knot-ixfr-refresh-$$"
 container="oxidedns-knot-ixfr-refresh-$$"
 mkdir -p "$workdir"
@@ -407,6 +408,7 @@ if ! docker run -d --name "$container" \
   echo "skipping Knot IXFR refresh interop: failed to start Alpine/Knot container" >&2
   exit 0
 fi
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-ixfr-refresh" "tcp-ixfr+tcp-axfr" "none" "knotd -V" "$workdir/knot.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..50}; do
   if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then

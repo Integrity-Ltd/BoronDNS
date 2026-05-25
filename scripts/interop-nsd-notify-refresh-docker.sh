@@ -19,6 +19,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
 container="oxidedns-nsd-notify-refresh-$$"
 mkdir -p "$workdir"
@@ -168,6 +169,7 @@ if ! docker run -d --name "$container" \
   echo "skipping NSD NOTIFY Docker interop: failed to start Alpine/NSD container" >&2
   exit 0
 fi
+record_docker_primary_version "$workdir" "$container" "NSD" "alpine:latest" "nsd" "nsd-notify-refresh" "udp-notify+tcp-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..120}; do
   if dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then

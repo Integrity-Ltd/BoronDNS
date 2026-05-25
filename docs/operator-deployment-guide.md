@@ -379,6 +379,12 @@ scripts/engineering-mvp-evidence.sh
 ./scripts/release-evidence-snapshot.sh
 ```
 
+Successful real-primary interop runs write `primary-version.txt` under their
+`target/interop/...` workdir. Retain that file with the script log: it binds the
+pass/fail result to the tested primary implementation version, OS or container
+package context, configuration artifacts, transport, and security mode. A script
+skip is missing evidence, not passing interop evidence.
+
 `scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
 under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
 fuzz compile, invariant audit, performance smoke, and BIND AXFR, TSIG AXFR, and
@@ -556,7 +562,7 @@ Upgrade procedure:
 2. Run `oxidedns check-config` against the production configuration.
 3. Run `./scripts/check.sh`.
 4. Run the interop scripts relevant to the deployment's primary software and
-   security mode.
+   security mode, retaining each successful run's `primary-version.txt`.
 5. Stage the binary on one secondary instance.
 6. Restart the service and wait for `/readyz`.
 7. Verify served SOA serials and transfer metrics.

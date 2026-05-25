@@ -39,7 +39,8 @@ plus already-started MVP protocol work:
 - safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
   evidence commands retained in the repo;
 - interoperability evidence against at least one real primary for AXFR, TSIG,
-  and NOTIFY, with the broader matrix tracked separately.
+  and NOTIFY, with primary version/configuration evidence recorded for each
+  real-primary run and the broader matrix tracked separately.
 
 The Engineering MVP may include more than the Alpha subset where implementation
 has already moved ahead, such as IXFR, XoT, DNSSEC serving of transferred data,
@@ -76,7 +77,8 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
   `--example-config`;
 - selected reliability, maintainability, portability, observability, and
   resource NFRs, including per-zone status metrics;
-- interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary.
+- interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary,
+  with the tested primary version recorded per `ODS-VER-013`.
 
 Deferred from Alpha to SRS acceptance per SRS ODS-VER-007: IXFR, full TSIG,
 XoT, DNSSEC serving, RRL, full DNS Cookies, expanded RR catalogue, `/livez` and
@@ -333,6 +335,12 @@ XoT foundations are started:
 
 Interop harness foundations:
 
+- Real-primary interop scripts source `scripts/interop-version-evidence.sh` and
+  emit `primary-version.txt` in their `target/interop/...` workdir. The artifact
+  records test timestamp, primary implementation/version output, primary OS or
+  container package context, configuration profile, transfer transport/security
+  mode, and retained configuration artifact hashes. Skipped scripts do not count
+  as successful `ODS-VER-013` evidence.
 - `scripts/interop-bind-axfr.sh` starts a local BIND 9 primary with the `alpha.test.` fixture, validates BIND SOA and AXFR service with `dig`, starts OxideDNS against that primary, waits for `/readyz`, and verifies UDP, TCP, CNAME-chain, and metrics behavior from the transferred zone.
 - `scripts/interop-bind-tsig-axfr.sh` starts a BIND 9 primary whose AXFR is restricted to HMAC-SHA256 TSIG, proves unsigned AXFR is rejected and signed AXFR succeeds with `dig`, starts OxideDNS with the matching TSIG key, verifies readiness and served data after the signed transfer, and checks OxideDNS logs do not contain the shared secret.
 - `scripts/interop-bind-notify-refresh.sh` starts a BIND 9 primary configured to send NOTIFY, updates the primary zone serial, observes the BIND-generated NOTIFY packet through a UDP forwarding probe, verifies that OxideDNS accepts the compressed embedded SOA, and confirms that OxideDNS refreshes and republishes the newer serial and data.

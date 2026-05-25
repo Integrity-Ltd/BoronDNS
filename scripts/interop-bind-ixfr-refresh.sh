@@ -14,6 +14,7 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-ixfr.conf.template"
 workdir="$repo_root/target/interop/bind-ixfr-refresh-$$"
 mkdir -p "$workdir"
@@ -349,6 +350,7 @@ options {
 EOF
 
 named-checkconf -z "$named_conf" >/dev/null
+record_bind_primary_version "$workdir" "bind-ixfr-refresh" "tcp-ixfr+tcp-axfr" "none" "$named_conf" "$workdir/alpha.test.zone" "$rndc_conf"
 
 cat >"$oxidedns_conf" <<EOF
 [server]

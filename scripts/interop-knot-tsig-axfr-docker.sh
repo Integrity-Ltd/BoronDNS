@@ -19,6 +19,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/knot/knot-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
@@ -68,6 +69,7 @@ if ! docker run -d --name "$container" \
   echo "skipping Knot TSIG Docker interop: failed to start Alpine/Knot container" >&2
   exit 0
 fi
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-tsig-axfr" "tcp-axfr" "tsig-hmac-sha256" "knotd -V" "$workdir/knot.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..120}; do
   if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then

@@ -14,6 +14,7 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
@@ -67,6 +68,7 @@ text = text.replace("__TSIG_SECRET__", secret)
 Path(output).write_text(text)
 PY
 named-checkconf -z "$named_conf" >/dev/null
+record_bind_primary_version "$workdir" "bind-tsig-axfr" "tcp-axfr" "tsig-hmac-sha256" "$named_conf" "$zone_file"
 
 cat >"$oxidedns_conf" <<EOF
 [server]

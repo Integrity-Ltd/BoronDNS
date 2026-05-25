@@ -19,6 +19,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 workdir="$repo_root/target/interop/knot-xot-$$"
 container="oxidedns-knot-xot-$$"
@@ -158,6 +159,7 @@ if ! docker run -d --name "$container" \
   echo "skipping Knot XoT Docker interop: failed to start Alpine/Knot container" >&2
   exit 0
 fi
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-xot" "tls-xot-axfr" "tls-alpn-dot" "knotd -V" "$workdir/knot.conf" "$zone_file"
 
 alpn_probe=""
 for _ in {1..120}; do

@@ -19,6 +19,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/knot/alpha-dnssec.test.zone"
 template_file="$repo_root/tests/interop/knot/knot-dnssec.conf.template"
 workdir="$repo_root/target/interop/knot-dnssec-$$"
@@ -89,6 +90,7 @@ if ! docker run -d --name "$container" \
   echo "skipping Knot DNSSEC Docker interop: failed to start Alpine/Knot container" >&2
   exit 0
 fi
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-dnssec" "tcp-axfr" "dnssec-signed-primary" "knotd -V" "$workdir/knot.conf" "$zone_file"
 
 for _ in {1..120}; do
   if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
