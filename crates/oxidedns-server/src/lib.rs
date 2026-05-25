@@ -351,8 +351,8 @@ impl Runtime {
             notify_refresh_tx.clone(),
             ZSM_SCHEDULER_TICK,
         ));
-        let mut health_shutdown = None;
-        if let Some(addr) = self.config.server.health {
+        let mut health_shutdown = Vec::new();
+        for addr in self.config.health_listeners() {
             let listener = TcpListener::bind(addr)
                 .await
                 .map_err(|source| RuntimeError::BindHealth { addr, source })?;
@@ -360,7 +360,7 @@ impl Runtime {
                 let _ = health_bound.send(listener.local_addr().map_err(RuntimeError::Health)?);
             }
             let (health_shutdown_tx, health_shutdown_rx) = oneshot::channel();
-            health_shutdown = Some(health_shutdown_tx);
+            health_shutdown.push(health_shutdown_tx);
             health_listeners.spawn(serve_health(
                 listener,
                 HealthEndpointState {
@@ -494,7 +494,7 @@ impl Runtime {
                     } else {
                         warn!("shutdown grace period elapsed with active refresh transfers");
                     }
-                    if let Some(health_shutdown) = health_shutdown.take() {
+                    for health_shutdown in health_shutdown.drain(..) {
                         let _ = health_shutdown.send(());
                     }
                     let health_drained =
@@ -6768,6 +6768,7 @@ mod tests {
         let limiter = MetricsRateLimiter::from_config(HealthConfig {
             metrics_rate_limit_per_minute: 1,
             metrics_rate_limit_idle_seconds: 1,
+            ..HealthConfig::default()
         });
         let now = std::time::Instant::now();
         let first: std::net::IpAddr = "192.0.2.10".parse().unwrap();
@@ -7481,6 +7482,7 @@ mod tests {
                 metrics_rate_limiter: MetricsRateLimiter::from_config(HealthConfig {
                     metrics_rate_limit_per_minute: 1,
                     metrics_rate_limit_idle_seconds: 300,
+                    ..HealthConfig::default()
                 }),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
@@ -7652,6 +7654,66 @@ mod tests {
             connection.is_err(),
             "health endpoint must not listen when server.health is unset"
         );
+
+        let _ = release_primary.send(());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn runtime_binds_health_on_management_interface() {
+        let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
+        let health_port = unused_udp_tcp_addr().await.port();
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:0"]
+                listen_tcp = []
+
+                [interfaces]
+                mgmt = ["127.0.0.1:9443"]
+
+                [health]
+                default_port = {health_port}
+
+                [limits]
+                axfr_timeout_secs = 5
+                graceful_shutdown_secs = 1
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["{primary}"]
+            "#
+        ))
+        .expect("valid config");
+        assert_eq!(config.server.health, None);
+        assert_eq!(
+            config.health_listeners(),
+            vec![
+                format!("127.0.0.1:{health_port}")
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap()
+            ]
+        );
+        let runtime = Runtime::new(config);
+        let (server, health_addr) = spawn_runtime_with_bound_health(runtime).await;
+        assert_eq!(health_addr.port(), health_port);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), query_seen)
+            .await
+            .expect("initial transfer should start")
+            .expect("primary should observe initial transfer query");
+
+        let health = eventually_http_request(
+            health_addr,
+            "GET",
+            "/healthz",
+            std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(health.ends_with(
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.0","zones_active":0,"zones_loading":1,"zones_expired":0}"#
+        ));
 
         let _ = release_primary.send(());
         server.abort();

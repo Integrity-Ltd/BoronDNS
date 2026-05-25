@@ -159,18 +159,22 @@ fields. The `/metrics` endpoint exposes the startup warning count as
 The example configuration in `config/oxidedns.example.toml` is the current schema
 reference. The major sections are:
 
-- `[server]`: UDP/TCP DNS listeners, optional health endpoint, log level, and
-  log format.
+- `[server]`: legacy UDP/TCP DNS listeners, legacy optional health endpoint,
+  log level, and log format. New deployments should prefer `[interfaces]` for
+  network roles.
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
   16384 and causes oversized JSON/plain entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
-- `[interfaces]`: optional additional listener roles. Current implementation
-  supports `interfaces.notify` for extra UDP/TCP sockets carrying
-  primary-originated NOTIFY traffic; ordinary DNS queries received on those
-  sockets are still answered normally. Notify addresses must not overlap
-  `[server].listen_udp` or `[server].listen_tcp`. Full SRS v0.7
-  `interfaces.dns`, `interfaces.mgmt`, and `interfaces.transfer` support is the
-  next interface-alignment implementation slice.
+- `[interfaces]`: SRS v0.7 network roles. `interfaces.dns` overrides the
+  legacy DNS listener lists and is used for both UDP and TCP DNS service;
+  `interfaces.mgmt` activates the health/metrics endpoint at
+  `health.default_port` unless an explicit health bind override is configured;
+  `interfaces.transfer` records outbound transfer source sockets and currently
+  validates that their ports are `0` for ephemeral source-port selection; and
+  `interfaces.notify` adds UDP/TCP sockets for primary-originated NOTIFY
+  traffic. Ordinary DNS queries received on notify sockets are still answered
+  normally. Notify addresses must not overlap the effective DNS listener
+  sockets.
 - `[query]`: query response policy, including QTYPE ANY behavior.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
   timestamp tolerance windows, and optional in-process server-secret rotation.
@@ -199,12 +203,19 @@ Minimal local test shape:
 
 ```toml
 [server]
-listen_udp = ["127.0.0.1:5300"]
-listen_tcp = ["127.0.0.1:5300"]
-health = "127.0.0.1:8080"
 log_level = "info"
 log_format = "json"
 nsid = "dns-bud-1"
+
+[interfaces]
+dns = ["127.0.0.1:5300"]
+mgmt = ["127.0.0.1:9443"]
+transfer = ["127.0.0.1:0"]
+notify = []
+
+[health]
+bind_address = "127.0.0.1"
+bind_port = 8080
 
 [[zones]]
 name = "example.test."

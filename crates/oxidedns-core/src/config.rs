@@ -32,6 +32,7 @@ pub enum ConfigError {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub server: ServerSettings,
     #[serde(default)]
@@ -90,12 +91,12 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.server.listen_udp.is_empty() && self.server.listen_tcp.is_empty() {
+        self.interfaces.validate(&self.server)?;
+        if self.dns_udp_listeners().is_empty() && self.dns_tcp_listeners().is_empty() {
             return Err(ConfigError::Invalid(
                 "at least one UDP or TCP listener is required".to_owned(),
             ));
         }
-        self.interfaces.validate(&self.server)?;
         self.logging.validate()?;
         self.metrics.validate()?;
 
@@ -243,8 +244,7 @@ impl ServerConfig {
     }
 
     pub fn udp_listeners(&self) -> Vec<SocketAddr> {
-        self.server
-            .listen_udp
+        self.dns_udp_listeners()
             .iter()
             .chain(self.interfaces.notify.iter())
             .copied()
@@ -252,12 +252,45 @@ impl ServerConfig {
     }
 
     pub fn tcp_listeners(&self) -> Vec<SocketAddr> {
-        self.server
-            .listen_tcp
+        self.dns_tcp_listeners()
             .iter()
             .chain(self.interfaces.notify.iter())
             .copied()
             .collect()
+    }
+
+    pub fn dns_udp_listeners(&self) -> Vec<SocketAddr> {
+        self.interfaces
+            .dns
+            .clone()
+            .unwrap_or_else(|| self.server.listen_udp.clone())
+    }
+
+    pub fn dns_tcp_listeners(&self) -> Vec<SocketAddr> {
+        self.interfaces
+            .dns
+            .clone()
+            .unwrap_or_else(|| self.server.listen_tcp.clone())
+    }
+
+    pub fn health_listeners(&self) -> Vec<SocketAddr> {
+        if let (Some(bind_address), Some(bind_port)) =
+            (self.health.bind_address, self.health.bind_port)
+        {
+            vec![SocketAddr::from((bind_address, bind_port))]
+        } else if let Some(addr) = self.server.health {
+            vec![addr]
+        } else {
+            self.interfaces
+                .mgmt
+                .iter()
+                .map(|addr| SocketAddr::from((addr.ip(), self.health.default_port)))
+                .collect()
+        }
+    }
+
+    pub fn transfer_source(&self) -> Option<SocketAddr> {
+        self.interfaces.transfer.first().copied()
     }
 
     pub fn configuration_warnings(&self) -> Vec<ConfigWarning> {
@@ -281,6 +314,24 @@ impl ServerConfig {
                     ),
                 });
             }
+        }
+
+        if let Some(dns) = self.interfaces.dns.as_ref()
+            && !dns.is_empty()
+            && !self.interfaces.mgmt.is_empty()
+            && !socket_addr_sets_equal(dns, &self.interfaces.mgmt)
+            && dns.iter().any(|dns| {
+                self.interfaces
+                    .mgmt
+                    .iter()
+                    .any(|mgmt| socket_addrs_overlap(*dns, *mgmt))
+            })
+        {
+            warnings.push(ConfigWarning {
+                code: "interfaces_dns_mgmt_overlap",
+                parameter: "interfaces.mgmt".to_owned(),
+                message: "interfaces.dns and interfaces.mgmt overlap; set them equal only when intentional co-location is desired".to_owned(),
+            });
         }
 
         if self.limits.tcp_idle_timeout_secs > 120 {
@@ -351,6 +402,7 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TsigConfig {
     #[serde(default = "default_tsig_fudge_seconds")]
     pub fudge_seconds: u16,
@@ -376,6 +428,7 @@ impl TsigConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ServerSettings {
     #[serde(default = "default_dns_listeners")]
     pub listen_udp: Vec<SocketAddr>,
@@ -391,6 +444,7 @@ pub struct ServerSettings {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     #[serde(default = "default_logging_max_entry_length_bytes")]
     pub max_entry_length_bytes: usize,
@@ -417,7 +471,15 @@ impl LoggingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct InterfacesConfig {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns: Option<Vec<SocketAddr>>,
+    #[serde(default)]
+    pub mgmt: Vec<SocketAddr>,
+    #[serde(default)]
+    pub transfer: Vec<SocketAddr>,
     #[serde(default)]
     pub notify: Vec<SocketAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -433,15 +495,48 @@ impl InterfacesConfig {
             ));
         }
 
+        if self.dns.as_ref().is_some_and(Vec::is_empty) {
+            return Err(ConfigError::Invalid(
+                "interfaces.dns must contain at least one listener when configured".to_owned(),
+            ));
+        }
+
+        let dns_udp = self.dns.as_deref().unwrap_or(&server.listen_udp);
+        let dns_tcp = self.dns.as_deref().unwrap_or(&server.listen_tcp);
+
+        let mut transfer_ipv4 = false;
+        let mut transfer_ipv6 = false;
+        for transfer in &self.transfer {
+            if transfer.port() != 0 {
+                return Err(ConfigError::Invalid(format!(
+                    "interfaces.transfer source {transfer} must use port 0 so the operating system can select an ephemeral source port"
+                )));
+            }
+            match transfer.ip() {
+                IpAddr::V4(_) if transfer_ipv4 => {
+                    return Err(ConfigError::Invalid(
+                        "interfaces.transfer must contain at most one IPv4 source".to_owned(),
+                    ));
+                }
+                IpAddr::V4(_) => transfer_ipv4 = true,
+                IpAddr::V6(_) if transfer_ipv6 => {
+                    return Err(ConfigError::Invalid(
+                        "interfaces.transfer must contain at most one IPv6 source".to_owned(),
+                    ));
+                }
+                IpAddr::V6(_) => transfer_ipv6 = true,
+            }
+        }
+
         for notify in &self.notify {
-            for dns in &server.listen_udp {
+            for dns in dns_udp {
                 if socket_addrs_overlap(*notify, *dns) {
                     return Err(ConfigError::Invalid(format!(
                         "interfaces.notify listener {notify} overlaps DNS UDP listener {dns}; notify and DNS listeners must use distinct sockets"
                     )));
                 }
             }
-            for dns in &server.listen_tcp {
+            for dns in dns_tcp {
                 if socket_addrs_overlap(*notify, *dns) {
                     return Err(ConfigError::Invalid(format!(
                         "interfaces.notify listener {notify} overlaps DNS TCP listener {dns}; notify and DNS listeners must use distinct sockets"
@@ -455,7 +550,14 @@ impl InterfacesConfig {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HealthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_address: Option<IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_port: Option<u16>,
+    #[serde(default = "default_health_port")]
+    pub default_port: u16,
     #[serde(default = "default_metrics_rate_limit_per_minute")]
     pub metrics_rate_limit_per_minute: u32,
     #[serde(default = "default_metrics_rate_limit_idle_seconds")]
@@ -465,6 +567,9 @@ pub struct HealthConfig {
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
+            bind_address: None,
+            bind_port: None,
+            default_port: default_health_port(),
             metrics_rate_limit_per_minute: default_metrics_rate_limit_per_minute(),
             metrics_rate_limit_idle_seconds: default_metrics_rate_limit_idle_seconds(),
         }
@@ -473,6 +578,16 @@ impl Default for HealthConfig {
 
 impl HealthConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.bind_address.is_some() != self.bind_port.is_some() {
+            return Err(ConfigError::Invalid(
+                "health.bind_address and health.bind_port must be configured together".to_owned(),
+            ));
+        }
+        if self.default_port == 0 {
+            return Err(ConfigError::Invalid(
+                "health.default_port must be at least 1".to_owned(),
+            ));
+        }
         if self.metrics_rate_limit_per_minute == 0 {
             return Err(ConfigError::Invalid(
                 "health.metrics_rate_limit_per_minute must be at least 1".to_owned(),
@@ -488,6 +603,7 @@ impl HealthConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     #[serde(default = "default_latency_histogram_buckets")]
     pub latency_histogram_buckets: Vec<LatencyHistogramBucketSeconds>,
@@ -557,6 +673,7 @@ impl PartialEq for LatencyHistogramBucketSeconds {
 impl Eq for LatencyHistogramBucketSeconds {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct QuerySettings {
     #[serde(default)]
     pub any_response: AnyResponseConfig,
@@ -596,6 +713,7 @@ pub enum LogFormatConfig {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CookieConfig {
     #[serde(default)]
     pub policy: CookiePolicyConfig,
@@ -644,6 +762,7 @@ pub enum CookiePolicyConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RrlConfig {
     #[serde(default = "default_rrl_enabled")]
     pub enabled: bool,
@@ -722,6 +841,7 @@ impl RrlConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Limits {
     #[serde(default = "default_max_udp_payload")]
     pub max_udp_payload: u16,
@@ -800,6 +920,7 @@ impl Default for Limits {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ZoneConfig {
     pub name: String,
     #[serde(default = "default_dns_class")]
@@ -881,6 +1002,7 @@ impl ZoneConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TransferPrimaryConfig {
     pub addr: SocketAddr,
     #[serde(default)]
@@ -984,6 +1106,7 @@ pub enum TransferTransportConfig {
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TsigKeyConfig {
     pub name: String,
     pub algorithm: String,
@@ -1074,6 +1197,14 @@ fn default_rrl_summary_log_interval_secs() -> u64 {
 
 fn default_tsig_fudge_seconds() -> u16 {
     DEFAULT_TSIG_FUDGE_SECS
+}
+
+fn default_health_port() -> u16 {
+    8080
+}
+
+fn socket_addr_sets_equal(left: &[SocketAddr], right: &[SocketAddr]) -> bool {
+    left.len() == right.len() && left.iter().all(|addr| right.contains(addr))
 }
 
 fn validate_ip_prefix(prefix: &str) -> Result<(), &'static str> {
@@ -1274,9 +1405,13 @@ mod tests {
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
         assert_eq!(config.logging.max_entry_length_bytes, 16_384);
+        assert!(config.interfaces.dns.is_none());
+        assert!(config.interfaces.mgmt.is_empty());
+        assert!(config.interfaces.transfer.is_empty());
         assert!(config.interfaces.notify.is_empty());
         assert_eq!(config.udp_listeners(), config.server.listen_udp);
         assert_eq!(config.tcp_listeners(), config.server.listen_tcp);
+        assert!(config.health_listeners().is_empty());
         assert_eq!(config.health.metrics_rate_limit_per_minute, 60);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 300);
         assert_eq!(
@@ -1356,6 +1491,277 @@ mod tests {
     }
 
     #[test]
+    fn parses_srs_interface_roles() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = ["127.0.0.1:5301"]
+                health = "127.0.0.1:8081"
+
+                [interfaces]
+                dns = ["127.0.0.2:5300", "[::1]:5300"]
+                mgmt = ["127.0.0.3:9443"]
+                transfer = ["127.0.0.4:0", "[::1]:0"]
+                notify = ["127.0.0.5:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(
+            config.interfaces.dns,
+            Some(vec![
+                "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
+                "[::1]:5300".parse::<SocketAddr>().unwrap(),
+            ])
+        );
+        assert_eq!(
+            config.interfaces.mgmt,
+            vec!["127.0.0.3:9443".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            config.interfaces.transfer,
+            vec![
+                "127.0.0.4:0".parse::<SocketAddr>().unwrap(),
+                "[::1]:0".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            config.dns_udp_listeners(),
+            vec![
+                "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
+                "[::1]:5300".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert_eq!(config.dns_tcp_listeners(), config.dns_udp_listeners());
+        assert_eq!(
+            config.udp_listeners(),
+            vec![
+                "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
+                "[::1]:5300".parse::<SocketAddr>().unwrap(),
+                "127.0.0.5:5300".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert_eq!(
+            config.health_listeners(),
+            vec!["127.0.0.1:8081".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            config.transfer_source(),
+            Some("127.0.0.4:0".parse::<SocketAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn health_listeners_use_srs_precedence() {
+        let explicit = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                health = "127.0.0.1:8081"
+
+                [interfaces]
+                mgmt = ["127.0.0.2:9443"]
+
+                [health]
+                bind_address = "127.0.0.3"
+                bind_port = 8083
+                default_port = 8084
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+        assert_eq!(
+            explicit.health_listeners(),
+            vec!["127.0.0.3:8083".parse::<SocketAddr>().unwrap()]
+        );
+
+        let mgmt = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [interfaces]
+                mgmt = ["127.0.0.2:9443", "[::1]:9443"]
+
+                [health]
+                default_port = 8084
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+        assert_eq!(
+            mgmt.health_listeners(),
+            vec![
+                "127.0.0.2:8084".parse::<SocketAddr>().unwrap(),
+                "[::1]:8084".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_srs_interface_roles() {
+        for (label, config, expected) in [
+            (
+                "empty dns",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    dns = []
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "interfaces.dns must contain at least one listener",
+            ),
+            (
+                "fixed transfer source port",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    transfer = ["127.0.0.2:5353"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "interfaces.transfer source 127.0.0.2:5353 must use port 0",
+            ),
+            (
+                "duplicate transfer family",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [interfaces]
+                    transfer = ["127.0.0.2:0", "127.0.0.3:0"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "interfaces.transfer must contain at most one IPv4 source",
+            ),
+            (
+                "partial explicit health bind",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [health]
+                    bind_address = "127.0.0.1"
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "health.bind_address and health.bind_port must be configured together",
+            ),
+        ] {
+            let error = ServerConfig::from_toml_str(config).expect_err(label);
+            assert!(error.to_string().contains(expected), "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_configuration_keys() {
+        for (label, config, expected) in [
+            (
+                "top-level",
+                r#"
+                    unexpected = true
+
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "unknown field",
+            ),
+            (
+                "nested",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+                    listen_quic = ["127.0.0.1:853"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+                "unknown field",
+            ),
+        ] {
+            let error = ServerConfig::from_toml_str(config).expect_err(label);
+            assert!(error.to_string().contains(expected), "{label}: {error}");
+        }
+    }
+
+    #[test]
+    fn warns_when_dns_and_mgmt_interfaces_overlap_unintentionally() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [interfaces]
+                dns = ["0.0.0.0:5300"]
+                mgmt = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+        assert!(
+            config
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "interfaces_dns_mgmt_overlap")
+        );
+
+        let intentional = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [interfaces]
+                dns = ["127.0.0.1:5300"]
+                mgmt = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+        assert!(
+            !intentional
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "interfaces_dns_mgmt_overlap")
+        );
+    }
+
+    #[test]
     fn parses_notify_interface_listeners() {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -1425,6 +1831,22 @@ mod tests {
 
                     [interfaces]
                     notify = ["127.0.0.1:5300"]
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ),
+            (
+                "interfaces dns exact",
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+                    listen_tcp = []
+
+                    [interfaces]
+                    dns = ["127.0.0.2:5300"]
+                    notify = ["127.0.0.2:5300"]
 
                     [[zones]]
                     name = "example.test."

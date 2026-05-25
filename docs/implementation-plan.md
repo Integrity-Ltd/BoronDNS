@@ -301,10 +301,10 @@ DNSSEC work is partially started:
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
 - authorized NOTIFY messages missing required TSIG, or with BADKEY, BADSIG, BADALG, or BADTRUNC verification failures, receive NOTAUTH responses carrying zero-MAC TSIG error records; BADTIME failures receive signed NOTAUTH TSIG error records with server-time other data.
 
-Slice 8 has health endpoint foundations:
+Slice 8 has health endpoint and SRS interface foundations:
 
-- optional `[server].health` binds a separate plain HTTP/1 listener when configured, and opens no HTTP listener when unset;
-- optional `[interfaces].notify` opens additional UDP and TCP listeners that reuse the normal DNS query/NOTIFY handlers; configuration validation rejects notify listeners that overlap DNS UDP or TCP listener sockets and rejects obsolete `interfaces.xot`;
+- optional `[server].health` remains a compatibility health bind override; `[health].bind_address`/`bind_port` take precedence for the SRS explicit health bind, and `[interfaces].mgmt` activates health/metrics listeners at `[health].default_port` when no explicit override is configured;
+- `[interfaces].dns` overrides legacy DNS listener lists and is used for both UDP and TCP DNS sockets, `[interfaces].notify` opens additional UDP and TCP listeners that reuse the normal DNS query/NOTIFY handlers, configuration validation rejects notify listeners that overlap effective DNS UDP or TCP listener sockets and rejects obsolete `interfaces.xot`, and `[interfaces].transfer` is schema-validated with port `0` source sockets ahead of runtime outbound-source binding;
 - `GET /livez` reports JSON liveness with HTTP 200 whenever the process can answer the probe, including LOADING and draining states;
 - `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
 - `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;

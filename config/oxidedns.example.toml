@@ -1,12 +1,7 @@
 [server]
-# Omit listen_udp/listen_tcp to use the SRS defaults:
+# Legacy listen_udp/listen_tcp keys are still accepted. Prefer [interfaces].dns
+# for new deployments; if interfaces.dns is omitted, the SRS defaults are
 # ["0.0.0.0:53", "[::]:53"] for UDP and TCP.
-# UDP sockets that serve authoritative DNS queries and receive NOTIFY.
-listen_udp = ["0.0.0.0:5300", "[::]:5300"]
-# TCP sockets that serve DNS-over-TCP queries and zone-transfer-style framing.
-listen_tcp = ["0.0.0.0:5300", "[::]:5300"]
-# Optional plain HTTP health/metrics listener. Omit to disable HTTP endpoints.
-health = "127.0.0.1:8080"
 # Runtime log level. Default: "info".
 log_level = "info"
 # Runtime log format. Default: "json"; set to "plain" for local debugging.
@@ -15,8 +10,17 @@ log_format = "json"
 nsid = "oxidedns-example"
 
 [interfaces]
+# DNS query sockets for both UDP and TCP. By default these sockets also receive
+# inbound NOTIFY when interfaces.notify is empty.
+dns = ["0.0.0.0:5300", "[::]:5300"]
+# Operator-facing interface address. Health and metrics use health.default_port
+# on these IP addresses unless health.bind_address/bind_port is set.
+mgmt = ["127.0.0.1:9443"]
+# Outbound transfer source addresses. Port must be 0 so the OS selects an
+# ephemeral source port; one IPv4 and one IPv6 source can be configured.
+transfer = ["0.0.0.0:0", "[::]:0"]
 # Optional additional UDP/TCP sockets for primary-originated NOTIFY traffic.
-# These addresses must not overlap the DNS listener sockets above.
+# These addresses must not overlap the effective DNS listener sockets above.
 notify = []
 
 [logging]
@@ -24,6 +28,12 @@ notify = []
 max_entry_length_bytes = 16384
 
 [health]
+# Explicit health/metrics bind override. When set, this takes precedence over
+# interfaces.mgmt and legacy server.health.
+bind_address = "127.0.0.1"
+bind_port = 8080
+# Port used with interfaces.mgmt when bind_address/bind_port is omitted.
+default_port = 8080
 # Per-source scrape budget for /metrics. Default: 60 requests per minute.
 metrics_rate_limit_per_minute = 60
 # Idle seconds before a metrics rate-limit bucket can be evicted. Default: 300.
