@@ -5,8 +5,8 @@ use std::{
     io,
 };
 
-use thiserror::Error;
 use oxidedns_core::ServerConfig;
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserIdentity {

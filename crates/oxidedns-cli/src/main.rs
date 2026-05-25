@@ -6,6 +6,11 @@ use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
+use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
+use oxidedns_server::{
+    BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
+    TransferError,
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::{
     Event, Level, Subscriber,
@@ -20,11 +25,6 @@ use tracing_subscriber::{
         writer::MakeWriterExt,
     },
     registry::LookupSpan,
-};
-use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
-use oxidedns_server::{
-    BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
-    TransferError,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/oxidedns-secondary/config.toml";
@@ -264,7 +264,8 @@ fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
     config
         .validate()
         .context("validating effective configuration")?;
-    oxidedns_server::validate_runtime_config(&config).context("validating runtime configuration")?;
+    oxidedns_server::validate_runtime_config(&config)
+        .context("validating runtime configuration")?;
     warnings.extend(config.configuration_warnings());
     warnings.extend(
         oxidedns_server::runtime_config_warnings(&config)
@@ -935,8 +936,13 @@ mod tests {
 
     #[test]
     fn explicit_config_path_overrides_default() {
-        let cli = Cli::try_parse_from(["oxidedns", "serve", "--config", "config/oxidedns.example.toml"])
-            .expect("serve CLI");
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "serve",
+            "--config",
+            "config/oxidedns.example.toml",
+        ])
+        .expect("serve CLI");
         match cli.command.expect("command") {
             Command::Serve { config } => {
                 assert_eq!(config, PathBuf::from("config/oxidedns.example.toml"));
@@ -953,8 +959,12 @@ mod tests {
             Mode::ValidateConfig(PathBuf::from(DEFAULT_CONFIG_PATH))
         );
 
-        let cli = Cli::try_parse_from(["oxidedns", "--validate-config", "config/oxidedns.example.toml"])
-            .expect("validate CLI");
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--validate-config",
+            "config/oxidedns.example.toml",
+        ])
+        .expect("validate CLI");
         assert_eq!(
             selected_mode(cli).expect("mode"),
             Mode::ValidateConfig(PathBuf::from("config/oxidedns.example.toml"))
@@ -969,8 +979,9 @@ mod tests {
             Mode::DumpConfig(PathBuf::from(DEFAULT_CONFIG_PATH))
         );
 
-        let cli = Cli::try_parse_from(["oxidedns", "--dump-config", "config/oxidedns.example.toml"])
-            .expect("dump CLI");
+        let cli =
+            Cli::try_parse_from(["oxidedns", "--dump-config", "config/oxidedns.example.toml"])
+                .expect("dump CLI");
         assert_eq!(
             selected_mode(cli).expect("mode"),
             Mode::DumpConfig(PathBuf::from("config/oxidedns.example.toml"))
@@ -1003,7 +1014,8 @@ mod tests {
 
     #[test]
     fn example_config_flag_selects_example_config_mode() {
-        let cli = Cli::try_parse_from(["oxidedns", "--example-config"]).expect("example config CLI");
+        let cli =
+            Cli::try_parse_from(["oxidedns", "--example-config"]).expect("example config CLI");
         assert_eq!(selected_mode(cli).expect("mode"), Mode::ExampleConfig);
     }
 

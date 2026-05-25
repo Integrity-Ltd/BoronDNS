@@ -26,23 +26,6 @@ use axum::{
     routing::get,
 };
 use flate2::{Compression, write::GzEncoder};
-use sha2::{Digest, Sha256};
-use thiserror::Error;
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpSocket, TcpStream, UdpSocket},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
-    task::JoinSet,
-};
-use tokio_rustls::{
-    TlsConnector,
-    client::TlsStream,
-    rustls::{
-        ClientConfig, RootCertStore,
-        pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject},
-    },
-};
-use tracing::{debug, info, warn};
 use oxidedns_core::{
     ConfigWarning, ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
@@ -65,6 +48,23 @@ use oxidedns_core::{
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, TcpSocket, TcpStream, UdpSocket},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
+    task::JoinSet,
+};
+use tokio_rustls::{
+    TlsConnector,
+    client::TlsStream,
+    rustls::{
+        ClientConfig, RootCertStore,
+        pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject},
+    },
+};
+use tracing::{debug, info, warn};
 use x509_parser::parse_x509_certificate;
 
 // ODS-NFR-MAINT-004 principal functional requirement references for runtime
@@ -7145,18 +7145,6 @@ mod tests {
         },
     };
 
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::{TcpListener, TcpStream, UdpSocket},
-        sync::{mpsc, oneshot},
-    };
-    use tokio_rustls::rustls::{RootCertStore, server::WebPkiClientVerifier};
-    use tracing::{
-        Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span::{Attributes, Id, Record},
-        subscriber::Interest,
-    };
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
@@ -7170,6 +7158,18 @@ mod tests {
             TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigKey,
         },
         zone::{ResourceRecord, Rrset, SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream, UdpSocket},
+        sync::{mpsc, oneshot},
+    };
+    use tokio_rustls::rustls::{RootCertStore, server::WebPkiClientVerifier};
+    use tracing::{
+        Event, Metadata, Subscriber,
+        field::{Field, Visit},
+        span::{Attributes, Id, Record},
+        subscriber::Interest,
     };
 
     use super::{
@@ -7725,7 +7725,8 @@ mod tests {
             metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"example.test.\"} 0")
         );
         assert!(
-            metrics.contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
+            metrics
+                .contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
         );
     }
 
@@ -7863,7 +7864,9 @@ mod tests {
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
         assert!(metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"NOERROR\"} 1"));
-        assert!(metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"BADCOOKIE\"} 1")
+        );
         assert!(metrics.contains("oxidedns_secondary_build_info{version=\"0.1.0\",commit=\""));
         assert!(metrics.contains("rust_version=\"rustc "));
         assert!(metrics.contains(
@@ -7904,21 +7907,31 @@ mod tests {
         assert!(metrics.contains("oxidedns_secondary_configuration_warnings_total 4"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
-        assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1")
+        );
         assert!(metrics.contains("oxidedns_transfer_sessions_failed_total{protocol=\"axfr\"} 0"));
         assert!(metrics.contains("oxidedns_notify_messages_received_total 1"));
         assert!(metrics.contains("oxidedns_notify_messages_unauthorized_total 1"));
         assert!(metrics.contains("oxidedns_notify_refresh_actions_total{action=\"signalled\"} 1"));
-        assert!(metrics.contains("oxidedns_notify_refresh_actions_total{action=\"deduplicated\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_notify_refresh_actions_total{action=\"deduplicated\"} 1")
+        );
         assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"ok\"} 1"));
         assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badkey\"} 1"));
         assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badsig\"} 1"));
         assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badtime\"} 1"));
         assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badalg\"} 1"));
-        assert!(metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badtrunc\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_tsig_notify_verifications_total{result=\"badtrunc\"} 1")
+        );
         assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"active\"} 1"));
-        assert!(metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0"));
-        assert!(metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_zone_state{zone=\"example.test.\",state=\"loading\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_zone_state{zone=\"loading.test.\",state=\"loading\"} 1")
+        );
         assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"example.test.\"} 0"));
         assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"loading.test.\"} "));
         assert!(
@@ -7959,7 +7972,8 @@ mod tests {
             "oxidedns_secondary_zone_next_refresh_seconds{zone=\"example.test.\"} 1700003600"
         ));
         assert!(
-            !metrics.contains("oxidedns_zone_last_success_timestamp_seconds{zone=\"loading.test.\"}")
+            !metrics
+                .contains("oxidedns_zone_last_success_timestamp_seconds{zone=\"loading.test.\"}")
         );
         assert!(
             !metrics
@@ -7972,10 +7986,12 @@ mod tests {
             "oxidedns_secondary_zone_next_refresh_seconds{zone=\"loading.test.\"} 1700000060"
         ));
         assert!(
-            metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"example.test.\"} 0")
+            metrics
+                .contains("oxidedns_zone_refresh_failures_since_success{zone=\"example.test.\"} 0")
         );
         assert!(
-            metrics.contains("oxidedns_zone_refresh_failures_since_success{zone=\"loading.test.\"} 1")
+            metrics
+                .contains("oxidedns_zone_refresh_failures_since_success{zone=\"loading.test.\"} 1")
         );
         assert!(
             metrics.contains("oxidedns_secondary_zone_refresh_failures{zone=\"example.test.\"} 0")

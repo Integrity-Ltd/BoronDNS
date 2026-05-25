@@ -163,6 +163,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "oxidedns-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hmac",
+ "serde",
+ "sha1",
+ "sha2",
+ "siphasher",
+ "subtle",
+ "thiserror",
+ "toml",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "oxidedns-fuzz"
+version = "0.0.0"
+dependencies = [
+ "libfuzzer-sys",
+ "oxidedns-core",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -377,31 +402,6 @@ name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
-
-[[package]]
-name = "oxidedns-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "hmac",
- "serde",
- "sha1",
- "sha2",
- "siphasher",
- "subtle",
- "thiserror",
- "toml",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "oxidedns-fuzz"
-version = "0.0.0"
-dependencies = [
- "libfuzzer-sys",
- "oxidedns-core",
-]
 
 [[package]]
 name = "unicode-ident"

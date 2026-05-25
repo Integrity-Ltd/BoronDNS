@@ -16,10 +16,10 @@ manifest_for_package() {
   local project_manifest="/project/crates/$package/Cargo.toml"
   local host_manifest="$repo_root/crates/$package/Cargo.toml"
 
-  if cargo metadata --manifest-path "$project_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
-    printf '%s\n' "$project_manifest"
-  elif cargo metadata --manifest-path "$host_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
+  if cargo metadata --manifest-path "$host_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
     printf '%s\n' "$host_manifest"
+  elif cargo metadata --manifest-path "$project_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
+    printf '%s\n' "$project_manifest"
   else
     printf 'failed to resolve cargo metadata manifest for package: %s\n' "$package" >&2
     exit 1
@@ -31,12 +31,13 @@ run_geiger_json() {
   local manifest="$2"
   local json_out="$artifact_dir/$root-geiger.json"
   local stderr_out="$artifact_dir/$root-geiger.stderr"
+  local target_dir="$artifact_dir/$root-target"
 
   {
-    printf '$ cargo geiger --manifest-path %q --locked --all-targets --all-dependencies --output-format Json\n\n' "$manifest"
+    printf '$ CARGO_TARGET_DIR=%q cargo geiger --manifest-path %q --locked --all-targets --all-dependencies --output-format Json\n\n' "$target_dir" "$manifest"
   } >"$artifact_dir/$root-geiger.command"
 
-  cargo geiger \
+  CARGO_TARGET_DIR="$target_dir" cargo geiger \
     --manifest-path "$manifest" \
     --locked \
     --all-targets \

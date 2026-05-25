@@ -625,7 +625,10 @@ fn version_flags_print_build_metadata() {
         );
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.starts_with("oxidedns 0.1.0\n"), "{flag} stdout={stdout}");
+        assert!(
+            stdout.starts_with("oxidedns 0.1.0\n"),
+            "{flag} stdout={stdout}"
+        );
         assert!(
             stdout.contains("\nbuild commit: "),
             "{flag} stdout={stdout}"
@@ -684,7 +687,10 @@ fn help_flags_print_operational_pointers() {
 fn example_config_flag_prints_valid_configuration_without_reading_input() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
         .arg("--example-config")
-        .env("OXIDEDNS_CONFIG", "/definitely/missing/oxidedns-config.toml")
+        .env(
+            "OXIDEDNS_CONFIG",
+            "/definitely/missing/oxidedns-config.toml",
+        )
         .output()
         .expect("run oxidedns --example-config");
 

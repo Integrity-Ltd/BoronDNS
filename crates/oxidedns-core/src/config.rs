@@ -2389,8 +2389,14 @@ mod tests {
         assert_eq!(target.transport, TransferTransportConfig::Xot);
         assert_eq!(target.server_name.as_deref(), Some("primary.example.test"));
         assert_eq!(target.trust_anchors, vec!["/etc/oxidedns/ca.pem"]);
-        assert_eq!(target.client_cert.as_deref(), Some("/etc/oxidedns/client.pem"));
-        assert_eq!(target.client_key.as_deref(), Some("/etc/oxidedns/client.key"));
+        assert_eq!(
+            target.client_cert.as_deref(),
+            Some("/etc/oxidedns/client.pem")
+        );
+        assert_eq!(
+            target.client_key.as_deref(),
+            Some("/etc/oxidedns/client.key")
+        );
         assert!(target.client_key_pem.is_none());
     }
 
@@ -2420,7 +2426,10 @@ mod tests {
         .expect("valid config with inline XoT client key");
 
         let target = &config.zones[0].transfer_primaries[0];
-        assert_eq!(target.client_cert.as_deref(), Some("/etc/oxidedns/client.pem"));
+        assert_eq!(
+            target.client_cert.as_deref(),
+            Some("/etc/oxidedns/client.pem")
+        );
         assert!(target.client_key.is_none());
         assert!(
             target
