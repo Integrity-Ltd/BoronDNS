@@ -105,6 +105,10 @@ def main() -> None:
         "completed long-running evidence is not an Engineering MVP requirement" in ledger,
         f"{LEDGER}: missing Engineering MVP long-running evidence note",
     )
+    require(
+        "block Engineering MVP when the missing evidence is explicitly deferred" in ledger,
+        f"{LEDGER}: missing Engineering MVP interpretation for Partial ledger rows",
+    )
 
     for path in [CHECK, EVIDENCE]:
         script = path.read_text(encoding="utf-8")

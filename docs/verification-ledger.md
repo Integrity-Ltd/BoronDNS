@@ -20,6 +20,17 @@ deliverables and are not treated as Engineering MVP evidence.
 Rows may record implemented defaults before SRS Appendix C.5 confirmation. Such
 evidence is not final project-decision approval for the underlying C.5 item.
 
+## Engineering MVP Interpretation
+
+The table's `Evidence State` column is an SRS/Alpha/release-acceptance coverage
+state for the listed requirement scope. `Partial` rows do not by themselves
+block Engineering MVP when the missing evidence is explicitly deferred to
+release/operations, broader SRS acceptance, or long-running campaigns. The
+Engineering MVP readiness boundary is evaluated through
+`docs/engineering-mvp-scope.md`, `docs/mvp-gap-register.md`,
+`scripts/check.sh`, and the bounded default profile in
+`scripts/engineering-mvp-evidence.sh`.
+
 ## Status Values
 
 - **Not Verified**: no accepted evidence is recorded in this ledger.
