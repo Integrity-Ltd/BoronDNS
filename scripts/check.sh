@@ -12,6 +12,8 @@ python3 scripts/check-verification-ledger.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
+scripts/audit-invariants.sh
+scripts/audit-safe-rust.sh
 bash -n scripts/audit-unused-code.sh
 bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh

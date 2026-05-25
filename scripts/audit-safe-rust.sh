@@ -30,6 +30,42 @@ PY
 
 process_signals_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
 resource_limits_exception="$repo_root/crates/oxidedns-server/src/resource_limits.rs"
+allowed_unsafe_allow_attrs=(
+  "crates/oxidedns-server/src/process_signals.rs"
+  "crates/oxidedns-server/src/resource_limits.rs"
+)
+
+allow_attr_matches="$(
+  rg --line-number --glob '*.rs' '#!?\[allow\(unsafe_code\)\]' \
+    "$repo_root/crates" "$repo_root/fuzz" || true
+)"
+
+unexpected_allow_attrs=()
+if [[ -n "$allow_attr_matches" ]]; then
+  while IFS= read -r match; do
+    absolute_path="${match%%:*}"
+    relative_path="${absolute_path#"$repo_root/"}"
+    allowed=0
+    for allowed_path in "${allowed_unsafe_allow_attrs[@]}"; do
+      if [[ "$relative_path" == "$allowed_path" ]]; then
+        allowed=1
+        break
+      fi
+    done
+    if [[ "$allowed" -ne 1 ]]; then
+      unexpected_allow_attrs+=("$match")
+    fi
+  done <<< "$allow_attr_matches"
+fi
+
+if [[ "${#unexpected_allow_attrs[@]}" -ne 0 ]]; then
+  printf 'unexpected unsafe_code allow attributes found:\n' >&2
+  printf '%s\n' "${unexpected_allow_attrs[@]}" >&2
+  echo "new unsafe-capable modules require an explicit safe-Rust audit allowlist entry, dedicated adapter tests, and architecture documentation" >&2
+  exit 1
+fi
+
+echo "unsafe allowlist check passed: only audited OS adapter modules may opt into unsafe_code"
 
 unsafe_matches="$(
   rg --line-number --glob '*.rs' '\bunsafe\s*(\{|fn|impl|trait|extern)' \

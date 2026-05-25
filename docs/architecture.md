@@ -86,6 +86,28 @@ crate with local `#![allow(unsafe_code)]`, each unsafe block must carry a
 must include static unsafe enumeration plus targeted adapter tests before the
 backend can be enabled.
 
+The current MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed arena, or
+hot response-cache backend. Those features are post-MVP optimization tracks,
+not hidden MVP requirements. When one is brought into scope, the implementation
+entry gate is:
+
+- a safe trait boundary such as `PacketIo` for network acceleration,
+  `ZoneStore` for packed arenas, or an equivalent response-cache adapter;
+- no `unsafe` in DNS wire parsing, transfer parsing, TSIG verification, or
+  response-composition modules;
+- an explicit `scripts/audit-safe-rust.sh` allowlist entry for the adapter file
+  or crate, with the architecture document updated in the same change;
+- unit and integration tests proving the adapter's safe API preserves buffer
+  ownership, lifetime, bounds, concurrency, and fallback behavior;
+- retained release evidence from `scripts/audit-safe-rust.sh`, transitive
+  unsafe enumeration, and backend-specific fault tests before enabling the
+  backend in production configuration.
+
+For eBPF specifically, runtime loading of operator-supplied programs remains
+forbidden by `ODS-INV-009`. Any future kernel-side program must be built as a
+project artifact, versioned with the server release, and attached only through
+the audited adapter path.
+
 ## Release Signing Decision
 
 The project's preferred release-signing mechanism is Sigstore/Cosign with
