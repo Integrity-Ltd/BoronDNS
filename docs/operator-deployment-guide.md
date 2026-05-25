@@ -227,12 +227,14 @@ Metrics currently include configured and active zone gauges, per-zone state,
 SOA serials, refresh timestamps, transfer counters, query counters, RCODE
 counters, truncation counters, CNAME limit/loop counters, NOTIFY counters, TSIG
 verification outcomes for authorized NOTIFY, global and per-source-prefix DNS
-Cookie case/BADCOOKIE counters, and RRL counters.
+Cookie case/BADCOOKIE counters, RRL counters, the
+`oxidedns_secondary_build_info` gauge, and the
+`oxidedns_secondary_query_duration_seconds` latency histogram.
 
-SRS v0.7 also requires release evidence for build-info metrics, latency
-histograms, broader retained health response-time evidence, gzip-capable metrics
-responses, and a per-source `/metrics` rate limit. Treat those as pending until
-the gap register says otherwise.
+SRS v0.7 also requires retained release evidence for build-info label accuracy,
+latency histogram behavior, broader retained health response-time evidence,
+gzip-capable metrics responses, and a per-source `/metrics` rate limit. Treat
+those as pending until the gap register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 

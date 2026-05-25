@@ -1758,7 +1758,15 @@ async fn serve_udp(
         }
         let dns_cookie =
             dns_cookie_context(peer_ip, &settings.dns_cookie_secret, settings.dns_cookie);
-        let query_metrics = observe_query_metrics(&prepared.packet, &zones, &settings.metrics);
+        let cookie_validated = dns_cookie
+            .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
+        let query_metrics = observe_query_metrics(
+            &prepared.packet,
+            &zones,
+            &settings.metrics,
+            Transport::Udp,
+            cookie_validated,
+        );
         let dns_cookie_metrics = observe_dns_cookie_metrics(
             &prepared.packet,
             dns_cookie,
@@ -1814,9 +1822,7 @@ async fn serve_udp(
                         continue;
                     }
                 };
-                let rrl_decision = if dns_cookie.is_some_and(|context| {
-                    request_has_valid_dns_server_cookie(&prepared.packet, context)
-                }) {
+                let rrl_decision = if cookie_validated {
                     RrlDecision::Send(response)
                 } else {
                     settings.rrl.apply(peer_ip, response)
@@ -1846,31 +1852,48 @@ async fn serve_udp(
 #[derive(Clone, Copy)]
 struct QueryMetricObservation {
     is_query: bool,
+    transport: Transport,
+    started_at: Instant,
+    cookie_validated: bool,
 }
 
 fn observe_query_metrics(
     packet: &[u8],
     zones: &ZoneStore,
     metrics: &RuntimeMetrics,
+    transport: Transport,
+    cookie_validated: bool,
 ) -> QueryMetricObservation {
+    let not_query = || QueryMetricObservation {
+        is_query: false,
+        transport,
+        started_at: Instant::now(),
+        cookie_validated: false,
+    };
+    let observed_query = || QueryMetricObservation {
+        is_query: true,
+        transport,
+        started_at: Instant::now(),
+        cookie_validated,
+    };
     let Ok(header) = Header::parse(packet) else {
-        return QueryMetricObservation { is_query: false };
+        return not_query();
     };
     if header.is_response() || header.opcode() != Some(Opcode::Query) {
-        return QueryMetricObservation { is_query: false };
+        return not_query();
     }
 
     metrics.record_query_received();
     if header.qdcount != 1 {
-        return QueryMetricObservation { is_query: true };
+        return observed_query();
     }
     let Ok(question) = Question::parse(packet) else {
-        return QueryMetricObservation { is_query: true };
+        return observed_query();
     };
     if let Some(zone) = zones.find_zone(&question.qname) {
         metrics.record_zone_query(&zone.origin);
     }
-    QueryMetricObservation { is_query: true }
+    observed_query()
 }
 
 fn observe_dns_cookie_metrics(
@@ -1930,6 +1953,61 @@ fn record_query_response_metric(
         metrics.record_query_truncated();
     }
     metrics.record_query_response_rcode(response_rcode(response, &header));
+    metrics.record_query_latency(
+        query_latency_category(observation, response, &header),
+        observation.started_at.elapsed(),
+    );
+}
+
+fn query_latency_category(
+    observation: QueryMetricObservation,
+    response: &[u8],
+    header: &Header,
+) -> QueryLatencyCategory {
+    if observation.cookie_validated {
+        return QueryLatencyCategory::CookieValidated;
+    }
+    if response_has_dnssec_augmentation(response, header) {
+        return QueryLatencyCategory::DnssecAugmented;
+    }
+    let cname_chain = response_answer_contains_type(
+        response,
+        header,
+        &[RecordType::Cname as u16, RecordType::Dname as u16],
+    );
+    match (observation.transport, cname_chain) {
+        (Transport::Udp, false) => QueryLatencyCategory::UdpDirect,
+        (Transport::Udp, true) => QueryLatencyCategory::UdpCnameChain,
+        (Transport::Tcp, false) => QueryLatencyCategory::TcpDirect,
+        (Transport::Tcp, true) => QueryLatencyCategory::TcpCnameChain,
+    }
+}
+
+fn response_has_dnssec_augmentation(response: &[u8], header: &Header) -> bool {
+    let Some(opt) = response_opt_record(response, header) else {
+        return false;
+    };
+    if opt.len() < 9 {
+        return false;
+    }
+    let ttl = u32::from_be_bytes([opt[5], opt[6], opt[7], opt[8]]);
+    ttl & 0x8000 != 0
+}
+
+fn response_answer_contains_type(response: &[u8], header: &Header, types: &[u16]) -> bool {
+    let Some(mut offset) = response_question_end(response, header) else {
+        return false;
+    };
+    for _ in 0..header.ancount {
+        let Some((rr_type, next)) = response_record_type(response, offset) else {
+            return false;
+        };
+        if types.contains(&rr_type) {
+            return true;
+        }
+        offset = next;
+    }
+    false
 }
 
 fn record_query_termination_metric(
@@ -2214,7 +2292,9 @@ fn metrics_body(
         snapshot.axfr_failed,
         snapshot.ixfr_failed,
     );
+    append_build_info_metric(&mut body);
     append_query_rcode_metrics(&mut body, metrics);
+    append_query_latency_metrics(&mut body, metrics);
     append_dns_cookie_metrics(&mut body, snapshot);
     append_dns_cookie_prefix_metrics(&mut body, metrics);
     append_notify_metrics(&mut body, snapshot);
@@ -2223,6 +2303,20 @@ fn metrics_body(
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
+}
+
+fn append_build_info_metric(body: &mut String) {
+    let version = prometheus_label_value(env!("CARGO_PKG_VERSION"));
+    let commit = prometheus_label_value(env!("OXIDEDNS_BUILD_COMMIT"));
+    let rust_version = prometheus_label_value(env!("OXIDEDNS_BUILD_RUST_VERSION"));
+    let build_timestamp = prometheus_label_value(env!("OXIDEDNS_BUILD_TIMESTAMP"));
+    body.push_str(
+        "# HELP oxidedns_secondary_build_info Build metadata embedded in the OxideDNS binary.\n\
+         # TYPE oxidedns_secondary_build_info gauge\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_secondary_build_info{{version=\"{version}\",commit=\"{commit}\",rust_version=\"{rust_version}\",build_timestamp=\"{build_timestamp}\"}} 1\n"
+    ));
 }
 
 fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
@@ -2251,6 +2345,46 @@ fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
             "oxidedns_query_responses_total{{rcode=\"{rcode}\"}} {count}\n"
         ));
     }
+}
+
+fn append_query_latency_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    let histograms = metrics.query_latency_histograms();
+    body.push_str(
+        "# HELP oxidedns_secondary_query_duration_seconds Query response latency in seconds.\n\
+         # TYPE oxidedns_secondary_query_duration_seconds histogram\n",
+    );
+    for category in QueryLatencyCategory::ALL {
+        let histogram = histograms.get(&category).copied().unwrap_or_default();
+        let label = category.label();
+        let mut cumulative = 0u64;
+        for (index, bucket) in LATENCY_HISTOGRAM_BUCKETS.iter().enumerate() {
+            cumulative = cumulative.saturating_add(histogram.buckets[index]);
+            body.push_str(&format!(
+                "oxidedns_secondary_query_duration_seconds_bucket{{query_category=\"{label}\",le=\"{}\"}} {cumulative}\n",
+                latency_bucket_label(*bucket)
+            ));
+        }
+        cumulative = cumulative.saturating_add(histogram.buckets[LATENCY_HISTOGRAM_BUCKETS.len()]);
+        body.push_str(&format!(
+            "oxidedns_secondary_query_duration_seconds_bucket{{query_category=\"{label}\",le=\"+Inf\"}} {cumulative}\n"
+        ));
+        body.push_str(&format!(
+            "oxidedns_secondary_query_duration_seconds_sum{{query_category=\"{label}\"}} {:.9}\n",
+            histogram.sum_seconds
+        ));
+        body.push_str(&format!(
+            "oxidedns_secondary_query_duration_seconds_count{{query_category=\"{label}\"}} {}\n",
+            histogram.count()
+        ));
+    }
+}
+
+fn latency_bucket_label(bucket: f64) -> String {
+    let formatted = format!("{bucket:.5}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
 }
 
 fn append_notify_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
@@ -2698,6 +2832,10 @@ struct RuntimeMetrics {
 }
 
 const DEFAULT_COOKIE_PREFIX_METRIC_LIMIT: usize = 100_000;
+const LATENCY_HISTOGRAM_BUCKETS: [f64; 9] = [
+    0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1,
+];
+const LATENCY_HISTOGRAM_BUCKET_COUNT: usize = LATENCY_HISTOGRAM_BUCKETS.len() + 1;
 
 #[derive(Debug, Default)]
 struct RuntimeMetricsInner {
@@ -2734,6 +2872,7 @@ struct RuntimeMetricsInner {
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
+    query_latency: Mutex<HashMap<QueryLatencyCategory, QueryLatencyHistogram>>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2777,6 +2916,69 @@ struct CookiePrefixCounters {
     valid_server: u64,
     invalid_server: u64,
     badcookie: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum QueryLatencyCategory {
+    UdpDirect,
+    UdpCnameChain,
+    TcpDirect,
+    TcpCnameChain,
+    DnssecAugmented,
+    CookieValidated,
+}
+
+impl QueryLatencyCategory {
+    const ALL: [Self; 6] = [
+        Self::UdpDirect,
+        Self::UdpCnameChain,
+        Self::TcpDirect,
+        Self::TcpCnameChain,
+        Self::DnssecAugmented,
+        Self::CookieValidated,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::UdpDirect => "udp_direct",
+            Self::UdpCnameChain => "udp_cname_chain",
+            Self::TcpDirect => "tcp_direct",
+            Self::TcpCnameChain => "tcp_cname_chain",
+            Self::DnssecAugmented => "dnssec_augmented",
+            Self::CookieValidated => "cookie_validated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QueryLatencyHistogram {
+    buckets: [u64; LATENCY_HISTOGRAM_BUCKET_COUNT],
+    sum_seconds: f64,
+}
+
+impl Default for QueryLatencyHistogram {
+    fn default() -> Self {
+        Self {
+            buckets: [0; LATENCY_HISTOGRAM_BUCKET_COUNT],
+            sum_seconds: 0.0,
+        }
+    }
+}
+
+impl QueryLatencyHistogram {
+    fn record(&mut self, duration: Duration) {
+        let seconds = duration.as_secs_f64();
+        let bucket_index = LATENCY_HISTOGRAM_BUCKETS
+            .iter()
+            .position(|bucket| seconds <= *bucket)
+            .unwrap_or(LATENCY_HISTOGRAM_BUCKETS.len());
+        self.buckets[bucket_index] = self.buckets[bucket_index].saturating_add(1);
+        self.sum_seconds += seconds;
+    }
+
+    fn count(&self) -> u64 {
+        self.buckets.iter().copied().sum()
+    }
 }
 
 #[derive(Debug)]
@@ -3050,11 +3252,28 @@ impl RuntimeMetrics {
         *counter = counter.saturating_add(1);
     }
 
+    fn record_query_latency(&self, category: QueryLatencyCategory, duration: Duration) {
+        let mut histograms = self
+            .inner
+            .query_latency
+            .lock()
+            .expect("runtime metrics query latency histogram lock poisoned");
+        histograms.entry(category).or_default().record(duration);
+    }
+
     fn query_rcode_counts(&self) -> HashMap<u16, u64> {
         self.inner
             .query_rcodes
             .lock()
             .expect("runtime metrics RCODE counter lock poisoned")
+            .clone()
+    }
+
+    fn query_latency_histograms(&self) -> HashMap<QueryLatencyCategory, QueryLatencyHistogram> {
+        self.inner
+            .query_latency
+            .lock()
+            .expect("runtime metrics query latency histogram lock poisoned")
             .clone()
     }
 
@@ -4477,7 +4696,15 @@ async fn handle_tcp_connection(
             continue;
         }
         let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
-        let query_metrics = observe_query_metrics(&prepared.packet, &zones, &metrics);
+        let cookie_validated = dns_cookie
+            .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
+        let query_metrics = observe_query_metrics(
+            &prepared.packet,
+            &zones,
+            &metrics,
+            Transport::Tcp,
+            cookie_validated,
+        );
         let dns_cookie_metrics = observe_dns_cookie_metrics(
             &prepared.packet,
             dns_cookie,
@@ -4639,7 +4866,7 @@ mod tests {
         config::{RrlConfig, TransferTransportConfig},
         dns::{
             AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
-            LookupTermination, Opcode, Rcode, RecordType,
+            LookupTermination, Opcode, Rcode, RecordType, Transport,
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -4651,16 +4878,16 @@ mod tests {
     use super::{
         CookiePrefixMetricSettings, DnsCookieRuntimeSettings, HealthEndpointState,
         IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
-        NotifyTsigResult, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
-        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError,
-        RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferPlan, UdpServerSettings,
-        ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
-        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        response_category, response_opt_record, response_question_end, response_rcode,
-        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
+        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
+        RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings,
+        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
+        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
+        load_pem_certs, load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
+        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
+        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
+        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
         signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
         transfer_query_id, validate_runtime_config, write_tcp_message,
@@ -4884,6 +5111,14 @@ mod tests {
         metrics_state.record_query_response_rcode(0);
         metrics_state.record_query_response_rcode(3);
         metrics_state.record_query_response_rcode(23);
+        metrics_state.record_query_latency(
+            QueryLatencyCategory::UdpDirect,
+            std::time::Duration::from_micros(250),
+        );
+        metrics_state.record_query_latency(
+            QueryLatencyCategory::TcpCnameChain,
+            std::time::Duration::from_millis(3),
+        );
         metrics_state.record_notify_received();
         metrics_state.record_notify_unauthorized();
         metrics_state.record_notify_refresh_action(NotifyRefreshAction::Signalled);
@@ -4975,6 +5210,26 @@ mod tests {
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"SERVFAIL\"} 0"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"NXDOMAIN\"} 1"));
         assert!(metrics.contains("oxidedns_query_responses_total{rcode=\"BADCOOKIE\"} 1"));
+        assert!(metrics.contains("oxidedns_secondary_build_info{version=\"0.1.0\",commit=\""));
+        assert!(metrics.contains("rust_version=\"rustc "));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.0001\"} 0"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.00025\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_sum{query_category=\"udp_direct\"} 0.000250000"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"tcp_cname_chain\",le=\"0.0025\"} 0"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"tcp_cname_chain\",le=\"0.005\"} 1"
+        ));
         assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"no_cookie\"} 1"));
         assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"client_only\"} 1"));
         assert!(metrics.contains("oxidedns_dns_cookie_queries_total{case=\"valid_server\"} 1"));
@@ -5940,23 +6195,29 @@ mod tests {
             &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
+            Transport::Udp,
+            false,
         );
         observe_query_metrics(
             &query(b"\x03www\x07loading\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
+            Transport::Udp,
+            false,
         );
         observe_query_metrics(
             &query(b"\x07outside\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
+            Transport::Udp,
+            false,
         );
         let response = {
             let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
             packet[2] |= 0x80;
             packet
         };
-        observe_query_metrics(&response, &zones, &metrics);
+        observe_query_metrics(&response, &zones, &metrics, Transport::Udp, false);
 
         assert_eq!(metrics.snapshot().queries_received, 3);
         let counts = metrics.zone_query_counts();
@@ -5973,8 +6234,11 @@ mod tests {
             &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
+            Transport::Udp,
+            false,
         );
-        let non_query_observation = observe_query_metrics(&[0, 1, 2], &zones, &metrics);
+        let non_query_observation =
+            observe_query_metrics(&[0, 1, 2], &zones, &metrics, Transport::Udp, false);
         let mut noerror = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         noerror[2] |= 0x80;
         let mut nxdomain = noerror.clone();
@@ -5996,6 +6260,13 @@ mod tests {
         assert_eq!(rcodes.get(&0), Some(&2));
         assert_eq!(rcodes.get(&3), Some(&1));
         assert_eq!(rcodes.get(&16), Some(&1));
+        assert_eq!(
+            metrics
+                .query_latency_histograms()
+                .get(&QueryLatencyCategory::UdpDirect)
+                .map(QueryLatencyHistogram::count),
+            Some(4)
+        );
     }
 
     #[test]
@@ -6025,8 +6296,18 @@ mod tests {
     #[test]
     fn query_metrics_count_cname_termination_causes_for_queries_only() {
         let metrics = RuntimeMetrics::new();
-        let observation = QueryMetricObservation { is_query: true };
-        let non_query_observation = QueryMetricObservation { is_query: false };
+        let observation = QueryMetricObservation {
+            is_query: true,
+            transport: Transport::Udp,
+            started_at: std::time::Instant::now(),
+            cookie_validated: false,
+        };
+        let non_query_observation = QueryMetricObservation {
+            is_query: false,
+            transport: Transport::Udp,
+            started_at: std::time::Instant::now(),
+            cookie_validated: false,
+        };
         let chain_limit = oxidedns_core::dns::LookupResult::positive_records_with_termination(
             Vec::new(),
             LookupTermination::CnameChainLimit,

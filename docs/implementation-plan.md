@@ -271,7 +271,7 @@ Slice 8 has health endpoint foundations:
 - `GET /livez` reports JSON liveness with HTTP 200 whenever the process can answer the probe, including LOADING and draining states;
 - `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
 - `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;
-- `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, AXFR/IXFR transfer-session started/completed/failed counters, NOTIFY receive/unauthorized/refresh-action counters, authorized NOTIFY TSIG verification outcome counters, and global plus per-source-prefix DNS Cookie case/BADCOOKIE counters;
+- `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, AXFR/IXFR transfer-session started/completed/failed counters, NOTIFY receive/unauthorized/refresh-action counters, authorized NOTIFY TSIG verification outcome counters, global plus per-source-prefix DNS Cookie case/BADCOOKIE counters, the SRS `oxidedns_secondary_build_info` gauge, and the SRS `oxidedns_secondary_query_duration_seconds` histogram with default buckets and query-category labels;
 - unknown paths return JSON HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405;
 - focused tests cover `/livez` and `/readyz` responses within the SRS 100 ms health-probe bound under starting and draining states.
 - CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
@@ -331,6 +331,7 @@ Non-functional evidence foundations:
 - `scripts/release-evidence-snapshot.sh` captures release-review command logs, tool versions, git state, fuzz compile checks, cargo-deny output, and optional fuzz campaign and interop script output under `target/evidence/<timestamp>/`.
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.
 - `scripts/audit-maintainability.sh` records the first-party Rust source line count and module map, and reports the current ODS-NFR-MAINT-001 line-count target status for release review.
+- `crates/oxidedns-server/build.rs` embeds build commit, Rust compiler version, and build timestamp labels for `oxidedns_secondary_build_info`; `crates/oxidedns-server/src/lib.rs` metrics tests cover build-info exposition and latency histogram bucket/count/sum output.
 
 Fuzzing foundations:
 
