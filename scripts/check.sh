@@ -11,6 +11,7 @@ python3 scripts/audit-log-lazy-formatting.py
 bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
 bash -n scripts/capture-health-metrics-evidence.sh
+bash -n scripts/capture-malformed-query-evidence.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-dns-cookie-dig.sh
