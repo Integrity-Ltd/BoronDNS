@@ -24,6 +24,7 @@ zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 workdir="$repo_root/target/interop/knot-xot-$$"
 container="oxidedns-knot-xot-$$"
 server_name="primary.alpha.test"
+artifact_dir="${OXIDEDNS_KNOT_XOT_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -186,6 +187,9 @@ if [[ "$alpn_probe" != *"ALPN protocol: dot"* ]]; then
   printf '%s\n' "$alpn_probe" >&2
   exit 0
 fi
+printf '%s\n' "$alpn_probe" >"$workdir/alpn-probe.txt"
+openssl x509 -in "$workdir/server.crt" -noout -subject -issuer -dates -ext subjectAltName \
+  >"$workdir/server-certificate.txt"
 
 oxidedns_conf="$workdir/oxidedns.toml"
 cat >"$oxidedns_conf" <<EOF
@@ -225,35 +229,43 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+printf '%s\n' "$ready" >"$workdir/readyz.json"
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after Knot XoT AXFR" >&2
   exit 1
 fi
 
-answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/oxidedns-answer-a.out"
+answer_a="$(cat "$workdir/oxidedns-answer-a.out")"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected A response after Knot XoT AXFR" >&2
   exit 1
 fi
 
-answer_cname="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/oxidedns-answer-cname.out"
+answer_cname="$(cat "$workdir/oxidedns-answer-cname.out")"
 if [[ "$answer_cname" != *"alias.alpha.test."* ]] || [[ "$answer_cname" != *"www.alpha.test."* ]] || [[ "$answer_cname" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected CNAME-chain response after Knot XoT AXFR" >&2
   exit 1
 fi
 
-tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
+  >"$workdir/oxidedns-tcp-soa.out"
+tcp_soa="$(cat "$workdir/oxidedns-tcp-soa.out")"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
   echo "OxideDNS did not serve expected TCP SOA response after Knot XoT AXFR" >&2
   exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
@@ -268,6 +280,41 @@ done
 if grep -E 'ConnectTcp|TlsHandshake|XotAlpn|did not negotiate ALPN dot' "$workdir/oxidedns.log" >/dev/null 2>&1; then
   echo "OxideDNS log contains an XoT connection failure" >&2
   exit 1
+fi
+
+if grep -E 'BEGIN .*PRIVATE KEY|master secret|traffic secret|session key' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+  echo "OxideDNS log leaked TLS key material" >&2
+  exit 1
+fi
+
+cat >"$workdir/knot-xot-summary.env" <<EOF
+alpn_dot_negotiated=1
+oxidedns_ready_after_xot_axfr=1
+oxidedns_served_transferred_a=1
+oxidedns_served_transferred_cname=1
+oxidedns_served_transferred_tcp_soa=1
+oxidedns_transfer_metrics_checked=1
+oxidedns_xot_failure_absence_checked=1
+oxidedns_tls_key_material_absence_checked=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+  cp "$workdir/knot.conf" "$artifact_dir/knot.conf"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
+  cp "$workdir/ca.crt" "$artifact_dir/ca.crt"
+  cp "$workdir/server.crt" "$artifact_dir/server.crt"
+  cp "$workdir/server-certificate.txt" "$artifact_dir/server-certificate.txt"
+  cp "$workdir/alpn-probe.txt" "$artifact_dir/alpn-probe.txt"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$workdir/readyz.json" "$artifact_dir/readyz.json"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$workdir/oxidedns-answer-a.out" "$artifact_dir/oxidedns-answer-a.out"
+  cp "$workdir/oxidedns-answer-cname.out" "$artifact_dir/oxidedns-answer-cname.out"
+  cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
+  cp "$workdir/knot-xot-summary.env" "$artifact_dir/knot-xot-summary.env"
 fi
 
 echo "Knot Docker XoT AXFR interop passed"

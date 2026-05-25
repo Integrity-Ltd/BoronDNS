@@ -25,6 +25,7 @@ tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/knot-xot-tsig-$$"
 container="oxidedns-knot-xot-tsig-$$"
 server_name="primary.alpha.test"
+artifact_dir="${OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -192,32 +193,33 @@ if [[ "$alpn_probe" != *"ALPN protocol: dot"* ]]; then
   printf '%s\n' "$alpn_probe" >&2
   exit 0
 fi
+printf '%s\n' "$alpn_probe" >"$workdir/alpn-probe.txt"
+openssl x509 -in "$workdir/server.crt" -noout -subject -issuer -dates -ext subjectAltName \
+  >"$workdir/server-certificate.txt"
 
 set +e
-unsigned_axfr="$(
-  dig "@127.0.0.1" \
+dig "@127.0.0.1" \
     -p "$knot_tls_port" \
     +tls \
     "+tls-ca=$workdir/ca.crt" \
     "+tls-hostname=$server_name" \
-    alpha.test. AXFR +time=2 +tries=1 2>&1
-)"
+    alpha.test. AXFR +nocmd +time=2 +tries=1 >"$workdir/unsigned-xot-axfr.out" 2>&1
 unsigned_status=$?
 set -e
+unsigned_axfr="$(cat "$workdir/unsigned-xot-axfr.out")"
 if (( unsigned_status == 0 )) && [[ "$unsigned_axfr" == *"www.alpha.test."* ]]; then
   echo "Knot XoT+TSIG primary unexpectedly allowed unsigned XoT AXFR" >&2
   exit 1
 fi
 
-signed_axfr="$(
-  dig "@127.0.0.1" \
+dig "@127.0.0.1" \
     -p "$knot_tls_port" \
     -y "hmac-sha256:transfer-key.:$tsig_secret" \
     +tls \
     "+tls-ca=$workdir/ca.crt" \
     "+tls-hostname=$server_name" \
-    alpha.test. AXFR +time=2 +tries=1
-)"
+    alpha.test. AXFR +nocmd +time=2 +tries=1 >"$workdir/signed-xot-axfr.out"
+signed_axfr="$(cat "$workdir/signed-xot-axfr.out")"
 if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.alpha.test."* ]]; then
   echo "Knot XoT+TSIG primary signed XoT AXFR did not include expected fixture records" >&2
   exit 1
@@ -267,35 +269,43 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+printf '%s\n' "$ready" >"$workdir/readyz.json"
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after Knot XoT+TSIG AXFR" >&2
   exit 1
 fi
 
-answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/oxidedns-answer-a.out"
+answer_a="$(cat "$workdir/oxidedns-answer-a.out")"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected A response after Knot XoT+TSIG AXFR" >&2
   exit 1
 fi
 
-answer_cname="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer \
+  >"$workdir/oxidedns-answer-cname.out"
+answer_cname="$(cat "$workdir/oxidedns-answer-cname.out")"
 if [[ "$answer_cname" != *"alias.alpha.test."* ]] || [[ "$answer_cname" != *"www.alpha.test."* ]] || [[ "$answer_cname" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected CNAME-chain response after Knot XoT+TSIG AXFR" >&2
   exit 1
 fi
 
-tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
+  >"$workdir/oxidedns-tcp-soa.out"
+tcp_soa="$(cat "$workdir/oxidedns-tcp-soa.out")"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
   echo "OxideDNS did not serve expected TCP SOA response after Knot XoT+TSIG AXFR" >&2
   exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
@@ -315,6 +325,46 @@ fi
 if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
   echo "OxideDNS log leaked TSIG secret" >&2
   exit 1
+fi
+
+if grep -E 'BEGIN .*PRIVATE KEY|master secret|traffic secret|session key' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+  echo "OxideDNS log leaked TLS key material" >&2
+  exit 1
+fi
+
+cat >"$workdir/knot-xot-tsig-summary.env" <<EOF
+alpn_dot_negotiated=1
+unsigned_xot_axfr_rejected=1
+signed_xot_axfr_succeeded=1
+oxidedns_ready_after_xot_tsig_axfr=1
+oxidedns_served_transferred_a=1
+oxidedns_served_transferred_cname=1
+oxidedns_served_transferred_tcp_soa=1
+oxidedns_transfer_metrics_checked=1
+oxidedns_xot_failure_absence_checked=1
+tsig_secret_redaction_checked=1
+oxidedns_tls_key_material_absence_checked=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/knot.conf" >"$artifact_dir/knot.conf.redacted"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+  cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
+  cp "$workdir/ca.crt" "$artifact_dir/ca.crt"
+  cp "$workdir/server.crt" "$artifact_dir/server.crt"
+  cp "$workdir/server-certificate.txt" "$artifact_dir/server-certificate.txt"
+  cp "$workdir/alpn-probe.txt" "$artifact_dir/alpn-probe.txt"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$workdir/readyz.json" "$artifact_dir/readyz.json"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$workdir/unsigned-xot-axfr.out" "$artifact_dir/unsigned-xot-axfr.out"
+  cp "$workdir/signed-xot-axfr.out" "$artifact_dir/signed-xot-axfr.out"
+  cp "$workdir/oxidedns-answer-a.out" "$artifact_dir/oxidedns-answer-a.out"
+  cp "$workdir/oxidedns-answer-cname.out" "$artifact_dir/oxidedns-answer-cname.out"
+  cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
+  cp "$workdir/knot-xot-tsig-summary.env" "$artifact_dir/knot-xot-tsig-summary.env"
 fi
 
 echo "Knot Docker XoT+TSIG AXFR interop passed"
