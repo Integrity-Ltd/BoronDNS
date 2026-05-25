@@ -29,6 +29,11 @@ metrics_rate_limit_per_minute = 60
 # Idle seconds before a metrics rate-limit bucket can be evicted. Default: 300.
 metrics_rate_limit_idle_seconds = 300
 
+[metrics]
+# Prometheus query-latency histogram buckets in seconds. Default:
+# [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
+latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
+
 [query]
 # ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.
 any_response = "minimal"

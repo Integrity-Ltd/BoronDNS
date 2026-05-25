@@ -258,7 +258,10 @@ impl Runtime {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(Duration::from_secs(
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
-        let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(self.config.rrl.max_keys);
+        let metrics = RuntimeMetrics::new_with_settings(
+            self.config.rrl.max_keys,
+            self.config.metrics.latency_histogram_buckets_seconds(),
+        );
         let startup_warning_count = self.config.configuration_warnings().len().saturating_add(
             runtime_config_warnings(&self.config)
                 .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?
@@ -3191,22 +3194,26 @@ fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
 
 fn append_query_latency_metrics(body: &mut String, metrics: &RuntimeMetrics) {
     let histograms = metrics.query_latency_histograms();
+    let latency_buckets = metrics.latency_buckets();
     body.push_str(
         "# HELP oxidedns_secondary_query_duration_seconds Query response latency in seconds.\n\
          # TYPE oxidedns_secondary_query_duration_seconds histogram\n",
     );
     for category in QueryLatencyCategory::ALL {
-        let histogram = histograms.get(&category).copied().unwrap_or_default();
+        let histogram = histograms
+            .get(&category)
+            .cloned()
+            .unwrap_or_else(|| QueryLatencyHistogram::new(latency_buckets.len()));
         let label = category.label();
         let mut cumulative = 0u64;
-        for (index, bucket) in LATENCY_HISTOGRAM_BUCKETS.iter().enumerate() {
+        for (index, bucket) in latency_buckets.iter().enumerate() {
             cumulative = cumulative.saturating_add(histogram.buckets[index]);
             body.push_str(&format!(
                 "oxidedns_secondary_query_duration_seconds_bucket{{query_category=\"{label}\",le=\"{}\"}} {cumulative}\n",
                 latency_bucket_label(*bucket)
             ));
         }
-        cumulative = cumulative.saturating_add(histogram.buckets[LATENCY_HISTOGRAM_BUCKETS.len()]);
+        cumulative = cumulative.saturating_add(histogram.buckets[latency_buckets.len()]);
         body.push_str(&format!(
             "oxidedns_secondary_query_duration_seconds_bucket{{query_category=\"{label}\",le=\"+Inf\"}} {cumulative}\n"
         ));
@@ -3920,10 +3927,10 @@ struct RuntimeMetrics {
 }
 
 const DEFAULT_COOKIE_PREFIX_METRIC_LIMIT: usize = 100_000;
-const LATENCY_HISTOGRAM_BUCKETS: [f64; 9] = [
+#[cfg(test)]
+const DEFAULT_LATENCY_HISTOGRAM_BUCKETS: [f64; 9] = [
     0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1,
 ];
-const LATENCY_HISTOGRAM_BUCKET_COUNT: usize = LATENCY_HISTOGRAM_BUCKETS.len() + 1;
 
 #[derive(Debug, Default)]
 struct RuntimeMetricsInner {
@@ -3961,6 +3968,7 @@ struct RuntimeMetricsInner {
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
+    latency_buckets: Vec<f64>,
     query_latency: Mutex<HashMap<QueryLatencyCategory, QueryLatencyHistogram>>,
 }
 
@@ -4040,28 +4048,26 @@ impl QueryLatencyCategory {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct QueryLatencyHistogram {
-    buckets: [u64; LATENCY_HISTOGRAM_BUCKET_COUNT],
+    buckets: Vec<u64>,
     sum_seconds: f64,
 }
 
-impl Default for QueryLatencyHistogram {
-    fn default() -> Self {
+impl QueryLatencyHistogram {
+    fn new(bucket_count: usize) -> Self {
         Self {
-            buckets: [0; LATENCY_HISTOGRAM_BUCKET_COUNT],
+            buckets: vec![0; bucket_count + 1],
             sum_seconds: 0.0,
         }
     }
-}
 
-impl QueryLatencyHistogram {
-    fn record(&mut self, duration: Duration) {
+    fn record(&mut self, duration: Duration, latency_buckets: &[f64]) {
         let seconds = duration.as_secs_f64();
-        let bucket_index = LATENCY_HISTOGRAM_BUCKETS
+        let bucket_index = latency_buckets
             .iter()
             .position(|bucket| seconds <= *bucket)
-            .unwrap_or(LATENCY_HISTOGRAM_BUCKETS.len());
+            .unwrap_or(latency_buckets.len());
         self.buckets[bucket_index] = self.buckets[bucket_index].saturating_add(1);
         self.sum_seconds += seconds;
     }
@@ -4161,13 +4167,17 @@ impl CookiePrefixMetrics {
 impl RuntimeMetrics {
     #[cfg(test)]
     fn new() -> Self {
-        Self::new_with_cookie_prefix_limit(DEFAULT_COOKIE_PREFIX_METRIC_LIMIT)
+        Self::new_with_settings(
+            DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+            DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+        )
     }
 
-    fn new_with_cookie_prefix_limit(cookie_prefix_limit: usize) -> Self {
+    fn new_with_settings(cookie_prefix_limit: usize, latency_buckets: Vec<f64>) -> Self {
         Self {
             inner: Arc::new(RuntimeMetricsInner {
                 dns_cookie_prefixes: Mutex::new(CookiePrefixMetrics::new(cookie_prefix_limit)),
+                latency_buckets,
                 ..RuntimeMetricsInner::default()
             }),
         }
@@ -4349,12 +4359,16 @@ impl RuntimeMetrics {
     }
 
     fn record_query_latency(&self, category: QueryLatencyCategory, duration: Duration) {
+        let latency_buckets = self.inner.latency_buckets.as_slice();
         let mut histograms = self
             .inner
             .query_latency
             .lock()
             .expect("runtime metrics query latency histogram lock poisoned");
-        histograms.entry(category).or_default().record(duration);
+        histograms
+            .entry(category)
+            .or_insert_with(|| QueryLatencyHistogram::new(latency_buckets.len()))
+            .record(duration, latency_buckets);
     }
 
     fn query_rcode_counts(&self) -> HashMap<u16, u64> {
@@ -4371,6 +4385,10 @@ impl RuntimeMetrics {
             .lock()
             .expect("runtime metrics query latency histogram lock poisoned")
             .clone()
+    }
+
+    fn latency_buckets(&self) -> Vec<f64> {
+        self.inner.latency_buckets.clone()
     }
 
     fn record_zone_query(&self, zone: &DomainName) {
@@ -6470,7 +6488,8 @@ mod tests {
     };
 
     use super::{
-        CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore,
+        CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+        DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
         HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter,
         NotifyAuthority, NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction,
         NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
@@ -8289,7 +8308,8 @@ mod tests {
 
     #[test]
     fn dns_cookie_prefix_metrics_use_rrl_prefixes_and_evict_at_cap() {
-        let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(1);
+        let metrics =
+            RuntimeMetrics::new_with_settings(1, DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec());
         let prefix_settings = cookie_prefix_metrics_for_test();
 
         metrics.record_dns_cookie_status(
@@ -8342,6 +8362,35 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.queries_cname_chain_limit, 1);
         assert_eq!(snapshot.queries_cname_loop, 1);
+    }
+
+    #[test]
+    fn query_latency_histogram_uses_configured_buckets() {
+        let zones = ZoneStore::new();
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+        let metrics = RuntimeMetrics::new_with_settings(
+            DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+            vec![0.001, 0.01],
+        );
+
+        metrics.record_query_latency(
+            QueryLatencyCategory::UdpDirect,
+            std::time::Duration::from_micros(1_500),
+        );
+
+        let body = metrics_body(&zones, &metrics, &refresh_registry, 0);
+
+        assert!(body.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.001\"} 0"
+        ));
+        assert!(body.contains(
+            "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.01\"} 1"
+        ));
+        assert!(!body.contains("le=\"0.00025\""));
     }
 
     #[test]

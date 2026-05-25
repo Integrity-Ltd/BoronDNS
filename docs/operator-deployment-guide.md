@@ -345,14 +345,17 @@ counters, RCODE counters, truncation counters, CNAME limit/loop counters,
 NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
 per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, and the
-`oxidedns_secondary_query_duration_seconds` latency histogram.
+`oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
+bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
+seconds and default to the SRS v0.7 bucket list.
 
 The `/metrics` endpoint returns gzip-compressed output when the scrape request
 includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
 default. SRS v0.7 still requires retained release evidence for build-info label
-accuracy, latency histogram behavior, broader retained health response-time
-evidence, and rate-limit behavior under production-representative scrape
-traffic. Treat those as pending until the gap register says otherwise.
+accuracy, latency histogram behavior under release traffic, broader retained
+health response-time evidence, and rate-limit behavior under
+production-representative scrape traffic. Treat those as pending until the gap
+register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 

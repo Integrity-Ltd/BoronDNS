@@ -41,6 +41,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub health: HealthConfig,
     #[serde(default)]
+    pub metrics: MetricsConfig,
+    #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
     pub cookie: CookieConfig,
@@ -95,6 +97,7 @@ impl ServerConfig {
         }
         self.interfaces.validate(&self.server)?;
         self.logging.validate()?;
+        self.metrics.validate()?;
 
         if self.zones.is_empty() {
             return Err(ConfigError::Invalid(
@@ -483,6 +486,75 @@ impl HealthConfig {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MetricsConfig {
+    #[serde(default = "default_latency_histogram_buckets")]
+    pub latency_histogram_buckets: Vec<LatencyHistogramBucketSeconds>,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            latency_histogram_buckets: default_latency_histogram_buckets(),
+        }
+    }
+}
+
+impl MetricsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.latency_histogram_buckets.is_empty() {
+            return Err(ConfigError::Invalid(
+                "metrics.latency_histogram_buckets must contain at least one bucket".to_owned(),
+            ));
+        }
+
+        let mut previous = None;
+        for bucket in &self.latency_histogram_buckets {
+            let seconds = bucket.seconds();
+            if !seconds.is_finite() || seconds <= 0.0 {
+                return Err(ConfigError::Invalid(
+                    "metrics.latency_histogram_buckets values must be positive finite seconds"
+                        .to_owned(),
+                ));
+            }
+            if previous.is_some_and(|previous| seconds <= previous) {
+                return Err(ConfigError::Invalid(
+                    "metrics.latency_histogram_buckets values must be strictly increasing"
+                        .to_owned(),
+                ));
+            }
+            previous = Some(seconds);
+        }
+
+        Ok(())
+    }
+
+    pub fn latency_histogram_buckets_seconds(&self) -> Vec<f64> {
+        self.latency_histogram_buckets
+            .iter()
+            .map(|bucket| bucket.seconds())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct LatencyHistogramBucketSeconds(pub f64);
+
+impl LatencyHistogramBucketSeconds {
+    pub fn seconds(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for LatencyHistogramBucketSeconds {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for LatencyHistogramBucketSeconds {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct QuerySettings {
@@ -1163,6 +1235,15 @@ fn default_metrics_rate_limit_idle_seconds() -> u64 {
     300
 }
 
+fn default_latency_histogram_buckets() -> Vec<LatencyHistogramBucketSeconds> {
+    [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1,
+    ]
+    .into_iter()
+    .map(LatencyHistogramBucketSeconds)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1198,6 +1279,12 @@ mod tests {
         assert_eq!(config.tcp_listeners(), config.server.listen_tcp);
         assert_eq!(config.health.metrics_rate_limit_per_minute, 60);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 300);
+        assert_eq!(
+            config.metrics.latency_histogram_buckets_seconds(),
+            vec![
+                0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1
+            ]
+        );
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
@@ -1952,6 +2039,67 @@ mod tests {
 
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+    }
+
+    #[test]
+    fn parses_metrics_latency_histogram_buckets() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [metrics]
+                latency_histogram_buckets = [0.0002, 0.001, 0.01]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid metrics config");
+
+        assert_eq!(
+            config.metrics.latency_histogram_buckets_seconds(),
+            vec![0.0002, 0.001, 0.01]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_latency_histogram_buckets() {
+        for (case, expected) in [
+            (
+                "latency_histogram_buckets = []",
+                "must contain at least one bucket",
+            ),
+            (
+                "latency_histogram_buckets = [0.001, 0.001]",
+                "must be strictly increasing",
+            ),
+            (
+                "latency_histogram_buckets = [0.0, 0.001]",
+                "positive finite seconds",
+            ),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [metrics]
+                    {case}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("invalid metrics bucket config must fail");
+
+            assert!(
+                error.to_string().contains(expected),
+                "{case} produced {error}"
+            );
+        }
     }
 
     #[test]
