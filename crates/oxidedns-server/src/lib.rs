@@ -27,9 +27,9 @@ use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream, UdpSocket},
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task::JoinSet,
 };
 use tokio_rustls::{
@@ -401,6 +401,14 @@ impl Runtime {
             let tcp_read_timeout = Duration::from_secs(self.config.limits.tcp_read_timeout_secs);
             let tcp_write_timeout = Duration::from_secs(self.config.limits.tcp_write_timeout_secs);
             let max_tcp_connections = self.config.limits.max_tcp_connections;
+            let max_tcp_inflight_queries_per_connection =
+                self.config.limits.max_tcp_inflight_queries_per_connection;
+            let tcp_inflight_limit_timeout = Duration::from_secs(
+                self.config
+                    .limits
+                    .tcp_inflight_limit_timeout_secs
+                    .unwrap_or(self.config.limits.tcp_read_timeout_secs),
+            );
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
@@ -412,6 +420,8 @@ impl Runtime {
                 read_timeout: tcp_read_timeout,
                 write_timeout: tcp_write_timeout,
                 max_connections: max_tcp_connections,
+                max_inflight_queries_per_connection: max_tcp_inflight_queries_per_connection,
+                inflight_limit_timeout: tcp_inflight_limit_timeout,
                 edns_padding_block_size,
                 any_response,
                 nsid,
@@ -2637,6 +2647,8 @@ async fn serve_tcp(
                 settings.max_cname_chain,
                 settings.read_timeout,
                 settings.write_timeout,
+                settings.max_inflight_queries_per_connection,
+                settings.inflight_limit_timeout,
                 settings.edns_padding_block_size,
                 settings.any_response,
                 settings.nsid,
@@ -4169,6 +4181,8 @@ struct TcpServerSettings {
     read_timeout: Duration,
     write_timeout: Duration,
     max_connections: usize,
+    max_inflight_queries_per_connection: usize,
+    inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
@@ -5568,13 +5582,15 @@ fn try_acquire_tcp_connection_slot(
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_tcp_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     zones: ZoneStore,
     idle_timeout: Duration,
     max_udp_payload: u16,
     max_cname_chain: usize,
     read_timeout: Duration,
     write_timeout: Duration,
+    max_inflight_queries_per_connection: usize,
+    inflight_limit_timeout: Duration,
     edns_padding_block_size: u16,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
@@ -5587,97 +5603,201 @@ async fn handle_tcp_connection(
     metrics: RuntimeMetrics,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
-    while let Some(packet) = read_tcp_message(&mut stream, idle_timeout, read_timeout).await? {
-        let Some(prepared) =
-            prepare_notify_packet_with_metrics(&packet, &notify_authority, peer_ip, &metrics)
-        else {
-            debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
-            continue;
+    let (mut reader, writer) = stream.into_split();
+    let inflight = Arc::new(Semaphore::new(max_inflight_queries_per_connection));
+    let (response_tx, response_rx) = mpsc::channel(max_inflight_queries_per_connection);
+    let writer_task = tokio::spawn(write_tcp_responses(writer, response_rx, write_timeout));
+    let mut query_tasks = JoinSet::new();
+
+    while !response_tx.is_closed() {
+        let permit =
+            match tokio::time::timeout(inflight_limit_timeout, inflight.clone().acquire_owned())
+                .await
+            {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    info!(
+                        %peer_ip,
+                        limit = max_inflight_queries_per_connection,
+                        timeout_secs = inflight_limit_timeout.as_secs(),
+                        "TCP connection remained at in-flight query limit; closing connection"
+                    );
+                    break;
+                }
+            };
+
+        let Some(packet) = read_tcp_message(&mut reader, idle_timeout, read_timeout).await? else {
+            drop(permit);
+            break;
         };
-        if let Some(response) = prepared.immediate_response {
-            if !write_tcp_message(&mut stream, &response, write_timeout).await? {
-                return Ok(());
-            }
-            continue;
-        }
-        let dns_cookie_secret = dns_cookie_secrets.current();
-        let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
-        let cookie_validated = dns_cookie
-            .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
-        let query_metrics = observe_query_metrics(
-            &prepared.packet,
-            &zones,
-            &metrics,
-            Transport::Tcp,
-            cookie_validated,
-        );
-        let dns_cookie_metrics = observe_dns_cookie_metrics(
-            &prepared.packet,
+
+        query_tasks.spawn(handle_tcp_packet(
+            packet,
+            zones.clone(),
+            idle_timeout,
+            max_udp_payload,
+            max_cname_chain,
+            edns_padding_block_size,
+            any_response,
+            nsid.clone(),
+            dns_cookie_secrets.clone(),
             dns_cookie,
-            peer_ip,
             cookie_prefix_metrics,
-            &metrics,
-        );
-        match answer_message_with_notify_hooks_and_query_observer(
-            &prepared.packet,
-            &zones,
-            AnswerOptions {
-                transport: Transport::Tcp,
-                max_udp_payload,
-                max_cname_chain,
-                tcp_keepalive_timeout_secs: idle_timeout.as_secs(),
-                edns_padding_block_size,
-                any_response,
-                nsid: &nsid,
-                dns_cookie,
-            },
-            |qname, qclass| {
-                let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
-                if !authorized {
-                    metrics.record_notify_unauthorized();
-                    warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
-                }
-                authorized
-            },
-            |qname, _qclass, serial| {
-                signal_notify_refresh(
-                    &notify_refresh,
-                    &notify_refresh_tx,
-                    &metrics,
-                    qname,
-                    peer_ip,
-                    serial,
-                )
-            },
-            |lookup| record_query_termination_metric(query_metrics, lookup, &metrics),
-        ) {
-            DatagramAction::Discard => {
-                debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
-            }
-            DatagramAction::Respond(response) => {
-                record_dns_cookie_badcookie_if_emitted(
-                    dns_cookie_metrics,
-                    &response,
-                    &metrics,
-                    peer_ip,
-                    cookie_prefix_metrics,
-                );
-                record_query_response_metric(query_metrics, &response, &metrics);
-                let response = match sign_notify_response(response, prepared.response_tsig) {
-                    Ok(response) => response,
-                    Err(error) => {
-                        warn!(%peer_ip, %error, "failed to sign NOTIFY response");
-                        continue;
-                    }
-                };
-                if !write_tcp_message(&mut stream, &response, write_timeout).await? {
-                    return Ok(());
-                }
+            notify_authority.clone(),
+            notify_refresh.clone(),
+            notify_refresh_tx.clone(),
+            metrics.clone(),
+            peer_ip,
+            response_tx.clone(),
+            permit,
+        ));
+
+        while let Some(join_result) = query_tasks.try_join_next() {
+            if let Err(error) = join_result {
+                warn!(%peer_ip, %error, "TCP query task failed");
             }
         }
     }
 
+    drop(response_tx);
+    while let Some(join_result) = query_tasks.join_next().await {
+        if let Err(error) = join_result {
+            warn!(%peer_ip, %error, "TCP query task failed");
+        }
+    }
+    match writer_task.await {
+        Ok(result) => result?,
+        Err(error) => warn!(%peer_ip, %error, "TCP writer task failed"),
+    }
+
     Ok(())
+}
+
+struct TcpResponse {
+    response: Vec<u8>,
+    permit: OwnedSemaphorePermit,
+}
+
+async fn write_tcp_responses(
+    mut writer: tokio::net::tcp::OwnedWriteHalf,
+    mut responses: mpsc::Receiver<TcpResponse>,
+    write_timeout: Duration,
+) -> Result<(), RuntimeError> {
+    while let Some(response) = responses.recv().await {
+        let TcpResponse { response, permit } = response;
+        if !write_tcp_message(&mut writer, &response, write_timeout).await? {
+            return Ok(());
+        }
+        drop(permit);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tcp_packet(
+    packet: Vec<u8>,
+    zones: ZoneStore,
+    idle_timeout: Duration,
+    max_udp_payload: u16,
+    max_cname_chain: usize,
+    edns_padding_block_size: u16,
+    any_response: AnyResponseMode,
+    nsid: Vec<u8>,
+    dns_cookie_secrets: DnsCookieSecretStore,
+    dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
+    notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    metrics: RuntimeMetrics,
+    peer_ip: IpAddr,
+    response_tx: mpsc::Sender<TcpResponse>,
+    permit: OwnedSemaphorePermit,
+) {
+    let Some(prepared) =
+        prepare_notify_packet_with_metrics(&packet, &notify_authority, peer_ip, &metrics)
+    else {
+        debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
+        return;
+    };
+    if let Some(response) = prepared.immediate_response {
+        let _ = response_tx.send(TcpResponse { response, permit }).await;
+        return;
+    }
+    let dns_cookie_secret = dns_cookie_secrets.current();
+    let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, dns_cookie);
+    let cookie_validated = dns_cookie
+        .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
+    let query_metrics = observe_query_metrics(
+        &prepared.packet,
+        &zones,
+        &metrics,
+        Transport::Tcp,
+        cookie_validated,
+    );
+    let dns_cookie_metrics = observe_dns_cookie_metrics(
+        &prepared.packet,
+        dns_cookie,
+        peer_ip,
+        cookie_prefix_metrics,
+        &metrics,
+    );
+    match answer_message_with_notify_hooks_and_query_observer(
+        &prepared.packet,
+        &zones,
+        AnswerOptions {
+            transport: Transport::Tcp,
+            max_udp_payload,
+            max_cname_chain,
+            tcp_keepalive_timeout_secs: idle_timeout.as_secs(),
+            edns_padding_block_size,
+            any_response,
+            nsid: &nsid,
+            dns_cookie,
+        },
+        |qname, qclass| {
+            let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
+            if !authorized {
+                metrics.record_notify_unauthorized();
+                warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
+            }
+            authorized
+        },
+        |qname, _qclass, serial| {
+            signal_notify_refresh(
+                &notify_refresh,
+                &notify_refresh_tx,
+                &metrics,
+                qname,
+                peer_ip,
+                serial,
+            )
+        },
+        |lookup| record_query_termination_metric(query_metrics, lookup, &metrics),
+    ) {
+        DatagramAction::Discard => {
+            debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
+        }
+        DatagramAction::Respond(response) => {
+            record_dns_cookie_badcookie_if_emitted(
+                dns_cookie_metrics,
+                &response,
+                &metrics,
+                peer_ip,
+                cookie_prefix_metrics,
+            );
+            record_query_response_metric(query_metrics, &response, &metrics);
+            let response = match sign_notify_response(response, prepared.response_tsig) {
+                Ok(response) => response,
+                Err(error) => {
+                    warn!(%peer_ip, %error, "failed to sign NOTIFY response");
+                    return;
+                }
+            };
+            let _ = response_tx.send(TcpResponse { response, permit }).await;
+        }
+    }
 }
 
 async fn write_tcp_message<W>(
@@ -5700,11 +5820,14 @@ where
     }
 }
 
-async fn read_tcp_message(
-    stream: &mut TcpStream,
+async fn read_tcp_message<R>(
+    stream: &mut R,
     idle_timeout: Duration,
     read_timeout: Duration,
-) -> Result<Option<Vec<u8>>, RuntimeError> {
+) -> Result<Option<Vec<u8>>, RuntimeError>
+where
+    R: AsyncRead + Unpin,
+{
     let Some(first_len_byte) = read_tcp_byte(stream, idle_timeout).await? else {
         return Ok(None);
     };
@@ -5726,10 +5849,13 @@ async fn read_tcp_message(
     }
 }
 
-async fn read_tcp_byte(
-    stream: &mut TcpStream,
+async fn read_tcp_byte<R>(
+    stream: &mut R,
     idle_timeout: Duration,
-) -> Result<Option<u8>, RuntimeError> {
+) -> Result<Option<u8>, RuntimeError>
+where
+    R: AsyncRead + Unpin,
+{
     match tokio::time::timeout(idle_timeout, stream.read_u8()).await {
         Ok(Ok(byte)) => Ok(Some(byte)),
         Ok(Err(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
@@ -9695,6 +9821,8 @@ mod tests {
                 8,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
+                64,
+                std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
@@ -9776,6 +9904,8 @@ mod tests {
                 8,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
+                64,
+                std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
@@ -9832,6 +9962,8 @@ mod tests {
                 8,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
+                64,
+                std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
@@ -9873,6 +10005,8 @@ mod tests {
                 1232,
                 8,
                 std::time::Duration::from_millis(25),
+                std::time::Duration::from_secs(5),
+                64,
                 std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
@@ -9930,6 +10064,8 @@ mod tests {
                 8,
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(5),
+                64,
+                std::time::Duration::from_secs(5),
                 0,
                 AnyResponseMode::Minimal,
                 Vec::new(),
@@ -9974,6 +10110,8 @@ mod tests {
                 read_timeout: std::time::Duration::from_secs(30),
                 write_timeout: std::time::Duration::from_secs(30),
                 max_connections: 1,
+                max_inflight_queries_per_connection: 64,
+                inflight_limit_timeout: std::time::Duration::from_secs(30),
                 edns_padding_block_size: 0,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),

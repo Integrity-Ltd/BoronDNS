@@ -132,6 +132,17 @@ impl ServerConfig {
                 "limits.max_tcp_connections must be at least 1".to_owned(),
             ));
         }
+        if self.limits.max_tcp_inflight_queries_per_connection == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.max_tcp_inflight_queries_per_connection must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.tcp_inflight_limit_timeout_secs == Some(0) {
+            return Err(ConfigError::Invalid(
+                "limits.tcp_inflight_limit_timeout_secs must be at least 1 when configured"
+                    .to_owned(),
+            ));
+        }
         if self.limits.graceful_shutdown_secs == 0 {
             return Err(ConfigError::Invalid(
                 "limits.graceful_shutdown_secs must be at least 1".to_owned(),
@@ -637,6 +648,10 @@ pub struct Limits {
     pub tcp_write_timeout_secs: u64,
     #[serde(default = "default_max_tcp_connections")]
     pub max_tcp_connections: usize,
+    #[serde(default = "default_max_tcp_inflight_queries_per_connection")]
+    pub max_tcp_inflight_queries_per_connection: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_inflight_limit_timeout_secs: Option<u64>,
     #[serde(default = "default_graceful_shutdown_secs")]
     pub graceful_shutdown_secs: u64,
     #[serde(default = "default_edns_padding_block_size")]
@@ -672,6 +687,9 @@ impl Default for Limits {
             tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
             tcp_write_timeout_secs: default_tcp_write_timeout_secs(),
             max_tcp_connections: default_max_tcp_connections(),
+            max_tcp_inflight_queries_per_connection:
+                default_max_tcp_inflight_queries_per_connection(),
+            tcp_inflight_limit_timeout_secs: None,
             graceful_shutdown_secs: default_graceful_shutdown_secs(),
             edns_padding_block_size: default_edns_padding_block_size(),
             axfr_timeout_secs: default_axfr_timeout_secs(),
@@ -1056,6 +1074,10 @@ fn default_max_tcp_connections() -> usize {
     1024
 }
 
+fn default_max_tcp_inflight_queries_per_connection() -> usize {
+    64
+}
+
 fn default_graceful_shutdown_secs() -> u64 {
     30
 }
@@ -1170,6 +1192,8 @@ mod tests {
         assert_eq!(config.limits.tcp_read_timeout_secs, 30);
         assert_eq!(config.limits.tcp_write_timeout_secs, 30);
         assert_eq!(config.limits.max_tcp_connections, 1024);
+        assert_eq!(config.limits.max_tcp_inflight_queries_per_connection, 64);
+        assert_eq!(config.limits.tcp_inflight_limit_timeout_secs, None);
         assert_eq!(config.limits.graceful_shutdown_secs, 30);
         assert_eq!(config.limits.edns_padding_block_size, 0);
         assert_eq!(config.limits.ixfr_timeout_secs, 60);
@@ -2204,6 +2228,8 @@ mod tests {
 
                 [limits]
                 max_tcp_connections = 16
+                max_tcp_inflight_queries_per_connection = 4
+                tcp_inflight_limit_timeout_secs = 9
 
                 [[zones]]
                 name = "example.test."
@@ -2213,26 +2239,40 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.limits.max_tcp_connections, 16);
+        assert_eq!(config.limits.max_tcp_inflight_queries_per_connection, 4);
+        assert_eq!(config.limits.tcp_inflight_limit_timeout_secs, Some(9));
     }
 
     #[test]
     fn rejects_zero_tcp_connection_limit() {
-        let error = ServerConfig::from_toml_str(
-            r#"
-                [server]
-                listen_tcp = ["127.0.0.1:5300"]
+        for (key, expected) in [
+            ("max_tcp_connections", "max_tcp_connections"),
+            (
+                "max_tcp_inflight_queries_per_connection",
+                "max_tcp_inflight_queries_per_connection",
+            ),
+            (
+                "tcp_inflight_limit_timeout_secs",
+                "tcp_inflight_limit_timeout_secs",
+            ),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_tcp = ["127.0.0.1:5300"]
 
-                [limits]
-                max_tcp_connections = 0
+                    [limits]
+                    {key} = 0
 
-                [[zones]]
-                name = "example.test."
-                primaries = ["192.0.2.53:53"]
-            "#,
-        )
-        .expect_err("zero TCP connection limit must fail");
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("zero TCP limit must fail");
 
-        assert!(error.to_string().contains("max_tcp_connections"));
+            assert!(error.to_string().contains(expected));
+        }
     }
 
     #[test]

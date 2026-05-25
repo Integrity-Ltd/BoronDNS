@@ -227,6 +227,11 @@ Production configuration notes:
   `2 * (limits.max_tcp_connections + limits.max_concurrent_transfers + 100)`.
   OxideDNS checks this at startup and exits with an OS-startup error if the limit is
   too low.
+- Keep `[limits].max_tcp_inflight_queries_per_connection` at the default 64
+  unless load testing shows a need to lower per-connection memory/concurrency or
+  raise pipelined DNS-over-TCP concurrency. Omit
+  `[limits].tcp_inflight_limit_timeout_secs` to close persistently saturated
+  connections after the configured TCP read timeout.
 
 ## Running as a Service
 

@@ -81,6 +81,11 @@ tcp_read_timeout_secs = 30
 tcp_write_timeout_secs = 30
 # Global accepted TCP connection limit. Default: 1024.
 max_tcp_connections = 1024
+# Per-connection DNS-over-TCP in-flight query limit. Default: 64.
+max_tcp_inflight_queries_per_connection = 64
+# Seconds a connection may remain at the in-flight limit before FIN close.
+# Omit to use tcp_read_timeout_secs.
+#tcp_inflight_limit_timeout_secs = 30
 # Graceful shutdown drain budget. Default: 30 seconds.
 graceful_shutdown_secs = 30
 # EDNS padding block size. Default: 0, which disables response padding.

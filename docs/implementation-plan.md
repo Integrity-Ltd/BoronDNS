@@ -203,12 +203,13 @@ Slice 4 is in progress:
 - TCP listeners bind from static configuration;
 - DNS-over-TCP messages use the two-octet length prefix;
 - zero-length DNS-over-TCP frames close the connection and emit a warning log;
-- back-to-back framed TCP queries on one connection receive independently framed responses matched by query ID;
+- back-to-back framed TCP queries on one connection receive independently framed responses matched by query ID, and accepted TCP queries are processed by per-connection in-flight tasks with serialized writes;
 - TCP query handling reuses the same authoritative response core as UDP;
 - idle TCP connections close after the configured `[limits].tcp_idle_timeout_secs`, defaulting to 30 seconds;
 - accepted TCP read and write operations use configurable `[limits].tcp_read_timeout_secs` and `[limits].tcp_write_timeout_secs`, each defaulting to 30 seconds;
-- write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream.
-- accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level.
+- write-timeout behavior is covered by deterministic backpressure tests against an in-memory Tokio stream;
+- accepted TCP connections are limited by configurable `[limits].max_tcp_connections`, defaulting to 1024; connections accepted over the cap are immediately closed and logged at warning level;
+- per-connection DNS-over-TCP in-flight queries are limited by `[limits].max_tcp_inflight_queries_per_connection`, defaulting to 64; when all per-connection permits are held, the read side stops reading new frames until a response is written or `[limits].tcp_inflight_limit_timeout_secs` elapses, defaulting to the TCP read timeout, after which the connection is closed with an info log.
 - SIGINT and SIGTERM initiate shutdown, abort listener tasks to stop accepting new DNS/health traffic, close the refresh queue, and wait up to `[limits].graceful_shutdown_secs`, defaulting to 30 seconds, for active TCP query connections and in-flight initial or refresh transfers to drain.
 - runtime shutdown tests cover the draining health state while an initial transfer is blocked, and confirm the runtime exits after the transfer releases.
 - process-level CLI smoke tests cover successful `oxidedns serve` shutdown on SIGINT and SIGTERM.
