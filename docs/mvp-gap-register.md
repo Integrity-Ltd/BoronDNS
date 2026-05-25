@@ -7,12 +7,15 @@ queue for release blockers.
 Terminology:
 
 - **Engineering MVP** is the first deployable secondary DNS server with the core
-  operational path and retained verification evidence.
+  operational path, deterministic tests, short smoke/runtime evidence, and
+  checked traceability.
+- **Long-running evidence is out of Engineering MVP scope.** Handoff scripts,
+  schemas, and runbooks for long fuzzing, Reference Hardware/Profile
+  benchmarks, 30-day soak, production-depth logging profiles, external
+  operator acceptance, independent reproducible-build comparison, and signed
+  release artifacts may exist here as scaffolding only.
 - **SRS acceptance execution** is the later ODS-VER-008 gate run. The current
-  project MVP must set up runnable harnesses, evidence formats, and release
-  handoff paths for long fuzzing, Reference Hardware/Profile benchmarks, and
-  30-day soak; those full-duration runs are not expected to be executed in this
-  local MVP work.
+  Engineering MVP does not depend on those completed results.
 - **Current normative SRS** is `docs/OxideDNS-Secondary-SRS-v0.7.md`.
 - **Pending C.5 decisions** in SRS v0.7 remain open even when implementation
   follows the current SRS body defaults. Release notes and acceptance review

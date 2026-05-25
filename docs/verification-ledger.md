@@ -11,6 +11,11 @@ The SRS-defined MVP in ODS-VER-008 is treated here as a full acceptance gate,
 not as the near-term engineering milestone. Rows with target `MVP` refer to
 that SRS acceptance gate unless a note explicitly says otherwise.
 
+For the near-term Engineering MVP, completed long-running evidence is not an
+Engineering MVP requirement. The boundary is defined in
+`docs/engineering-mvp-scope.md`; long-run harnesses and handoff artifacts may be
+tracked here only as setup for later SRS acceptance.
+
 Rows may record implemented defaults before SRS Appendix C.5 confirmation. Such
 evidence is not final project-decision approval for the underlying C.5 item.
 

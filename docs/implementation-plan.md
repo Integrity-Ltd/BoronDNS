@@ -4,17 +4,22 @@ This plan tracks the path from the current Rust project to a working
 secondary-authoritative DNS server while preserving traceability to Tibor's SRS
 v0.7.
 
-The project MVP in this repository is not the same work item as executing every
-long-running SRS acceptance activity locally. The long fuzz campaigns,
-Reference Hardware/Profile benchmarks, and 30-day soak must have runnable
-harnesses, evidence formats, and operator handoff paths here; their full
-duration runs are expected to be executed later by release or operations owners.
-This plan therefore uses two targets:
+The project MVP in this repository is not the same work item as executing SRS
+acceptance locally. Engineering MVP must not require completed long-running
+evidence: long fuzz campaigns, Reference Hardware/Profile benchmarks, 30-day
+soak, production-depth logging profiles, external operator acceptance,
+independent reproducible-build comparison, and signed release artifacts are
+later release or operations activities. This plan therefore uses two targets:
 
 - **Engineering MVP**: the first deployable and reviewable secondary DNS server
-  that exercises the core operational path with retained evidence.
+  that exercises the core operational path with deterministic tests, short
+  smoke/runtime evidence, and checked traceability.
 - **SRS acceptance execution**: the later ODS-VER-008 compliance gate run,
   including the long-duration campaigns and external operator acceptance.
+
+The detailed Engineering MVP boundary is recorded in
+`docs/engineering-mvp-scope.md` and checked by
+`scripts/check-engineering-mvp-scope.py`.
 
 ## Engineering MVP Target
 

@@ -19,6 +19,8 @@ and update companion documents afterward.
 - `architecture.md`: architecture and release-governance scaffold for current MVP decisions.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `verification-ledger.md`: lightweight Alpha/MVP verification evidence ledger scaffold.
+- `engineering-mvp-scope.md`: local Engineering MVP boundary, especially the
+  exclusion of completed long-running evidence from this milestone.
 - `implementation-plan.md`: Engineering MVP and SRS acceptance implementation plan.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
 - `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.

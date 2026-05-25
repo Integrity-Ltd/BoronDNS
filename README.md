@@ -16,6 +16,7 @@ Normative order:
 Implementation planning:
 
 - [Engineering MVP and SRS acceptance implementation plan](docs/implementation-plan.md)
+- [Engineering MVP scope](docs/engineering-mvp-scope.md)
 - [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md)
 - [Verification ledger](docs/verification-ledger.md)
 - [Test Plan](docs/test-plan.md)
