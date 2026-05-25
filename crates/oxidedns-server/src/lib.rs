@@ -14,6 +14,7 @@ use std::{
 };
 
 mod process_signals;
+mod resource_limits;
 
 use axum::{
     Router,
@@ -108,6 +109,14 @@ pub enum RuntimeError {
 
     #[error("failed to generate DNS Cookie server secret: {0}")]
     DnsCookieSecret(getrandom::Error),
+
+    #[error(
+        "file-descriptor rlimit is insufficient for configured connection limits: current {current}, required {required}"
+    )]
+    InsufficientFileDescriptorLimit { current: u64, required: u64 },
+
+    #[error("failed to inspect file-descriptor rlimit: {0}")]
+    FileDescriptorLimit(std::io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -228,6 +237,7 @@ impl Runtime {
     ) -> Result<(), RuntimeError> {
         validate_runtime_config(&self.config)
             .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
+        validate_file_descriptor_limit(&self.config)?;
         tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
@@ -511,6 +521,36 @@ pub fn validate_runtime_config(config: &ServerConfig) -> Result<(), TransferErro
         }
     }
     Ok(())
+}
+
+fn validate_file_descriptor_limit(config: &ServerConfig) -> Result<(), RuntimeError> {
+    let required = required_file_descriptor_limit(config);
+    let current = resource_limits::current_file_descriptor_limit()
+        .map_err(RuntimeError::FileDescriptorLimit)?;
+    if current >= required {
+        Ok(())
+    } else {
+        Err(RuntimeError::InsufficientFileDescriptorLimit { current, required })
+    }
+}
+
+fn required_file_descriptor_limit(config: &ServerConfig) -> u64 {
+    let tcp_connections = config.limits.max_tcp_connections as u64;
+    let outbound_transfers = config.limits.max_concurrent_transfers as u64;
+    2 * (tcp_connections + outbound_transfers + 100)
+}
+
+#[cfg(test)]
+fn validate_file_descriptor_limit_value(
+    config: &ServerConfig,
+    current: u64,
+) -> Result<(), RuntimeError> {
+    let required = required_file_descriptor_limit(config);
+    if current >= required {
+        Ok(())
+    } else {
+        Err(RuntimeError::InsufficientFileDescriptorLimit { current, required })
+    }
 }
 
 pub fn runtime_config_warnings(config: &ServerConfig) -> Result<Vec<ConfigWarning>, TransferError> {
@@ -5659,11 +5699,12 @@ mod tests {
         observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
         prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
         record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
-        response_category, response_opt_record, response_question_end, response_rcode,
-        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
-        sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, validate_runtime_config, write_tcp_message,
+        required_file_descriptor_limit, response_category, response_opt_record,
+        response_question_end, response_rcode, rrl_truncated_response, runtime_config_warnings_at,
+        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, validate_file_descriptor_limit_value,
+        validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -8992,6 +9033,39 @@ mod tests {
         .expect("valid config");
 
         validate_runtime_config(&config).expect("xot tls files should validate");
+    }
+
+    #[test]
+    fn file_descriptor_limit_check_uses_srs_resource_formula() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [limits]
+                max_tcp_connections = 20
+                max_concurrent_transfers = 3
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(required_file_descriptor_limit(&config), 246);
+        validate_file_descriptor_limit_value(&config, 246).expect("exact required limit is enough");
+
+        let error = validate_file_descriptor_limit_value(&config, 245)
+            .expect_err("below required limit should fail");
+        assert!(matches!(
+            error,
+            RuntimeError::InsufficientFileDescriptorLimit {
+                current: 245,
+                required: 246
+            }
+        ));
     }
 
     #[test]

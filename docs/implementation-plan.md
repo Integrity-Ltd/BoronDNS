@@ -355,6 +355,7 @@ Non-functional evidence foundations:
 - `scripts/audit-safe-rust.sh` verifies the workspace `unsafe_code = "forbid"` lint and scans first-party Rust source for unsafe construct candidates, providing a repeatable first-party safe-Rust audit artifact.
 - `scripts/audit-maintainability.sh` records the first-party Rust source line count and module map, and reports the current ODS-NFR-MAINT-001 line-count target status for release review.
 - `scripts/audit-dnssec-passive.sh` records repeatable static evidence for SRS v0.7 `ODS-FR-DNSSEC-013`, and is included in `scripts/check.sh` plus release evidence snapshots.
+- Runtime startup validates the SRS v0.7 file-descriptor rlimit formula for `ODS-NFR-RES-004`: `2 * (max_tcp_connections + max_concurrent_transfers + 100)`, and exits with an OS-startup error if the current soft `RLIMIT_NOFILE` is too low.
 - `crates/oxidedns-server/build.rs` embeds build commit, Rust compiler version, and build timestamp labels for `oxidedns_secondary_build_info`; `crates/oxidedns-server/src/lib.rs` metrics tests cover build-info exposition and latency histogram bucket/count/sum output.
 
 Fuzzing foundations:

@@ -213,6 +213,10 @@ Production configuration notes:
   required and tested.
 - Keep `[rrl].enabled = true` for Internet-facing UDP service unless an
   upstream mitigation layer has been validated.
+- Ensure the service soft file-descriptor limit is at least
+  `2 * (limits.max_tcp_connections + limits.max_concurrent_transfers + 100)`.
+  OxideDNS checks this at startup and exits with an OS-startup error if the limit is
+  too low.
 
 ## Running as a Service
 

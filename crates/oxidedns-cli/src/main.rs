@@ -367,7 +367,10 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | RuntimeError::BindTcp { .. }
                 | RuntimeError::BindHealth { .. } => EX_CANTCREAT,
                 RuntimeError::InvalidRuntimeConfig(_) => EX_CONFIG_INVALID,
-                RuntimeError::ShutdownSignal(_) | RuntimeError::DnsCookieSecret(_) => EX_OSERR,
+                RuntimeError::ShutdownSignal(_)
+                | RuntimeError::DnsCookieSecret(_)
+                | RuntimeError::InsufficientFileDescriptorLimit { .. }
+                | RuntimeError::FileDescriptorLimit(_) => EX_OSERR,
                 RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
             };
         }
@@ -593,6 +596,13 @@ mod tests {
         )))
         .context("starting runtime");
         assert_eq!(exit_code_for_error(&startup_os), EX_OSERR);
+
+        let insufficient_rlimit = anyhow!(RuntimeError::InsufficientFileDescriptorLimit {
+            current: 128,
+            required: 512,
+        })
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&insufficient_rlimit), EX_OSERR);
     }
 
     #[test]
