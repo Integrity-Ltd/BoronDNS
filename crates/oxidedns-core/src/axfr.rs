@@ -1726,6 +1726,57 @@ mod tests {
     }
 
     #[test]
+    fn rejects_axfr_response_with_mismatched_opcode() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut response = axfr_message(0x1234, vec![soa.clone(), apex_ns(), soa]);
+        response[2] = 0x88;
+
+        let error =
+            parse_axfr_response(0x1234, &apex, 1, &[response]).expect_err("mismatched AXFR opcode");
+
+        assert_eq!(error, AxfrError::MismatchedOpcode);
+    }
+
+    #[test]
+    fn rejects_axfr_response_with_error_rcode() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut response = axfr_message(0x1234, vec![soa.clone(), apex_ns(), soa]);
+        response[3] = 5;
+
+        let error =
+            parse_axfr_response(0x1234, &apex, 1, &[response]).expect_err("AXFR error RCODE");
+
+        assert_eq!(error, AxfrError::ErrorRcode(5));
+    }
+
+    #[test]
+    fn rejects_axfr_record_with_mismatched_class() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut wrong_class = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        wrong_class.class = 3;
+
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), wrong_class, soa],
+            )],
+        )
+        .expect_err("AXFR class mismatch");
+
+        assert_eq!(error, AxfrError::ClassMismatch);
+    }
+
+    #[test]
     fn parses_valid_soa_response_serial() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
