@@ -12,6 +12,7 @@ python3 scripts/check-verification-ledger.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
+bash -n scripts/audit-unused-code.sh
 bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
 bash -n scripts/capture-health-metrics-evidence.sh
@@ -39,6 +40,7 @@ bash -n scripts/interop-rrl-udp.sh
 bash -n scripts/rrl-evidence-campaign.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
+scripts/audit-unused-code.sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

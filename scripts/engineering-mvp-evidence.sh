@@ -58,6 +58,7 @@ scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh
 scripts/audit-log-fields.py
 scripts/audit-log-lazy-formatting.py
+scripts/audit-unused-code.sh
 scripts/capture-log-evidence.sh
 scripts/capture-signal-evidence.sh
 scripts/capture-health-metrics-evidence.sh
@@ -93,6 +94,7 @@ run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_REA
 run_and_capture audit-spoof-evidence bash -lc "cd '$repo_root' && scripts/audit-spoof-evidence.py"
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
 run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
+run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"
 run_and_capture negative-responses bash -lc "cd '$repo_root' && OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR='$snapshot_dir/negative-response-artifacts' scripts/interop-negative-responses.sh"
 run_and_capture notify-negative bash -lc "cd '$repo_root' && OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR='$snapshot_dir/notify-negative-artifacts' scripts/interop-notify-negative.sh"

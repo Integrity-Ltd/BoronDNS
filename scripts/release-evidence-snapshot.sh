@@ -101,6 +101,8 @@ record_version rustc rustc --version
 record_version cargo cargo --version
 record_version cargo-deny cargo deny --version
 record_version cargo-fuzz cargo fuzz --version
+record_version cargo-bloat cargo bloat --version
+record_version cargo-machete cargo machete --version
 record_version docker docker --version
 record_version dig dig -v
 record_version curl curl --version
@@ -130,6 +132,7 @@ run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit
 run_and_capture audit-spoof-evidence bash -lc "cd '$repo_root' && scripts/audit-spoof-evidence.py"
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
 run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
+run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
 run_and_capture audit-xot-revocation bash -lc "cd '$repo_root' && scripts/audit-xot-revocation.sh"
 run_and_capture audit-dnssec-passive bash -lc "cd '$repo_root' && scripts/audit-dnssec-passive.sh"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"
