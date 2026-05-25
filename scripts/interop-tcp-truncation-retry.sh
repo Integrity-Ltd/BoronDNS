@@ -57,6 +57,7 @@ primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 oxidedns_conf="$workdir/oxidedns.toml"
 limit_summary_path="$workdir/tcp-limit-summary.env"
+pipeline_summary_path="$workdir/tcp-pipeline-summary.env"
 drain_summary_path="$workdir/graceful-drain-summary.env"
 readyz_draining_path="$workdir/readyz-draining.txt"
 
@@ -200,7 +201,9 @@ HOST = "127.0.0.1"
 PORT = int(sys.argv[1])
 LOG_PATH = sys.argv[2]
 LIMIT_SUMMARY_PATH = sys.argv[3]
-QNAME = "large.tcp.test."
+PIPELINE_SUMMARY_PATH = sys.argv[4]
+LARGE_QNAME = "large.tcp.test."
+SMALL_QNAME = "ns1.tcp.test."
 A = 1
 IN = 1
 
@@ -220,16 +223,19 @@ def name_wire(name):
     return bytes(out)
 
 
-def query(qid):
+def query(qid, qname=LARGE_QNAME):
     return (
         struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0)
-        + name_wire(QNAME)
+        + name_wire(qname)
         + struct.pack("!HH", A, IN)
     )
 
 
 def read_tcp_response(tcp):
-    length = struct.unpack("!H", tcp.recv(2))[0]
+    header = tcp.recv(2)
+    if len(header) != 2:
+        raise AssertionError("short TCP length prefix")
+    length = struct.unpack("!H", header)[0]
     chunks = bytearray()
     while len(chunks) < length:
         chunk = tcp.recv(length - len(chunks))
@@ -237,6 +243,14 @@ def read_tcp_response(tcp):
             raise AssertionError("short TCP response")
         chunks.extend(chunk)
     return bytes(chunks)
+
+
+def frame(packet):
+    return struct.pack("!H", len(packet)) + packet
+
+
+def response_id(packet):
+    return struct.unpack("!H", packet[:2])[0]
 
 
 def skip_name(packet, offset):
@@ -305,6 +319,34 @@ if tcp_answers < 80:
     raise AssertionError(f"TCP response returned too few A answers: {tcp_answers}")
 tcp.close()
 
+pipeline = socket.create_connection((HOST, PORT), timeout=2.0)
+pipeline_queries = [
+    query(0x6101, LARGE_QNAME),
+    query(0x6102, SMALL_QNAME),
+]
+pipeline.sendall(b"".join(frame(packet) for packet in pipeline_queries))
+pipeline_responses = [read_tcp_response(pipeline), read_tcp_response(pipeline)]
+pipeline.close()
+pipeline_ids = [response_id(packet) for packet in pipeline_responses]
+if sorted(pipeline_ids) != [0x6101, 0x6102]:
+    raise AssertionError(f"pipelined TCP response IDs did not match requests: {pipeline_ids}")
+pipeline_answer_counts = {response_id(packet): answer_count(packet) for packet in pipeline_responses}
+if pipeline_answer_counts[0x6101] < 80:
+    raise AssertionError(f"pipelined large answer too small: {pipeline_answer_counts[0x6101]}")
+if pipeline_answer_counts[0x6102] != 1:
+    raise AssertionError(f"pipelined small answer count mismatch: {pipeline_answer_counts[0x6102]}")
+pipeline_out_of_order = 1 if pipeline_ids == [0x6102, 0x6101] else 0
+pipeline_summary = (
+    "pipelined_queries=2 pipelined_responses=2 "
+    f"pipelined_response_ids={','.join(hex(item) for item in pipeline_ids)} "
+    f"pipelined_out_of_order={pipeline_out_of_order} "
+    f"pipelined_large_a_answers={pipeline_answer_counts[0x6101]} "
+    f"pipelined_small_a_answers={pipeline_answer_counts[0x6102]}"
+)
+with open(PIPELINE_SUMMARY_PATH, "w", encoding="utf-8") as handle:
+    print(pipeline_summary, file=handle)
+log(pipeline_summary)
+
 holder = socket.create_connection((HOST, PORT), timeout=2.0)
 holder_query = query(0x6003)
 holder.sendall(struct.pack("!H", len(holder_query)) + holder_query)
@@ -333,7 +375,7 @@ log(limit_summary)
 summary = (
     f"udp_truncated=1 udp_response_bytes={len(udp_response)} "
     f"tcp_truncated=0 tcp_response_bytes={len(tcp_response)} tcp_a_answers={tcp_answers} "
-    f"{limit_summary}"
+    f"{pipeline_summary} {limit_summary}"
 )
 log(summary)
 print(summary)
@@ -507,12 +549,12 @@ if (( ready != 1 )); then
   exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path")"
+client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path" "$pipeline_summary_path")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_secondary_queries_total{zone="tcp.test."} 3' \
-  'oxidedns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 3' \
+  'oxidedns_secondary_queries_total{zone="tcp.test."} 5' \
+  'oxidedns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 5' \
   'oxidedns_queries_truncated_total 1'; do
   if [[ "$metrics" != *"$expected"* ]]; then
     echo "metrics missing expected TCP truncation retry line: $expected" >&2
@@ -542,6 +584,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
   printf '%s\n' "$client_summary" >"$artifact_dir/client-summary.env"
   cp "$limit_summary_path" "$artifact_dir/tcp-limit-summary.env"
+  cp "$pipeline_summary_path" "$artifact_dir/tcp-pipeline-summary.env"
   cp "$drain_summary_path" "$artifact_dir/graceful-drain-summary.env"
   cp "$readyz_draining_path" "$artifact_dir/readyz-draining.txt"
   printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
