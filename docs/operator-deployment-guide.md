@@ -205,17 +205,20 @@ Notes:
 
 If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
 
-- `GET /healthz`: returns HTTP 200 with `ready` after at least one zone is
-  active, HTTP 503 with `starting` before readiness, and HTTP 503 with
-  `draining` during graceful shutdown.
-- `GET /readyz`: returns HTTP 200 only when at least one zone is active and the
-  runtime is not draining.
+- `GET /livez`: returns HTTP 200 with a JSON liveness body whenever the process
+  can answer the probe, including while zones are loading or the runtime is
+  draining.
+- `GET /readyz`: returns JSON readiness: HTTP 200 when at least one zone is
+  active and the runtime is not draining, otherwise HTTP 503 with `not-ready`,
+  `draining`, or `unhealthy` status details.
+- `GET /healthz`: backward-compatible alias for `/readyz`.
 - `GET /metrics`: returns Prometheus-compatible text metrics.
 
 Basic checks:
 
 ```sh
 curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8080/livez
 curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/metrics
 ```
@@ -227,9 +230,9 @@ verification outcomes for authorized NOTIFY, global and per-source-prefix DNS
 Cookie case/BADCOOKIE counters, and RRL counters.
 
 SRS v0.7 also requires release evidence for build-info metrics, latency
-histograms, `/livez`+`/readyz` split conformance, health response-time bounds,
-gzip-capable metrics responses, and a per-source `/metrics` rate limit. Treat
-those as pending until the gap register says otherwise.
+histograms, broader retained health response-time evidence, gzip-capable metrics
+responses, and a per-source `/metrics` rate limit. Treat those as pending until
+the gap register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 

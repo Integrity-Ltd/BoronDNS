@@ -268,10 +268,12 @@ DNSSEC work is partially started:
 Slice 8 has health endpoint foundations:
 
 - optional `[server].health` binds a separate plain HTTP/1 listener when configured, and opens no HTTP listener when unset;
-- `GET /healthz` reports `ready` with HTTP 200 once at least one zone is ACTIVE, `starting` with HTTP 503 before readiness, and `draining` with HTTP 503 during graceful shutdown;
-- `GET /readyz` reports HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503;
+- `GET /livez` reports JSON liveness with HTTP 200 whenever the process can answer the probe, including LOADING and draining states;
+- `GET /readyz` reports JSON readiness with HTTP 200 only when at least one zone is ACTIVE and the runtime is not draining, otherwise HTTP 503 with `not-ready`, `draining`, or `unhealthy` status details;
+- `GET /healthz` is a backward-compatible JSON readiness alias for `/readyz`;
 - `GET /metrics` exposes minimal Prometheus text gauges for configured and ACTIVE zones, per-zone LOADING/ACTIVE/EXPIRED state, held SOA serials, last successful refresh timestamp, next scheduled refresh timestamp, refresh failures since last success, query received totals, query RCODE totals, query truncation totals, CNAME chain limit and loop totals, per-zone query counts, AXFR/IXFR transfer-session started/completed/failed counters, NOTIFY receive/unauthorized/refresh-action counters, authorized NOTIFY TSIG verification outcome counters, and global plus per-source-prefix DNS Cookie case/BADCOOKIE counters;
-- unknown paths return HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405.
+- unknown paths return JSON HTTP 404, and methods other than GET on configured endpoint paths return HTTP 405;
+- focused tests cover `/livez` and `/readyz` responses within the SRS 100 ms health-probe bound under starting and draining states.
 - CLI startup logging is initialized from static configuration after successful config parse: `[server].log_level` defaults to `info`, accepts the existing `tracing-subscriber` filter syntax, and may be overridden by `OXIDEDNS_LOG_LEVEL` or `RUST_LOG`;
 - `[server].log_format` selects `json` or `plain`, defaults to `json`, rejects unknown values before runtime startup, and has focused unit coverage for default JSON, explicit plain, and invalid values;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; plain logs use the standard `tracing-subscriber` text formatter.

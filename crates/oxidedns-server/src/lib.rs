@@ -13,7 +13,7 @@ use std::{
 use axum::{
     Router,
     extract::State,
-    http::{StatusCode, header},
+    http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -293,6 +293,8 @@ impl Runtime {
                     runtime_status: runtime_status.clone(),
                     metrics: metrics.clone(),
                     refresh_registry: refresh_registry.clone(),
+                    started_at: Instant::now(),
+                    graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
                 },
                 async move {
                     let _ = health_shutdown_rx.await;
@@ -2089,9 +2091,11 @@ async fn serve_health(
 
 fn health_router(state: HealthEndpointState) -> Router {
     Router::new()
+        .route("/livez", get(livez).head(health_method_not_allowed))
         .route("/healthz", get(healthz).head(health_method_not_allowed))
         .route("/readyz", get(readyz).head(health_method_not_allowed))
         .route("/metrics", get(metrics).head(health_method_not_allowed))
+        .fallback(health_not_found)
         .with_state(state)
 }
 
@@ -2099,23 +2103,33 @@ async fn health_method_not_allowed() -> StatusCode {
     StatusCode::METHOD_NOT_ALLOWED
 }
 
+async fn health_not_found(uri: Uri) -> Response {
+    json_response(
+        StatusCode::NOT_FOUND,
+        format!(
+            "{{\"error\":\"not_found\",\"path\":\"{}\"}}",
+            json_string(uri.path())
+        ),
+    )
+}
+
+async fn livez(State(state): State<HealthEndpointState>) -> Response {
+    json_response(
+        StatusCode::OK,
+        format!(
+            "{{\"status\":\"alive\",\"version\":\"{}\",\"uptime_seconds\":{}}}",
+            env!("CARGO_PKG_VERSION"),
+            state.started_at.elapsed().as_secs()
+        ),
+    )
+}
+
 async fn healthz(State(state): State<HealthEndpointState>) -> Response {
-    match state.runtime_status.status() {
-        RuntimeStatusValue::Running if state.zones.has_active_zone() => {
-            plain_text(StatusCode::OK, "ready\n")
-        }
-        RuntimeStatusValue::Running => plain_text(StatusCode::SERVICE_UNAVAILABLE, "starting\n"),
-        RuntimeStatusValue::Draining => plain_text(StatusCode::SERVICE_UNAVAILABLE, "draining\n"),
-        RuntimeStatusValue::Unhealthy => plain_text(StatusCode::SERVICE_UNAVAILABLE, "unhealthy\n"),
-    }
+    readiness_response(&state)
 }
 
 async fn readyz(State(state): State<HealthEndpointState>) -> Response {
-    if state.runtime_status.is_running() && state.zones.has_active_zone() {
-        plain_text(StatusCode::OK, "ready\n")
-    } else {
-        plain_text(StatusCode::SERVICE_UNAVAILABLE, "not ready\n")
-    }
+    readiness_response(&state)
 }
 
 async fn metrics(State(state): State<HealthEndpointState>) -> Response {
@@ -2513,13 +2527,96 @@ fn prometheus_label_value(value: &str) -> String {
     escaped
 }
 
-fn plain_text(status: StatusCode, body: &'static str) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        body,
-    )
-        .into_response()
+fn readiness_response(state: &HealthEndpointState) -> Response {
+    let counts = ZoneCounts::from_store(&state.zones);
+    match state.runtime_status.status() {
+        RuntimeStatusValue::Running if counts.active > 0 => json_response(
+            StatusCode::OK,
+            format!(
+                "{{\"status\":\"ready\",\"version\":\"{}\",\"zones_active\":{},\"zones_loading\":{},\"zones_expired\":{}}}",
+                env!("CARGO_PKG_VERSION"),
+                counts.active,
+                counts.loading,
+                counts.expired
+            ),
+        ),
+        RuntimeStatusValue::Running => json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "{{\"status\":\"not-ready\",\"reason\":\"{}\",\"version\":\"{}\",\"zones_active\":{},\"zones_loading\":{},\"zones_expired\":{}}}",
+                counts.not_ready_reason(),
+                env!("CARGO_PKG_VERSION"),
+                counts.active,
+                counts.loading,
+                counts.expired
+            ),
+        ),
+        RuntimeStatusValue::Draining => json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "{{\"status\":\"draining\",\"version\":\"{}\",\"grace_period_remaining_seconds\":{}}}",
+                env!("CARGO_PKG_VERSION"),
+                state.graceful_shutdown_remaining_secs()
+            ),
+        ),
+        RuntimeStatusValue::Unhealthy => json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "{{\"status\":\"unhealthy\",\"version\":\"{}\"}}",
+                env!("CARGO_PKG_VERSION")
+            ),
+        ),
+    }
+}
+
+fn json_response(status: StatusCode, body: String) -> Response {
+    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ZoneCounts {
+    active: usize,
+    loading: usize,
+    expired: usize,
+}
+
+impl ZoneCounts {
+    fn from_store(zones: &ZoneStore) -> Self {
+        let mut counts = Self::default();
+        for snapshot in zones.snapshots() {
+            match snapshot.state {
+                ZoneState::Loading => counts.loading += 1,
+                ZoneState::Active => counts.active += 1,
+                ZoneState::Expired => counts.expired += 1,
+            }
+        }
+        counts
+    }
+
+    fn not_ready_reason(&self) -> &'static str {
+        if self.loading > 0 {
+            "loading"
+        } else if self.expired > 0 {
+            "expired"
+        } else {
+            "no_active_zones"
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2528,11 +2625,24 @@ struct HealthEndpointState {
     runtime_status: RuntimeStatus,
     metrics: RuntimeMetrics,
     refresh_registry: ZoneRefreshRegistry,
+    started_at: Instant,
+    graceful_shutdown_secs: u64,
+}
+
+impl HealthEndpointState {
+    fn graceful_shutdown_remaining_secs(&self) -> u64 {
+        let Some(elapsed) = self.runtime_status.draining_elapsed() else {
+            return self.graceful_shutdown_secs;
+        };
+        self.graceful_shutdown_secs
+            .saturating_sub(elapsed.as_secs())
+    }
 }
 
 #[derive(Clone, Debug)]
 struct RuntimeStatus {
     value: Arc<AtomicU8>,
+    draining_since: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2546,10 +2656,15 @@ impl RuntimeStatus {
     fn new() -> Self {
         Self {
             value: Arc::new(AtomicU8::new(RUNTIME_STATUS_RUNNING)),
+            draining_since: Arc::new(Mutex::new(None)),
         }
     }
 
     fn mark_draining(&self) {
+        *self
+            .draining_since
+            .lock()
+            .expect("runtime status lock poisoned") = Some(Instant::now());
         self.value.store(RUNTIME_STATUS_DRAINING, Ordering::Release);
     }
 
@@ -2559,10 +2674,6 @@ impl RuntimeStatus {
             .store(RUNTIME_STATUS_UNHEALTHY, Ordering::Release);
     }
 
-    fn is_running(&self) -> bool {
-        self.status() == RuntimeStatusValue::Running
-    }
-
     fn status(&self) -> RuntimeStatusValue {
         match self.value.load(Ordering::Acquire) {
             RUNTIME_STATUS_RUNNING => RuntimeStatusValue::Running,
@@ -2570,6 +2681,14 @@ impl RuntimeStatus {
             RUNTIME_STATUS_UNHEALTHY => RuntimeStatusValue::Unhealthy,
             _ => RuntimeStatusValue::Unhealthy,
         }
+    }
+
+    fn draining_elapsed(&self) -> Option<Duration> {
+        self.draining_since
+            .lock()
+            .expect("runtime status lock poisoned")
+            .as_ref()
+            .map(Instant::elapsed)
     }
 }
 
@@ -4675,9 +4794,22 @@ mod tests {
             std::future::pending(),
         ));
 
+        let livez = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            http_request(addr, "GET", "/livez"),
+        )
+        .await
+        .expect("/livez should answer within SRS health bound");
+        assert!(livez.starts_with("HTTP/1.1 200 OK"));
+        assert!(livez.contains("content-type: application/json"));
+        assert!(livez.contains(r#""status":"alive""#));
+
         let starting = http_request(addr, "GET", "/healthz").await;
         assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(starting.ends_with("starting\n"));
+        assert!(starting.contains("content-type: application/json"));
+        assert!(starting.ends_with(
+            r#"{"status":"not-ready","reason":"no_active_zones","version":"0.1.0","zones_active":0,"zones_loading":0,"zones_expired":0}"#
+        ));
 
         zones.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -4687,7 +4819,9 @@ mod tests {
 
         let ready = http_request(addr, "GET", "/healthz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
-        assert!(ready.ends_with("ready\n"));
+        assert!(ready.ends_with(
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+        ));
 
         server.abort();
     }
@@ -4709,7 +4843,9 @@ mod tests {
 
         let ready = http_request(addr, "GET", "/healthz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
-        assert!(ready.ends_with("ready\n"));
+        assert!(ready.ends_with(
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+        ));
 
         shutdown_tx.send(()).unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), server)
@@ -4814,13 +4950,17 @@ mod tests {
                 runtime_status: RuntimeStatus::new(),
                 metrics: metrics_state,
                 refresh_registry,
+                started_at: std::time::Instant::now(),
+                graceful_shutdown_secs: 30,
             },
             std::future::pending(),
         ));
 
         let ready = http_request(addr, "GET", "/readyz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
-        assert!(ready.ends_with("ready\n"));
+        assert!(ready.ends_with(
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":1,"zones_expired":0}"#
+        ));
 
         let metrics = http_request(addr, "GET", "/metrics").await;
         assert!(metrics.starts_with("HTTP/1.1 200 OK"));
@@ -4894,9 +5034,10 @@ mod tests {
 
         let missing = http_request(addr, "GET", "/missing").await;
         assert!(missing.starts_with("HTTP/1.1 404 Not Found"));
+        assert!(missing.ends_with(r#"{"error":"not_found","path":"/missing"}"#));
 
         for method in ["HEAD", "POST"] {
-            for path in ["/healthz", "/readyz", "/metrics"] {
+            for path in ["/livez", "/healthz", "/readyz", "/metrics"] {
                 let method_not_allowed = http_request(addr, method, path).await;
                 assert!(method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"));
             }
@@ -4927,6 +5068,8 @@ mod tests {
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_secs(3600),
                 ),
+                started_at: std::time::Instant::now(),
+                graceful_shutdown_secs: 30,
             },
             std::future::pending(),
         ));
@@ -4935,16 +5078,33 @@ mod tests {
 
         let health = http_request(addr, "GET", "/healthz").await;
         assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(health.ends_with("draining\n"));
+        assert!(health.ends_with(
+            r#"{"status":"draining","version":"0.1.0","grace_period_remaining_seconds":30}"#
+        ));
 
-        let ready = http_request(addr, "GET", "/readyz").await;
+        let livez = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            http_request(addr, "GET", "/livez"),
+        )
+        .await
+        .expect("/livez should remain responsive while draining");
+        assert!(livez.starts_with("HTTP/1.1 200 OK"));
+
+        let ready = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            http_request(addr, "GET", "/readyz"),
+        )
+        .await
+        .expect("/readyz should answer within SRS health bound while draining");
         assert!(ready.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(ready.ends_with("not ready\n"));
+        assert!(ready.ends_with(
+            r#"{"status":"draining","version":"0.1.0","grace_period_remaining_seconds":30}"#
+        ));
 
         runtime_status.mark_unhealthy();
         let unhealthy = http_request(addr, "GET", "/healthz").await;
         assert!(unhealthy.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(unhealthy.ends_with("unhealthy\n"));
+        assert!(unhealthy.ends_with(r#"{"status":"unhealthy","version":"0.1.0"}"#));
 
         server.abort();
     }
@@ -4985,7 +5145,9 @@ mod tests {
         )
         .await;
         assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(health.ends_with("starting\n"));
+        assert!(health.ends_with(
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.0","zones_active":0,"zones_loading":1,"zones_expired":0}"#
+        ));
 
         let _ = release_primary.send(());
         server.abort();
@@ -5069,17 +5231,23 @@ mod tests {
             .await
             .expect("initial transfer should start")
             .expect("primary should observe initial transfer query");
-        let starting =
-            eventually_health_body(health_addr, "starting\n", std::time::Duration::from_secs(1))
-                .await;
+        let starting = eventually_health_body(
+            health_addr,
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.0","zones_active":0,"zones_loading":1,"zones_expired":0}"#,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
         assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
 
         shutdown_tx
             .send("SIGTERM")
             .expect("runtime receives shutdown");
-        let draining =
-            eventually_health_body(health_addr, "draining\n", std::time::Duration::from_secs(1))
-                .await;
+        let draining = eventually_health_body(
+            health_addr,
+            r#"{"status":"draining","version":"0.1.0","grace_period_remaining_seconds":2}"#,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
         assert!(draining.starts_with("HTTP/1.1 503 Service Unavailable"));
 
         let _ = release_primary.send(());
@@ -5109,8 +5277,12 @@ mod tests {
         let runtime = Runtime::new(config);
         let (server, health_addr) = spawn_runtime_with_bound_health(runtime).await;
 
-        let ready =
-            eventually_health_body(health_addr, "ready\n", std::time::Duration::from_secs(1)).await;
+        let ready = eventually_health_body(
+            health_addr,
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
+            std::time::Duration::from_secs(1),
+        )
+        .await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -5122,7 +5294,9 @@ mod tests {
         )
         .await;
         assert!(still_ready.starts_with("HTTP/1.1 200 OK"));
-        assert!(still_ready.ends_with("ready\n"));
+        assert!(still_ready.ends_with(
+            r#"{"status":"ready","version":"0.1.0","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+        ));
 
         server.abort();
     }
@@ -9383,6 +9557,8 @@ mod tests {
                 std::time::Duration::from_secs(60),
                 std::time::Duration::from_secs(3600),
             ),
+            started_at: std::time::Instant::now(),
+            graceful_shutdown_secs: 30,
         }
     }
 
