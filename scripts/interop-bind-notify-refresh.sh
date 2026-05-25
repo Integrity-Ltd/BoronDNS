@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in named named-checkconf named-checkzone rndc dig curl python3 cargo; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping BIND NOTIFY interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping BIND NOTIFY interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,29 +21,38 @@ artifact_dir="${OXIDEDNS_BIND_NOTIFY_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${named_pid:-}" ]] && kill -0 "$named_pid" 2>/dev/null; then
-    kill "$named_pid" 2>/dev/null || true
-    wait "$named_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${proxy_pid:-}" ]] && kill -0 "$proxy_pid" 2>/dev/null; then
-    kill "$proxy_pid" 2>/dev/null || true
-    wait "$proxy_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/named.log" ]] && { echo "---- named.log ----" >&2; tail -120 "$workdir/named.log" >&2; }
-    [[ -f "$workdir/notify-proxy.log" ]] && { echo "---- notify-proxy.log ----" >&2; tail -120 "$workdir/notify-proxy.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
-  fi
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${named_pid:-}" ]] && kill -0 "$named_pid" 2>/dev/null; then
+        kill "$named_pid" 2>/dev/null || true
+        wait "$named_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${proxy_pid:-}" ]] && kill -0 "$proxy_pid" 2>/dev/null; then
+        kill "$proxy_pid" 2>/dev/null || true
+        wait "$proxy_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/named.log" ]] && {
+            echo "---- named.log ----" >&2
+            tail -120 "$workdir/named.log" >&2
+        }
+        [[ -f "$workdir/notify-proxy.log" ]] && {
+            echo "---- notify-proxy.log ----" >&2
+            tail -120 "$workdir/notify-proxy.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$workdir/oxidedns.log" >&2
+        }
+    fi
 }
 trap cleanup EXIT
 
 read -r bind_port rndc_port notify_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -67,9 +76,9 @@ summary_tsv="$workdir/bind-notify-refresh-summary.tsv"
 traceability_tsv="$workdir/bind-notify-traceability.tsv"
 
 write_zone() {
-  local serial="$1"
-  local www_addr="$2"
-  cat >"$zone_file" <<EOF
+    local serial="$1"
+    local www_addr="$2"
+    cat >"$zone_file" <<EOF
 \$ORIGIN alpha.test.
 \$TTL 3600
 @ IN SOA ns1.alpha.test. hostmaster.alpha.test. (
@@ -89,7 +98,7 @@ alias IN CNAME www.alpha.test.
 txt IN TXT "bind notify interop fixture"
 _sip._tcp IN SRV 10 20 5060 www.alpha.test.
 EOF
-  named-checkzone alpha.test. "$zone_file" >/dev/null
+    named-checkzone alpha.test. "$zone_file" >/dev/null
 }
 
 write_zone 2026052401 192.0.2.10
@@ -224,50 +233,50 @@ oxidedns_pid=$!
 
 live=0
 for _ in {1..100}; do
-  if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
-    live=1
-    break
-  fi
-  sleep 0.1
+    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+        live=1
+        break
+    fi
+    sleep 0.1
 done
-if (( live != 1 )); then
-  echo "OxideDNS did not become live before starting BIND" >&2
-  exit 1
+if ((live != 1)); then
+    echo "OxideDNS did not become live before starting BIND" >&2
+    exit 1
 fi
 
 named -g -c "$named_conf" -n 1 >"$workdir/named.log" 2>&1 &
 named_pid=$!
 
 for _ in {1..50}; do
-  if dig "@127.0.0.1" -p "$bind_port" alpha.test. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
+    if dig "@127.0.0.1" -p "$bind_port" alpha.test. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
 done
 
 primary_soa="$(dig "@127.0.0.1" -p "$bind_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$primary_soa" != *"2026052401"* ]]; then
-  echo "BIND NOTIFY primary did not answer initial SOA serial" >&2
-  exit 1
+    echo "BIND NOTIFY primary did not answer initial SOA serial" >&2
+    exit 1
 fi
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after initial BIND AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after initial BIND AXFR" >&2
+    exit 1
 fi
 
 initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-  echo "OxideDNS did not serve initial SOA serial" >&2
-  exit 1
+    echo "OxideDNS did not serve initial SOA serial" >&2
+    exit 1
 fi
 
 write_zone 2026052402 192.0.2.42
@@ -276,68 +285,68 @@ rndc -c "$rndc_conf" notify alpha.test >/dev/null
 
 updated_answer=""
 for _ in {1..120}; do
-  updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
-  if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
-    break
-  fi
-  sleep 0.1
+    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+    if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
+        break
+    fi
+    sleep 0.1
 done
 
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-  echo "OxideDNS did not publish updated A response after BIND NOTIFY" >&2
-  exit 1
+    echo "OxideDNS did not publish updated A response after BIND NOTIFY" >&2
+    exit 1
 fi
 updated_address="$(awk '/www[.]alpha[.]test[.]/ { print $NF; exit }' <<<"$updated_answer")"
 
 updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-  echo "OxideDNS did not publish updated SOA serial after BIND NOTIFY" >&2
-  exit 1
+    echo "OxideDNS did not publish updated SOA serial after BIND NOTIFY" >&2
+    exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 if [[ "$metrics" != *'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
-  echo "OxideDNS metrics missing updated BIND NOTIFY SOA serial" >&2
-  exit 1
+    echo "OxideDNS metrics missing updated BIND NOTIFY SOA serial" >&2
+    exit 1
 fi
 
 notify_received="$(awk '$1 == "oxidedns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
-if [[ -z "$notify_received" ]] || (( notify_received < 1 )); then
-  echo "OxideDNS metrics did not record BIND NOTIFY receipt" >&2
-  exit 1
+if [[ -z "$notify_received" ]] || ((notify_received < 1)); then
+    echo "OxideDNS metrics did not record BIND NOTIFY receipt" >&2
+    exit 1
 fi
 
 notify_signalled="$(awk '$1 == "oxidedns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
-if [[ -z "$notify_signalled" ]] || (( notify_signalled < 1 )); then
-  echo "OxideDNS metrics did not record BIND NOTIFY refresh signal" >&2
-  exit 1
+if [[ -z "$notify_signalled" ]] || ((notify_signalled < 1)); then
+    echo "OxideDNS metrics did not record BIND NOTIFY refresh signal" >&2
+    exit 1
 fi
 
 if ! grep -q "notify_from_bind .* opcode=4" "$notify_proxy_log"; then
-  echo "BIND NOTIFY proxy did not observe a BIND NOTIFY packet" >&2
-  exit 1
+    echo "BIND NOTIFY proxy did not observe a BIND NOTIFY packet" >&2
+    exit 1
 fi
 
 if ! grep -q "response_from_oxidedns rcode=0" "$notify_proxy_log"; then
-  echo "BIND NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
-  exit 1
+    echo "BIND NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
+    exit 1
 fi
 
 if ! grep 'accepted NOTIFY' "$workdir/oxidedns.log" | grep -q 'alpha.test.'; then
-  echo "OxideDNS log missing accepted BIND NOTIFY event" >&2
-  exit 1
+    echo "OxideDNS log missing accepted BIND NOTIFY event" >&2
+    exit 1
 fi
 
 {
-  printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
-  printf 'BIND\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$primary_soa" \
-    "$initial_soa" \
-    "$updated_soa" \
-    "$notify_received" \
-    "$notify_signalled" \
-    "$updated_address"
+    printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
+    printf 'BIND\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$primary_soa" \
+        "$initial_soa" \
+        "$updated_soa" \
+        "$notify_received" \
+        "$notify_signalled" \
+        "$updated_address"
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<'EOF'
@@ -350,17 +359,17 @@ ODS-FR-ZSM-003	retained-real-primary	bind_notify_triggered_refresh	bind-notify-r
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
-  cp "$named_conf" "$artifact_dir/named.conf"
-  cp "$zone_file" "$artifact_dir/alpha.test.zone"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$workdir/named.log" "$artifact_dir/named.log"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
-  cp "$metrics_out" "$artifact_dir/metrics.txt"
-  cp "$summary_tsv" "$artifact_dir/bind-notify-refresh-summary.tsv"
-  cp "$traceability_tsv" "$artifact_dir/bind-notify-traceability.tsv"
+    mkdir -p "$artifact_dir"
+    cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+    cp "$named_conf" "$artifact_dir/named.conf"
+    cp "$zone_file" "$artifact_dir/alpha.test.zone"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/named.log" "$artifact_dir/named.log"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
+    cp "$metrics_out" "$artifact_dir/metrics.txt"
+    cp "$summary_tsv" "$artifact_dir/bind-notify-refresh-summary.tsv"
+    cp "$traceability_tsv" "$artifact_dir/bind-notify-traceability.tsv"
 fi
 
 echo "BIND NOTIFY refresh interop passed"

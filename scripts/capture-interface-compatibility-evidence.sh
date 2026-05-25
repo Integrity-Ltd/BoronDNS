@@ -12,14 +12,14 @@ cp "$repo_root/docs/interface-stability-baseline.tsv" "$evidence_dir/current-int
 cp "$repo_root/docs/interface-compatibility-policy.md" "$evidence_dir/interface-compatibility-policy.md"
 
 if [[ -n "$previous_baseline" ]]; then
-  python3 "$repo_root/scripts/check-interface-compatibility.py" \
-    --previous "$previous_baseline" \
-    >"$evidence_dir/interface-compatibility-check.log" 2>&1
-  diff_status="previous-baseline-compared"
+    python3 "$repo_root/scripts/check-interface-compatibility.py" \
+        --previous "$previous_baseline" \
+        >"$evidence_dir/interface-compatibility-check.log" 2>&1
+    diff_status="previous-baseline-compared"
 else
-  python3 "$repo_root/scripts/check-interface-compatibility.py" \
-    >"$evidence_dir/interface-compatibility-check.log" 2>&1
-  diff_status="initial-baseline-no-previous-release"
+    python3 "$repo_root/scripts/check-interface-compatibility.py" \
+        >"$evidence_dir/interface-compatibility-check.log" 2>&1
+    diff_status="initial-baseline-no-previous-release"
 fi
 
 cat >"$evidence_dir/interface-compatibility-summary.env" <<EOF

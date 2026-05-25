@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+target_triple="${OXIDEDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
+dist_dir="${OXIDEDNS_DIST_DIR:-$repo_root/target/dist}"
+package_name="${OXIDEDNS_PACKAGE_NAME:-oxidedns}"
+version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
+commit="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+archive_root="$package_name-$version-$target_triple"
+staging="$dist_dir/$archive_root"
+archive="$dist_dir/$archive_root.tar.xz"
+
+missing=()
+for tool in cargo rustup tar xz python3; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
+done
+if ((${#missing[@]} > 0)); then
+    printf 'missing required packaging tools: %s\n' "${missing[*]}" >&2
+    exit 1
+fi
+
+mkdir -p "$dist_dir"
+
+if ! rustup target list --installed | grep -Fx "$target_triple" >/dev/null 2>&1; then
+    rustup target add "$target_triple"
+fi
+
+(
+    cd "$repo_root"
+    cargo build --locked --release --target "$target_triple" -p oxidedns-cli
+)
+
+binary="$repo_root/target/$target_triple/release/oxidedns"
+[[ -x "$binary" ]] || {
+    printf 'missing built binary: %s\n' "$binary" >&2
+    exit 1
+}
+
+rm -rf "$staging"
+mkdir -p "$staging/bin" "$staging/share/oxidedns"
+install -m 0755 "$binary" "$staging/bin/oxidedns"
+install -m 0755 "$repo_root/packaging/installer/install.sh" "$staging/install.sh"
+cp -R "$repo_root/packaging/installer/share/oxidedns/." "$staging/share/oxidedns/"
+install -m 0644 "$repo_root/packaging/installer/README.install.md" "$staging/README.install.md"
+install -m 0644 "$repo_root/config/oxidedns.example.toml" "$staging/share/oxidedns/oxidedns.example.toml"
+install -m 0644 "$repo_root/LICENSE-MIT" "$staging/LICENSE-MIT"
+install -m 0644 "$repo_root/LICENSE-APACHE" "$staging/LICENSE-APACHE"
+
+sha256_tool=""
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    sha256_tool="shasum -a 256"
+fi
+
+{
+    printf 'name=%s\n' "$package_name"
+    printf 'version=%s\n' "$version"
+    printf 'target=%s\n' "$target_triple"
+    printf 'commit=%s\n' "$commit"
+    printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'binary=bin/oxidedns\n'
+    if [[ -n "$sha256_tool" ]]; then
+        # shellcheck disable=SC2086
+        $sha256_tool "$staging/bin/oxidedns" | awk '{print "binary_sha256="$1}'
+    fi
+} >"$staging/manifest.txt"
+
+if command -v ldd >/dev/null 2>&1; then
+    if ldd "$staging/bin/oxidedns" >"$staging/ldd.txt" 2>&1; then
+        if ! grep -Eiq 'not a dynamic executable|statically linked' "$staging/ldd.txt"; then
+            printf 'warning: ldd succeeded for %s; inspect %s for dynamic dependencies\n' "$staging/bin/oxidedns" "$staging/ldd.txt" >&2
+        fi
+    elif ! grep -Eiq 'not a dynamic executable|statically linked' "$staging/ldd.txt"; then
+        printf 'warning: could not confirm static linking with ldd; inspect %s\n' "$staging/ldd.txt" >&2
+    fi
+fi
+
+if command -v file >/dev/null 2>&1; then
+    file "$staging/bin/oxidedns" >"$staging/file.txt"
+fi
+
+rm -f "$archive" "$archive.sha256"
+tar -C "$dist_dir" -cJf "$archive" "$archive_root"
+if [[ -n "$sha256_tool" ]]; then
+    (
+        cd "$dist_dir"
+        # shellcheck disable=SC2086
+        $sha256_tool "$(basename "$archive")" >"$(basename "$archive").sha256"
+    )
+fi
+
+printf 'created %s\n' "$archive"
+[[ -f "$archive.sha256" ]] && printf 'created %s\n' "$archive.sha256"

@@ -22,6 +22,7 @@ Required for normal build and test work:
 rustup toolchain install 1.95
 rustup component add rustfmt clippy --toolchain 1.95
 cargo install cargo-deny cargo-machete cargo-geiger
+# Install shfmt and shellcheck with the host package manager.
 ```
 
 Useful for runtime smoke checks and interop scripts:
@@ -45,8 +46,9 @@ cargo deny check
 ```
 
 `./scripts/check.sh` is the repository gate used for local Engineering MVP
-evidence. It includes formatting, clippy, tests, dependency policy, unused-code
-audit, unsafe-boundary checks, and short evidence captures.
+evidence. It includes Rust formatting, shell formatting through `shfmt -w`,
+`shellcheck`, clippy, tests, dependency policy, unused-code audit,
+unsafe-boundary checks, and short evidence captures.
 
 For a human-operated primary-server smoke test, run the BIND interop check after
 the normal Rust tests:
@@ -73,7 +75,35 @@ For a host install:
 sudo install -m 0755 target/release/oxidedns /usr/local/sbin/oxidedns
 ```
 
-## 5. Create a Config
+## 5. Build the Installer Archive
+
+For a first-class Linux install/update artifact, build the static musl archive:
+
+```bash
+scripts/package-installer.sh
+```
+
+The output is written under `target/dist/` as
+`oxidedns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
+archive contains `bin/oxidedns`, `install.sh`, systemd/OpenRC service templates,
+the example config, licenses, and an installer README. On a target host:
+
+```bash
+tar -xf oxidedns-*.tar.xz
+cd oxidedns-*
+sudo ./install.sh
+```
+
+For unattended static-zone setup:
+
+```bash
+sudo OXIDEDNS_ZONE=example.com. \
+  OXIDEDNS_PRIMARY=10.0.0.10:53 \
+  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
+  ./install.sh --yes
+```
+
+## 6. Create a Config
 
 Start from the checked-in example:
 
@@ -102,7 +132,7 @@ Validate before starting:
 ./target/release/oxidedns --dump-config /tmp/oxidedns.toml
 ```
 
-## 6. Run Locally
+## 7. Run Locally
 
 ```bash
 ./target/release/oxidedns serve --config /tmp/oxidedns.toml
@@ -121,7 +151,7 @@ If the configured primary is not reachable, health can stay unready while the
 zone remains in `LOADING`. That is expected for a config that still points at
 documentation/example addresses.
 
-## 7. Default Host Layout
+## 8. Default Host Layout
 
 The default runtime path is:
 
@@ -138,7 +168,7 @@ sudo install -m 0640 /tmp/oxidedns.toml /etc/oxidedns-secondary/config.toml
 
 Then `oxidedns serve` can run without an explicit `--config` argument.
 
-## 8. Service Manager Notes
+## 9. Service Manager Notes
 
 For privileged port 53, prefer one of:
 
@@ -152,7 +182,7 @@ For privileged port 53, prefer one of:
 OxideDNS ignores `SIGHUP`; configuration changes require a process restart.
 `SIGTERM` and `SIGINT` trigger graceful shutdown.
 
-## 9. Next Documents
+## 10. Next Documents
 
 - [Operator deployment guide](operator-deployment-guide.md): full runtime,
   monitoring, security, and release evidence guidance.

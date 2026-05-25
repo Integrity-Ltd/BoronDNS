@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping malformed-query evidence: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping malformed-query evidence: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,26 +19,35 @@ artifact_dir="${OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -120 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/client.log" ]] && { echo "---- client.log ----" >&2; tail -120 "$workdir/client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -120 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/client.log" ]] && {
+            echo "---- client.log ----" >&2
+            tail -120 "$workdir/client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$workdir/oxidedns.log" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -372,14 +381,14 @@ python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
 
 for _ in {1..100}; do
-  if grep -q "READY" "$primary_log" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
+    if grep -q "READY" "$primary_log" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
 done
 if ! grep -q "READY" "$primary_log" 2>/dev/null; then
-  echo "malformed-query fake primary did not become ready" >&2
-  exit 1
+    echo "malformed-query fake primary did not become ready" >&2
+    exit 1
 fi
 
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
@@ -387,15 +396,15 @@ oxidedns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-  if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 0.05
+    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+        ready=1
+        break
+    fi
+    sleep 0.05
 done
-if (( ready != 1 )); then
-  echo "OxideDNS did not become ready for malformed-query evidence" >&2
-  exit 1
+if ((ready != 1)); then
+    echo "OxideDNS did not become ready for malformed-query evidence" >&2
+    exit 1
 fi
 
 curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >"$workdir/livez-before.txt"
@@ -406,33 +415,33 @@ curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >"$workdir/readyz-afte
 curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" >"$workdir/metrics.txt"
 
 if grep -Ei 'panic|panicked|thread .* panicked' "$workdir/oxidedns.log" >"$workdir/panic-scan.txt"; then
-  echo "OxideDNS log contains panic evidence after malformed query corpus" >&2
-  cat "$workdir/panic-scan.txt" >&2
-  exit 1
+    echo "OxideDNS log contains panic evidence after malformed query corpus" >&2
+    cat "$workdir/panic-scan.txt" >&2
+    exit 1
 fi
 touch "$workdir/panic-scan.txt"
 
 {
-  cat "$summary_env"
-  printf 'livez_after=1\n'
-  printf 'readyz_after=1\n'
-  printf 'panic_log_findings=0\n'
+    cat "$summary_env"
+    printf 'livez_after=1\n'
+    printf 'readyz_after=1\n'
+    printf 'panic_log_findings=0\n'
 } >"$workdir/malformed-query-evidence-summary.env"
 
 cat "$workdir/malformed-query-evidence-summary.env"
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$client_log" "$artifact_dir/client.log"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$results_tsv" "$artifact_dir/malformed-query-results.tsv"
-  cp "$workdir/malformed-query-evidence-summary.env" "$artifact_dir/malformed-query-summary.env"
-  cp "$workdir/livez-before.txt" "$artifact_dir/livez-before.txt"
-  cp "$workdir/readyz-before.txt" "$artifact_dir/readyz-before.txt"
-  cp "$workdir/livez-after.txt" "$artifact_dir/livez-after.txt"
-  cp "$workdir/readyz-after.txt" "$artifact_dir/readyz-after.txt"
-  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
-  cp "$workdir/panic-scan.txt" "$artifact_dir/panic-scan.txt"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$client_log" "$artifact_dir/client.log"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$results_tsv" "$artifact_dir/malformed-query-results.tsv"
+    cp "$workdir/malformed-query-evidence-summary.env" "$artifact_dir/malformed-query-summary.env"
+    cp "$workdir/livez-before.txt" "$artifact_dir/livez-before.txt"
+    cp "$workdir/readyz-before.txt" "$artifact_dir/readyz-before.txt"
+    cp "$workdir/livez-after.txt" "$artifact_dir/livez-after.txt"
+    cp "$workdir/readyz-after.txt" "$artifact_dir/readyz-after.txt"
+    cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+    cp "$workdir/panic-scan.txt" "$artifact_dir/panic-scan.txt"
 fi

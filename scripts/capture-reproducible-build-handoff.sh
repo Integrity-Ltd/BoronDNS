@@ -10,9 +10,9 @@ short_commit="$(git -C "$repo_root" rev-parse --short=8 HEAD)"
 branch="$(git -C "$repo_root" branch --show-current)"
 dirty_status="$(git -C "$repo_root" status --short)"
 if [[ -n "$dirty_status" ]]; then
-  dirty="yes"
+    dirty="yes"
 else
-  dirty="no"
+    dirty="no"
 fi
 commit_epoch="$(git -C "$repo_root" show -s --format=%ct HEAD)"
 commit_timestamp="$(date -u -d "@$commit_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
@@ -22,16 +22,16 @@ target_triple="$(rustc -vV 2>/dev/null | awk -F': ' '/^host:/ { print $2 }' || t
 target_triple="${target_triple:-unknown}"
 sha256_tool="sha256sum"
 if ! command -v "$sha256_tool" >/dev/null 2>&1; then
-  sha256_tool="shasum -a 256"
+    sha256_tool="shasum -a 256"
 fi
 
 file_hash() {
-  local path="$1"
-  if [[ -f "$repo_root/$path" ]]; then
-    $sha256_tool "$repo_root/$path" | awk '{ print $1 }'
-  else
-    printf 'missing'
-  fi
+    local path="$1"
+    if [[ -f "$repo_root/$path" ]]; then
+        $sha256_tool "$repo_root/$path" | awk '{ print $1 }'
+    else
+        printf 'missing'
+    fi
 }
 
 cargo_lock_sha256="$(file_hash Cargo.lock)"
@@ -60,10 +60,10 @@ OXIDEDNS_BUILD_TIMESTAMP=$commit_timestamp
 EOF
 
 if command -v cargo >/dev/null 2>&1; then
-  cargo metadata --locked --format-version 1 >"$evidence_dir/cargo-metadata.locked.json"
+    cargo metadata --locked --format-version 1 >"$evidence_dir/cargo-metadata.locked.json"
 else
-  printf 'cargo is not available; cargo metadata was not captured\n' \
-    >"$evidence_dir/cargo-metadata.locked.json"
+    printf 'cargo is not available; cargo metadata was not captured\n' \
+        >"$evidence_dir/cargo-metadata.locked.json"
 fi
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'

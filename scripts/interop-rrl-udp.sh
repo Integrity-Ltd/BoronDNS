@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping RRL UDP runtime interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping RRL UDP runtime interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,30 +19,51 @@ artifact_dir="${OXIDEDNS_RRL_UDP_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -100 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
-    [[ -f "$workdir/rrl-client.log" ]] && { echo "---- rrl-client.log ----" >&2; tail -100 "$workdir/rrl-client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
-    [[ -f "$workdir/client-summary.env" ]] && { echo "---- client-summary.env ----" >&2; cat "$workdir/client-summary.env" >&2; }
-    [[ -f "$workdir/metrics-summary.env" ]] && { echo "---- metrics-summary.env ----" >&2; cat "$workdir/metrics-summary.env" >&2; }
-    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -100 "$workdir/metrics.txt" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -100 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/fake-primary.stderr" ]] && {
+            echo "---- fake-primary.stderr ----" >&2
+            tail -100 "$workdir/fake-primary.stderr" >&2
+        }
+        [[ -f "$workdir/rrl-client.log" ]] && {
+            echo "---- rrl-client.log ----" >&2
+            tail -100 "$workdir/rrl-client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -100 "$workdir/oxidedns.log" >&2
+        }
+        [[ -f "$workdir/client-summary.env" ]] && {
+            echo "---- client-summary.env ----" >&2
+            cat "$workdir/client-summary.env" >&2
+        }
+        [[ -f "$workdir/metrics-summary.env" ]] && {
+            echo "---- metrics-summary.env ----" >&2
+            cat "$workdir/metrics-summary.env" >&2
+        }
+        [[ -f "$workdir/metrics.txt" ]] && {
+            echo "---- metrics.txt ----" >&2
+            tail -100 "$workdir/metrics.txt" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -337,10 +358,10 @@ python3 "$fake_primary" "$primary_port" "$primary_log" >"$workdir/fake-primary.s
 primary_pid=$!
 
 for _ in {1..50}; do
-  if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
+    if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
 done
 
 cargo build -p oxidedns-cli >/dev/null
@@ -349,15 +370,15 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after fake-primary AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after fake-primary AXFR" >&2
+    exit 1
 fi
 
 client_summary="$(python3 "$rrl_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/rrl-client.log")"
@@ -367,13 +388,13 @@ printf '%s\n' "$client_summary" | tr ' ' '\n' >"$workdir/client-summary.env"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
-  'oxidedns_zones_active 1' \
-  'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-  'oxidedns_rrl_keys_tracked 5'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "metrics missing expected line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
+    'oxidedns_rrl_keys_tracked 5'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "metrics missing expected line: $expected" >&2
+        exit 1
+    fi
 done
 
 subject="$(awk '$1 == "oxidedns_rrl_responses_subject_total" { print int($2) }' <<<"$metrics")"
@@ -381,9 +402,9 @@ dropped="$(awk '$1 == "oxidedns_rrl_responses_dropped_total" { print int($2) }' 
 truncated="$(awk '$1 == "oxidedns_rrl_responses_truncated_total" { print int($2) }' <<<"$metrics")"
 queries_truncated="$(awk '$1 == "oxidedns_queries_truncated_total" { print int($2) }' <<<"$metrics")"
 
-if (( subject < 40 || dropped < 15 || truncated < 15 || queries_truncated < 15 )); then
-  echo "RRL metrics did not show expected UDP limiting: subject=$subject dropped=$dropped truncated=$truncated query_tc=$queries_truncated" >&2
-  exit 1
+if ((subject < 40 || dropped < 15 || truncated < 15 || queries_truncated < 15)); then
+    echo "RRL metrics did not show expected UDP limiting: subject=$subject dropped=$dropped truncated=$truncated query_tc=$queries_truncated" >&2
+    exit 1
 fi
 
 cat >"$metrics_summary" <<EOF
@@ -396,22 +417,22 @@ rrl_categories_checked=positive,nxdomain,nodata,referral,error
 EOF
 
 if ! grep -F "TCP AXFR served" "$primary_log" >/dev/null 2>&1; then
-  echo "fake primary did not serve the initial AXFR" >&2
-  exit 1
+    echo "fake primary did not serve the initial AXFR" >&2
+    exit 1
 fi
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
-  cp "$fake_primary" "$artifact_dir/fake-primary.py"
-  cp "$rrl_client" "$artifact_dir/rrl-client.py"
-  cp "$workdir/rrl-client.log" "$artifact_dir/rrl-client.log"
-  cp "$workdir/client-summary.env" "$artifact_dir/client-summary.env"
-  cp "$workdir/metrics-summary.env" "$artifact_dir/metrics-summary.env"
-  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+    cp "$fake_primary" "$artifact_dir/fake-primary.py"
+    cp "$rrl_client" "$artifact_dir/rrl-client.py"
+    cp "$workdir/rrl-client.log" "$artifact_dir/rrl-client.log"
+    cp "$workdir/client-summary.env" "$artifact_dir/client-summary.env"
+    cp "$workdir/metrics-summary.env" "$artifact_dir/metrics-summary.env"
+    cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
 fi
 
 echo "RRL UDP runtime interop passed"

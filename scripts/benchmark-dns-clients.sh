@@ -17,58 +17,67 @@ response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 
 require_positive_integer() {
-  local name="$1"
-  local value="$2"
-  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
-    printf '%s must be a positive integer, got %q\n' "$name" "$value" >&2
-    exit 64
-  fi
+    local name="$1"
+    local value="$2"
+    if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s must be a positive integer, got %q\n' "$name" "$value" >&2
+        exit 64
+    fi
 }
 
 for pair in \
-  "OXIDEDNS_BENCH_RECORDS:$records" \
-  "OXIDEDNS_BENCH_DURATION_SECONDS:$duration" \
-  "OXIDEDNS_BENCH_SERVER_THREADS:$server_threads" \
-  "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
-  "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
-  "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
-  require_positive_integer "${pair%%:*}" "${pair#*:}"
+    "OXIDEDNS_BENCH_RECORDS:$records" \
+    "OXIDEDNS_BENCH_DURATION_SECONDS:$duration" \
+    "OXIDEDNS_BENCH_SERVER_THREADS:$server_threads" \
+    "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
+    "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
+    "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
+    require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
 case "$transport" in
-  udp|tcp) ;;
-  *)
+udp | tcp) ;;
+*)
     printf 'OXIDEDNS_BENCH_TRANSPORT must be udp or tcp, got %q\n' "$transport" >&2
     exit 64
     ;;
 esac
 case "$pipeline_timing_enabled" in
-  true|false) ;;
-  *)
+true | false) ;;
+*)
     printf 'OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED must be true or false, got %q\n' "$pipeline_timing_enabled" >&2
     exit 64
     ;;
 esac
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$artifact_dir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -120 "$artifact_dir/fake-primary.log" >&2; }
-    [[ -f "$artifact_dir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$artifact_dir/oxidedns.log" >&2; }
-    [[ -f "$artifact_dir/client.log" ]] && { echo "---- client.log ----" >&2; tail -120 "$artifact_dir/client.log" >&2; }
-  fi
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$artifact_dir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -120 "$artifact_dir/fake-primary.log" >&2
+        }
+        [[ -f "$artifact_dir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$artifact_dir/oxidedns.log" >&2
+        }
+        [[ -f "$artifact_dir/client.log" ]] && {
+            echo "---- client.log ----" >&2
+            tail -120 "$artifact_dir/client.log" >&2
+        }
+    fi
 }
 trap cleanup EXIT
 
 read -r primary_port dns_port health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -292,22 +301,22 @@ cargo build --locked --release -p oxidedns-cli >/dev/null
 python3 "$fake_primary" "$primary_port" "$primary_log" "$records" &
 primary_pid=$!
 for _ in {1..100}; do
-  if grep -q "READY" "$primary_log" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
+    if grep -q "READY" "$primary_log" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
 done
 if ! grep -q "READY" "$primary_log" 2>/dev/null; then
-  echo "benchmark fake primary did not become ready" >&2
-  exit 1
+    echo "benchmark fake primary did not become ready" >&2
+    exit 1
 fi
 
 server_cmd=("$repo_root/target/release/oxidedns" serve --config "$config")
 server_affinity="not-applied"
-if command -v taskset >/dev/null 2>&1 && (( server_threads > 0 )); then
-  last_cpu=$((server_threads - 1))
-  server_cmd=(taskset -c "0-$last_cpu" "${server_cmd[@]}")
-  server_affinity="0-$last_cpu"
+if command -v taskset >/dev/null 2>&1 && ((server_threads > 0)); then
+    last_cpu=$((server_threads - 1))
+    server_cmd=(taskset -c "0-$last_cpu" "${server_cmd[@]}")
+    server_affinity="0-$last_cpu"
 fi
 printf 'server_command=' >"$artifact_dir/server-command.txt"
 printf ' %q' "${server_cmd[@]}" >>"$artifact_dir/server-command.txt"
@@ -318,37 +327,37 @@ printf 'server_affinity=%s\n' "$server_affinity" >>"$artifact_dir/run.env"
 oxidedns_pid=$!
 ready=0
 for _ in {1..400}; do
-  if curl -fsS "http://127.0.0.1:$health_port/readyz" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 0.05
+    if curl -fsS "http://127.0.0.1:$health_port/readyz" >/dev/null 2>&1; then
+        ready=1
+        break
+    fi
+    sleep 0.05
 done
-if (( ready != 1 )); then
-  echo "OxideDNS did not become ready for DNS client benchmark" >&2
-  exit 1
+if ((ready != 1)); then
+    echo "OxideDNS did not become ready for DNS client benchmark" >&2
+    exit 1
 fi
 
 curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
 
 "$client_bin" \
-  --transport "$transport" \
-  --server 127.0.0.1 \
-  --port "$dns_port" \
-  --threads "$client_threads" \
-  --duration "$duration" \
-  --window "$client_window" \
-  --names "$records" \
-  --timeout-ms "$response_timeout_ms" | tee "$client_log"
+    --transport "$transport" \
+    --server 127.0.0.1 \
+    --port "$dns_port" \
+    --threads "$client_threads" \
+    --duration "$duration" \
+    --window "$client_window" \
+    --names "$records" \
+    --timeout-ms "$response_timeout_ms" | tee "$client_log"
 
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
 cp "$config" "$artifact_dir/oxidedns.toml"
 
 summary="$(tail -1 "$client_log")"
 summary_value() {
-  local key="$1"
-  tr ' ' '\n' <<<"$summary" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
+    local key="$1"
+    tr ' ' '\n' <<<"$summary" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
 }
 
 responses_per_second="$(summary_value responses_per_second)"
@@ -394,4 +403,4 @@ EOF
 
 printf 'dns_client_benchmark_dir=%s\n' "$artifact_dir"
 printf 'capability_summary transport=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
-  "$transport" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"
+    "$transport" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"

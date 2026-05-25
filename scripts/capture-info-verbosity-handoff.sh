@@ -10,12 +10,12 @@ sample_interval_seconds="${OXIDEDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS:-60}"
 log_rate_window_seconds="${OXIDEDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS:-60}"
 
 require_positive_integer() {
-  local name="$1"
-  local value="$2"
-  [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
-    printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
-    exit 64
-  }
+    local name="$1"
+    local value="$2"
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+        printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
+        exit 64
+    }
 }
 
 require_positive_integer OXIDEDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS "$profile_duration_seconds"

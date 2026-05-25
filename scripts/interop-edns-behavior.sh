@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping EDNS behavior interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping EDNS behavior interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,26 +19,35 @@ artifact_dir="${OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -120 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/client.log" ]] && { echo "---- client.log ----" >&2; tail -160 "$workdir/client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -160 "$workdir/oxidedns.log" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -120 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/client.log" ]] && {
+            echo "---- client.log ----" >&2
+            tail -160 "$workdir/client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -160 "$workdir/oxidedns.log" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -594,14 +603,14 @@ python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
 
 for _ in {1..100}; do
-  if grep -q "READY" "$primary_log" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
+    if grep -q "READY" "$primary_log" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
 done
 if ! grep -q "READY" "$primary_log" 2>/dev/null; then
-  echo "fake EDNS primary did not become ready" >&2
-  exit 1
+    echo "fake EDNS primary did not become ready" >&2
+    exit 1
 fi
 
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
@@ -609,37 +618,37 @@ oxidedns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-  if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 0.05
+    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+        ready=1
+        break
+    fi
+    sleep 0.05
 done
-if (( ready != 1 )); then
-  echo "OxideDNS did not become ready during EDNS behavior interop" >&2
-  exit 1
+if ((ready != 1)); then
+    echo "OxideDNS did not become ready during EDNS behavior interop" >&2
+    exit 1
 fi
 
 client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
-  'oxidedns_zones_active 1' \
-  'oxidedns_queries_truncated_total 7'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "metrics missing expected EDNS behavior line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    'oxidedns_queries_truncated_total 7'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "metrics missing expected EDNS behavior line: $expected" >&2
+        exit 1
+    fi
 done
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$client_log" "$artifact_dir/client.log"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$summary_tsv" "$artifact_dir/edns-summary.tsv"
-  cp "$traceability_tsv" "$artifact_dir/edns-traceability.tsv"
-  printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$client_log" "$artifact_dir/client.log"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$summary_tsv" "$artifact_dir/edns-summary.tsv"
+    cp "$traceability_tsv" "$artifact_dir/edns-traceability.tsv"
+    printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
 printf '%s\n' "$client_summary"

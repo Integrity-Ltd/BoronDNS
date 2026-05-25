@@ -3,19 +3,19 @@ set -euo pipefail
 
 missing=()
 for tool in docker dig curl python3 cargo; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping PowerDNS/PostgreSQL catalog TSIG interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping PowerDNS/PostgreSQL catalog TSIG interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "skipping PowerDNS/PostgreSQL catalog TSIG interop: Docker daemon is unavailable" >&2
-  exit 0
+    echo "skipping PowerDNS/PostgreSQL catalog TSIG interop: Docker daemon is unavailable" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,32 +34,35 @@ mkdir -p "$workdir"
 chmod 755 "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if docker ps -a --format '{{.Names}}' | grep -Fx "$pdns_container" >/dev/null 2>&1; then
-    docker logs "$pdns_container" >"$workdir/pdns.log" 2>&1 || true
-    if (( status != 0 )); then
-      echo "---- PowerDNS logs ----" >&2
-      tail -180 "$workdir/pdns.log" >&2 || true
-      [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -180 "$workdir/oxidedns.log" >&2; }
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
     fi
-    docker rm -f "$pdns_container" >/dev/null 2>&1 || true
-  fi
-  if docker ps -a --format '{{.Names}}' | grep -Fx "$postgres_container" >/dev/null 2>&1; then
-    docker logs "$postgres_container" >"$workdir/postgres.log" 2>&1 || true
-    docker rm -f "$postgres_container" >/dev/null 2>&1 || true
-  fi
-  if docker network ls --format '{{.Name}}' | grep -Fx "$network" >/dev/null 2>&1; then
-    docker network rm "$network" >/dev/null 2>&1 || true
-  fi
+    if docker ps -a --format '{{.Names}}' | grep -Fx "$pdns_container" >/dev/null 2>&1; then
+        docker logs "$pdns_container" >"$workdir/pdns.log" 2>&1 || true
+        if ((status != 0)); then
+            echo "---- PowerDNS logs ----" >&2
+            tail -180 "$workdir/pdns.log" >&2 || true
+            [[ -f "$workdir/oxidedns.log" ]] && {
+                echo "---- oxidedns.log ----" >&2
+                tail -180 "$workdir/oxidedns.log" >&2
+            }
+        fi
+        docker rm -f "$pdns_container" >/dev/null 2>&1 || true
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -Fx "$postgres_container" >/dev/null 2>&1; then
+        docker logs "$postgres_container" >"$workdir/postgres.log" 2>&1 || true
+        docker rm -f "$postgres_container" >/dev/null 2>&1 || true
+    fi
+    if docker network ls --format '{{.Name}}' | grep -Fx "$network" >/dev/null 2>&1; then
+        docker network rm "$network" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT
 
 read -r pdns_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -125,35 +128,35 @@ chmod 644 "$pdns_conf"
 
 docker network create "$network" >/dev/null
 docker run -d --name "$postgres_container" \
-  --network "$network" \
-  -e POSTGRES_PASSWORD=pdns \
-  -e POSTGRES_USER=pdns \
-  -e POSTGRES_DB=pdns \
-  "$postgres_image" \
-  >/dev/null
+    --network "$network" \
+    -e POSTGRES_PASSWORD=pdns \
+    -e POSTGRES_USER=pdns \
+    -e POSTGRES_DB=pdns \
+    "$postgres_image" \
+    >/dev/null
 
 for _ in {1..120}; do
-  if docker exec "$postgres_container" psql -U pdns -d pdns -c 'select 1' >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
+    if docker exec "$postgres_container" psql -U pdns -d pdns -c 'select 1' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 if ! docker exec "$postgres_container" psql -U pdns -d pdns -c 'select 1' >/dev/null 2>&1; then
-  echo "PostgreSQL did not become ready for PowerDNS interop" >&2
-  exit 1
+    echo "PostgreSQL did not become ready for PowerDNS interop" >&2
+    exit 1
 fi
 
-docker run --rm --entrypoint cat "$pdns_image" /usr/local/share/doc/pdns/schema.pgsql.sql \
-  | docker exec -i "$postgres_container" psql -U pdns -d pdns >/dev/null
+docker run --rm --entrypoint cat "$pdns_image" /usr/local/share/doc/pdns/schema.pgsql.sql |
+    docker exec -i "$postgres_container" psql -U pdns -d pdns >/dev/null
 
 pdnsutil_run() {
-  docker run --rm \
-    --network "$network" \
-    -v "$workdir:/work:rw" \
-    --entrypoint pdnsutil \
-    "$pdns_image" \
-    --config-dir=/work \
-    "$@"
+    docker run --rm \
+        --network "$network" \
+        -v "$workdir:/work:rw" \
+        --entrypoint pdnsutil \
+        "$pdns_image" \
+        --config-dir=/work \
+        "$@"
 }
 
 pdnsutil_run tsigkey import "$tsig_name" hmac-sha256 "$tsig_secret" >"$workdir/pdnsutil-tsig-import.out"
@@ -165,50 +168,50 @@ pdnsutil_run zone set-kind member.example primary >"$workdir/pdnsutil-member-kin
 pdnsutil_run tsigkey activate member.example "$tsig_name" primary >"$workdir/pdnsutil-member-tsig.out"
 
 docker run -d --name "$pdns_container" \
-  --network "$network" \
-  -p "127.0.0.1:$pdns_port:5353/tcp" \
-  -p "127.0.0.1:$pdns_port:5353/udp" \
-  -v "$workdir:/work:rw" \
-  --entrypoint pdns_server \
-  "$pdns_image" \
-  --config-dir=/work \
-  --daemon=no \
-  --guardian=no \
-  >/dev/null
+    --network "$network" \
+    -p "127.0.0.1:$pdns_port:5353/tcp" \
+    -p "127.0.0.1:$pdns_port:5353/udp" \
+    -v "$workdir:/work:rw" \
+    --entrypoint pdns_server \
+    "$pdns_image" \
+    --config-dir=/work \
+    --daemon=no \
+    --guardian=no \
+    >/dev/null
 
 record_docker_primary_version \
-  "$workdir" \
-  "$pdns_container" \
-  "PowerDNS Authoritative" \
-  "$pdns_image" \
-  "pdns-auth" \
-  "powerdns-postgres-catalog-tsig" \
-  "tcp-axfr+catalog-refresh" \
-  "tsig-hmac-sha256" \
-  "pdns_server --version" \
-  "$pdns_conf" \
-  "$catalog_zone" \
-  "$member_zone"
+    "$workdir" \
+    "$pdns_container" \
+    "PowerDNS Authoritative" \
+    "$pdns_image" \
+    "pdns-auth" \
+    "powerdns-postgres-catalog-tsig" \
+    "tcp-axfr+catalog-refresh" \
+    "tsig-hmac-sha256" \
+    "pdns_server --version" \
+    "$pdns_conf" \
+    "$catalog_zone" \
+    "$member_zone"
 
 for _ in {1..120}; do
-  if dig "@127.0.0.1" -p "$pdns_port" catalog.example. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
+    if dig "@127.0.0.1" -p "$pdns_port" catalog.example. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 
 catalog_unsigned_axfr="$(dig "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1 2>&1 || true)"
 printf '%s\n' "$catalog_unsigned_axfr" >"$catalog_unsigned_axfr_out"
 if [[ "$catalog_unsigned_axfr" == *"version.catalog.example."* ]]; then
-  echo "PowerDNS allowed unsigned catalog AXFR despite TSIG-only policy" >&2
-  exit 1
+    echo "PowerDNS allowed unsigned catalog AXFR despite TSIG-only policy" >&2
+    exit 1
 fi
 
 catalog_signed_axfr="$(dig -y "hmac-sha256:$tsig_name:$tsig_secret" "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1)"
 printf '%s\n' "$catalog_signed_axfr" >"$catalog_signed_axfr_out"
 if [[ "$catalog_signed_axfr" != *'version.catalog.example.'* ]] || [[ "$catalog_signed_axfr" == *'.zones.catalog.example.'* ]]; then
-  echo "PowerDNS initial signed catalog AXFR did not have the expected empty catalog shape" >&2
-  exit 1
+    echo "PowerDNS initial signed catalog AXFR did not have the expected empty catalog shape" >&2
+    exit 1
 fi
 
 cat >"$oxidedns_conf" <<EOF
@@ -250,122 +253,122 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..120}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after PowerDNS TSIG catalog transfer" >&2
-  exit 1
+    echo "OxideDNS did not become ready after PowerDNS TSIG catalog transfer" >&2
+    exit 1
 fi
 
 catalog_hidden="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1)"
 printf '%s\n' "$catalog_hidden" >"$catalog_hidden_out"
 if [[ "$catalog_hidden" == *'"2"'* ]]; then
-  echo "OxideDNS served the PowerDNS catalog zone despite serve_catalog_zone=false" >&2
-  exit 1
+    echo "OxideDNS served the PowerDNS catalog zone despite serve_catalog_zone=false" >&2
+    exit 1
 fi
 
 member_before="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
 printf '%s\n' "$member_before" >"$member_before_out"
 if [[ -n "$member_before" ]]; then
-  echo "OxideDNS served PowerDNS member.example before catalog assignment" >&2
-  exit 1
+    echo "OxideDNS served PowerDNS member.example before catalog assignment" >&2
+    exit 1
 fi
 
 pdnsutil_run catalog set member.example catalog.example >"$workdir/pdnsutil-catalog-add.out"
 pdnsutil_run zone increase-serial catalog.example >"$workdir/pdnsutil-catalog-add-serial.out"
 pdnsutil_run catalog list-members catalog.example >"$workdir/pdnsutil-catalog-members-added.out"
 if ! grep -Fx 'member.example' "$workdir/pdnsutil-catalog-members-added.out" >/dev/null; then
-  echo "PowerDNS did not list member.example after catalog assignment" >&2
-  exit 1
+    echo "PowerDNS did not list member.example after catalog assignment" >&2
+    exit 1
 fi
 
 catalog_after_add_axfr=""
 for _ in {1..120}; do
-  catalog_after_add_axfr="$(dig -y "hmac-sha256:$tsig_name:$tsig_secret" "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1 2>&1 || true)"
-  if [[ "$catalog_after_add_axfr" == *'.zones.catalog.example.'* ]] && [[ "$catalog_after_add_axfr" == *'PTR	member.example.'* || "$catalog_after_add_axfr" == *'PTR member.example.'* ]]; then
-    break
-  fi
-  sleep 0.25
+    catalog_after_add_axfr="$(dig -y "hmac-sha256:$tsig_name:$tsig_secret" "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1 2>&1 || true)"
+    if [[ "$catalog_after_add_axfr" == *'.zones.catalog.example.'* ]] && [[ "$catalog_after_add_axfr" == *'PTR	member.example.'* || "$catalog_after_add_axfr" == *'PTR member.example.'* ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$catalog_after_add_axfr" >"$catalog_after_add_axfr_out"
 if [[ "$catalog_after_add_axfr" != *'.zones.catalog.example.'* ]] || [[ "$catalog_after_add_axfr" != *'member.example.'* ]]; then
-  echo "PowerDNS signed catalog AXFR did not publish member.example after catalog assignment" >&2
-  exit 1
+    echo "PowerDNS signed catalog AXFR did not publish member.example after catalog assignment" >&2
+    exit 1
 fi
 
 member_added=""
 for _ in {1..120}; do
-  member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-  if [[ "$member_added" == "192.0.2.88" ]]; then
-    break
-  fi
-  sleep 0.25
+    member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
+    if [[ "$member_added" == "192.0.2.88" ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$member_added" >"$member_added_out"
 if [[ "$member_added" != "192.0.2.88" ]]; then
-  echo "OxideDNS did not serve the PowerDNS catalog-added member zone" >&2
-  exit 1
+    echo "OxideDNS did not serve the PowerDNS catalog-added member zone" >&2
+    exit 1
 fi
 
 metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
 if [[ "$metrics_after_add" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'* ]]; then
-  echo "OxideDNS metrics after PowerDNS catalog add missing member SOA serial" >&2
-  exit 1
+    echo "OxideDNS metrics after PowerDNS catalog add missing member SOA serial" >&2
+    exit 1
 fi
 
 pdnsutil_run catalog set member.example >"$workdir/pdnsutil-catalog-remove.out"
 pdnsutil_run zone increase-serial catalog.example >"$workdir/pdnsutil-catalog-remove-serial.out"
 pdnsutil_run catalog list-members catalog.example >"$workdir/pdnsutil-catalog-members-removed.out"
 if grep -Fx 'member.example' "$workdir/pdnsutil-catalog-members-removed.out" >/dev/null; then
-  echo "PowerDNS still lists member.example after catalog removal" >&2
-  exit 1
+    echo "PowerDNS still lists member.example after catalog removal" >&2
+    exit 1
 fi
 
 catalog_after_remove_axfr=""
 for _ in {1..120}; do
-  catalog_after_remove_axfr="$(dig -y "hmac-sha256:$tsig_name:$tsig_secret" "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1 2>&1 || true)"
-  if [[ "$catalog_after_remove_axfr" == *'version.catalog.example.'* ]] && [[ "$catalog_after_remove_axfr" != *'.zones.catalog.example.'* ]]; then
-    break
-  fi
-  sleep 0.25
+    catalog_after_remove_axfr="$(dig -y "hmac-sha256:$tsig_name:$tsig_secret" "@127.0.0.1" -p "$pdns_port" catalog.example. AXFR +tcp +time=2 +tries=1 2>&1 || true)"
+    if [[ "$catalog_after_remove_axfr" == *'version.catalog.example.'* ]] && [[ "$catalog_after_remove_axfr" != *'.zones.catalog.example.'* ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$catalog_after_remove_axfr" >"$catalog_after_remove_axfr_out"
 if [[ "$catalog_after_remove_axfr" != *'version.catalog.example.'* ]] || [[ "$catalog_after_remove_axfr" == *'.zones.catalog.example.'* ]]; then
-  echo "PowerDNS signed catalog AXFR still published member.example after catalog removal" >&2
-  exit 1
+    echo "PowerDNS signed catalog AXFR still published member.example after catalog removal" >&2
+    exit 1
 fi
 
 member_removed="192.0.2.88"
 for _ in {1..120}; do
-  member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-  if [[ -z "$member_removed" ]]; then
-    break
-  fi
-  sleep 0.25
+    member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
+    if [[ -z "$member_removed" ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$member_removed" >"$member_removed_out"
 if [[ -n "$member_removed" ]]; then
-  echo "OxideDNS still served the PowerDNS catalog member after removal" >&2
-  exit 1
+    echo "OxideDNS still served the PowerDNS catalog member after removal" >&2
+    exit 1
 fi
 
 metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
 if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
-  echo "OxideDNS metrics still reported removed PowerDNS catalog member zone" >&2
-  exit 1
+    echo "OxideDNS metrics still reported removed PowerDNS catalog member zone" >&2
+    exit 1
 fi
 
 docker logs "$pdns_container" >"$workdir/pdns.log" 2>&1 || true
 docker logs "$postgres_container" >"$workdir/postgres.log" 2>&1 || true
 
 {
-  printf 'primary\tbackend\ttransfer_security\tmember_added_answer\tmember_removed_answer\n'
-  printf 'powerdns\tpostgres\t%s\t%s\t%s\n' "tsig-hmac-sha256" "$member_added" "${member_removed:-<empty>}"
+    printf 'primary\tbackend\ttransfer_security\tmember_added_answer\tmember_removed_answer\n'
+    printf 'powerdns\tpostgres\t%s\t%s\t%s\n' "tsig-hmac-sha256" "$member_added" "${member_removed:-<empty>}"
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<'EOF'
@@ -377,23 +380,23 @@ RFC9432-CATALOG-MVP-013	retained-real-primary	powerdns_catalog_member_remove	mem
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  for artifact in \
-    pdns.conf oxidedns.toml catalog.example.zone member.example.zone \
-    primary-version.txt pdns.log postgres.log \
-    catalog-unsigned-axfr.out catalog-signed-axfr.out catalog-after-add-axfr.out \
-    catalog-after-remove-axfr.out catalog-hidden.out \
-    member-before.out member-added.out member-removed.out \
-    metrics-after-add.txt metrics-after-remove.txt \
-    pdnsutil-tsig-import.out pdnsutil-catalog-load.out pdnsutil-catalog-kind.out \
-    pdnsutil-catalog-tsig.out pdnsutil-member-load.out pdnsutil-member-kind.out \
-    pdnsutil-member-tsig.out pdnsutil-catalog-add.out pdnsutil-catalog-remove.out \
-    pdnsutil-catalog-add-serial.out pdnsutil-catalog-remove-serial.out \
-    pdnsutil-catalog-members-added.out pdnsutil-catalog-members-removed.out \
-    powerdns-postgres-catalog-tsig-summary.tsv \
-    powerdns-postgres-catalog-tsig-traceability.tsv; do
-    cp "$workdir/$artifact" "$artifact_dir/$artifact"
-  done
+    mkdir -p "$artifact_dir"
+    for artifact in \
+        pdns.conf oxidedns.toml catalog.example.zone member.example.zone \
+        primary-version.txt pdns.log postgres.log \
+        catalog-unsigned-axfr.out catalog-signed-axfr.out catalog-after-add-axfr.out \
+        catalog-after-remove-axfr.out catalog-hidden.out \
+        member-before.out member-added.out member-removed.out \
+        metrics-after-add.txt metrics-after-remove.txt \
+        pdnsutil-tsig-import.out pdnsutil-catalog-load.out pdnsutil-catalog-kind.out \
+        pdnsutil-catalog-tsig.out pdnsutil-member-load.out pdnsutil-member-kind.out \
+        pdnsutil-member-tsig.out pdnsutil-catalog-add.out pdnsutil-catalog-remove.out \
+        pdnsutil-catalog-add-serial.out pdnsutil-catalog-remove-serial.out \
+        pdnsutil-catalog-members-added.out pdnsutil-catalog-members-removed.out \
+        powerdns-postgres-catalog-tsig-summary.tsv \
+        powerdns-postgres-catalog-tsig-traceability.tsv; do
+        cp "$workdir/$artifact" "$artifact_dir/$artifact"
+    done
 fi
 
 echo "PowerDNS/PostgreSQL catalog TSIG live interop passed"

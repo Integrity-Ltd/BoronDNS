@@ -3,19 +3,19 @@ set -euo pipefail
 
 missing=()
 for tool in docker dig curl python3 cargo awk; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping Knot DNSSEC Docker interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping Knot DNSSEC Docker interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "skipping Knot DNSSEC Docker interop: Docker daemon is unavailable" >&2
-  exit 0
+    echo "skipping Knot DNSSEC Docker interop: Docker daemon is unavailable" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,28 +27,34 @@ container="oxidedns-knot-dnssec-$$"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
-    if (( status != 0 )); then
-      echo "---- knot container logs ----" >&2
-      docker logs "$container" >&2 || true
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
     fi
-    docker rm -f "$container" >/dev/null 2>&1 || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/dnssec-client.log" ]] && { echo "---- dnssec-client.log ----" >&2; tail -120 "$workdir/dnssec-client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
-  fi
-  rm -rf "$workdir"
+    if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
+        if ((status != 0)); then
+            echo "---- knot container logs ----" >&2
+            docker logs "$container" >&2 || true
+        fi
+        docker rm -f "$container" >/dev/null 2>&1 || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/dnssec-client.log" ]] && {
+            echo "---- dnssec-client.log ----" >&2
+            tail -120 "$workdir/dnssec-client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$workdir/oxidedns.log" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r knot_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -65,60 +71,60 @@ cp "$template_file" "$workdir/knot.conf"
 
 set +e
 knot_probe="$(
-  docker run --rm \
-    -v "$workdir:/work" \
-    alpine:latest \
-    sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check' \
-    2>&1
+    docker run --rm \
+        -v "$workdir:/work" \
+        alpine:latest \
+        sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check' \
+        2>&1
 )"
 knot_probe_status=$?
 set -e
 
-if (( knot_probe_status != 0 )); then
-  echo "skipping Knot DNSSEC Docker interop: Alpine/Knot rejected DNSSEC signing configuration" >&2
-  printf '%s\n' "$knot_probe" >&2
-  exit 0
+if ((knot_probe_status != 0)); then
+    echo "skipping Knot DNSSEC Docker interop: Alpine/Knot rejected DNSSEC signing configuration" >&2
+    printf '%s\n' "$knot_probe" >&2
+    exit 0
 fi
 
 if ! docker run -d --name "$container" \
-  -p "127.0.0.1:$knot_port:5353/tcp" \
-  -p "127.0.0.1:$knot_port:5353/udp" \
-  -v "$workdir:/work" \
-  alpine:latest \
-  sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotd -c /work/knot.conf -v' \
-  >/dev/null; then
-  echo "skipping Knot DNSSEC Docker interop: failed to start Alpine/Knot container" >&2
-  exit 0
+    -p "127.0.0.1:$knot_port:5353/tcp" \
+    -p "127.0.0.1:$knot_port:5353/udp" \
+    -v "$workdir:/work" \
+    alpine:latest \
+    sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotd -c /work/knot.conf -v' \
+    >/dev/null; then
+    echo "skipping Knot DNSSEC Docker interop: failed to start Alpine/Knot container" >&2
+    exit 0
 fi
 record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-dnssec" "tcp-axfr" "dnssec-signed-primary" "knotd -V" "$workdir/knot.conf" "$zone_file"
 
 for _ in {1..120}; do
-  if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
+    if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 
 primary_soa="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short)"
 signed_serial="$(awk '{ print $3; exit }' <<<"$primary_soa")"
-if [[ -z "$signed_serial" ]] || (( signed_serial <= 2026052404 )); then
-  echo "skipping Knot DNSSEC Docker interop: Knot did not publish a DNSSEC-signed SOA serial" >&2
-  echo "SOA response: $primary_soa" >&2
-  exit 0
+if [[ -z "$signed_serial" ]] || ((signed_serial <= 2026052404)); then
+    echo "skipping Knot DNSSEC Docker interop: Knot did not publish a DNSSEC-signed SOA serial" >&2
+    echo "SOA response: $primary_soa" >&2
+    exit 0
 fi
 
 primary_axfr="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. AXFR +time=3 +tries=1)"
 for rrtype in DNSKEY RRSIG NSEC3 NSEC3PARAM; do
-  if ! awk -v rrtype="$rrtype" '$4 == rrtype { found = 1 } END { exit(found ? 0 : 1) }' <<<"$primary_axfr"; then
-    echo "skipping Knot DNSSEC Docker interop: Knot AXFR did not include $rrtype after signing" >&2
-    exit 0
-  fi
+    if ! awk -v rrtype="$rrtype" '$4 == rrtype { found = 1 } END { exit(found ? 0 : 1) }' <<<"$primary_axfr"; then
+        echo "skipping Knot DNSSEC Docker interop: Knot AXFR did not include $rrtype after signing" >&2
+        exit 0
+    fi
 done
 
 nsec3_owner="$(awk '$4 == "NSEC3" { print $1; exit }' <<<"$primary_axfr")"
 if [[ -z "$nsec3_owner" ]]; then
-  echo "skipping Knot DNSSEC Docker interop: could not identify an NSEC3 owner in Knot AXFR" >&2
-  exit 0
+    echo "skipping Knot DNSSEC Docker interop: could not identify an NSEC3 owner in Knot AXFR" >&2
+    exit 0
 fi
 
 dnssec_client="$workdir/dnssec-client.py"
@@ -368,15 +374,15 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == "ready" ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != "ready" ]]; then
-  echo "OxideDNS did not become ready after Knot signed AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after Knot signed AXFR" >&2
+    exit 1
 fi
 
 client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$oxidedns_dns_port" "$nsec3_owner" "$workdir/dnssec-client.log")"
@@ -384,14 +390,14 @@ echo "$client_summary"
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
-  'oxidedns_zones_active 1' \
-  "oxidedns_zone_soa_serial{zone=\"alpha.test.\"} $signed_serial" \
-  'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
-  'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "OxideDNS metrics missing expected line after Knot signed AXFR: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    "oxidedns_zone_soa_serial{zone=\"alpha.test.\"} $signed_serial" \
+    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
+    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "OxideDNS metrics missing expected line after Knot signed AXFR: $expected" >&2
+        exit 1
+    fi
 done
 
 echo "Knot Docker signed-primary DNSSEC interop passed"

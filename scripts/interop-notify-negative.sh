@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping negative NOTIFY interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping negative NOTIFY interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,26 +19,35 @@ artifact_dir="${OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -120 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/client.log" ]] && { echo "---- client.log ----" >&2; tail -120 "$workdir/client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -160 "$workdir/oxidedns.log" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -120 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/client.log" ]] && {
+            echo "---- client.log ----" >&2
+            tail -120 "$workdir/client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -160 "$workdir/oxidedns.log" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -615,14 +624,14 @@ python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
 
 for _ in {1..100}; do
-  if grep -q "READY" "$primary_log" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
+    if grep -q "READY" "$primary_log" 2>/dev/null; then
+        break
+    fi
+    sleep 0.05
 done
 if ! grep -q "READY" "$primary_log" 2>/dev/null; then
-  echo "fake NOTIFY primary did not become ready" >&2
-  exit 1
+    echo "fake NOTIFY primary did not become ready" >&2
+    exit 1
 fi
 
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
@@ -630,61 +639,61 @@ oxidedns_pid=$!
 
 live=0
 for _ in {1..200}; do
-  if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
-    live=1
-    break
-  fi
-  sleep 0.05
+    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+        live=1
+        break
+    fi
+    sleep 0.05
 done
-if (( live != 1 )); then
-  echo "OxideDNS did not become live during negative NOTIFY interop" >&2
-  exit 1
+if ((live != 1)); then
+    echo "OxideDNS did not become live during negative NOTIFY interop" >&2
+    exit 1
 fi
 
 client_summary="$(python3 "$client" "$oxidedns_dns_port" "$oxidedns_dns_port" "$client_log" "$summary_tsv")"
 summary_logged=0
 for _ in {1..40}; do
-  if grep -q 'event=notify_log_rate_limit_summary' "$workdir/oxidedns.log"; then
-    summary_logged=1
-    break
-  fi
-  sleep 0.1
+    if grep -q 'event=notify_log_rate_limit_summary' "$workdir/oxidedns.log"; then
+        summary_logged=1
+        break
+    fi
+    sleep 0.1
 done
-if (( summary_logged != 1 )); then
-  echo "OxideDNS log missing NOTIFY log-rate summary event" >&2
-  exit 1
+if ((summary_logged != 1)); then
+    echo "OxideDNS log missing NOTIFY log-rate summary event" >&2
+    exit 1
 fi
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
-  'oxidedns_zones_active 1' \
-  'oxidedns_notify_messages_received_total 11' \
-  'oxidedns_notify_messages_unauthorized_total 3' \
-  'oxidedns_notify_refresh_actions_total{action="signalled"} 2' \
-  'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
-  'oxidedns_tsig_notify_verifications_total{result="ok"} 1' \
-  'oxidedns_tsig_notify_verifications_total{result="badkey"} 1' \
-  'oxidedns_tsig_notify_verifications_total{result="badsig"} 1'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "metrics missing expected negative NOTIFY line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    'oxidedns_notify_messages_received_total 11' \
+    'oxidedns_notify_messages_unauthorized_total 3' \
+    'oxidedns_notify_refresh_actions_total{action="signalled"} 2' \
+    'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
+    'oxidedns_tsig_notify_verifications_total{result="ok"} 1' \
+    'oxidedns_tsig_notify_verifications_total{result="badkey"} 1' \
+    'oxidedns_tsig_notify_verifications_total{result="badsig"} 1'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "metrics missing expected negative NOTIFY line: $expected" >&2
+        exit 1
+    fi
 done
 
 for expected_log in \
-  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=refresh_signalled' \
-  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=deduplicated' \
-  'message="accepted NOTIFY" source=127.0.0.1 zone=notify-signed.test. soa_serial="Some(2026052503)" action=refresh_signalled' \
-  'event=notify_unauthorized_discard' \
-  'event=notify_tsig_failure' \
-  'event=notify_log_rate_limit_summary' \
-  'suppressed_unauthorized=2' \
-  'suppressed_tsig_failures=1' \
-  'distinct_source_prefixes=1' \
-  'total_suppressed=3'; do
-  if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
-    echo "OxideDNS log missing expected negative NOTIFY event: $expected_log" >&2
-    exit 1
-  fi
+    'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=refresh_signalled' \
+    'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=deduplicated' \
+    'message="accepted NOTIFY" source=127.0.0.1 zone=notify-signed.test. soa_serial="Some(2026052503)" action=refresh_signalled' \
+    'event=notify_unauthorized_discard' \
+    'event=notify_tsig_failure' \
+    'event=notify_log_rate_limit_summary' \
+    'suppressed_unauthorized=2' \
+    'suppressed_tsig_failures=1' \
+    'distinct_source_prefixes=1' \
+    'total_suppressed=3'; do
+    if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
+        echo "OxideDNS log missing expected negative NOTIFY event: $expected_log" >&2
+        exit 1
+    fi
 done
 
 cat >"$traceability_tsv" <<'EOF'
@@ -703,14 +712,14 @@ ODS-FR-NOTIFY-011	retained-runtime	log_rate_suppression_summary	oxidedns.log; no
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$client_log" "$artifact_dir/client.log"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$summary_tsv" "$artifact_dir/notify-negative-summary.tsv"
-  cp "$traceability_tsv" "$artifact_dir/notify-traceability.tsv"
-  printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$client_log" "$artifact_dir/client.log"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$summary_tsv" "$artifact_dir/notify-negative-summary.tsv"
+    cp "$traceability_tsv" "$artifact_dir/notify-traceability.tsv"
+    printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
 fi
 
 printf '%s\n' "$client_summary"

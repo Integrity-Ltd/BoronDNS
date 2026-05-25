@@ -6,71 +6,71 @@ artifact_dir="${OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR:-$repo_root/target/evide
 mkdir -p "$artifact_dir"
 
 if ! cargo geiger --version >/dev/null 2>&1; then
-  printf 'missing required cargo subcommand: cargo geiger\n' >&2
-  printf 'install with: cargo install cargo-geiger\n' >&2
-  exit 1
+    printf 'missing required cargo subcommand: cargo geiger\n' >&2
+    printf 'install with: cargo install cargo-geiger\n' >&2
+    exit 1
 fi
 
 manifest_for_package() {
-  local package="$1"
-  local project_manifest="/project/crates/$package/Cargo.toml"
-  local host_manifest="$repo_root/crates/$package/Cargo.toml"
+    local package="$1"
+    local project_manifest="/project/crates/$package/Cargo.toml"
+    local host_manifest="$repo_root/crates/$package/Cargo.toml"
 
-  if cargo metadata --manifest-path "$host_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
-    printf '%s\n' "$host_manifest"
-  elif cargo metadata --manifest-path "$project_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
-    printf '%s\n' "$project_manifest"
-  else
-    printf 'failed to resolve cargo metadata manifest for package: %s\n' "$package" >&2
-    exit 1
-  fi
+    if cargo metadata --manifest-path "$host_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
+        printf '%s\n' "$host_manifest"
+    elif cargo metadata --manifest-path "$project_manifest" --no-deps --format-version 1 >/dev/null 2>&1; then
+        printf '%s\n' "$project_manifest"
+    else
+        printf 'failed to resolve cargo metadata manifest for package: %s\n' "$package" >&2
+        exit 1
+    fi
 }
 
 run_geiger_json() {
-  local root="$1"
-  local manifest="$2"
-  local json_out="$artifact_dir/$root-geiger.json"
-  local stderr_out="$artifact_dir/$root-geiger.stderr"
-  local target_dir="$artifact_dir/$root-target"
+    local root="$1"
+    local manifest="$2"
+    local json_out="$artifact_dir/$root-geiger.json"
+    local stderr_out="$artifact_dir/$root-geiger.stderr"
+    local target_dir="$artifact_dir/$root-target"
 
-  {
-    printf '$ CARGO_TARGET_DIR=%q cargo geiger --manifest-path %q --locked --all-targets --all-dependencies --output-format Json\n\n' "$target_dir" "$manifest"
-  } >"$artifact_dir/$root-geiger.command"
+    {
+        printf '$ CARGO_TARGET_DIR=%q cargo geiger --manifest-path %q --locked --all-targets --all-dependencies --output-format Json\n\n' "$target_dir" "$manifest"
+    } >"$artifact_dir/$root-geiger.command"
 
-  set +e
-  CARGO_TARGET_DIR="$target_dir" cargo geiger \
-    --manifest-path "$manifest" \
-    --locked \
-    --all-targets \
-    --all-dependencies \
-    --output-format Json \
-    >"$json_out" \
-    2>"$stderr_out"
-  local geiger_status=$?
-  set -e
+    set +e
+    CARGO_TARGET_DIR="$target_dir" cargo geiger \
+        --manifest-path "$manifest" \
+        --locked \
+        --all-targets \
+        --all-dependencies \
+        --output-format Json \
+        >"$json_out" \
+        2>"$stderr_out"
+    local geiger_status=$?
+    set -e
 
-  printf '%s\n' "$geiger_status" >"$artifact_dir/$root-geiger.exit-status"
-  if [[ "$geiger_status" -ne 0 && ! -s "$json_out" ]]; then
-    printf 'cargo geiger failed before producing JSON evidence for %s; see %s\n' "$root" "$stderr_out" >&2
-    return "$geiger_status"
-  fi
+    printf '%s\n' "$geiger_status" >"$artifact_dir/$root-geiger.exit-status"
+    if [[ "$geiger_status" -ne 0 && ! -s "$json_out" ]]; then
+        printf 'cargo geiger failed before producing JSON evidence for %s; see %s\n' "$root" "$stderr_out" >&2
+        return "$geiger_status"
+    fi
 }
 
 {
-  printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf 'repo_root=%s\n' "$repo_root"
-  printf 'commit=%s\n' "$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-  printf 'rustc=%s\n' "$(rustc --version)"
-  printf 'cargo=%s\n' "$(cargo --version)"
-  printf 'cargo_geiger=%s\n' "$(cargo geiger --version)"
+    printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'repo_root=%s\n' "$repo_root"
+    printf 'commit=%s\n' "$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+    printf 'rustc=%s\n' "$(rustc --version)"
+    printf 'cargo=%s\n' "$(cargo --version)"
+    printf 'cargo_geiger=%s\n' "$(cargo geiger --version)"
 } >"$artifact_dir/tool-versions.env"
 
 root_packages="${OXIDEDNS_GEIGER_ROOT_PACKAGES:-oxidedns-cli}"
 printf 'root_package\tmanifest\n' >"$artifact_dir/geiger-roots.tsv"
 for package in $root_packages; do
-  manifest="$(manifest_for_package "$package")"
-  printf '%s\t%s\n' "$package" "$manifest" >>"$artifact_dir/geiger-roots.tsv"
-  run_geiger_json "$package" "$manifest"
+    manifest="$(manifest_for_package "$package")"
+    printf '%s\t%s\n' "$package" "$manifest" >>"$artifact_dir/geiger-roots.tsv"
+    run_geiger_json "$package" "$manifest"
 done
 
 python3 - "$artifact_dir" <<'PY'

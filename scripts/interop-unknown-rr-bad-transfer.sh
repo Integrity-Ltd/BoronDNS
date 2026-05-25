@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping unknown-RR bad-transfer interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping unknown-RR bad-transfer interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,17 +23,17 @@ mkdir -p "$workdir/cases"
 
 pids=()
 cleanup() {
-  local status=$?
-  for pid in "${pids[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
+    local status=$?
+    for pid in "${pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    if ((status != 0)); then
+        find "$workdir/cases" -maxdepth 2 -type f \( -name '*.log' -o -name 'readyz.txt' -o -name 'metrics.txt' \) -print -exec tail -80 {} \; >&2 || true
     fi
-  done
-  if (( status != 0 )); then
-    find "$workdir/cases" -maxdepth 2 -type f \( -name '*.log' -o -name 'readyz.txt' -o -name 'metrics.txt' \) -print -exec tail -80 {} \; >&2 || true
-  fi
-  rm -rf "$workdir"
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
@@ -160,7 +160,7 @@ if __name__ == "__main__":
 PY
 
 allocate_ports() {
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 sockets = []
 for _ in range(3):
@@ -172,15 +172,15 @@ PY
 }
 
 wait_for_log() {
-  local file="$1"
-  local needle="$2"
-  for _ in {1..80}; do
-    if [[ -f "$file" ]] && grep -F "$needle" "$file" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  return 1
+    local file="$1"
+    local needle="$2"
+    for _ in {1..80}; do
+        if [[ -f "$file" ]] && grep -F "$needle" "$file" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
 }
 
 printf 'case\trr_type\terror_kind\tready_status\taxfr_failed\tactive_zones\tlog_match\n' >"$summary_tsv"
@@ -188,30 +188,30 @@ printf 'case\trr_type\terror_kind\tready_status\taxfr_failed\tactive_zones\tlog_
 cargo build -p oxidedns-cli >/dev/null
 
 run_case() {
-  local case_name="$1"
-  local rr_type="$2"
-  local error_kind="$3"
-  local expected_error="$4"
-  local primary_port oxidedns_dns_port oxidedns_health_port
-  read -r primary_port oxidedns_dns_port oxidedns_health_port < <(allocate_ports)
-  local case_dir="$workdir/cases/$case_name"
-  local zone="$case_name.unknown-bad.test."
-  local primary_log="$case_dir/fake-primary.log"
-  local oxidedns_log="$case_dir/oxidedns.log"
-  local oxidedns_conf="$case_dir/oxidedns.toml"
-  local readyz_out="$case_dir/readyz.txt"
-  local metrics_out="$case_dir/metrics.txt"
-  mkdir -p "$case_dir"
+    local case_name="$1"
+    local rr_type="$2"
+    local error_kind="$3"
+    local expected_error="$4"
+    local primary_port oxidedns_dns_port oxidedns_health_port
+    read -r primary_port oxidedns_dns_port oxidedns_health_port < <(allocate_ports)
+    local case_dir="$workdir/cases/$case_name"
+    local zone="$case_name.unknown-bad.test."
+    local primary_log="$case_dir/fake-primary.log"
+    local oxidedns_log="$case_dir/oxidedns.log"
+    local oxidedns_conf="$case_dir/oxidedns.toml"
+    local readyz_out="$case_dir/readyz.txt"
+    local metrics_out="$case_dir/metrics.txt"
+    mkdir -p "$case_dir"
 
-  python3 "$fake_primary" "$primary_port" "$primary_log" "$zone" "$rr_type" >"$case_dir/fake-primary.stderr" 2>&1 &
-  local primary_pid=$!
-  pids+=("$primary_pid")
-  wait_for_log "$primary_log" "READY" || {
-    echo "bad-transfer primary did not become ready for $case_name" >&2
-    return 1
-  }
+    python3 "$fake_primary" "$primary_port" "$primary_log" "$zone" "$rr_type" >"$case_dir/fake-primary.stderr" 2>&1 &
+    local primary_pid=$!
+    pids+=("$primary_pid")
+    wait_for_log "$primary_log" "READY" || {
+        echo "bad-transfer primary did not become ready for $case_name" >&2
+        return 1
+    }
 
-  cat >"$oxidedns_conf" <<EOF
+    cat >"$oxidedns_conf" <<EOF
 [server]
 listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
 listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
@@ -237,51 +237,51 @@ primaries = ["127.0.0.1:$primary_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-  "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$oxidedns_log" 2>&1 &
-  local oxidedns_pid=$!
-  pids+=("$oxidedns_pid")
+    "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$oxidedns_log" 2>&1 &
+    local oxidedns_pid=$!
+    pids+=("$oxidedns_pid")
 
-  wait_for_log "$oxidedns_log" "AXFR failed" || {
-    echo "OxideDNS did not log AXFR failure for $case_name" >&2
-    return 1
-  }
-  if ! grep -F "$expected_error" "$oxidedns_log" >/dev/null 2>&1; then
-    echo "OxideDNS log for $case_name missing expected error: $expected_error" >&2
-    return 1
-  fi
-
-  local ready_body=""
-  for _ in {1..50}; do
-    ready_body="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null || true)"
-    if [[ "$ready_body" == *'"status":"not-ready"'* ]]; then
-      break
+    wait_for_log "$oxidedns_log" "AXFR failed" || {
+        echo "OxideDNS did not log AXFR failure for $case_name" >&2
+        return 1
+    }
+    if ! grep -F "$expected_error" "$oxidedns_log" >/dev/null 2>&1; then
+        echo "OxideDNS log for $case_name missing expected error: $expected_error" >&2
+        return 1
     fi
-    sleep 0.1
-  done
-  printf '%s\n' "$ready_body" >"$readyz_out"
-  if [[ "$ready_body" == *'"status":"ready"'* ]]; then
-    echo "OxideDNS unexpectedly became ready for prohibited type $case_name" >&2
-    return 1
-  fi
 
-  local metrics=""
-  metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
-  printf '%s\n' "$metrics" >"$metrics_out"
-  if [[ "$metrics" != *'oxidedns_transfer_sessions_failed_total{protocol="axfr"} 1'* ]]; then
-    echo "OxideDNS metrics missing AXFR failure counter for $case_name" >&2
-    return 1
-  fi
-  if [[ "$metrics" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS metrics unexpectedly report active zone for $case_name" >&2
-    return 1
-  fi
+    local ready_body=""
+    for _ in {1..50}; do
+        ready_body="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null || true)"
+        if [[ "$ready_body" == *'"status":"not-ready"'* ]]; then
+            break
+        fi
+        sleep 0.1
+    done
+    printf '%s\n' "$ready_body" >"$readyz_out"
+    if [[ "$ready_body" == *'"status":"ready"'* ]]; then
+        echo "OxideDNS unexpectedly became ready for prohibited type $case_name" >&2
+        return 1
+    fi
 
-  printf '%s\t%s\t%s\tnot-ready\t1\t0\t1\n' "$case_name" "$rr_type" "$error_kind" >>"$summary_tsv"
+    local metrics=""
+    metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+    printf '%s\n' "$metrics" >"$metrics_out"
+    if [[ "$metrics" != *'oxidedns_transfer_sessions_failed_total{protocol="axfr"} 1'* ]]; then
+        echo "OxideDNS metrics missing AXFR failure counter for $case_name" >&2
+        return 1
+    fi
+    if [[ "$metrics" != *'oxidedns_zones_active 0'* ]]; then
+        echo "OxideDNS metrics unexpectedly report active zone for $case_name" >&2
+        return 1
+    fi
 
-  kill "$oxidedns_pid" 2>/dev/null || true
-  wait "$oxidedns_pid" 2>/dev/null || true
-  kill "$primary_pid" 2>/dev/null || true
-  wait "$primary_pid" 2>/dev/null || true
+    printf '%s\t%s\t%s\tnot-ready\t1\t0\t1\n' "$case_name" "$rr_type" "$error_kind" >>"$summary_tsv"
+
+    kill "$oxidedns_pid" 2>/dev/null || true
+    wait "$oxidedns_pid" 2>/dev/null || true
+    kill "$primary_pid" 2>/dev/null || true
+    wait "$primary_pid" 2>/dev/null || true
 }
 
 reserved_error="AXFR response contained a reserved RR type"
@@ -304,11 +304,11 @@ ODS-FR-URR-009	retained-runtime	rrtype0; opt; tkey; tsig; ixfr; axfr; mailb; mai
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$fake_primary" "$artifact_dir/fake-primary.py"
-  cp "$summary_tsv" "$artifact_dir/unknown-rr-bad-transfer-summary.tsv"
-  cp "$traceability_tsv" "$artifact_dir/unknown-rr-bad-transfer-traceability.tsv"
-  cp -R "$workdir/cases" "$artifact_dir/cases"
+    mkdir -p "$artifact_dir"
+    cp "$fake_primary" "$artifact_dir/fake-primary.py"
+    cp "$summary_tsv" "$artifact_dir/unknown-rr-bad-transfer-summary.tsv"
+    cp "$traceability_tsv" "$artifact_dir/unknown-rr-bad-transfer-traceability.tsv"
+    cp -R "$workdir/cases" "$artifact_dir/cases"
 fi
 
 printf 'unknown_rr_bad_transfer_cases=10\n'

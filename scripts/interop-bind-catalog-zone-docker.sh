@@ -3,19 +3,19 @@ set -euo pipefail
 
 missing=()
 for tool in docker dig curl python3 cargo; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping BIND catalog-zone Docker interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping BIND catalog-zone Docker interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "skipping BIND catalog-zone Docker interop: Docker daemon is unavailable" >&2
-  exit 0
+    echo "skipping BIND catalog-zone Docker interop: Docker daemon is unavailable" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,24 +28,27 @@ artifact_dir="${OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
-    if (( status != 0 )); then
-      echo "---- BIND container logs ----" >&2
-      docker logs "$container" >&2 || true
-      [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -160 "$workdir/oxidedns.log" >&2; }
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
     fi
-    docker rm -f "$container" >/dev/null 2>&1 || true
-  fi
+    if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
+        if ((status != 0)); then
+            echo "---- BIND container logs ----" >&2
+            docker logs "$container" >&2 || true
+            [[ -f "$workdir/oxidedns.log" ]] && {
+                echo "---- oxidedns.log ----" >&2
+                tail -160 "$workdir/oxidedns.log" >&2
+            }
+        fi
+        docker rm -f "$container" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT
 
 read -r bind_port rndc_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -72,9 +75,9 @@ metrics_after_add_out="$workdir/metrics-after-add.txt"
 metrics_after_remove_out="$workdir/metrics-after-remove.txt"
 
 write_catalog_zone() {
-  local serial="$1"
-  local include_member="$2"
-  cat >"$catalog_zone" <<EOF
+    local serial="$1"
+    local include_member="$2"
+    cat >"$catalog_zone" <<EOF
 \$ORIGIN catalog.example.
 \$TTL 1
 @ IN SOA ns.catalog.example. hostmaster.catalog.example. (
@@ -88,17 +91,17 @@ write_catalog_zone() {
 ns IN A 127.0.0.1
 version IN TXT "2"
 EOF
-  if [[ "$include_member" == "yes" ]]; then
-    cat >>"$catalog_zone" <<'EOF'
+    if [[ "$include_member" == "yes" ]]; then
+        cat >>"$catalog_zone" <<'EOF'
 m1.zones IN PTR member.example.
 EOF
-  fi
+    fi
 }
 
 write_member_zone() {
-  local serial="$1"
-  local address="$2"
-  cat >"$member_zone" <<EOF
+    local serial="$1"
+    local address="$2"
+    cat >"$member_zone" <<EOF
 \$ORIGIN member.example.
 \$TTL 60
 @ IN SOA ns.member.example. hostmaster.member.example. (
@@ -171,42 +174,42 @@ options {
 EOF
 
 if ! docker run -d --name "$container" \
-  -p "127.0.0.1:$bind_port:5353/tcp" \
-  -p "127.0.0.1:$bind_port:5353/udp" \
-  -v "$workdir:/work:rw" \
-  alpine:latest \
-  sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
-  >/dev/null; then
-  echo "skipping BIND catalog-zone Docker interop: failed to start Alpine/BIND container" >&2
-  exit 0
+    -p "127.0.0.1:$bind_port:5353/tcp" \
+    -p "127.0.0.1:$bind_port:5353/udp" \
+    -v "$workdir:/work:rw" \
+    alpine:latest \
+    sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
+    >/dev/null; then
+    echo "skipping BIND catalog-zone Docker interop: failed to start Alpine/BIND container" >&2
+    exit 0
 fi
 
 record_docker_primary_version \
-  "$workdir" \
-  "$container" \
-  "BIND 9" \
-  "alpine:latest" \
-  "bind" \
-  "bind-docker-catalog-zone" \
-  "tcp-axfr+catalog-refresh" \
-  "none" \
-  "named -V" \
-  "$named_conf" \
-  "$rndc_conf" \
-  "$workdir/catalog-initial.zone" \
-  "$workdir/member-initial.zone"
+    "$workdir" \
+    "$container" \
+    "BIND 9" \
+    "alpine:latest" \
+    "bind" \
+    "bind-docker-catalog-zone" \
+    "tcp-axfr+catalog-refresh" \
+    "none" \
+    "named -V" \
+    "$named_conf" \
+    "$rndc_conf" \
+    "$workdir/catalog-initial.zone" \
+    "$workdir/member-initial.zone"
 
 for _ in {1..120}; do
-  if dig "@127.0.0.1" -p "$bind_port" catalog.example. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
+    if dig "@127.0.0.1" -p "$bind_port" catalog.example. SOA +tcp +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 
 primary_catalog_soa="$(dig "@127.0.0.1" -p "$bind_port" catalog.example. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$primary_catalog_soa" != *"2026052501"* ]]; then
-  echo "BIND catalog primary did not answer initial catalog SOA serial" >&2
-  exit 1
+    echo "BIND catalog primary did not answer initial catalog SOA serial" >&2
+    exit 1
 fi
 
 cat >"$oxidedns_conf" <<EOF
@@ -242,28 +245,28 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..120}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after initial catalog transfer" >&2
-  exit 1
+    echo "OxideDNS did not become ready after initial catalog transfer" >&2
+    exit 1
 fi
 
 catalog_hidden="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1)"
 printf '%s\n' "$catalog_hidden" >"$catalog_hidden_out"
 if [[ "$catalog_hidden" == *'"2"'* ]]; then
-  echo "OxideDNS served the catalog zone even though serve_catalog_zone=false" >&2
-  exit 1
+    echo "OxideDNS served the catalog zone even though serve_catalog_zone=false" >&2
+    exit 1
 fi
 
 initial_member="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
 if [[ -n "$initial_member" ]]; then
-  echo "OxideDNS served member.example before the catalog listed it" >&2
-  exit 1
+    echo "OxideDNS served member.example before the catalog listed it" >&2
+    exit 1
 fi
 
 write_catalog_zone 2026052502 yes
@@ -273,28 +276,28 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_added=""
 for _ in {1..80}; do
-  member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-  if [[ "$member_added" == "192.0.2.77" ]]; then
-    break
-  fi
-  sleep 0.25
+    member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
+    if [[ "$member_added" == "192.0.2.77" ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$member_added" >"$member_added_out"
 if [[ "$member_added" != "192.0.2.77" ]]; then
-  echo "OxideDNS did not serve the catalog-added member zone" >&2
-  exit 1
+    echo "OxideDNS did not serve the catalog-added member zone" >&2
+    exit 1
 fi
 
 metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
 for expected in \
-  'oxidedns_zones_active 2' \
-  'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052502' \
-  'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'; do
-  if [[ "$metrics_after_add" != *"$expected"* ]]; then
-    echo "OxideDNS metrics after catalog add missing expected line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 2' \
+    'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052502' \
+    'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'; do
+    if [[ "$metrics_after_add" != *"$expected"* ]]; then
+        echo "OxideDNS metrics after catalog add missing expected line: $expected" >&2
+        exit 1
+    fi
 done
 
 write_catalog_zone 2026052503 no
@@ -304,34 +307,34 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_removed="192.0.2.77"
 for _ in {1..80}; do
-  member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-  if [[ -z "$member_removed" ]]; then
-    break
-  fi
-  sleep 0.25
+    member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
+    if [[ -z "$member_removed" ]]; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$member_removed" >"$member_removed_out"
 if [[ -n "$member_removed" ]]; then
-  echo "OxideDNS still served the member zone after catalog removal" >&2
-  exit 1
+    echo "OxideDNS still served the member zone after catalog removal" >&2
+    exit 1
 fi
 
 metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
 if [[ "$metrics_after_remove" != *'oxidedns_zones_active 1'* ]]; then
-  echo "OxideDNS metrics after catalog removal did not return to one active hidden catalog zone" >&2
-  exit 1
+    echo "OxideDNS metrics after catalog removal did not return to one active hidden catalog zone" >&2
+    exit 1
 fi
 if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
-  echo "OxideDNS metrics still reported the removed catalog member zone" >&2
-  exit 1
+    echo "OxideDNS metrics still reported the removed catalog member zone" >&2
+    exit 1
 fi
 
 docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 {
-  printf 'primary\tinitial_catalog_serial\tadded_catalog_serial\tremoved_catalog_serial\tmember_added_answer\tmember_removed_answer\n'
-  printf 'bind\t2026052501\t2026052502\t2026052503\t%s\t%s\n' "$member_added" "${member_removed:-<empty>}"
+    printf 'primary\tinitial_catalog_serial\tadded_catalog_serial\tremoved_catalog_serial\tmember_added_answer\tmember_removed_answer\n'
+    printf 'bind\t2026052501\t2026052502\t2026052503\t%s\t%s\n' "$member_added" "${member_removed:-<empty>}"
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<'EOF'
@@ -343,15 +346,15 @@ RFC9432-CATALOG-MVP-004	retained-real-primary	catalog_query_hidden	catalog-hidde
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  for artifact in \
-    named.conf rndc.conf oxidedns.toml named.log oxidedns.log primary-version.txt \
-    catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
-    catalog-hidden.out member-added.out member-removed.out \
-    metrics-after-add.txt metrics-after-remove.txt \
-    bind-catalog-zone-summary.tsv bind-catalog-zone-traceability.tsv; do
-    cp "$workdir/$artifact" "$artifact_dir/$artifact"
-  done
+    mkdir -p "$artifact_dir"
+    for artifact in \
+        named.conf rndc.conf oxidedns.toml named.log oxidedns.log primary-version.txt \
+        catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
+        catalog-hidden.out member-added.out member-removed.out \
+        metrics-after-add.txt metrics-after-remove.txt \
+        bind-catalog-zone-summary.tsv bind-catalog-zone-traceability.tsv; do
+        cp "$workdir/$artifact" "$artifact_dir/$artifact"
+    done
 fi
 
 echo "BIND Docker catalog-zone live interop passed"

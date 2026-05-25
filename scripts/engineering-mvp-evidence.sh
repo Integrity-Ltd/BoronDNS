@@ -9,21 +9,21 @@ snapshot_dir="$evidence_root/$timestamp"
 mkdir -p "$snapshot_dir/logs"
 
 run_and_capture() {
-  local name="$1"
-  shift
-  local log="$snapshot_dir/logs/$name.log"
+    local name="$1"
+    shift
+    local log="$snapshot_dir/logs/$name.log"
 
-  set +e
-  {
-    printf '$'
-    printf ' %q' "$@"
-    printf '\n\n'
-    timeout --preserve-status "${command_timeout_seconds}s" "$@"
-  } >"$log" 2>&1
-  local status=$?
-  set -e
+    set +e
+    {
+        printf '$'
+        printf ' %q' "$@"
+        printf '\n\n'
+        timeout --preserve-status "${command_timeout_seconds}s" "$@"
+    } >"$log" 2>&1
+    local status=$?
+    set -e
 
-  return "$status"
+    return "$status"
 }
 
 cat >"$snapshot_dir/README.md" <<EOF

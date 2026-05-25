@@ -10,75 +10,75 @@ mkdir -p "$snapshot_dir/logs" "$snapshot_dir/interop-primary-versions"
 printf 'source_path\tsnapshot_path\n' >"$snapshot_dir/interop-primary-versions/INDEX.tsv"
 
 for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin" /cache/cargo/bin; do
-  if [[ -d "$candidate" ]]; then
-    PATH="$candidate:$PATH"
-  fi
+    if [[ -d "$candidate" ]]; then
+        PATH="$candidate:$PATH"
+    fi
 done
 export PATH
 
 run_and_capture() {
-  local name="$1"
-  shift
-  local log="$snapshot_dir/logs/$name.log"
-  local before="$snapshot_dir/logs/$name.primary-version.before"
-  list_primary_version_artifacts "$repo_root" >"$before"
+    local name="$1"
+    shift
+    local log="$snapshot_dir/logs/$name.log"
+    local before="$snapshot_dir/logs/$name.primary-version.before"
+    list_primary_version_artifacts "$repo_root" >"$before"
 
-  set +e
-  {
-    printf '$'
-    printf ' %q' "$@"
-    printf '\n\n'
-    "$@"
-  } >"$log" 2>&1
-  local status=$?
-  set -e
+    set +e
+    {
+        printf '$'
+        printf ' %q' "$@"
+        printf '\n\n'
+        "$@"
+    } >"$log" 2>&1
+    local status=$?
+    set -e
 
-  capture_new_primary_version_artifacts "$repo_root" "$snapshot_dir" "$name" "$before"
-  rm -f "$before"
-  return "$status"
+    capture_new_primary_version_artifacts "$repo_root" "$snapshot_dir" "$name" "$before"
+    rm -f "$before"
+    return "$status"
 }
 
 record_version() {
-  local name="$1"
-  shift
-  local log="$snapshot_dir/logs/tool-versions.log"
-  {
-    printf '$'
-    printf ' %q' "$@"
-    printf '\n'
-    if command -v "$1" >/dev/null 2>&1; then
-      "$@" 2>&1 || true
-    else
-      printf 'missing: %s\n' "$1"
-    fi
-    printf '\n'
-  } >>"$log"
+    local name="$1"
+    shift
+    local log="$snapshot_dir/logs/tool-versions.log"
+    {
+        printf '$'
+        printf ' %q' "$@"
+        printf '\n'
+        if command -v "$1" >/dev/null 2>&1; then
+            "$@" 2>&1 || true
+        else
+            printf 'missing: %s\n' "$1"
+        fi
+        printf '\n'
+    } >>"$log"
 }
 
 require_positive_integer() {
-  local name="$1"
-  local value="$2"
-  [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
-    printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
-    exit 1
-  }
+    local name="$1"
+    local value="$2"
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+        printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
+        exit 1
+    }
 }
 
 run_rrl_campaign() {
-  local name="$1"
-  local campaign_dir="$snapshot_dir/$name"
-  local iterations="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS:-3}"
-  local duration="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION:-}"
+    local name="$1"
+    local campaign_dir="$snapshot_dir/$name"
+    local iterations="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS:-3}"
+    local duration="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION:-}"
 
-  if [[ -n "$duration" ]]; then
-    require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION "$duration"
-    run_and_capture "$name" bash -lc \
-      "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --duration '$duration' --evidence-dir '$campaign_dir'"
-  else
-    require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS "$iterations"
-    run_and_capture "$name" bash -lc \
-      "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --iterations '$iterations' --evidence-dir '$campaign_dir'"
-  fi
+    if [[ -n "$duration" ]]; then
+        require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION "$duration"
+        run_and_capture "$name" bash -lc \
+            "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --duration '$duration' --evidence-dir '$campaign_dir'"
+    else
+        require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS "$iterations"
+        run_and_capture "$name" bash -lc \
+            "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --iterations '$iterations' --evidence-dir '$campaign_dir'"
+    fi
 }
 
 cat >"$snapshot_dir/README.md" <<EOF
@@ -95,9 +95,9 @@ interface-compatibility, canonical log-field, and lazy log-formatting audit
 output, plus retained unsafe dependency enumeration.
 It is an evidence collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
-production benchmark reports. The default `info-verbosity-handoff/`,
-`interface-compatibility/`, `benchmark-handoff/`, `soak-handoff/`,
-`reproducible-build-handoff/`, and `release-handoff/` artifacts are
+production benchmark reports. The default \`info-verbosity-handoff/\`,
+\`interface-compatibility/\`, \`benchmark-handoff/\`, \`soak-handoff/\`,
+\`reproducible-build-handoff/\`, and \`release-handoff/\` artifacts are
 release/operations setup scaffolds for later production-depth info-verbosity
 profile, release-to-release interface diff review, Reference Hardware/Profile
 benchmark, long-duration soak, independent reproducible-build comparison,
@@ -129,9 +129,9 @@ record_version curl curl --version
 record_version python3 python3 --version
 
 {
-  printf '# OxideDNS Verification Commands\n\n'
-  awk '/^```sh$/ { in_block=1 } in_block { print } /^```$/ && in_block { in_block=0 }' \
-    "$repo_root/docs/mvp-gap-register.md"
+    printf '# OxideDNS Verification Commands\n\n'
+    awk '/^```sh$/ { in_block=1 } in_block { print } /^```$/ && in_block { in_block=0 }' \
+        "$repo_root/docs/mvp-gap-register.md"
 } >"$snapshot_dir/verification-commands.md"
 
 run_and_capture test-plan-check bash -lc "cd '$repo_root' && scripts/check-test-plan.sh"
@@ -179,9 +179,9 @@ run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_
 run_and_capture rrl-udp bash -lc "cd '$repo_root' && OXIDEDNS_RRL_UDP_ARTIFACT_DIR='$snapshot_dir/rrl-udp-artifacts' scripts/interop-rrl-udp.sh"
 
 if [[ "${OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN:-0}" == "1" ]]; then
-  run_rrl_campaign rrl-evidence-campaign
+    run_rrl_campaign rrl-evidence-campaign
 else
-  cat >"$snapshot_dir/logs/rrl-evidence-campaign-skipped.log" <<'EOF'
+    cat >"$snapshot_dir/logs/rrl-evidence-campaign-skipped.log" <<'EOF'
 RRL evidence campaign was not run by default.
 
 Set OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1 to run scripts/rrl-evidence-campaign.sh
@@ -192,10 +192,10 @@ EOF
 fi
 
 if [[ -n "${OXIDEDNS_PERF_BASELINE:-}" ]]; then
-  run_and_capture perf-regression bash -lc \
-    "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$OXIDEDNS_PERF_BASELINE' --threshold-pct '${OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
+    run_and_capture perf-regression bash -lc \
+        "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$OXIDEDNS_PERF_BASELINE' --threshold-pct '${OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
 else
-  cat >"$snapshot_dir/logs/perf-regression-skipped.log" <<'EOF'
+    cat >"$snapshot_dir/logs/perf-regression-skipped.log" <<'EOF'
 Performance regression comparison was not run by default.
 
 Set OXIDEDNS_PERF_BASELINE to a whitespace-delimited history file with rows shaped
@@ -205,10 +205,10 @@ EOF
 fi
 
 if [[ -n "${OXIDEDNS_RELEASE_NOTES:-}" ]]; then
-  run_and_capture release-notes-gate bash -lc \
-    "cd '$repo_root' && scripts/check-release-notes.sh '$OXIDEDNS_RELEASE_NOTES' '$snapshot_dir'"
+    run_and_capture release-notes-gate bash -lc \
+        "cd '$repo_root' && scripts/check-release-notes.sh '$OXIDEDNS_RELEASE_NOTES' '$snapshot_dir'"
 else
-  cat >"$snapshot_dir/logs/release-notes-gate-skipped.log" <<'EOF'
+    cat >"$snapshot_dir/logs/release-notes-gate-skipped.log" <<'EOF'
 Release notes gate was not run by default.
 
 Set OXIDEDNS_RELEASE_NOTES to a completed release notes markdown file to run
@@ -217,15 +217,15 @@ EOF
 fi
 
 if [[ "${OXIDEDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
-  fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
-  if [[ ! "$fuzz_duration" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'OXIDEDNS_EVIDENCE_FUZZ_DURATION must be a positive integer: %s\n' "$fuzz_duration" >&2
-    exit 1
-  fi
-  run_and_capture fuzz-campaign bash -lc \
-    "cd '$repo_root' && scripts/fuzz-campaign.sh --duration '$fuzz_duration' --evidence-dir '$snapshot_dir/fuzz-campaign'"
+    fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
+    if [[ ! "$fuzz_duration" =~ ^[1-9][0-9]*$ ]]; then
+        printf 'OXIDEDNS_EVIDENCE_FUZZ_DURATION must be a positive integer: %s\n' "$fuzz_duration" >&2
+        exit 1
+    fi
+    run_and_capture fuzz-campaign bash -lc \
+        "cd '$repo_root' && scripts/fuzz-campaign.sh --duration '$fuzz_duration' --evidence-dir '$snapshot_dir/fuzz-campaign'"
 else
-  cat >"$snapshot_dir/logs/fuzz-campaign-skipped.log" <<'EOF'
+    cat >"$snapshot_dir/logs/fuzz-campaign-skipped.log" <<'EOF'
 Fuzz campaigns were not run by default.
 
 Set OXIDEDNS_EVIDENCE_RUN_FUZZ=1 to run scripts/fuzz-campaign.sh and retain its
@@ -236,24 +236,24 @@ EOF
 fi
 
 if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
-  while IFS= read -r command_line; do
-    [[ -z "$command_line" || "$command_line" =~ ^# ]] && continue
-    [[ "$command_line" == ./* || "$command_line" == scripts/* ]] || continue
-    case "$command_line" in
-      *scripts/release-evidence-snapshot.sh*|*scripts/engineering-mvp-evidence.sh*)
-        continue
-        ;;
-      scripts/rrl-evidence-campaign.sh*)
+    while IFS= read -r command_line; do
+        [[ -z "$command_line" || "$command_line" =~ ^# ]] && continue
+        [[ "$command_line" == ./* || "$command_line" == scripts/* ]] || continue
+        case "$command_line" in
+        *scripts/release-evidence-snapshot.sh* | *scripts/engineering-mvp-evidence.sh*)
+            continue
+            ;;
+        scripts/rrl-evidence-campaign.sh*)
+            name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
+            run_rrl_campaign "interop-$name"
+            continue
+            ;;
+        esac
         name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
-        run_rrl_campaign "interop-$name"
-        continue
-        ;;
-    esac
-    name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
-    run_and_capture "interop-$name" bash -lc "cd '$repo_root' && $command_line"
-  done < <(awk '/^```sh$/ { in_block=1; next } /^```$/ && in_block { in_block=0 } in_block { print }' "$repo_root/docs/mvp-gap-register.md")
+        run_and_capture "interop-$name" bash -lc "cd '$repo_root' && $command_line"
+    done < <(awk '/^```sh$/ { in_block=1; next } /^```$/ && in_block { in_block=0 } in_block { print }' "$repo_root/docs/mvp-gap-register.md")
 else
-  cat >"$snapshot_dir/logs/interop-skipped.log" <<'EOF'
+    cat >"$snapshot_dir/logs/interop-skipped.log" <<'EOF'
 Interop scripts were not run by default.
 
 Set OXIDEDNS_EVIDENCE_RUN_INTEROP=1 to run the interop commands listed in

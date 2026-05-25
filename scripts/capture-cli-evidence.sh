@@ -6,39 +6,39 @@ evidence_dir="${OXIDEDNS_CLI_EVIDENCE_DIR:-$repo_root/target/cli-evidence}"
 mkdir -p "$evidence_dir"
 
 run_capture() {
-  local name="$1"
-  shift
-  local stdout="$evidence_dir/$name.stdout"
-  local stderr="$evidence_dir/$name.stderr"
-  local status_file="$evidence_dir/$name.status"
+    local name="$1"
+    shift
+    local stdout="$evidence_dir/$name.stdout"
+    local stderr="$evidence_dir/$name.stderr"
+    local status_file="$evidence_dir/$name.status"
 
-  set +e
-  "$@" >"$stdout" 2>"$stderr"
-  local status=$?
-  set -e
+    set +e
+    "$@" >"$stdout" 2>"$stderr"
+    local status=$?
+    set -e
 
-  printf '%s\n' "$status" >"$status_file"
-  if (( status != 0 )); then
-    printf 'CLI evidence command failed (%s), status=%s\n' "$name" "$status" >&2
-    sed -n '1,80p' "$stderr" >&2
-    exit "$status"
-  fi
+    printf '%s\n' "$status" >"$status_file"
+    if ((status != 0)); then
+        printf 'CLI evidence command failed (%s), status=%s\n' "$name" "$status" >&2
+        sed -n '1,80p' "$stderr" >&2
+        exit "$status"
+    fi
 }
 
 require_text() {
-  local path="$1"
-  local needle="$2"
-  if ! grep -F -- "$needle" "$path" >/dev/null 2>&1; then
-    printf '%s missing required text: %s\n' "$path" "$needle" >&2
-    exit 1
-  fi
+    local path="$1"
+    local needle="$2"
+    if ! grep -F -- "$needle" "$path" >/dev/null 2>&1; then
+        printf '%s missing required text: %s\n' "$path" "$needle" >&2
+        exit 1
+    fi
 }
 
 cd "$repo_root"
 
 repo_relative_path() {
-  local path="$1"
-  realpath --relative-to="$repo_root" "$path"
+    local path="$1"
+    realpath --relative-to="$repo_root" "$path"
 }
 
 example_config_path="$(repo_relative_path "$evidence_dir/example-config.stdout")"
@@ -67,13 +67,13 @@ run_capture help-long cargo run -q -p oxidedns-cli -- --help
 run_capture help-short cargo run -q -p oxidedns-cli -- -h
 run_capture example-config cargo run -q -p oxidedns-cli -- --example-config
 run_capture example-config-validate cargo run -q -p oxidedns-cli -- \
-  --validate-config "$example_config_path"
+    --validate-config "$example_config_path"
 run_capture checked-in-config-validate cargo run -q -p oxidedns-cli -- \
-  --validate-config config/oxidedns.example.toml
+    --validate-config config/oxidedns.example.toml
 run_capture checked-in-config-dump cargo run -q -p oxidedns-cli -- \
-  --dump-config config/oxidedns.example.toml
+    --dump-config config/oxidedns.example.toml
 run_capture redacted-config-dump cargo run -q -p oxidedns-cli -- \
-  --dump-config "$redaction_config_path"
+    --dump-config "$redaction_config_path"
 
 require_text "$evidence_dir/version-long.stdout" "oxidedns 0.1.0"
 require_text "$evidence_dir/version-long.stdout" "build commit:"
@@ -93,8 +93,8 @@ require_text "$evidence_dir/checked-in-config-validate.stdout" "configuration ok
 require_text "$evidence_dir/checked-in-config-dump.stdout" "[server]"
 require_text "$evidence_dir/redacted-config-dump.stdout" "secret = \"<redacted>\""
 if grep -F -- "c2VjcmV0LWtleQ==" "$evidence_dir/redacted-config-dump.stdout" >/dev/null 2>&1; then
-  printf 'redacted config dump leaked TSIG secret material\n' >&2
-  exit 1
+    printf 'redacted config dump leaked TSIG secret material\n' >&2
+    exit 1
 fi
 
 cat >"$evidence_dir/README.md" <<EOF

@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo dig curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping IXFR fallback interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping IXFR fallback interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,31 +19,55 @@ artifact_dir="${OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -100 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
-    [[ -f "$workdir/primary-soa.out" ]] && { echo "---- primary-soa.out ----" >&2; cat "$workdir/primary-soa.out" >&2; }
-    [[ -f "$workdir/initial-a.out" ]] && { echo "---- initial-a.out ----" >&2; cat "$workdir/initial-a.out" >&2; }
-    [[ -f "$workdir/final-soa.out" ]] && { echo "---- final-soa.out ----" >&2; cat "$workdir/final-soa.out" >&2; }
-    [[ -f "$workdir/final-a.out" ]] && { echo "---- final-a.out ----" >&2; cat "$workdir/final-a.out" >&2; }
-    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -100 "$workdir/metrics.txt" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -100 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/fake-primary.stderr" ]] && {
+            echo "---- fake-primary.stderr ----" >&2
+            tail -100 "$workdir/fake-primary.stderr" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -100 "$workdir/oxidedns.log" >&2
+        }
+        [[ -f "$workdir/primary-soa.out" ]] && {
+            echo "---- primary-soa.out ----" >&2
+            cat "$workdir/primary-soa.out" >&2
+        }
+        [[ -f "$workdir/initial-a.out" ]] && {
+            echo "---- initial-a.out ----" >&2
+            cat "$workdir/initial-a.out" >&2
+        }
+        [[ -f "$workdir/final-soa.out" ]] && {
+            echo "---- final-soa.out ----" >&2
+            cat "$workdir/final-soa.out" >&2
+        }
+        [[ -f "$workdir/final-a.out" ]] && {
+            echo "---- final-a.out ----" >&2
+            cat "$workdir/final-a.out" >&2
+        }
+        [[ -f "$workdir/metrics.txt" ]] && {
+            echo "---- metrics.txt ----" >&2
+            tail -100 "$workdir/metrics.txt" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -303,18 +327,18 @@ python3 "$fake_primary" "$primary_port" "$primary_log" >"$workdir/fake-primary.s
 primary_pid=$!
 
 for _ in {1..50}; do
-  if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
+    if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
 done
 
 dig "@127.0.0.1" -p "$primary_port" alpha.test. SOA +time=1 +tries=1 +short \
-  >"$workdir/primary-soa.out"
+    >"$workdir/primary-soa.out"
 primary_soa="$(<"$workdir/primary-soa.out")"
 if [[ "$primary_soa" != *" 1 1 1 30 5"* ]]; then
-  echo "fake primary did not answer initial SOA serial 1" >&2
-  exit 1
+    echo "fake primary did not answer initial SOA serial 1" >&2
+    exit 1
 fi
 
 cargo build -p oxidedns-cli >/dev/null
@@ -323,86 +347,86 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after initial fake-primary AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after initial fake-primary AXFR" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
-  >"$workdir/initial-a.out"
+    >"$workdir/initial-a.out"
 initial_a="$(<"$workdir/initial-a.out")"
 if [[ "$initial_a" != *"192.0.2.11"* ]]; then
-  echo "OxideDNS did not serve initial AXFR data" >&2
-  exit 1
+    echo "OxideDNS did not serve initial AXFR data" >&2
+    exit 1
 fi
 
 final_soa=""
 metrics=""
 for _ in {1..160}; do
-  final_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short || true)"
-  metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" 2>/dev/null || true)"
-  if [[ "$final_soa" == *" 3 1 1 30 5"* ]] \
-    && [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3'* ]] \
-    && [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3'* ]] \
-    && [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1'* ]] \
-    && [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0'* ]] \
-    && [[ "$metrics" == *'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'* ]] \
-    && grep -F "TCP AXFR serial=3" "$primary_log" >/dev/null 2>&1; then
-      break
-  fi
-  sleep 0.25
+    final_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short || true)"
+    metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" 2>/dev/null || true)"
+    if [[ "$final_soa" == *" 3 1 1 30 5"* ]] &&
+        [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3'* ]] &&
+        [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3'* ]] &&
+        [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1'* ]] &&
+        [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0'* ]] &&
+        [[ "$metrics" == *'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'* ]] &&
+        grep -F "TCP AXFR serial=3" "$primary_log" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 printf '%s\n' "$final_soa" >"$workdir/final-soa.out"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 
 if [[ "$final_soa" != *" 3 1 1 30 5"* ]]; then
-  echo "OxideDNS did not publish serial 3 after IXFR NOTIMP fallback/cooldown" >&2
-  exit 1
+    echo "OxideDNS did not publish serial 3 after IXFR NOTIMP fallback/cooldown" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
-  >"$workdir/final-a.out"
+    >"$workdir/final-a.out"
 final_a="$(<"$workdir/final-a.out")"
 if [[ "$final_a" != *"192.0.2.13"* ]]; then
-  echo "OxideDNS did not serve final fallback AXFR data" >&2
-  exit 1
+    echo "OxideDNS did not serve final fallback AXFR data" >&2
+    exit 1
 fi
 
 ixfr_count="$(grep -c "TCP IXFR" "$primary_log" || true)"
 if [[ "$ixfr_count" != "1" ]]; then
-  echo "expected exactly one IXFR attempt before cooldown, saw $ixfr_count" >&2
-  exit 1
+    echo "expected exactly one IXFR attempt before cooldown, saw $ixfr_count" >&2
+    exit 1
 fi
 
 for expected in \
-  'TCP AXFR serial=1' \
-  'TCP AXFR serial=2' \
-  'TCP AXFR serial=3' \
-  'TCP IXFR notimp count=1'; do
-  if ! grep -F "$expected" "$primary_log" >/dev/null 2>&1; then
-    echo "fake primary log missing expected event: $expected" >&2
-    exit 1
-  fi
+    'TCP AXFR serial=1' \
+    'TCP AXFR serial=2' \
+    'TCP AXFR serial=3' \
+    'TCP IXFR notimp count=1'; do
+    if ! grep -F "$expected" "$primary_log" >/dev/null 2>&1; then
+        echo "fake primary log missing expected event: $expected" >&2
+        exit 1
+    fi
 done
 
 for expected in \
-  'oxidedns_zones_active 1' \
-  'oxidedns_zone_soa_serial{zone="alpha.test."} 3' \
-  'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3' \
-  'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3' \
-  'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1' \
-  'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0' \
-  'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "metrics missing expected line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    'oxidedns_zone_soa_serial{zone="alpha.test."} 3' \
+    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3' \
+    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3' \
+    'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1' \
+    'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0' \
+    'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "metrics missing expected line: $expected" >&2
+        exit 1
+    fi
 done
 
 cat >"$summary_env" <<EOF
@@ -420,18 +444,18 @@ ixfr_attempts_before_cooldown=$ixfr_count
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
-  cp "$fake_primary" "$artifact_dir/fake-primary.py"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$workdir/primary-soa.out" "$artifact_dir/primary-soa.out"
-  cp "$workdir/initial-a.out" "$artifact_dir/initial-a.out"
-  cp "$workdir/final-soa.out" "$artifact_dir/final-soa.out"
-  cp "$workdir/final-a.out" "$artifact_dir/final-a.out"
-  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
-  cp "$summary_env" "$artifact_dir/ixfr-fallback-summary.env"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+    cp "$fake_primary" "$artifact_dir/fake-primary.py"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/primary-soa.out" "$artifact_dir/primary-soa.out"
+    cp "$workdir/initial-a.out" "$artifact_dir/initial-a.out"
+    cp "$workdir/final-soa.out" "$artifact_dir/final-soa.out"
+    cp "$workdir/final-a.out" "$artifact_dir/final-a.out"
+    cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+    cp "$summary_env" "$artifact_dir/ixfr-fallback-summary.env"
 fi
 
 echo "IXFR NOTIMP fallback interop passed"

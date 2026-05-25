@@ -6,23 +6,23 @@ artifact_dir="${OXIDEDNS_PORTABILITY_EVIDENCE_DIR:-$repo_root/target/evidence/po
 mkdir -p "$artifact_dir"
 
 write_command() {
-  local name="$1"
-  shift
-  local out="$artifact_dir/$name.txt"
-  {
-    printf '$'
-    printf ' %q' "$@"
-    printf '\n\n'
-    "$@" 2>&1 || true
-  } >"$out"
+    local name="$1"
+    shift
+    local out="$artifact_dir/$name.txt"
+    {
+        printf '$'
+        printf ' %q' "$@"
+        printf '\n\n'
+        "$@" 2>&1 || true
+    } >"$out"
 }
 
 require_command() {
-  local tool="$1"
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    printf 'missing required command: %s\n' "$tool" >&2
-    exit 1
-  fi
+    local tool="$1"
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'missing required command: %s\n' "$tool" >&2
+        exit 1
+    fi
 }
 
 require_command cargo
@@ -38,29 +38,29 @@ write_command cargo cargo --version
 write_command oxidedns-version "$repo_root/target/debug/oxidedns" --version
 
 if [[ -r /etc/os-release ]]; then
-  cp /etc/os-release "$artifact_dir/os-release.txt"
+    cp /etc/os-release "$artifact_dir/os-release.txt"
 else
-  printf 'missing /etc/os-release\n' >"$artifact_dir/os-release.txt"
+    printf 'missing /etc/os-release\n' >"$artifact_dir/os-release.txt"
 fi
 
 if command -v ldd >/dev/null 2>&1; then
-  write_command ldd-version ldd --version
-  write_command oxidedns-ldd ldd "$repo_root/target/debug/oxidedns"
+    write_command ldd-version ldd --version
+    write_command oxidedns-ldd ldd "$repo_root/target/debug/oxidedns"
 else
-  printf 'missing ldd\n' >"$artifact_dir/ldd-version.txt"
-  printf 'missing ldd\n' >"$artifact_dir/oxidedns-ldd.txt"
+    printf 'missing ldd\n' >"$artifact_dir/ldd-version.txt"
+    printf 'missing ldd\n' >"$artifact_dir/oxidedns-ldd.txt"
 fi
 
 {
-  printf 'tool\tstatus\tversion\n'
-  for tool in docker podman containerd ctr crictl crio runc; do
-    if command -v "$tool" >/dev/null 2>&1; then
-      version="$("$tool" --version 2>&1 | head -n 1 || true)"
-      printf '%s\tpresent\t%s\n' "$tool" "$version"
-    else
-      printf '%s\tmissing\t\n' "$tool"
-    fi
-  done
+    printf 'tool\tstatus\tversion\n'
+    for tool in docker podman containerd ctr crictl crio runc; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            version="$("$tool" --version 2>&1 | head -n 1 || true)"
+            printf '%s\tpresent\t%s\n' "$tool" "$version"
+        else
+            printf '%s\tmissing\t\n' "$tool"
+        fi
+    done
 } >"$artifact_dir/container-runtime-inventory.tsv"
 
 python3 >"$artifact_dir/network-probes.tsv" <<'PY'
@@ -123,31 +123,31 @@ PY
 
 runtime_scan="$artifact_dir/init-package-runtime-scan.txt"
 if rg -n \
-  -e 'systemd' \
-  -e 'sysvinit' \
-  -e 'OpenRC' \
-  -e 'apt(-get)?\b' \
-  -e '\byum\b' \
-  -e '\bdnf\b' \
-  -e '\bapk\b' \
-  -e '/etc/(debian|redhat|alpine|systemd)' \
-  "$repo_root/crates/oxidedns-cli/src" \
-  "$repo_root/crates/oxidedns-core/src" \
-  "$repo_root/crates/oxidedns-server/src" \
-  "$repo_root/config" >"$runtime_scan"; then
-  printf 'runtime portability scan found distribution/init coupling; see %s\n' "$runtime_scan" >&2
-  exit 1
+    -e 'systemd' \
+    -e 'sysvinit' \
+    -e 'OpenRC' \
+    -e 'apt(-get)?\b' \
+    -e '\byum\b' \
+    -e '\bdnf\b' \
+    -e '\bapk\b' \
+    -e '/etc/(debian|redhat|alpine|systemd)' \
+    "$repo_root/crates/oxidedns-cli/src" \
+    "$repo_root/crates/oxidedns-core/src" \
+    "$repo_root/crates/oxidedns-server/src" \
+    "$repo_root/config" >"$runtime_scan"; then
+    printf 'runtime portability scan found distribution/init coupling; see %s\n' "$runtime_scan" >&2
+    exit 1
 else
-  printf 'no first-party runtime references to init systems or distro package managers\n' >"$runtime_scan"
+    printf 'no first-party runtime references to init systems or distro package managers\n' >"$runtime_scan"
 fi
 
 {
-  printf 'requirement_id\tevidence_state\tartifact\treview_note\n'
-  printf 'ODS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; oxidedns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
-  printf 'ODS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; oxidedns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
-  printf 'ODS-NFR-PORT-003\tinventory\tcontainer-runtime-inventory.tsv\tOCI runtime availability is inventoried for the release host; runtime/container deployment tests remain separate artifacts.\n'
-  printf 'ODS-NFR-PORT-004\tcurrent-host-runtime\tnetwork-probes.tsv\tCurrent host IPv4/IPv6 TCP and UDP loopback capability is probed; full per-operation dual-stack tests remain acceptance work.\n'
-  printf 'ODS-NFR-PORT-005\tstatic-audit\tinit-package-runtime-scan.txt\tFirst-party runtime/config source is scanned for init-system, package-manager, and distribution-layout coupling.\n'
+    printf 'requirement_id\tevidence_state\tartifact\treview_note\n'
+    printf 'ODS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; oxidedns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
+    printf 'ODS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; oxidedns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
+    printf 'ODS-NFR-PORT-003\tinventory\tcontainer-runtime-inventory.tsv\tOCI runtime availability is inventoried for the release host; runtime/container deployment tests remain separate artifacts.\n'
+    printf 'ODS-NFR-PORT-004\tcurrent-host-runtime\tnetwork-probes.tsv\tCurrent host IPv4/IPv6 TCP and UDP loopback capability is probed; full per-operation dual-stack tests remain acceptance work.\n'
+    printf 'ODS-NFR-PORT-005\tstatic-audit\tinit-package-runtime-scan.txt\tFirst-party runtime/config source is scanned for init-system, package-manager, and distribution-layout coupling.\n'
 } >"$artifact_dir/portability-traceability.tsv"
 
 printf 'portability_evidence_dir=%s\n' "$artifact_dir"

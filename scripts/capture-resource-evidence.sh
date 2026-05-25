@@ -3,13 +3,13 @@ set -euo pipefail
 
 missing=()
 for tool in cargo curl python3; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping resource evidence: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping resource evidence: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,25 +21,25 @@ fd_bound=$((2 * (max_tcp_connections + max_concurrent_transfers + 100)))
 mkdir -p "$evidence_dir"
 
 if ! [[ "$sample_seconds" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'OXIDEDNS_RESOURCE_IDLE_SAMPLE_SECONDS must be a positive integer: %s\n' "$sample_seconds" >&2
-  exit 1
+    printf 'OXIDEDNS_RESOURCE_IDLE_SAMPLE_SECONDS must be a positive integer: %s\n' "$sample_seconds" >&2
+    exit 1
 fi
 
 cleanup() {
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
-    kill -TERM "$oxidedns_pid" >/dev/null 2>&1 || true
-    wait "$oxidedns_pid" >/dev/null 2>&1 || true
-  fi
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
+        kill -TERM "$oxidedns_pid" >/dev/null 2>&1 || true
+        wait "$oxidedns_pid" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT
 
 require_text() {
-  local path="$1"
-  local needle="$2"
-  if ! grep -F -- "$needle" "$path" >/dev/null 2>&1; then
-    printf '%s missing required text: %s\n' "$path" "$needle" >&2
-    exit 1
-  fi
+    local path="$1"
+    local needle="$2"
+    if ! grep -F -- "$needle" "$path" >/dev/null 2>&1; then
+        printf '%s missing required text: %s\n' "$path" "$needle" >&2
+        exit 1
+    fi
 }
 
 cd "$repo_root"
@@ -50,12 +50,12 @@ binary_bytes="$(stat -c '%s' "$binary")"
 binary_mib="$(awk -v bytes="$binary_bytes" 'BEGIN { printf "%.3f", bytes / 1048576 }')"
 
 {
-  printf 'artifact\tbytes\tmib\tnote\n'
-  printf 'target/release/oxidedns\t%s\t%s\tRelease binary size; not an OCI image size claim.\n' "$binary_bytes" "$binary_mib"
+    printf 'artifact\tbytes\tmib\tnote\n'
+    printf 'target/release/oxidedns\t%s\t%s\tRelease binary size; not an OCI image size claim.\n' "$binary_bytes" "$binary_mib"
 } >"$evidence_dir/binary-size.tsv"
 
 read -r dns_port health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -94,26 +94,26 @@ primaries = ["127.0.0.1:9"]
 EOF
 
 "$binary" serve --config "$evidence_dir/oxidedns.toml" \
-  >"$evidence_dir/oxidedns.stdout" \
-  2>"$evidence_dir/oxidedns.stderr" &
+    >"$evidence_dir/oxidedns.stdout" \
+    2>"$evidence_dir/oxidedns.stderr" &
 oxidedns_pid=$!
 
 for _ in $(seq 1 100); do
-  if grep -F -- "health listener bound" "$evidence_dir/oxidedns.stderr" >/dev/null 2>&1; then
-    break
-  fi
-  if ! kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
-    printf 'OxideDNS exited before health listener bound\n' >&2
-    sed -n '1,160p' "$evidence_dir/oxidedns.stderr" >&2 || true
-    exit 1
-  fi
-  sleep 0.05
+    if grep -F -- "health listener bound" "$evidence_dir/oxidedns.stderr" >/dev/null 2>&1; then
+        break
+    fi
+    if ! kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
+        printf 'OxideDNS exited before health listener bound\n' >&2
+        sed -n '1,160p' "$evidence_dir/oxidedns.stderr" >&2 || true
+        exit 1
+    fi
+    sleep 0.05
 done
 require_text "$evidence_dir/oxidedns.stderr" "health listener bound"
 
 curl -fsS "http://127.0.0.1:$health_port/livez" >"$evidence_dir/livez.json"
 curl -sS -o "$evidence_dir/readyz.json" -w 'http_code=%{http_code}\n' \
-  "http://127.0.0.1:$health_port/readyz" >"$evidence_dir/readyz.meta"
+    "http://127.0.0.1:$health_port/readyz" >"$evidence_dir/readyz.meta"
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$evidence_dir/metrics.txt"
 require_text "$evidence_dir/livez.json" '"status":"alive"'
 require_text "$evidence_dir/readyz.json" '"status":"not-ready"'
@@ -124,9 +124,9 @@ cp "/proc/$oxidedns_pid/status" "$evidence_dir/proc-status-before.txt"
 cp "/proc/$oxidedns_pid/limits" "$evidence_dir/proc-limits.txt"
 fd_count="$(find "/proc/$oxidedns_pid/fd" -maxdepth 1 -type l | wc -l | tr -d ' ')"
 printf 'fd_count=%s\nfd_formula_bound=%s\n' "$fd_count" "$fd_bound" >"$evidence_dir/fd-count.env"
-if (( fd_count > fd_bound )); then
-  printf 'runtime fd count %s exceeds SRS formula bound %s\n' "$fd_count" "$fd_bound" >&2
-  exit 1
+if ((fd_count > fd_bound)); then
+    printf 'runtime fd count %s exceeds SRS formula bound %s\n' "$fd_count" "$fd_bound" >&2
+    exit 1
 fi
 
 python3 - "$oxidedns_pid" "$sample_seconds" >"$evidence_dir/idle-cpu.env" <<'PY'
@@ -167,19 +167,19 @@ rss_kib="$(awk '/^VmRSS:/ { print $2; found = 1 } END { if (!found) print 0 }' "
 cpu_pct="$(awk -F= '$1 == "cpu_pct_one_core" { print $2 }' "$evidence_dir/idle-cpu.env")"
 
 {
-  printf 'evidence\tstatus\tartifact\treview_note\n'
-  printf 'ODS-NFR-RES-001\tsmoke\tbinary-size.tsv\tRelease binary size is retained as a proxy input; published OCI image size still requires release packaging evidence.\n'
-  printf 'ODS-NFR-RES-004\tbounded-runtime\tfd-count.env; proc-limits.txt\tRuntime file-descriptor count %s is below the configured formula bound %s for this smoke profile.\n' "$fd_count" "$fd_bound"
-  printf 'ODS-NFR-RES-006\tsmoke\tidle-cpu.env; proc-status-before.txt; proc-status-after.txt\tShort zero-query CPU sample recorded %.6f percent of one core with RSS %s KiB; full 1000-zone 5-minute acceptance benchmark remains open.\n' "$cpu_pct" "$rss_kib"
+    printf 'evidence\tstatus\tartifact\treview_note\n'
+    printf 'ODS-NFR-RES-001\tsmoke\tbinary-size.tsv\tRelease binary size is retained as a proxy input; published OCI image size still requires release packaging evidence.\n'
+    printf 'ODS-NFR-RES-004\tbounded-runtime\tfd-count.env; proc-limits.txt\tRuntime file-descriptor count %s is below the configured formula bound %s for this smoke profile.\n' "$fd_count" "$fd_bound"
+    printf 'ODS-NFR-RES-006\tsmoke\tidle-cpu.env; proc-status-before.txt; proc-status-after.txt\tShort zero-query CPU sample recorded %.6f percent of one core with RSS %s KiB; full 1000-zone 5-minute acceptance benchmark remains open.\n' "$cpu_pct" "$rss_kib"
 } >"$evidence_dir/resource-traceability.tsv"
 
 {
-  printf 'release_binary_bytes=%s\n' "$binary_bytes"
-  printf 'release_binary_mib=%s\n' "$binary_mib"
-  printf 'fd_count=%s\n' "$fd_count"
-  printf 'fd_formula_bound=%s\n' "$fd_bound"
-  printf 'rss_kib_after=%s\n' "$rss_kib"
-  printf 'idle_cpu_pct_one_core=%s\n' "$cpu_pct"
+    printf 'release_binary_bytes=%s\n' "$binary_bytes"
+    printf 'release_binary_mib=%s\n' "$binary_mib"
+    printf 'fd_count=%s\n' "$fd_count"
+    printf 'fd_formula_bound=%s\n' "$fd_bound"
+    printf 'rss_kib_after=%s\n' "$rss_kib"
+    printf 'idle_cpu_pct_one_core=%s\n' "$cpu_pct"
 } >"$evidence_dir/resource-summary.env"
 
 printf 'resource_evidence_dir=%s\n' "$evidence_dir"

@@ -6,52 +6,52 @@ artifact_dir="${OXIDEDNS_COVERAGE_EVIDENCE_DIR:-$repo_root/target/evidence/cover
 mkdir -p "$artifact_dir"
 
 for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin" /cache/cargo/bin; do
-  if [[ -x "$candidate/cargo-llvm-cov" ]]; then
-    PATH="$candidate:$PATH"
-  fi
+    if [[ -x "$candidate/cargo-llvm-cov" ]]; then
+        PATH="$candidate:$PATH"
+    fi
 done
 export PATH
 
 missing=()
 for tool in cargo python3 rustc; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
-if (( ${#missing[@]} > 0 )); then
-  printf 'missing required tool for coverage evidence: %s\n' "${missing[*]}" >&2
-  exit 1
+if ((${#missing[@]} > 0)); then
+    printf 'missing required tool for coverage evidence: %s\n' "${missing[*]}" >&2
+    exit 1
 fi
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
-  printf 'missing required cargo subcommand: cargo llvm-cov\n' >&2
-  printf 'install with: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked\n' >&2
-  exit 1
+    printf 'missing required cargo subcommand: cargo llvm-cov\n' >&2
+    printf 'install with: rustup component add llvm-tools-preview && cargo install cargo-llvm-cov --locked\n' >&2
+    exit 1
 fi
 
 {
-  printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf 'repo_root=%s\n' "$repo_root"
-  printf 'commit=%s\n' "$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-  printf 'rustc=%s\n' "$(rustc --version)"
-  printf 'cargo=%s\n' "$(cargo --version)"
-  printf 'cargo_llvm_cov=%s\n' "$(cargo llvm-cov --version)"
-  if command -v rustup >/dev/null 2>&1; then
-    rustup component list --installed | grep -E '^llvm-tools|^rust-src' || true
-  fi
+    printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'repo_root=%s\n' "$repo_root"
+    printf 'commit=%s\n' "$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+    printf 'rustc=%s\n' "$(rustc --version)"
+    printf 'cargo=%s\n' "$(cargo --version)"
+    printf 'cargo_llvm_cov=%s\n' "$(cargo llvm-cov --version)"
+    if command -v rustup >/dev/null 2>&1; then
+        rustup component list --installed | grep -E '^llvm-tools|^rust-src' || true
+    fi
 } >"$artifact_dir/tool-versions.env"
 
 summary_json="$artifact_dir/coverage-summary.json"
 coverage_log="$artifact_dir/cargo-llvm-cov.log"
 case "$artifact_dir" in
-  "$repo_root"/*) cargo_artifact_dir="${artifact_dir#"$repo_root"/}" ;;
-  *) cargo_artifact_dir="$artifact_dir" ;;
+"$repo_root"/*) cargo_artifact_dir="${artifact_dir#"$repo_root"/}" ;;
+*) cargo_artifact_dir="$artifact_dir" ;;
 esac
 cargo_summary_json="$cargo_artifact_dir/coverage-summary.json"
 
 cd "$repo_root"
 {
-  printf '$ cargo llvm-cov --workspace --summary-only --json --output-path %q\n\n' "$cargo_summary_json"
-  cargo llvm-cov --workspace --summary-only --json --output-path "$cargo_summary_json"
+    printf '$ cargo llvm-cov --workspace --summary-only --json --output-path %q\n\n' "$cargo_summary_json"
+    cargo llvm-cov --workspace --summary-only --json --output-path "$cargo_summary_json"
 } >"$coverage_log" 2>&1
 
 python3 - "$summary_json" "$artifact_dir" <<'PY'

@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping DNSSEC serve interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping DNSSEC serve interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,29 +19,47 @@ artifact_dir="${OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -120 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -120 "$workdir/fake-primary.stderr" >&2; }
-    [[ -f "$workdir/dnssec-client.log" ]] && { echo "---- dnssec-client.log ----" >&2; tail -120 "$workdir/dnssec-client.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
-    [[ -f "$workdir/client-summary.out" ]] && { echo "---- client-summary.out ----" >&2; cat "$workdir/client-summary.out" >&2; }
-    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -120 "$workdir/metrics.txt" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -120 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/fake-primary.stderr" ]] && {
+            echo "---- fake-primary.stderr ----" >&2
+            tail -120 "$workdir/fake-primary.stderr" >&2
+        }
+        [[ -f "$workdir/dnssec-client.log" ]] && {
+            echo "---- dnssec-client.log ----" >&2
+            tail -120 "$workdir/dnssec-client.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$workdir/oxidedns.log" >&2
+        }
+        [[ -f "$workdir/client-summary.out" ]] && {
+            echo "---- client-summary.out ----" >&2
+            cat "$workdir/client-summary.out" >&2
+        }
+        [[ -f "$workdir/metrics.txt" ]] && {
+            echo "---- metrics.txt ----" >&2
+            tail -120 "$workdir/metrics.txt" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -593,10 +611,10 @@ python3 "$fake_primary" "$primary_port" "$primary_log" >"$workdir/fake-primary.s
 primary_pid=$!
 
 for _ in {1..50}; do
-  if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.1
+    if [[ -f "$primary_log" ]] && grep -F "READY" "$primary_log" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
 done
 
 cargo build -p oxidedns-cli >/dev/null
@@ -605,15 +623,15 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after fake-primary DNSSEC AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after fake-primary DNSSEC AXFR" >&2
+    exit 1
 fi
 
 client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/dnssec-client.log")"
@@ -623,17 +641,17 @@ echo "$client_summary"
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
-  'oxidedns_zones_active 1' \
-  'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "metrics missing expected DNSSEC line: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zones_active 1' \
+    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "metrics missing expected DNSSEC line: $expected" >&2
+        exit 1
+    fi
 done
 
 if ! grep -F "TCP AXFR with DNSSEC records served" "$primary_log" >/dev/null 2>&1; then
-  echo "fake DNSSEC primary did not serve the initial AXFR" >&2
-  exit 1
+    echo "fake DNSSEC primary did not serve the initial AXFR" >&2
+    exit 1
 fi
 
 cat >"$summary_env" <<'EOF'
@@ -661,15 +679,15 @@ ad_cd_requested_and_cleared_on_dnssec_categories=1
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
-  cp "$fake_primary" "$artifact_dir/fake-primary.py"
-  cp "$dnssec_client" "$artifact_dir/dnssec-client.py"
-  cp "$workdir/dnssec-client.log" "$artifact_dir/dnssec-client.log"
-  cp "$workdir/client-summary.out" "$artifact_dir/client-summary.out"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
-  cp "$summary_env" "$artifact_dir/dnssec-serve-summary.env"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+    cp "$fake_primary" "$artifact_dir/fake-primary.py"
+    cp "$dnssec_client" "$artifact_dir/dnssec-client.py"
+    cp "$workdir/dnssec-client.log" "$artifact_dir/dnssec-client.log"
+    cp "$workdir/client-summary.out" "$artifact_dir/client-summary.out"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+    cp "$summary_env" "$artifact_dir/dnssec-serve-summary.env"
 fi

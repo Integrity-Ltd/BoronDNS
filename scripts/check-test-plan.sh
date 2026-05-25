@@ -4,48 +4,48 @@ set -euo pipefail
 test_plan="docs/test-plan.md"
 
 if [[ ! -f "$test_plan" ]]; then
-  printf 'missing Test Plan: %s\n' "$test_plan" >&2
-  exit 66
+    printf 'missing Test Plan: %s\n' "$test_plan" >&2
+    exit 66
 fi
 
 require_text() {
-  local needle="$1"
-  if ! grep -F "$needle" "$test_plan" >/dev/null 2>&1; then
-    printf 'Test Plan missing required text: %s\n' "$needle" >&2
-    exit 1
-  fi
+    local needle="$1"
+    if ! grep -F "$needle" "$test_plan" >/dev/null 2>&1; then
+        printf 'Test Plan missing required text: %s\n' "$needle" >&2
+        exit 1
+    fi
 }
 
 for heading in \
-  "## Cadence Classes" \
-  "## Method Cadence Map" \
-  "## Continuous Execution" \
-  "## Periodic Execution" \
-  "## Gate Execution" \
-  "## Regression Policy" \
-  "## Release Notes Inputs"; do
-  require_text "$heading"
+    "## Cadence Classes" \
+    "## Method Cadence Map" \
+    "## Continuous Execution" \
+    "## Periodic Execution" \
+    "## Gate Execution" \
+    "## Regression Policy" \
+    "## Release Notes Inputs"; do
+    require_text "$heading"
 done
 
 for method in \
-  "Static analysis" \
-  "Unit test" \
-  "Property-based test" \
-  "Integration test" \
-  "Conformance test" \
-  "Fuzz test" \
-  "Performance test" \
-  "Differential test" \
-  "Interoperability test" \
-  "Soak test" \
-  "Operational test" \
-  "Security audit" \
-  "External operator acceptance"; do
-  require_text "$method"
+    "Static analysis" \
+    "Unit test" \
+    "Property-based test" \
+    "Integration test" \
+    "Conformance test" \
+    "Fuzz test" \
+    "Performance test" \
+    "Differential test" \
+    "Interoperability test" \
+    "Soak test" \
+    "Operational test" \
+    "Security audit" \
+    "External operator acceptance"; do
+    require_text "$method"
 done
 
 for cadence in Continuous Periodic Gate; do
-  require_text "$cadence"
+    require_text "$cadence"
 done
 
 require_text "regression.performance_threshold_pct"

@@ -11,12 +11,12 @@ memory_growth_threshold_pct="${OXIDEDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT:-10}"
 snapshot_cadence="${OXIDEDNS_SOAK_SNAPSHOT_CADENCE:-weekly}"
 
 require_positive_integer() {
-  local name="$1"
-  local value="$2"
-  [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
-    printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
-    exit 64
-  }
+    local name="$1"
+    local value="$2"
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+        printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
+        exit 64
+    }
 }
 
 require_positive_integer OXIDEDNS_SOAK_DURATION_DAYS "$duration_days"

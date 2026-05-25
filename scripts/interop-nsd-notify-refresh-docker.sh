@@ -3,19 +3,19 @@ set -euo pipefail
 
 missing=()
 for tool in docker dig curl python3 cargo; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping NSD NOTIFY Docker interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping NSD NOTIFY Docker interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "skipping NSD NOTIFY Docker interop: Docker daemon is unavailable" >&2
-  exit 0
+    echo "skipping NSD NOTIFY Docker interop: Docker daemon is unavailable" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,23 +26,29 @@ artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
-    if (( status != 0 )); then
-      echo "---- nsd container logs ----" >&2
-      docker logs "$container" >&2 || true
+    local status=$?
+    if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
+        if ((status != 0)); then
+            echo "---- nsd container logs ----" >&2
+            docker logs "$container" >&2 || true
+        fi
+        docker rm -f "$container" >/dev/null 2>&1 || true
     fi
-    docker rm -f "$container" >/dev/null 2>&1 || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/notify-proxy.log" ]] && { echo "---- notify-proxy.log ----" >&2; tail -120 "$workdir/notify-proxy.log" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -120 "$workdir/oxidedns.log" >&2; }
-  fi
+    if ((status != 0)); then
+        [[ -f "$workdir/notify-proxy.log" ]] && {
+            echo "---- notify-proxy.log ----" >&2
+            tail -120 "$workdir/notify-proxy.log" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -120 "$workdir/oxidedns.log" >&2
+        }
+    fi
 }
 trap cleanup EXIT
 
 read -r nsd_port notify_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -64,9 +70,9 @@ summary_tsv="$workdir/nsd-notify-refresh-summary.tsv"
 traceability_tsv="$workdir/nsd-notify-traceability.tsv"
 
 write_zone() {
-  local serial="$1"
-  local www_addr="$2"
-  cat >"$zone_file" <<EOF
+    local serial="$1"
+    local www_addr="$2"
+    cat >"$zone_file" <<EOF
 \$ORIGIN alpha.test.
 \$TTL 3600
 @ IN SOA ns1.alpha.test. hostmaster.alpha.test. (
@@ -160,32 +166,32 @@ PY
 
 cargo build -p oxidedns-cli >/dev/null
 if ! docker run -d --name "$container" \
-  -p "127.0.0.1:$nsd_port:$nsd_port/tcp" \
-  -p "127.0.0.1:$nsd_port:$nsd_port/udp" \
-  -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/tcp" \
-  -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/udp" \
-  -p "127.0.0.1:$oxidedns_health_port:$oxidedns_health_port/tcp" \
-  -v "$repo_root:/repo:ro" \
-  -v "$workdir:/work:rw" \
-  alpine:latest \
-  sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && nsd -c /work/nsd.conf && tail -f /dev/null' \
-  >/dev/null; then
-  echo "skipping NSD NOTIFY Docker interop: failed to start Alpine/NSD container" >&2
-  exit 0
+    -p "127.0.0.1:$nsd_port:$nsd_port/tcp" \
+    -p "127.0.0.1:$nsd_port:$nsd_port/udp" \
+    -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/tcp" \
+    -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/udp" \
+    -p "127.0.0.1:$oxidedns_health_port:$oxidedns_health_port/tcp" \
+    -v "$repo_root:/repo:ro" \
+    -v "$workdir:/work:rw" \
+    alpine:latest \
+    sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && nsd -c /work/nsd.conf && tail -f /dev/null' \
+    >/dev/null; then
+    echo "skipping NSD NOTIFY Docker interop: failed to start Alpine/NSD container" >&2
+    exit 0
 fi
 record_docker_primary_version "$workdir" "$container" "NSD" "alpine:latest" "nsd" "nsd-notify-refresh" "udp-notify+tcp-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..120}; do
-  if dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
+    if dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
 done
 
 primary_soa="$(dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short)"
 if [[ "$primary_soa" != *"2026052401"* ]]; then
-  echo "NSD NOTIFY primary did not answer initial SOA serial" >&2
-  exit 1
+    echo "NSD NOTIFY primary did not answer initial SOA serial" >&2
+    exit 1
 fi
 
 cat >"$oxidedns_conf" <<EOF
@@ -219,21 +225,21 @@ docker exec "$container" sh -c '/repo/target/debug/oxidedns serve --config /work
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after initial NSD AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after initial NSD AXFR" >&2
+    exit 1
 fi
 
 initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-  echo "OxideDNS did not serve initial SOA serial from NSD" >&2
-  exit 1
+    echo "OxideDNS did not serve initial SOA serial from NSD" >&2
+    exit 1
 fi
 
 write_zone 2026052402 192.0.2.42
@@ -243,88 +249,88 @@ docker exec "$container" nsd-control -c /work/nsd.conf notify alpha.test >/dev/n
 
 primary_updated_soa=""
 for _ in {1..80}; do
-  primary_updated_soa="$(dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short)"
-  if [[ "$primary_updated_soa" == *"2026052402"* ]]; then
-    break
-  fi
-  sleep 0.1
+    primary_updated_soa="$(dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short)"
+    if [[ "$primary_updated_soa" == *"2026052402"* ]]; then
+        break
+    fi
+    sleep 0.1
 done
 
 if [[ "$primary_updated_soa" != *"2026052402"* ]]; then
-  echo "NSD primary did not publish updated SOA serial" >&2
-  exit 1
+    echo "NSD primary did not publish updated SOA serial" >&2
+    exit 1
 fi
 
 updated_answer=""
 for _ in {1..120}; do
-  updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
-  if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
-    break
-  fi
-  sleep 0.1
+    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+    if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
+        break
+    fi
+    sleep 0.1
 done
 
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-  echo "OxideDNS did not publish updated A response after NSD NOTIFY" >&2
-  exit 1
+    echo "OxideDNS did not publish updated A response after NSD NOTIFY" >&2
+    exit 1
 fi
 updated_address="$(awk '/www[.]alpha[.]test[.]/ { print $NF; exit }' <<<"$updated_answer")"
 
 updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-  echo "OxideDNS did not publish updated SOA serial after NSD NOTIFY" >&2
-  exit 1
+    echo "OxideDNS did not publish updated SOA serial after NSD NOTIFY" >&2
+    exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
-  'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402' \
-  'oxidedns_notify_messages_received_total' \
-  'oxidedns_notify_refresh_actions_total{action="signalled"}'; do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    echo "OxideDNS metrics missing expected NSD NOTIFY evidence: $expected" >&2
-    exit 1
-  fi
+    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402' \
+    'oxidedns_notify_messages_received_total' \
+    'oxidedns_notify_refresh_actions_total{action="signalled"}'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        echo "OxideDNS metrics missing expected NSD NOTIFY evidence: $expected" >&2
+        exit 1
+    fi
 done
 
 notify_received="$(awk '$1 == "oxidedns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
-if [[ -z "$notify_received" ]] || (( notify_received < 1 )); then
-  echo "OxideDNS metrics did not record NSD NOTIFY receipt" >&2
-  exit 1
+if [[ -z "$notify_received" ]] || ((notify_received < 1)); then
+    echo "OxideDNS metrics did not record NSD NOTIFY receipt" >&2
+    exit 1
 fi
 
 notify_signalled="$(awk '$1 == "oxidedns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
-if [[ -z "$notify_signalled" ]] || (( notify_signalled < 1 )); then
-  echo "OxideDNS metrics did not record NSD NOTIFY refresh signal" >&2
-  exit 1
+if [[ -z "$notify_signalled" ]] || ((notify_signalled < 1)); then
+    echo "OxideDNS metrics did not record NSD NOTIFY refresh signal" >&2
+    exit 1
 fi
 
 if ! grep -q "notify_from_nsd .* opcode=4" "$notify_proxy_log"; then
-  echo "NSD NOTIFY proxy did not observe an NSD NOTIFY packet" >&2
-  exit 1
+    echo "NSD NOTIFY proxy did not observe an NSD NOTIFY packet" >&2
+    exit 1
 fi
 
 if ! grep -q "response_from_oxidedns rcode=0" "$notify_proxy_log"; then
-  echo "NSD NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
-  exit 1
+    echo "NSD NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
+    exit 1
 fi
 
 if ! grep 'accepted NOTIFY' "$workdir/oxidedns.log" | grep -q 'alpha.test.'; then
-  echo "OxideDNS log missing accepted NSD NOTIFY event" >&2
-  exit 1
+    echo "OxideDNS log missing accepted NSD NOTIFY event" >&2
+    exit 1
 fi
 
 {
-  printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_primary_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
-  printf 'NSD\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$primary_soa" \
-    "$initial_soa" \
-    "$primary_updated_soa" \
-    "$updated_soa" \
-    "$notify_received" \
-    "$notify_signalled" \
-    "$updated_address"
+    printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_primary_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
+    printf 'NSD\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$primary_soa" \
+        "$initial_soa" \
+        "$primary_updated_soa" \
+        "$updated_soa" \
+        "$notify_received" \
+        "$notify_signalled" \
+        "$updated_address"
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<'EOF'
@@ -337,16 +343,16 @@ ODS-FR-ZSM-003	retained-real-primary	nsd_notify_triggered_refresh	nsd-notify-ref
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
-  cp "$nsd_conf" "$artifact_dir/nsd.conf"
-  cp "$zone_file" "$artifact_dir/alpha.test.zone"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
-  cp "$metrics_out" "$artifact_dir/metrics.txt"
-  cp "$summary_tsv" "$artifact_dir/nsd-notify-refresh-summary.tsv"
-  cp "$traceability_tsv" "$artifact_dir/nsd-notify-traceability.tsv"
+    mkdir -p "$artifact_dir"
+    cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+    cp "$nsd_conf" "$artifact_dir/nsd.conf"
+    cp "$zone_file" "$artifact_dir/alpha.test.zone"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
+    cp "$metrics_out" "$artifact_dir/metrics.txt"
+    cp "$summary_tsv" "$artifact_dir/nsd-notify-refresh-summary.tsv"
+    cp "$traceability_tsv" "$artifact_dir/nsd-notify-traceability.tsv"
 fi
 
 echo "NSD NOTIFY refresh Docker interop passed"

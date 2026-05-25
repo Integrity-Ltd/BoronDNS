@@ -11,12 +11,12 @@ regression_threshold_pct="${OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT:-10}"
 min_duration_seconds="${OXIDEDNS_BENCHMARK_MIN_DURATION_SECONDS:-300}"
 
 require_positive_integer() {
-  local name="$1"
-  local value="$2"
-  [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
-    printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
-    exit 64
-  }
+    local name="$1"
+    local value="$2"
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+        printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
+        exit 64
+    }
 }
 
 require_positive_integer OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT "$regression_threshold_pct"

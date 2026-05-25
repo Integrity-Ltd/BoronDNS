@@ -3,14 +3,14 @@ set -euo pipefail
 
 missing=()
 for tool in python3 cargo curl dig; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    missing+=("$tool")
-  fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        missing+=("$tool")
+    fi
 done
 
-if (( ${#missing[@]} > 0 )); then
-  printf 'skipping DNS Cookie dig interop: missing %s\n' "${missing[*]}" >&2
-  exit 0
+if ((${#missing[@]} > 0)); then
+    printf 'skipping DNS Cookie dig interop: missing %s\n' "${missing[*]}" >&2
+    exit 0
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,34 +19,67 @@ artifact_dir="${OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
-  local status=$?
-  if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
-  fi
-  if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
-    kill "$primary_pid" 2>/dev/null || true
-    wait "$primary_pid" 2>/dev/null || true
-  fi
-  if (( status != 0 )); then
-    [[ -f "$workdir/fake-primary.log" ]] && { echo "---- fake-primary.log ----" >&2; tail -100 "$workdir/fake-primary.log" >&2; }
-    [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
-    [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
-    [[ -f "$workdir/no-cookie-dig.out" ]] && { echo "---- no-cookie-dig.out ----" >&2; cat "$workdir/no-cookie-dig.out" >&2; }
-    [[ -f "$workdir/first-dig.out" ]] && { echo "---- first-dig.out ----" >&2; cat "$workdir/first-dig.out" >&2; }
-    [[ -f "$workdir/second-dig.out" ]] && { echo "---- second-dig.out ----" >&2; cat "$workdir/second-dig.out" >&2; }
-    [[ -f "$workdir/invalid-cookie-dig.out" ]] && { echo "---- invalid-cookie-dig.out ----" >&2; cat "$workdir/invalid-cookie-dig.out" >&2; }
-    [[ -f "$workdir/strict-oxidedns.log" ]] && { echo "---- strict-oxidedns.log ----" >&2; tail -100 "$workdir/strict-oxidedns.log" >&2; }
-    [[ -f "$workdir/strict-client-only-badcookie-dig.out" ]] && { echo "---- strict-client-only-badcookie-dig.out ----" >&2; cat "$workdir/strict-client-only-badcookie-dig.out" >&2; }
-    [[ -f "$workdir/strict-invalid-server-cookie-badcookie-dig.out" ]] && { echo "---- strict-invalid-server-cookie-badcookie-dig.out ----" >&2; cat "$workdir/strict-invalid-server-cookie-badcookie-dig.out" >&2; }
-    [[ -f "$workdir/strict-valid-server-cookie-dig.out" ]] && { echo "---- strict-valid-server-cookie-dig.out ----" >&2; cat "$workdir/strict-valid-server-cookie-dig.out" >&2; }
-  fi
-  rm -rf "$workdir"
+    local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
+        kill "$primary_pid" 2>/dev/null || true
+        wait "$primary_pid" 2>/dev/null || true
+    fi
+    if ((status != 0)); then
+        [[ -f "$workdir/fake-primary.log" ]] && {
+            echo "---- fake-primary.log ----" >&2
+            tail -100 "$workdir/fake-primary.log" >&2
+        }
+        [[ -f "$workdir/fake-primary.stderr" ]] && {
+            echo "---- fake-primary.stderr ----" >&2
+            tail -100 "$workdir/fake-primary.stderr" >&2
+        }
+        [[ -f "$workdir/oxidedns.log" ]] && {
+            echo "---- oxidedns.log ----" >&2
+            tail -100 "$workdir/oxidedns.log" >&2
+        }
+        [[ -f "$workdir/no-cookie-dig.out" ]] && {
+            echo "---- no-cookie-dig.out ----" >&2
+            cat "$workdir/no-cookie-dig.out" >&2
+        }
+        [[ -f "$workdir/first-dig.out" ]] && {
+            echo "---- first-dig.out ----" >&2
+            cat "$workdir/first-dig.out" >&2
+        }
+        [[ -f "$workdir/second-dig.out" ]] && {
+            echo "---- second-dig.out ----" >&2
+            cat "$workdir/second-dig.out" >&2
+        }
+        [[ -f "$workdir/invalid-cookie-dig.out" ]] && {
+            echo "---- invalid-cookie-dig.out ----" >&2
+            cat "$workdir/invalid-cookie-dig.out" >&2
+        }
+        [[ -f "$workdir/strict-oxidedns.log" ]] && {
+            echo "---- strict-oxidedns.log ----" >&2
+            tail -100 "$workdir/strict-oxidedns.log" >&2
+        }
+        [[ -f "$workdir/strict-client-only-badcookie-dig.out" ]] && {
+            echo "---- strict-client-only-badcookie-dig.out ----" >&2
+            cat "$workdir/strict-client-only-badcookie-dig.out" >&2
+        }
+        [[ -f "$workdir/strict-invalid-server-cookie-badcookie-dig.out" ]] && {
+            echo "---- strict-invalid-server-cookie-badcookie-dig.out ----" >&2
+            cat "$workdir/strict-invalid-server-cookie-badcookie-dig.out" >&2
+        }
+        [[ -f "$workdir/strict-valid-server-cookie-dig.out" ]] && {
+            echo "---- strict-valid-server-cookie-dig.out ----" >&2
+            cat "$workdir/strict-valid-server-cookie-dig.out" >&2
+        }
+    fi
+    rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
-  python3 - <<'PY'
+    python3 - <<'PY'
 import socket
 
 sockets = []
@@ -217,10 +250,10 @@ python3 "$fake_primary" "$primary_port" "$primary_log" >"$workdir/fake-primary.s
 primary_pid=$!
 
 for _ in {1..50}; do
-  if grep -q READY "$primary_log" 2>/dev/null; then
-    break
-  fi
-  sleep 0.1
+    if grep -q READY "$primary_log" 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
 done
 
 cargo build -p oxidedns-cli >/dev/null
@@ -229,92 +262,91 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-  echo "OxideDNS did not become ready after fake-primary AXFR" >&2
-  exit 1
+    echo "OxideDNS did not become ready after fake-primary AXFR" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse +nocookie +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/no-cookie-dig.out"
+    +norecurse +nocookie +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/no-cookie-dig.out"
 
 if ! grep -q "www.alpha.test." "$workdir/no-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/no-cookie-dig.out"; then
-  echo "dig +nocookie did not receive expected answer from OxideDNS" >&2
-  exit 1
+    echo "dig +nocookie did not receive expected answer from OxideDNS" >&2
+    exit 1
 fi
 
 if grep -q "COOKIE:" "$workdir/no-cookie-dig.out"; then
-  echo "OxideDNS included a COOKIE option in a no-cookie response" >&2
-  exit 1
+    echo "OxideDNS included a COOKIE option in a no-cookie response" >&2
+    exit 1
 fi
 
 client_cookie="0102030405060708"
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$client_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/first-dig.out"
+    +norecurse "+cookie=$client_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/first-dig.out"
 
 if ! grep -q "www.alpha.test." "$workdir/first-dig.out" || ! grep -q "192.0.2.10" "$workdir/first-dig.out"; then
-  echo "dig +cookie did not receive expected answer from OxideDNS" >&2
-  exit 1
+    echo "dig +cookie did not receive expected answer from OxideDNS" >&2
+    exit 1
 fi
 
 response_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/first-dig.out")"
 if [[ ! "$response_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
-  echo "OxideDNS response did not contain echoed client cookie plus RFC9018 server cookie" >&2
-  exit 1
+    echo "OxideDNS response did not contain echoed client cookie plus RFC9018 server cookie" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$response_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/second-dig.out"
+    +norecurse "+cookie=$response_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/second-dig.out"
 
 if ! grep -q "www.alpha.test." "$workdir/second-dig.out" || ! grep -q "192.0.2.10" "$workdir/second-dig.out"; then
-  echo "dig valid-server-cookie retry did not receive expected answer from OxideDNS" >&2
-  exit 1
+    echo "dig valid-server-cookie retry did not receive expected answer from OxideDNS" >&2
+    exit 1
 fi
 
 invalid_response_cookie="${client_cookie}0000000000000000"
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$invalid_response_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/invalid-cookie-dig.out"
+    +norecurse "+cookie=$invalid_response_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/invalid-cookie-dig.out"
 
 if ! grep -q "www.alpha.test." "$workdir/invalid-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/invalid-cookie-dig.out"; then
-  echo "dig invalid-server-cookie query did not receive expected lenient answer from OxideDNS" >&2
-  exit 1
+    echo "dig invalid-server-cookie query did not receive expected lenient answer from OxideDNS" >&2
+    exit 1
 fi
 
 invalid_retry_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/invalid-cookie-dig.out")"
 if [[ ! "$invalid_retry_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
-  echo "OxideDNS invalid-server-cookie response did not contain a refreshed RFC9018 server cookie" >&2
-  exit 1
+    echo "OxideDNS invalid-server-cookie response did not contain a refreshed RFC9018 server cookie" >&2
+    exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
-  'oxidedns_dns_cookie_queries_total{case="no_cookie"} 1' \
-  'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
-  'oxidedns_dns_cookie_queries_total{case="valid_server"} 1' \
-  'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
-  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="no_cookie"} 1' \
-  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="client_only"} 1' \
-  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="valid_server"} 1' \
-  'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="invalid_server"} 1'
-do
-  if [[ "$metrics" != *"$expected"* ]]; then
-    printf 'missing expected metric: %s\n' "$expected" >&2
-    exit 1
-  fi
+    'oxidedns_dns_cookie_queries_total{case="no_cookie"} 1' \
+    'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
+    'oxidedns_dns_cookie_queries_total{case="valid_server"} 1' \
+    'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
+    'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="no_cookie"} 1' \
+    'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="client_only"} 1' \
+    'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="valid_server"} 1' \
+    'oxidedns_dns_cookie_queries_by_prefix_total{source_prefix="127.0.0.0/24",case="invalid_server"} 1'; do
+    if [[ "$metrics" != *"$expected"* ]]; then
+        printf 'missing expected metric: %s\n' "$expected" >&2
+        exit 1
+    fi
 done
 
 if ! grep -q "DNS Cookie server secret generated" "$workdir/oxidedns.log"; then
-  echo "OxideDNS log did not record DNS Cookie startup fingerprint event" >&2
-  exit 1
+    echo "OxideDNS log did not record DNS Cookie startup fingerprint event" >&2
+    exit 1
 fi
 
 kill "$oxidedns_pid" 2>/dev/null || true
@@ -350,74 +382,73 @@ oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-  if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == *'"status":"ready"'* ]] && break
-  fi
-  sleep 0.1
+    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+        [[ "$ready" == *'"status":"ready"'* ]] && break
+    fi
+    sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-  echo "strict OxideDNS did not become ready after fake-primary AXFR" >&2
-  exit 1
+    echo "strict OxideDNS did not become ready after fake-primary AXFR" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$client_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/strict-client-only-badcookie-dig.out"
+    +norecurse "+cookie=$client_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/strict-client-only-badcookie-dig.out"
 
 if ! grep -q "BADCOOKIE" "$workdir/strict-client-only-badcookie-dig.out"; then
-  echo "strict client-only cookie query did not receive BADCOOKIE" >&2
-  exit 1
+    echo "strict client-only cookie query did not receive BADCOOKIE" >&2
+    exit 1
 fi
 
 strict_response_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/strict-client-only-badcookie-dig.out")"
 if [[ ! "$strict_response_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
-  echo "strict BADCOOKIE response did not contain a retry server cookie" >&2
-  exit 1
+    echo "strict BADCOOKIE response did not contain a retry server cookie" >&2
+    exit 1
 fi
 
 strict_invalid_response_cookie="${client_cookie}0000000000000000"
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$strict_invalid_response_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/strict-invalid-server-cookie-badcookie-dig.out"
+    +norecurse "+cookie=$strict_invalid_response_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/strict-invalid-server-cookie-badcookie-dig.out"
 
 if ! grep -q "BADCOOKIE" "$workdir/strict-invalid-server-cookie-badcookie-dig.out"; then
-  echo "strict invalid-server-cookie query did not receive BADCOOKIE" >&2
-  exit 1
+    echo "strict invalid-server-cookie query did not receive BADCOOKIE" >&2
+    exit 1
 fi
 
 strict_invalid_retry_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/strict-invalid-server-cookie-badcookie-dig.out")"
 if [[ ! "$strict_invalid_retry_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
-  echo "strict invalid-server-cookie BADCOOKIE response did not contain a retry server cookie" >&2
-  exit 1
+    echo "strict invalid-server-cookie BADCOOKIE response did not contain a retry server cookie" >&2
+    exit 1
 fi
 
 dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
-  +norecurse "+cookie=$strict_response_cookie" +noall +comments +answer +time=1 +tries=1 \
-  >"$workdir/strict-valid-server-cookie-dig.out"
+    +norecurse "+cookie=$strict_response_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/strict-valid-server-cookie-dig.out"
 
 if ! grep -q "www.alpha.test." "$workdir/strict-valid-server-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/strict-valid-server-cookie-dig.out"; then
-  echo "strict valid-server-cookie retry did not receive expected answer from OxideDNS" >&2
-  exit 1
+    echo "strict valid-server-cookie retry did not receive expected answer from OxideDNS" >&2
+    exit 1
 fi
 
 strict_metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
-  'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
-  'oxidedns_dns_cookie_queries_total{case="valid_server"} 3' \
-  'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
-  'oxidedns_dns_cookie_badcookie_responses_total 2' \
-  'oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix="127.0.0.0/24"} 2'
-do
-  if [[ "$strict_metrics" != *"$expected"* ]]; then
-    printf 'strict metrics missing expected line: %s\n' "$expected" >&2
-    exit 1
-  fi
+    'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
+    'oxidedns_dns_cookie_queries_total{case="valid_server"} 3' \
+    'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
+    'oxidedns_dns_cookie_badcookie_responses_total 2' \
+    'oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix="127.0.0.0/24"} 2'; do
+    if [[ "$strict_metrics" != *"$expected"* ]]; then
+        printf 'strict metrics missing expected line: %s\n' "$expected" >&2
+        exit 1
+    fi
 done
 
 if ! grep -q "DNS Cookie BADCOOKIE response emitted" "$workdir/strict-oxidedns.log"; then
-  echo "strict OxideDNS log did not record BADCOOKIE emission" >&2
-  exit 1
+    echo "strict OxideDNS log did not record BADCOOKIE emission" >&2
+    exit 1
 fi
 
 cat >"$summary_env" <<EOF
@@ -453,25 +484,25 @@ ODS-FR-COOKIE-011	metrics.txt; strict-metrics.txt	global and source-prefix cooki
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
-  mkdir -p "$artifact_dir"
-  cp "$primary_log" "$artifact_dir/fake-primary.log"
-  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
-  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-  cp "$workdir/strict-oxidedns.log" "$artifact_dir/strict-oxidedns.log"
-  cp "$strict_oxidedns_conf" "$artifact_dir/strict-oxidedns.toml"
-  cp "$workdir/no-cookie-dig.out" "$artifact_dir/no-cookie-dig.out"
-  cp "$workdir/first-dig.out" "$artifact_dir/first-dig.out"
-  cp "$workdir/second-dig.out" "$artifact_dir/second-dig.out"
-  cp "$workdir/invalid-cookie-dig.out" "$artifact_dir/invalid-cookie-dig.out"
-  cp "$workdir/strict-client-only-badcookie-dig.out" "$artifact_dir/strict-client-only-badcookie-dig.out"
-  cp "$workdir/strict-invalid-server-cookie-badcookie-dig.out" "$artifact_dir/strict-invalid-server-cookie-badcookie-dig.out"
-  cp "$workdir/strict-valid-server-cookie-dig.out" "$artifact_dir/strict-valid-server-cookie-dig.out"
-  cp "$summary_env" "$artifact_dir/dns-cookie-summary.env"
-  cp "$strict_summary_env" "$artifact_dir/strict-dns-cookie-summary.env"
-  cp "$traceability_tsv" "$artifact_dir/dns-cookie-traceability.tsv"
-  printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
-  printf '%s\n' "$strict_metrics" >"$artifact_dir/strict-metrics.txt"
+    mkdir -p "$artifact_dir"
+    cp "$primary_log" "$artifact_dir/fake-primary.log"
+    cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/strict-oxidedns.log" "$artifact_dir/strict-oxidedns.log"
+    cp "$strict_oxidedns_conf" "$artifact_dir/strict-oxidedns.toml"
+    cp "$workdir/no-cookie-dig.out" "$artifact_dir/no-cookie-dig.out"
+    cp "$workdir/first-dig.out" "$artifact_dir/first-dig.out"
+    cp "$workdir/second-dig.out" "$artifact_dir/second-dig.out"
+    cp "$workdir/invalid-cookie-dig.out" "$artifact_dir/invalid-cookie-dig.out"
+    cp "$workdir/strict-client-only-badcookie-dig.out" "$artifact_dir/strict-client-only-badcookie-dig.out"
+    cp "$workdir/strict-invalid-server-cookie-badcookie-dig.out" "$artifact_dir/strict-invalid-server-cookie-badcookie-dig.out"
+    cp "$workdir/strict-valid-server-cookie-dig.out" "$artifact_dir/strict-valid-server-cookie-dig.out"
+    cp "$summary_env" "$artifact_dir/dns-cookie-summary.env"
+    cp "$strict_summary_env" "$artifact_dir/strict-dns-cookie-summary.env"
+    cp "$traceability_tsv" "$artifact_dir/dns-cookie-traceability.tsv"
+    printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
+    printf '%s\n' "$strict_metrics" >"$artifact_dir/strict-metrics.txt"
 fi
 
 printf 'DNS Cookie dig interop passed response_cookie_bytes=%s cases=no_cookie,client_only,valid_server,invalid_server strict_badcookie=2\n' "$((${#response_cookie} / 2))"

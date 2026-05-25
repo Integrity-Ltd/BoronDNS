@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 write_axfr_traceability_tsv() {
-  local output="$1"
-  local primary_name="$2"
-  local primary_log_artifact="$3"
-  local primary_version_artifact="${4:-primary-version.txt}"
+    local output="$1"
+    local primary_name="$2"
+    local primary_log_artifact="$3"
+    local primary_version_artifact="${4:-primary-version.txt}"
 
-  cat >"$output" <<EOF
+    cat >"$output" <<EOF
 requirement_id	evidence_state	runtime_case	artifacts	review_note
 ODS-FR-AXFR-001	retained-runtime	tcp_axfr_only	primary-axfr.out; $primary_version_artifact; oxidedns.log	The real-primary $primary_name run serves AXFR over TCP and OxideDNS reaches ready only after the transfer completes; UDP non-emission remains supported by code inspection and transfer API shape.
 ODS-FR-AXFR-002	retained-runtime-plus-support	outbound_axfr_query_construction	primary-axfr.out; $primary_version_artifact; crates/oxidedns-core/src/axfr.rs::builds_axfr_query_wire_message	The run proves $primary_name accepted the OxideDNS AXFR query for alpha.test.; focused wire-construction tests cover exact QNAME/QTYPE/QCLASS/opcode/RD fields.
