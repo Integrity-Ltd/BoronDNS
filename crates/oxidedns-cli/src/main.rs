@@ -255,6 +255,10 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
             }
+            "ODS_TSIG_FUDGE_SECONDS" => {
+                let value = env_value_to_string(&name, value)?;
+                config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
+            }
             _ if name.starts_with("ODS_") => {
                 warnings.push(ConfigWarning {
                     code: "unrecognised_rds_environment_variable",
@@ -596,6 +600,9 @@ mod tests {
                 metrics_rate_limit_per_minute = 60
                 metrics_rate_limit_idle_seconds = 300
 
+                [tsig]
+                fudge_seconds = 300
+
                 [[zones]]
                 name = "example.test."
                 primaries = ["192.0.2.53:53"]
@@ -612,6 +619,7 @@ mod tests {
                 ("ODS_SERVER_NSID", "env-nsid"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
+                ("ODS_TSIG_FUDGE_SECONDS", "30"),
             ]
             .into_iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
@@ -629,6 +637,7 @@ mod tests {
         assert_eq!(config.server.nsid, "env-nsid");
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+        assert_eq!(config.tsig.fudge_seconds, 30);
     }
 
     #[test]

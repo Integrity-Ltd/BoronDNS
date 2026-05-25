@@ -107,6 +107,7 @@ fn dump_config_includes_rds_environment_overrides() {
         .env("ODS_SERVER_NSID", "env-nsid")
         .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120")
         .env("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45")
+        .env("ODS_TSIG_FUDGE_SECONDS", "30")
         .output()
         .expect("run oxidedns --dump-config");
 
@@ -119,6 +120,7 @@ fn dump_config_includes_rds_environment_overrides() {
     assert!(stdout.contains("nsid = \"env-nsid\""));
     assert!(stdout.contains("metrics_rate_limit_per_minute = 120"));
     assert!(stdout.contains("metrics_rate_limit_idle_seconds = 45"));
+    assert!(stdout.contains("fudge_seconds = 30"));
 
     let _ = fs::remove_file(config);
 }
@@ -208,6 +210,9 @@ fn suspicious_config_warnings_do_not_fail_validation() {
             [limits]
             tcp_idle_timeout_secs = 121
 
+            [tsig]
+            fudge_seconds = 61
+
             [[tsig_keys]]
             name = "legacy-key."
             algorithm = "hmac-sha1"
@@ -236,6 +241,7 @@ fn suspicious_config_warnings_do_not_fail_validation() {
     assert!(stderr.contains("code=dns_cookies_disabled"));
     assert!(stderr.contains("code=rrl_global_allowlist"));
     assert!(stderr.contains("code=tcp_idle_timeout_large"));
+    assert!(stderr.contains("code=tsig_fudge_large"));
     assert!(stderr.contains("code=tsig_hmac_sha1"));
 
     let _ = fs::remove_file(config);

@@ -36,6 +36,11 @@ slip = 2
 max_keys = 100000
 allowlist = []
 
+[tsig]
+# Default from RFC 8945 guidance. Values above 60 seconds are accepted but
+# reported as suspicious configuration warnings.
+fudge_seconds = 300
+
 [limits]
 max_udp_payload = 1232
 max_cname_chain = 8

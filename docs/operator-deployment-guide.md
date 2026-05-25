@@ -108,6 +108,7 @@ and are included in `--dump-config` output:
 - `ODS_SERVER_NSID`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
+- `ODS_TSIG_FUDGE_SECONDS`
 
 Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
 `category=configuration_warning` messages and ignored. Variables outside the
@@ -120,6 +121,7 @@ implemented warning catalogue is:
 - `rrl_global_allowlist`: `[rrl] allowlist` contains `0.0.0.0/0` or `::/0`.
 - `tcp_idle_timeout_large`: `[limits] tcp_idle_timeout_secs` is greater than
   120.
+- `tsig_fudge_large`: `[tsig] fudge_seconds` is greater than 60.
 - `tsig_hmac_sha1`: a configured TSIG key uses `hmac-sha1`.
 
 `--validate-config` and `--dump-config` print these warnings to stderr. `serve`
@@ -137,6 +139,8 @@ reference. The major sections are:
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`) and
   timestamp tolerance windows.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration.
+- `[tsig]`: process-wide TSIG behavior, currently the outbound/error-response
+  fudge value.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
   limits.
 - `[[zones]]`: served secondary zones and their primary transfer sources.

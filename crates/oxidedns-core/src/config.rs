@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     dns::{AnyResponseMode, DomainName},
-    tsig::TsigKey,
+    tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
 };
 
 #[derive(Debug, Error)]
@@ -42,6 +42,8 @@ pub struct ServerConfig {
     pub cookie: CookieConfig,
     #[serde(default)]
     pub rrl: RrlConfig,
+    #[serde(default)]
+    pub tsig: TsigConfig,
     #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
@@ -164,6 +166,7 @@ impl ServerConfig {
         self.cookie.validate()?;
         self.health.validate()?;
         self.rrl.validate()?;
+        self.tsig.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
 
@@ -222,6 +225,17 @@ impl ServerConfig {
             });
         }
 
+        if self.tsig.fudge_seconds > 60 {
+            warnings.push(ConfigWarning {
+                code: "tsig_fudge_large",
+                parameter: "tsig.fudge_seconds".to_owned(),
+                message: format!(
+                    "TSIG fudge value {} seconds is larger than the SRS suspicious-configuration threshold of 60 seconds",
+                    self.tsig.fudge_seconds
+                ),
+            });
+        }
+
         for key in &self.tsig_keys {
             if key.algorithm.eq_ignore_ascii_case("hmac-sha1") {
                 warnings.push(ConfigWarning {
@@ -253,6 +267,31 @@ impl ServerConfig {
             }
         }
         Ok(names)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TsigConfig {
+    #[serde(default = "default_tsig_fudge_seconds")]
+    pub fudge_seconds: u16,
+}
+
+impl Default for TsigConfig {
+    fn default() -> Self {
+        Self {
+            fudge_seconds: default_tsig_fudge_seconds(),
+        }
+    }
+}
+
+impl TsigConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.fudge_seconds == 0 {
+            return Err(ConfigError::Invalid(
+                "tsig.fudge_seconds must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -778,6 +817,10 @@ fn default_rrl_max_keys() -> usize {
     100_000
 }
 
+fn default_tsig_fudge_seconds() -> u16 {
+    DEFAULT_TSIG_FUDGE_SECS
+}
+
 fn validate_ip_prefix(prefix: &str) -> Result<(), &'static str> {
     let Some((addr, len)) = prefix.split_once('/') else {
         prefix
@@ -945,6 +988,7 @@ mod tests {
         assert_eq!(config.rrl.error_per_second, 5);
         assert_eq!(config.rrl.slip, 2);
         assert_eq!(config.rrl.max_keys, 100_000);
+        assert_eq!(config.tsig.fudge_seconds, DEFAULT_TSIG_FUDGE_SECS);
         assert_eq!(config.query.any_response, AnyResponseConfig::Minimal);
         assert_eq!(config.query.any_response_mode(), AnyResponseMode::Minimal);
         assert_eq!(config.zones[0].class, "IN");
@@ -987,6 +1031,9 @@ mod tests {
                 [limits]
                 tcp_idle_timeout_secs = 121
 
+                [tsig]
+                fudge_seconds = 61
+
                 [[tsig_keys]]
                 name = "legacy-key."
                 algorithm = "hmac-sha1"
@@ -1015,7 +1062,48 @@ mod tests {
             2
         );
         assert!(codes.contains(&"tcp_idle_timeout_large"));
+        assert!(codes.contains(&"tsig_fudge_large"));
         assert!(codes.contains(&"tsig_hmac_sha1"));
+    }
+
+    #[test]
+    fn parses_tsig_fudge_seconds() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [tsig]
+                fudge_seconds = 30
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.tsig.fudge_seconds, 30);
+    }
+
+    #[test]
+    fn rejects_zero_tsig_fudge_seconds() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [tsig]
+                fudge_seconds = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero TSIG fudge is invalid");
+
+        assert!(error.to_string().contains("tsig.fudge_seconds"));
     }
 
     #[test]

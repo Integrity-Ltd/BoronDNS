@@ -638,8 +638,15 @@ pub async fn transfer_axfr_from_primary(
     qid: u16,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
-    transfer_axfr_from_primary_with_tsig(primary, zone_apex, qclass, qid, None, timeout_duration)
-        .await
+    transfer_axfr_from_primary_with_tsig(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        TransferTsig::unsigned(),
+        timeout_duration,
+    )
+    .await
 }
 
 async fn transfer_axfr_from_primary_with_tsig(
@@ -647,11 +654,11 @@ async fn transfer_axfr_from_primary_with_tsig(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
     let target = TransferPrimaryConfig::tcp(primary);
-    transfer_axfr_from_target_with_tsig(&target, zone_apex, qclass, qid, tsig_key, timeout_duration)
+    transfer_axfr_from_target_with_tsig(&target, zone_apex, qclass, qid, tsig, timeout_duration)
         .await
 }
 
@@ -660,11 +667,11 @@ async fn transfer_axfr_from_target_with_tsig(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<ZoneSnapshot, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, tsig_key).await
+        transfer_axfr_from_primary_inner(primary, zone_apex, qclass, qid, tsig).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -679,7 +686,15 @@ pub async fn poll_soa_from_primary(
     qid: u16,
     timeout_duration: Duration,
 ) -> Result<u32, TransferError> {
-    poll_soa_from_primary_with_tsig(primary, zone_apex, qclass, qid, None, timeout_duration).await
+    poll_soa_from_primary_with_tsig(
+        primary,
+        zone_apex,
+        qclass,
+        qid,
+        TransferTsig::unsigned(),
+        timeout_duration,
+    )
+    .await
 }
 
 async fn poll_soa_from_primary_with_tsig(
@@ -687,11 +702,11 @@ async fn poll_soa_from_primary_with_tsig(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<u32, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig_key).await
+        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -704,7 +719,7 @@ async fn poll_soa_from_primary_inner(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
 ) -> Result<u32, TransferError> {
     let socket = UdpSocket::bind(outbound_udp_bind_addr(primary))
         .await
@@ -720,7 +735,7 @@ async fn poll_soa_from_primary_inner(
             source,
         })?;
 
-    let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig_key)?;
+    let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig)?;
     socket
         .send(&query.message)
         .await
@@ -739,7 +754,7 @@ async fn poll_soa_from_primary_inner(
         })?;
 
     let response =
-        maybe_verify_transfer_response(&buffer[..len], tsig_key, query.request_mac.as_deref())?;
+        maybe_verify_transfer_response(&buffer[..len], tsig.key, query.request_mac.as_deref())?;
     match axfr::parse_soa_response(qid, zone_apex, qclass, &response) {
         Ok(serial) => Ok(serial),
         Err(error) => {
@@ -959,7 +974,7 @@ pub async fn transfer_ixfr_from_primary(
         qclass,
         qid,
         current_zone,
-        None,
+        TransferTsig::unsigned(),
         timeout_duration,
     )
     .await
@@ -971,7 +986,7 @@ async fn transfer_ixfr_from_primary_with_tsig(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     let target = TransferPrimaryConfig::tcp(primary);
@@ -981,7 +996,7 @@ async fn transfer_ixfr_from_primary_with_tsig(
         qclass,
         qid,
         current_zone,
-        tsig_key,
+        tsig,
         timeout_duration,
     )
     .await
@@ -993,12 +1008,11 @@ async fn transfer_ixfr_from_target_with_tsig(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
     timeout_duration: Duration,
 ) -> Result<IxfrResponse, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, tsig_key)
-            .await
+        transfer_ixfr_from_primary_inner(primary, zone_apex, qclass, qid, current_zone, tsig).await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -1012,7 +1026,7 @@ async fn transfer_ixfr_from_primary_inner(
     qclass: u16,
     qid: u16,
     current_zone: &ZoneSnapshot,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
 ) -> Result<IxfrResponse, TransferError> {
     let mut stream = connect_transfer_stream(primary).await?;
 
@@ -1021,7 +1035,7 @@ async fn transfer_ixfr_from_primary_inner(
         .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
     let query = maybe_sign_transfer_query(
         axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
-        tsig_key,
+        tsig,
     )?;
     let framed_query = axfr::frame_tcp_message(&query.message);
     stream
@@ -1040,7 +1054,7 @@ async fn transfer_ixfr_from_primary_inner(
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
                 let verified_messages = maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig_key,
+                    tsig.key,
                     query.request_mac.as_deref(),
                 )?;
                 return axfr::parse_ixfr_response(
@@ -1078,7 +1092,7 @@ async fn transfer_ixfr_from_primary_inner(
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig_key,
+                    tsig.key,
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
@@ -1118,18 +1132,34 @@ struct TransferQuery {
     request_mac: Option<Vec<u8>>,
 }
 
+#[derive(Clone, Copy)]
+struct TransferTsig<'a> {
+    key: Option<&'a TsigKey>,
+    fudge_seconds: u16,
+}
+
+impl<'a> TransferTsig<'a> {
+    fn new(key: Option<&'a TsigKey>, fudge_seconds: u16) -> Self {
+        Self { key, fudge_seconds }
+    }
+
+    fn unsigned() -> Self {
+        Self::new(None, DEFAULT_TSIG_FUDGE_SECS)
+    }
+}
+
 fn maybe_sign_transfer_query(
     query: Vec<u8>,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
 ) -> Result<TransferQuery, TransferError> {
-    let Some(tsig_key) = tsig_key else {
+    let Some(tsig_key) = tsig.key else {
         return Ok(TransferQuery {
             message: query,
             request_mac: None,
         });
     };
 
-    let signed = tsig_key.sign_request(&query, tsig_time_signed(), DEFAULT_TSIG_FUDGE_SECS)?;
+    let signed = tsig_key.sign_request(&query, tsig_time_signed(), tsig.fudge_seconds)?;
     Ok(TransferQuery {
         message: signed.message,
         request_mac: Some(signed.mac),
@@ -1179,12 +1209,11 @@ async fn transfer_axfr_from_primary_inner(
     zone_apex: &DomainName,
     qclass: u16,
     qid: u16,
-    tsig_key: Option<&TsigKey>,
+    tsig: TransferTsig<'_>,
 ) -> Result<ZoneSnapshot, TransferError> {
     let mut stream = connect_transfer_stream(primary).await?;
 
-    let query =
-        maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig_key)?;
+    let query = maybe_sign_transfer_query(axfr::build_axfr_query(qid, zone_apex, qclass), tsig)?;
     let framed_query = axfr::frame_tcp_message(&query.message);
     stream
         .write_all(&framed_query)
@@ -1202,7 +1231,7 @@ async fn transfer_axfr_from_primary_inner(
             Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
                 let verified_messages = maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig_key,
+                    tsig.key,
                     query.request_mac.as_deref(),
                 )?;
                 return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
@@ -1234,7 +1263,7 @@ async fn transfer_axfr_from_primary_inner(
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
-                    tsig_key,
+                    tsig.key,
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
@@ -3617,6 +3646,7 @@ struct ZoneTransferPlan {
     qclass: u16,
     primaries: Vec<TransferPrimaryConfig>,
     tsig_key: Option<Arc<TsigKey>>,
+    tsig_fudge_seconds: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -3656,6 +3686,7 @@ impl TransferPlan {
                         qclass: 1,
                         primaries: zone.transfer_targets(),
                         tsig_key,
+                        tsig_fudge_seconds: config.tsig.fudge_seconds,
                     },
                 )
             })
@@ -4041,10 +4072,21 @@ fn jitter_seed() -> u64 {
     (since_epoch as u64) ^ ((since_epoch >> 64) as u64)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct NotifyAuthority {
     sources_by_zone: Arc<HashMap<String, HashSet<IpAddr>>>,
     tsig_keys_by_zone: Arc<HashMap<String, Arc<TsigKey>>>,
+    tsig_fudge_seconds: u16,
+}
+
+impl Default for NotifyAuthority {
+    fn default() -> Self {
+        Self {
+            sources_by_zone: Arc::new(HashMap::new()),
+            tsig_keys_by_zone: Arc::new(HashMap::new()),
+            tsig_fudge_seconds: DEFAULT_TSIG_FUDGE_SECS,
+        }
+    }
 }
 
 impl NotifyAuthority {
@@ -4084,6 +4126,7 @@ impl NotifyAuthority {
         Self {
             sources_by_zone: Arc::new(sources_by_zone),
             tsig_keys_by_zone: Arc::new(tsig_keys_by_zone),
+            tsig_fudge_seconds: config.tsig.fudge_seconds,
         }
     }
 
@@ -4112,6 +4155,7 @@ struct PreparedDnsMessage {
 struct ResponseTsig {
     key: Arc<TsigKey>,
     request_mac: Vec<u8>,
+    fudge_seconds: u16,
 }
 
 #[cfg(test)]
@@ -4177,6 +4221,7 @@ fn prepare_notify_packet_with_optional_metrics(
                 response_tsig: Some(ResponseTsig {
                     key,
                     request_mac: verified.mac,
+                    fudge_seconds: notify_authority.tsig_fudge_seconds,
                 }),
                 immediate_response: None,
             })
@@ -4188,12 +4233,18 @@ fn prepare_notify_packet_with_optional_metrics(
                 metrics.record_notify_tsig_result(result);
             }
             warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
-            tsig_error_response(packet, &header, &question, &key, &error).map(|response| {
-                PreparedDnsMessage {
-                    packet: packet.to_vec(),
-                    response_tsig: None,
-                    immediate_response: Some(response),
-                }
+            tsig_error_response(
+                packet,
+                &header,
+                &question,
+                &key,
+                &error,
+                notify_authority.tsig_fudge_seconds,
+            )
+            .map(|response| PreparedDnsMessage {
+                packet: packet.to_vec(),
+                response_tsig: None,
+                immediate_response: Some(response),
             })
         }
     }
@@ -4218,6 +4269,7 @@ fn tsig_error_response(
     question: &Question,
     key: &TsigKey,
     error: &TsigError,
+    tsig_fudge_seconds: u16,
 ) -> Option<Vec<u8>> {
     let now = tsig_time_signed();
     let mut response = Vec::new();
@@ -4238,7 +4290,7 @@ fn tsig_error_response(
             &response,
             key,
             now,
-            DEFAULT_TSIG_FUDGE_SECS,
+            tsig_fudge_seconds,
             header.id,
             TSIG_ERROR_BADSIG,
             &[],
@@ -4248,7 +4300,7 @@ fn tsig_error_response(
             &response,
             key,
             now,
-            DEFAULT_TSIG_FUDGE_SECS,
+            tsig_fudge_seconds,
             header.id,
             TSIG_ERROR_BADTRUNC,
             &[],
@@ -4258,7 +4310,7 @@ fn tsig_error_response(
             &response,
             key,
             now,
-            DEFAULT_TSIG_FUDGE_SECS,
+            tsig_fudge_seconds,
             header.id,
             TSIG_ERROR_BADALG,
             &[],
@@ -4269,7 +4321,7 @@ fn tsig_error_response(
                 &response,
                 key,
                 now,
-                DEFAULT_TSIG_FUDGE_SECS,
+                tsig_fudge_seconds,
                 header.id,
                 TSIG_ERROR_BADKEY,
                 &[],
@@ -4284,7 +4336,7 @@ fn tsig_error_response(
                 TsigErrorResponseFields {
                     request_mac: &request_mac,
                     time_signed: now,
-                    fudge: DEFAULT_TSIG_FUDGE_SECS,
+                    fudge: tsig_fudge_seconds,
                     original_id: header.id,
                     error: TSIG_ERROR_BADTIME,
                     other_data: &u48_bytes(now),
@@ -4319,7 +4371,7 @@ fn sign_notify_response(
             &response,
             &response_tsig.request_mac,
             tsig_time_signed(),
-            DEFAULT_TSIG_FUDGE_SECS,
+            response_tsig.fudge_seconds,
         )?
         .message)
 }
@@ -4716,7 +4768,7 @@ async fn refresh_zone_from_primaries(
                 &plan.origin,
                 plan.qclass,
                 qid,
-                plan.tsig_key.as_deref(),
+                TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 context.axfr_timeout,
             )
             .await
@@ -4784,7 +4836,7 @@ async fn refresh_zone_from_primaries(
                     plan.qclass,
                     qid,
                     current_snapshot,
-                    plan.tsig_key.as_deref(),
+                    TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                     context.ixfr_timeout,
                 )
                 .await
@@ -4851,7 +4903,7 @@ async fn refresh_zone_from_primaries(
             &plan.origin,
             plan.qclass,
             qid,
-            plan.tsig_key.as_deref(),
+            TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
             context.axfr_timeout,
         )
         .await
@@ -5123,7 +5175,7 @@ mod tests {
         NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
         QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
         RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry,
+        TcpServerSettings, TransferPlan, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
         dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
         observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
@@ -5242,6 +5294,9 @@ mod tests {
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
+
+                [tsig]
+                fudge_seconds = 30
 
                 [[tsig_keys]]
                 name = "transfer-key."
@@ -5907,6 +5962,9 @@ mod tests {
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
+                [tsig]
+                fudge_seconds = 30
+
                 [[tsig_keys]]
                 name = "transfer-key."
                 algorithm = "hmac-sha256"
@@ -5937,6 +5995,8 @@ mod tests {
         let response = notify_response(0x1234);
         let signed_response = sign_notify_response(response.clone(), prepared.response_tsig)
             .expect("signed NOTIFY response");
+        let response_tsig = parse_tsig_response_fields(&signed_response);
+        assert_eq!(response_tsig.fudge, 30);
         let verified_response = key
             .verify_response(&signed_response, &signed_notify.mac, current_unix_time())
             .expect("verified NOTIFY response");
@@ -6464,7 +6524,7 @@ mod tests {
             &apex,
             1,
             0x1234,
-            Some(&key),
+            TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -6484,7 +6544,7 @@ mod tests {
             &apex,
             1,
             0x1234,
-            Some(&key),
+            TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
             std::time::Duration::from_secs(5),
         )
         .await
@@ -7557,6 +7617,9 @@ mod tests {
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
+                [tsig]
+                fudge_seconds = 30
+
                 [[tsig_keys]]
                 name = "transfer-key."
                 algorithm = "hmac-sha256"
@@ -7573,6 +7636,7 @@ mod tests {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let plan = transfer_plan.get(&apex).expect("zone transfer plan");
         assert!(plan.tsig_key.is_some());
+        assert_eq!(plan.tsig_fudge_seconds, 30);
         let zones = ZoneStore::new();
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
@@ -7600,6 +7664,7 @@ mod tests {
             .expect("primary observed query");
         assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
         assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
+        assert_eq!(query_tsig_fudge(&query), 30);
     }
 
     #[tokio::test]
@@ -9572,6 +9637,16 @@ mod tests {
         query[offset..offset + mac_len].to_vec()
     }
 
+    fn query_tsig_fudge(query: &[u8]) -> u16 {
+        let (_, question_len) = DomainName::parse(query, 12).unwrap();
+        let mut offset = 12 + question_len + 4;
+        let (_, owner_len) = DomainName::parse(query, offset).unwrap();
+        offset += owner_len + 10;
+        let (_, algorithm_len) = DomainName::parse(query, offset).unwrap();
+        offset += algorithm_len + 6;
+        u16::from_be_bytes([query[offset], query[offset + 1]])
+    }
+
     fn current_unix_time() -> u64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -9842,6 +9917,7 @@ mod tests {
     }
 
     struct ParsedTsigResponseFields {
+        fudge: u16,
         mac_len: usize,
         original_id: u16,
         error: u16,
@@ -9863,7 +9939,9 @@ mod tests {
         offset += 10;
         let rdata_end = offset + rdlen;
         let (_, algorithm_len) = DomainName::parse(response, offset).unwrap();
-        offset += algorithm_len + 6 + 2;
+        offset += algorithm_len + 6;
+        let fudge = u16::from_be_bytes([response[offset], response[offset + 1]]);
+        offset += 2;
         let mac_len = u16::from_be_bytes([response[offset], response[offset + 1]]) as usize;
         offset += 2 + mac_len;
         let original_id = u16::from_be_bytes([response[offset], response[offset + 1]]);
@@ -9874,6 +9952,7 @@ mod tests {
         offset += 2;
         assert_eq!(offset + other_len, rdata_end);
         ParsedTsigResponseFields {
+            fudge,
             mac_len,
             original_id,
             error,
