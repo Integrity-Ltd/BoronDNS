@@ -618,6 +618,23 @@ Rollback procedure:
 Because OxideDNS has no persistent runtime state, rollback is a binary and
 configuration rollback followed by zone reacquisition from the primary.
 
+## RFC Compliance Assertions
+
+The canonical structured RFC compliance assertion list for the current
+Engineering MVP posture is maintained in `docs/rfc-compliance-assertions.md`.
+This guide treats that file as the single-source synchronized Operator
+Deployment Guide section required by SRS v0.7 `ODS-VER-014`; release notes must
+copy that structured list, update evidence pointers to the release snapshot,
+and retain this primary-documentation sync pointer.
+
+Current operator-facing posture:
+
+- No full RFC compliance claim is made for unreleased `main`.
+- Normative protocol RFCs are marked `Partially Compliant` until the release
+  evidence snapshot closes the corresponding SRS acceptance gaps.
+- RFCs used only as architectural, registry, or operational guidance are marked
+  `Informative Only`.
+
 ## Known Limitations
 
 The gap register is the live source for remaining acceptance gaps. The

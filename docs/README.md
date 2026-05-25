@@ -22,6 +22,7 @@ and update companion documents afterward.
 - `implementation-plan.md`: Engineering MVP and SRS acceptance implementation plan.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
 - `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.
+- `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance assertion register.
 
 
 Raw mailbox messages and exported attachments are intentionally not tracked in this repository.

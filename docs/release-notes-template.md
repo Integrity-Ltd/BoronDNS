@@ -56,9 +56,15 @@ TBD
 
 ## RFC Compliance Assertions
 
-| RFC | Scope | Assertion status | Evidence pointer | Out-of-scope rationale |
-| --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD |
+Allowed compliance status values are `Fully Compliant`, `Partially Compliant`,
+`Not Compliant`, and `Informative Only`. Copy the structured list from
+`docs/rfc-compliance-assertions.md`, update evidence pointers to this release's
+retained evidence snapshot, and keep the primary documentation sync pointer
+aligned with the Operator Deployment Guide.
+
+| RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution release | SRS revision | Evidence pointer | Primary documentation sync |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | docs/operator-deployment-guide.md#rfc-compliance-assertions |
 
 ## Interface Changes
 

@@ -19,6 +19,7 @@ fi
 
 notes_file="$1"
 snapshot_dir="${2:-}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ ! -f "$notes_file" ]]; then
   printf 'release notes file not found: %s\n' "$notes_file" >&2
@@ -49,6 +50,46 @@ done
 
 for status in Verified Deferred Failed; do
   require_text "$status"
+done
+
+for rfc_field in \
+  "RFC number" \
+  "RFC title" \
+  "Compliance status" \
+  "Scope qualifier" \
+  "Unresolved compliance gaps" \
+  "Target resolution release" \
+  "SRS revision" \
+  "Evidence pointer" \
+  "Primary documentation sync" \
+  "Fully Compliant" \
+  "Partially Compliant" \
+  "Not Compliant" \
+  "Informative Only" \
+  "docs/operator-deployment-guide.md#rfc-compliance-assertions"; do
+  require_text "$rfc_field"
+done
+
+for primary_doc in \
+  "$repo_root/docs/rfc-compliance-assertions.md" \
+  "$repo_root/docs/operator-deployment-guide.md"; do
+  if [[ ! -f "$primary_doc" ]]; then
+    printf 'primary RFC compliance documentation missing: %s\n' "$primary_doc" >&2
+    exit 1
+  fi
+done
+
+for primary_doc_text in \
+  "# RFC Compliance Assertions" \
+  "## RFC Compliance Assertions" \
+  "ODS-VER-014" \
+  "RFC number" \
+  "Compliance status" \
+  "SRS v0.7"; do
+  if ! grep -F "$primary_doc_text" "$repo_root/docs/rfc-compliance-assertions.md" "$repo_root/docs/operator-deployment-guide.md" >/dev/null 2>&1; then
+    printf 'primary RFC compliance documentation missing required text: %s\n' "$primary_doc_text" >&2
+    exit 1
+  fi
 done
 
 for regression_field in \
