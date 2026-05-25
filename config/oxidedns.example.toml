@@ -99,6 +99,8 @@ ixfr_disabled_cooldown_secs = 3600
 max_transfer_ingest_bytes = 4294967296
 # Per-zone accepted NOTIFY deduplication window. Default: 1 second.
 notify_dedup_secs = 1
+# Window for rate-limited unauthorized/TSIG-failed NOTIFY warning logs. Default: 60 seconds.
+notify_log_rate_window_secs = 60
 # Maximum concurrent transfer sessions. Default: 4.
 max_concurrent_transfers = 4
 # Effective SOA REFRESH/RETRY scheduling bounds and initial-load retry policy.

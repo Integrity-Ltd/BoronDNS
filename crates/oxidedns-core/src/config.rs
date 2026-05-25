@@ -148,6 +148,16 @@ impl ServerConfig {
                 "limits.graceful_shutdown_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.notify_dedup_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.notify_dedup_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.notify_log_rate_window_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.notify_log_rate_window_secs must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.max_concurrent_transfers == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_concurrent_transfers must be at least 1".to_owned(),
@@ -666,6 +676,8 @@ pub struct Limits {
     pub max_transfer_ingest_bytes: u64,
     #[serde(default = "default_notify_dedup_secs")]
     pub notify_dedup_secs: u64,
+    #[serde(default = "default_notify_log_rate_window_secs")]
+    pub notify_log_rate_window_secs: u64,
     #[serde(default = "default_max_concurrent_transfers")]
     pub max_concurrent_transfers: usize,
     #[serde(default = "default_zsm_min_interval_secs")]
@@ -697,6 +709,7 @@ impl Default for Limits {
             ixfr_disabled_cooldown_secs: default_ixfr_disabled_cooldown_secs(),
             max_transfer_ingest_bytes: default_max_transfer_ingest_bytes(),
             notify_dedup_secs: default_notify_dedup_secs(),
+            notify_log_rate_window_secs: default_notify_log_rate_window_secs(),
             max_concurrent_transfers: default_max_concurrent_transfers(),
             zsm_min_interval_secs: default_zsm_min_interval_secs(),
             zsm_max_interval_secs: default_zsm_max_interval_secs(),
@@ -1106,6 +1119,10 @@ fn default_notify_dedup_secs() -> u64 {
     1
 }
 
+fn default_notify_log_rate_window_secs() -> u64 {
+    60
+}
+
 fn default_max_concurrent_transfers() -> usize {
     4
 }
@@ -1202,6 +1219,8 @@ mod tests {
             config.limits.max_transfer_ingest_bytes,
             4 * 1024 * 1024 * 1024
         );
+        assert_eq!(config.limits.notify_dedup_secs, 1);
+        assert_eq!(config.limits.notify_log_rate_window_secs, 60);
         assert_eq!(config.limits.max_concurrent_transfers, 4);
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_max_interval_secs, 86_400);
@@ -2270,6 +2289,53 @@ mod tests {
                 "#
             ))
             .expect_err("zero TCP limit must fail");
+
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn parses_notify_timing_limits() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                notify_dedup_secs = 3
+                notify_log_rate_window_secs = 12
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.limits.notify_dedup_secs, 3);
+        assert_eq!(config.limits.notify_log_rate_window_secs, 12);
+    }
+
+    #[test]
+    fn rejects_zero_notify_timing_limits() {
+        for (key, expected) in [
+            ("notify_dedup_secs", "notify_dedup_secs"),
+            ("notify_log_rate_window_secs", "notify_log_rate_window_secs"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [limits]
+                    {key} = 0
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("zero NOTIFY timing limit must fail");
 
             assert!(error.to_string().contains(expected));
         }

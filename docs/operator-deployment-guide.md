@@ -232,6 +232,10 @@ Production configuration notes:
   raise pipelined DNS-over-TCP concurrency. Omit
   `[limits].tcp_inflight_limit_timeout_secs` to close persistently saturated
   connections after the configured TCP read timeout.
+- `[limits].notify_log_rate_window_secs` controls the anti-flood window for
+  unauthorized-source and TSIG-failure NOTIFY warning logs. The default is 60
+  seconds; repeated warnings from the same source /24 or /56 prefix, zone, and
+  category are suppressed until the next window summary.
 
 ## Running as a Service
 

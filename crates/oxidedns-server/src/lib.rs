@@ -276,8 +276,15 @@ impl Runtime {
         let notify_authority = NotifyAuthority::from_config(&self.config);
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
+        let notify_log_limiter = NotifyLogLimiter::new(Duration::from_secs(
+            self.config.limits.notify_log_rate_window_secs,
+        ));
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
+        background_tasks.spawn(serve_notify_log_summaries(
+            notify_log_limiter.clone(),
+            Duration::from_secs(self.config.limits.notify_log_rate_window_secs),
+        ));
         if self.config.rrl.enabled {
             background_tasks.spawn(serve_rrl_summary_logs(
                 rrl.clone(),
@@ -371,6 +378,7 @@ impl Runtime {
             let notify_authority = notify_authority.clone();
             let notify_refresh = notify_refresh.clone();
             let notify_refresh_tx = notify_refresh_tx.clone();
+            let notify_log_limiter = notify_log_limiter.clone();
             let metrics = metrics.clone();
             let rrl = rrl.clone();
             let udp_settings = UdpServerSettings {
@@ -385,6 +393,7 @@ impl Runtime {
                 notify_authority,
                 notify_refresh,
                 notify_refresh_tx,
+                notify_log_limiter,
                 metrics,
                 rrl,
             };
@@ -431,6 +440,7 @@ impl Runtime {
                 notify_authority: notify_authority.clone(),
                 notify_refresh: notify_refresh.clone(),
                 notify_refresh_tx: notify_refresh_tx.clone(),
+                notify_log_limiter: notify_log_limiter.clone(),
                 metrics: metrics.clone(),
                 active_connections: tcp_connections,
             };
@@ -723,6 +733,19 @@ async fn serve_rrl_summary_logs(
     }
 }
 
+async fn serve_notify_log_summaries(
+    limiter: NotifyLogLimiter,
+    interval: Duration,
+) -> Result<(), RuntimeError> {
+    loop {
+        tokio::time::sleep(interval).await;
+        let summary = limiter.take_summary();
+        if summary.total_suppressed > 0 {
+            log_notify_log_summary(summary, interval);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RrlSummary {
     dropped_responses: u64,
@@ -759,6 +782,27 @@ fn log_rrl_summary(summary: RrlSummary, interval: Duration) {
         total_dropped_responses = summary.total_dropped_responses,
         total_truncated_responses = summary.total_truncated_responses,
         "RRL periodic summary"
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NotifyLogSummary {
+    suppressed_unauthorized: u64,
+    suppressed_tsig_failures: u64,
+    distinct_source_prefixes: u64,
+    total_suppressed: u64,
+}
+
+fn log_notify_log_summary(summary: NotifyLogSummary, interval: Duration) {
+    info!(
+        category = "notify",
+        event = "notify_log_rate_limit_summary",
+        interval_secs = interval.as_secs(),
+        suppressed_unauthorized = summary.suppressed_unauthorized,
+        suppressed_tsig_failures = summary.suppressed_tsig_failures,
+        distinct_source_prefixes = summary.distinct_source_prefixes,
+        total_suppressed = summary.total_suppressed,
+        "NOTIFY log rate-limit summary"
     );
 }
 
@@ -2125,6 +2169,180 @@ impl fmt::Display for IpPrefix {
     }
 }
 
+#[derive(Clone, Debug)]
+struct NotifyLogLimiter {
+    inner: Arc<Mutex<NotifyLogState>>,
+}
+
+impl NotifyLogLimiter {
+    fn new(window: Duration) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NotifyLogState::new(window))),
+        }
+    }
+
+    fn log_unauthorized(&self, source: IpAddr, zone: &DomainName) {
+        self.log_event(NotifyLogCategory::Unauthorized, source, zone, None);
+    }
+
+    fn log_tsig_failure(&self, source: IpAddr, zone: &DomainName, error: &TsigError) {
+        self.log_event(
+            NotifyLogCategory::TsigFailure,
+            source,
+            zone,
+            Some(error.to_string()),
+        );
+    }
+
+    fn log_event(
+        &self,
+        category: NotifyLogCategory,
+        source: IpAddr,
+        zone: &DomainName,
+        error: Option<String>,
+    ) {
+        let zone_key = zone.canonical_key();
+        let decision = self
+            .inner
+            .lock()
+            .expect("NOTIFY log limiter lock poisoned")
+            .observe(category, source, zone_key);
+        if decision == NotifyLogDecision::Suppress {
+            return;
+        }
+        match category {
+            NotifyLogCategory::Unauthorized => {
+                warn!(
+                    category = "notify",
+                    event = "notify_unauthorized_discard",
+                    peer_ip = %source,
+                    source_prefix = %notify_log_prefix(source),
+                    zone = %zone,
+                    "unauthorized NOTIFY discarded"
+                );
+            }
+            NotifyLogCategory::TsigFailure => {
+                warn!(
+                    category = "notify",
+                    event = "notify_tsig_failure",
+                    peer_ip = %source,
+                    source_prefix = %notify_log_prefix(source),
+                    zone = %zone,
+                    error = %error.as_deref().unwrap_or("TSIG verification failed"),
+                    "rejected NOTIFY with invalid TSIG"
+                );
+            }
+        }
+    }
+
+    fn take_summary(&self) -> NotifyLogSummary {
+        self.inner
+            .lock()
+            .expect("NOTIFY log limiter lock poisoned")
+            .take_summary()
+    }
+}
+
+#[derive(Debug)]
+struct NotifyLogState {
+    window: Duration,
+    keys: HashMap<NotifyLogKey, Instant>,
+    suppressed_unauthorized: u64,
+    suppressed_tsig_failures: u64,
+    suppressed_prefixes: HashSet<IpPrefix>,
+}
+
+impl NotifyLogState {
+    fn new(window: Duration) -> Self {
+        Self {
+            window,
+            keys: HashMap::new(),
+            suppressed_unauthorized: 0,
+            suppressed_tsig_failures: 0,
+            suppressed_prefixes: HashSet::new(),
+        }
+    }
+
+    fn observe(
+        &mut self,
+        category: NotifyLogCategory,
+        source: IpAddr,
+        zone: String,
+    ) -> NotifyLogDecision {
+        let now = Instant::now();
+        self.expire_old_keys(now);
+        let prefix = notify_log_prefix(source);
+        let key = NotifyLogKey {
+            prefix,
+            zone,
+            category,
+        };
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.keys.entry(key) {
+            entry.insert(now);
+            return NotifyLogDecision::Emit;
+        }
+
+        match category {
+            NotifyLogCategory::Unauthorized => {
+                self.suppressed_unauthorized = self.suppressed_unauthorized.saturating_add(1);
+            }
+            NotifyLogCategory::TsigFailure => {
+                self.suppressed_tsig_failures = self.suppressed_tsig_failures.saturating_add(1);
+            }
+        }
+        self.suppressed_prefixes.insert(prefix);
+        NotifyLogDecision::Suppress
+    }
+
+    fn expire_old_keys(&mut self, now: Instant) {
+        let window = self.window;
+        self.keys
+            .retain(|_, first_seen| now.duration_since(*first_seen) < window);
+    }
+
+    fn take_summary(&mut self) -> NotifyLogSummary {
+        let summary = NotifyLogSummary {
+            suppressed_unauthorized: self.suppressed_unauthorized,
+            suppressed_tsig_failures: self.suppressed_tsig_failures,
+            distinct_source_prefixes: self.suppressed_prefixes.len() as u64,
+            total_suppressed: self
+                .suppressed_unauthorized
+                .saturating_add(self.suppressed_tsig_failures),
+        };
+        self.suppressed_unauthorized = 0;
+        self.suppressed_tsig_failures = 0;
+        self.suppressed_prefixes.clear();
+        summary
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NotifyLogKey {
+    prefix: IpPrefix,
+    zone: String,
+    category: NotifyLogCategory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum NotifyLogCategory {
+    Unauthorized,
+    TsigFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotifyLogDecision {
+    Emit,
+    Suppress,
+}
+
+fn notify_log_prefix(source: IpAddr) -> IpPrefix {
+    let prefix_len = match source {
+        IpAddr::V4(_) => 24,
+        IpAddr::V6(_) => 56,
+    };
+    IpPrefix::new(source, prefix_len)
+}
+
 fn prefix_mask_v4(len: u8) -> u32 {
     if len == 0 { 0 } else { u32::MAX << (32 - len) }
 }
@@ -2259,6 +2477,7 @@ async fn serve_udp(
             &settings.notify_authority,
             peer_ip,
             &settings.metrics,
+            &settings.notify_log_limiter,
         ) else {
             debug!(%peer, bytes = len, "discarded DNS datagram");
             continue;
@@ -2307,7 +2526,7 @@ async fn serve_udp(
                     .is_authorized(qname, qclass, peer_ip);
                 if !authorized {
                     settings.metrics.record_notify_unauthorized();
-                    warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
+                    settings.notify_log_limiter.log_unauthorized(peer_ip, qname);
                 }
                 authorized
             },
@@ -2607,6 +2826,7 @@ struct UdpServerSettings {
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     rrl: RrlLimiter,
 }
@@ -2658,6 +2878,7 @@ async fn serve_tcp(
                 settings.notify_authority,
                 settings.notify_refresh,
                 settings.notify_refresh_tx,
+                settings.notify_log_limiter,
                 settings.metrics,
                 peer.ip(),
             )
@@ -4192,6 +4413,7 @@ struct TcpServerSettings {
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     active_connections: Arc<AtomicUsize>,
 }
@@ -4783,7 +5005,7 @@ fn prepare_notify_packet(
     notify_authority: &NotifyAuthority,
     source: IpAddr,
 ) -> Option<PreparedDnsMessage> {
-    prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, None)
+    prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, None, None)
 }
 
 fn prepare_notify_packet_with_metrics(
@@ -4791,8 +5013,15 @@ fn prepare_notify_packet_with_metrics(
     notify_authority: &NotifyAuthority,
     source: IpAddr,
     metrics: &RuntimeMetrics,
+    notify_log_limiter: &NotifyLogLimiter,
 ) -> Option<PreparedDnsMessage> {
-    prepare_notify_packet_with_optional_metrics(packet, notify_authority, source, Some(metrics))
+    prepare_notify_packet_with_optional_metrics(
+        packet,
+        notify_authority,
+        source,
+        Some(metrics),
+        Some(notify_log_limiter),
+    )
 }
 
 fn prepare_notify_packet_with_optional_metrics(
@@ -4800,6 +5029,7 @@ fn prepare_notify_packet_with_optional_metrics(
     notify_authority: &NotifyAuthority,
     source: IpAddr,
     metrics: Option<&RuntimeMetrics>,
+    notify_log_limiter: Option<&NotifyLogLimiter>,
 ) -> Option<PreparedDnsMessage> {
     let unsigned = || PreparedDnsMessage {
         packet: packet.to_vec(),
@@ -4851,7 +5081,18 @@ fn prepare_notify_packet_with_optional_metrics(
             {
                 metrics.record_notify_tsig_result(result);
             }
-            warn!(%source, zone = %question.qname, %error, "rejected NOTIFY with invalid TSIG");
+            if let Some(notify_log_limiter) = notify_log_limiter {
+                notify_log_limiter.log_tsig_failure(source, &question.qname, &error);
+            } else {
+                warn!(
+                    category = "notify",
+                    event = "notify_tsig_failure",
+                    peer_ip = %source,
+                    zone = %question.qname,
+                    %error,
+                    "rejected NOTIFY with invalid TSIG"
+                );
+            }
             tsig_error_response(
                 packet,
                 &header,
@@ -5600,6 +5841,7 @@ async fn handle_tcp_connection(
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
@@ -5647,6 +5889,7 @@ async fn handle_tcp_connection(
             notify_authority.clone(),
             notify_refresh.clone(),
             notify_refresh_tx.clone(),
+            notify_log_limiter.clone(),
             metrics.clone(),
             peer_ip,
             response_tx.clone(),
@@ -5710,14 +5953,19 @@ async fn handle_tcp_packet(
     notify_authority: NotifyAuthority,
     notify_refresh: NotifyRefreshTracker,
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     peer_ip: IpAddr,
     response_tx: mpsc::Sender<TcpResponse>,
     permit: OwnedSemaphorePermit,
 ) {
-    let Some(prepared) =
-        prepare_notify_packet_with_metrics(&packet, &notify_authority, peer_ip, &metrics)
-    else {
+    let Some(prepared) = prepare_notify_packet_with_metrics(
+        &packet,
+        &notify_authority,
+        peer_ip,
+        &metrics,
+        &notify_log_limiter,
+    ) else {
         debug!(bytes = packet.len(), "discarded DNS-over-TCP message");
         return;
     };
@@ -5760,7 +6008,7 @@ async fn handle_tcp_packet(
             let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
             if !authorized {
                 metrics.record_notify_unauthorized();
-                warn!(%peer_ip, zone = %qname, "unauthorized NOTIFY discarded");
+                notify_log_limiter.log_unauthorized(peer_ip, qname);
             }
             authorized
         },
@@ -5902,7 +6150,7 @@ mod tests {
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
-            TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigKey,
+            TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigKey,
         },
         zone::{ResourceRecord, Rrset, SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
     };
@@ -5910,23 +6158,23 @@ mod tests {
     use super::{
         CookiePrefixMetricSettings, DnsCookieRuntimeSettings, DnsCookieSecretStore,
         HealthEndpointState, IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority,
-        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory,
-        QueryLatencyHistogram, QueryMetricObservation, RefreshAttemptContext, RefreshRequest,
-        RefreshWorkerSettings, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
-        RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings, TransferError,
-        TransferPlan, TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
-        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
-        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
-        log_rrl_summary, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
-        response_opt_record, response_question_end, response_rcode, rrl_truncated_response,
-        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
-        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
-        signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-        transfer_query_id, validate_file_descriptor_limit_value, validate_runtime_config,
-        write_tcp_message,
+        NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction, NotifyRefreshTracker,
+        NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
+        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
+        RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
+        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
+        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
+        drain_tcp_connections, handle_tcp_connection, jitter_interval, load_pem_certs,
+        load_pem_private_key, log_notify_log_summary, log_rrl_summary, observe_query_metrics,
+        poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
+        prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        required_file_descriptor_limit, response_category, response_opt_record,
+        response_question_end, response_rcode, rrl_truncated_response, runtime_config_warnings_at,
+        serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+        serve_udp, sign_notify_response, signal_notify_refresh, transfer_axfr_from_primary,
+        transfer_ixfr_from_primary, transfer_query_id, validate_file_descriptor_limit_value,
+        validate_runtime_config, write_tcp_message,
     };
 
     #[test]
@@ -7005,6 +7253,7 @@ mod tests {
             &authority,
             "192.0.2.53".parse().unwrap(),
             &metrics,
+            &notify_log_limiter_for_test(),
         )
         .expect("TSIG error response");
         assert!(unsigned_prepared.immediate_response.is_some());
@@ -7017,6 +7266,7 @@ mod tests {
             &authority,
             "192.0.2.53".parse().unwrap(),
             &metrics,
+            &notify_log_limiter_for_test(),
         )
         .expect("verified NOTIFY");
         assert_eq!(signed_prepared.packet, packet);
@@ -7780,6 +8030,59 @@ mod tests {
     }
 
     #[test]
+    fn notify_log_limiter_suppresses_repeats_and_summarizes() {
+        let limiter = NotifyLogLimiter::new(std::time::Duration::from_secs(60));
+        let zone = DomainName::from_absolute_str("example.test.").unwrap();
+        let source = "192.0.2.10".parse().unwrap();
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        limiter.log_unauthorized(source, &zone);
+        limiter.log_unauthorized(source, &zone);
+        limiter.log_tsig_failure(source, &zone, &TsigError::MissingTsig);
+        limiter.log_tsig_failure(source, &zone, &TsigError::MissingTsig);
+
+        assert!(captured.contains_all(&[
+            "unauthorized NOTIFY discarded",
+            "category=\"notify\"",
+            "event=\"notify_unauthorized_discard\"",
+            "peer_ip=192.0.2.10",
+            "source_prefix=192.0.2.0/24",
+            "zone=example.test.",
+        ]));
+        assert!(captured.contains_all(&[
+            "rejected NOTIFY with invalid TSIG",
+            "category=\"notify\"",
+            "event=\"notify_tsig_failure\"",
+            "peer_ip=192.0.2.10",
+            "source_prefix=192.0.2.0/24",
+            "zone=example.test.",
+        ]));
+
+        let summary = limiter.take_summary();
+        assert_eq!(
+            summary,
+            NotifyLogSummary {
+                suppressed_unauthorized: 1,
+                suppressed_tsig_failures: 1,
+                distinct_source_prefixes: 1,
+                total_suppressed: 2,
+            }
+        );
+        log_notify_log_summary(summary, std::time::Duration::from_secs(60));
+        assert!(captured.contains_all(&[
+            "NOTIFY log rate-limit summary",
+            "category=\"notify\"",
+            "event=\"notify_log_rate_limit_summary\"",
+            "suppressed_unauthorized=1",
+            "suppressed_tsig_failures=1",
+            "distinct_source_prefixes=1",
+            "total_suppressed=2",
+        ]));
+    }
+
+    #[test]
     fn rrl_limiter_evicts_least_recent_key_at_capacity() {
         let config = RrlConfig {
             positive_per_second: 0,
@@ -7904,6 +8207,7 @@ mod tests {
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
+                notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: server_metrics,
                 rrl: RrlLimiter::from_config(&RrlConfig::default(), metrics.clone()),
             },
@@ -7974,6 +8278,7 @@ mod tests {
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
+                notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: server_metrics,
                 rrl: RrlLimiter::from_config(&rrl_config, metrics.clone()),
             },
@@ -9832,6 +10137,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
@@ -9915,6 +10221,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
@@ -9973,6 +10280,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
@@ -10017,6 +10325,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
@@ -10075,6 +10384,7 @@ mod tests {
                 NotifyAuthority::default(),
                 NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx(),
+                notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
                 "127.0.0.1".parse().unwrap(),
             )
@@ -10121,6 +10431,7 @@ mod tests {
                 notify_authority: NotifyAuthority::default(),
                 notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
                 notify_refresh_tx: notify_refresh_tx(),
+                notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: RuntimeMetrics::new(),
                 active_connections: active.clone(),
             },
@@ -11307,9 +11618,14 @@ mod tests {
             notify_authority: NotifyAuthority::default(),
             notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
             notify_refresh_tx: notify_refresh_tx(),
+            notify_log_limiter: notify_log_limiter_for_test(),
             metrics: metrics.clone(),
             rrl: RrlLimiter::from_config(&rrl_config, metrics),
         }
+    }
+
+    fn notify_log_limiter_for_test() -> NotifyLogLimiter {
+        NotifyLogLimiter::new(std::time::Duration::from_secs(60))
     }
 
     fn dns_cookie_settings_for_test(policy: DnsCookiePolicy) -> DnsCookieRuntimeSettings {

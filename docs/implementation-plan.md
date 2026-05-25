@@ -221,7 +221,8 @@ Slice 6 has initial NOTIFY intake foundations:
 - NOTIFY requests for unconfigured zones or non-IN classes receive REFUSED;
 - accepted NOTIFY requests receive a NOTIFY response with AA set and the question copied verbatim;
 - embedded SOA records in NOTIFY answer sections are validated against the NOTIFY QNAME and QCLASS, and malformed or mismatched embedded SOAs receive FORMERR;
-- runtime NOTIFY source authorization is derived from each zone's primaries plus `notify_sources`; unauthorized NOTIFY requests are silently discarded and logged at warning level.
+- runtime NOTIFY source authorization is derived from each zone's primaries plus `notify_sources`; unauthorized NOTIFY requests are silently discarded, and unauthorized-source plus TSIG-failure warning logs are rate-limited per `(source /24 or /56 prefix, zone, category)` over `[limits].notify_log_rate_window_secs`, defaulting to 60 seconds.
+- NOTIFY log-rate limiting emits the first warning in full, suppresses repeated warnings in the same window, and emits aggregate info summaries with suppressed unauthorized, suppressed TSIG-failure, total suppressed, and distinct source-prefix counts.
 - accepted NOTIFY requests call a refresh-signalling hook with the optional embedded SOA serial, and the runtime deduplicates per-zone refresh signals using `[limits].notify_dedup_secs`, defaulting to 1 second, while still responding to duplicate NOTIFY messages.
 - non-duplicate accepted NOTIFY signals are queued for the transfer worker; if the embedded SOA serial is newer than the active zone serial, or no comparable serial is available, the worker attempts AXFR against configured primaries and publishes the first successful snapshot.
 
