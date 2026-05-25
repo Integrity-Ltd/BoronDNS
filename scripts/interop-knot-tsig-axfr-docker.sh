@@ -19,12 +19,14 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/knot/knot-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/knot-tsig-axfr-$$"
 container="oxidedns-knot-tsig-axfr-$$"
+artifact_dir="${OXIDEDNS_KNOT_TSIG_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -58,6 +60,15 @@ PY
 
 cp "$zone_file" "$workdir/alpha.test.zone"
 cp "$template_file" "$workdir/knot.conf"
+primary_soa_out="$workdir/primary-soa.out"
+unsigned_axfr_out="$workdir/unsigned-axfr.out"
+signed_axfr_out="$workdir/signed-axfr.out"
+readyz_out="$workdir/readyz.txt"
+answer_a_out="$workdir/oxidedns-answer-a.out"
+tcp_soa_out="$workdir/oxidedns-tcp-soa.out"
+metrics_out="$workdir/metrics.txt"
+summary_out="$workdir/knot-tsig-axfr-summary.env"
+knot_log="$workdir/knot.log"
 
 if ! docker run -d --name "$container" \
   -p "127.0.0.1:$knot_port:5353/tcp" \
@@ -79,21 +90,25 @@ for _ in {1..120}; do
 done
 
 primary_soa="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short)"
+printf '%s\n' "$primary_soa" >"$primary_soa_out"
 if [[ "$primary_soa" != *"2026052401"* ]]; then
   echo "Knot TSIG primary did not answer expected SOA serial" >&2
   exit 1
 fi
 
 set +e
-unsigned_axfr="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. AXFR +time=2 +tries=1 2>&1)"
+dig "@127.0.0.1" -p "$knot_port" alpha.test. AXFR +nocmd +time=2 +tries=1 >"$unsigned_axfr_out" 2>&1
 unsigned_status=$?
 set -e
+unsigned_axfr="$(cat "$unsigned_axfr_out")"
 if (( unsigned_status == 0 )) && [[ "$unsigned_axfr" == *"www.alpha.test."* ]]; then
   echo "Knot TSIG primary unexpectedly allowed unsigned AXFR" >&2
   exit 1
 fi
 
-signed_axfr="$(dig "@127.0.0.1" -p "$knot_port" -y "hmac-sha256:transfer-key.:$tsig_secret" alpha.test. AXFR +time=2 +tries=1)"
+dig "@127.0.0.1" -p "$knot_port" -y "hmac-sha256:transfer-key.:$tsig_secret" alpha.test. AXFR +nocmd +time=2 +tries=1 \
+  >"$signed_axfr_out"
+signed_axfr="$(cat "$signed_axfr_out")"
 if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.alpha.test."* ]]; then
   echo "Knot TSIG primary signed AXFR did not include expected fixture records" >&2
   exit 1
@@ -138,29 +153,33 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+printf '%s\n' "$ready" >"$readyz_out"
+if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after Knot TSIG AXFR" >&2
   exit 1
 fi
 
 answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+printf '%s\n' "$answer_a" >"$answer_a_out"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
   echo "OxideDNS did not serve expected A response after Knot TSIG AXFR" >&2
   exit 1
 fi
 
 tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$tcp_soa" >"$tcp_soa_out"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
   echo "OxideDNS did not serve expected TCP SOA response after Knot TSIG AXFR" >&2
   exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
@@ -175,6 +194,36 @@ done
 if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
   echo "OxideDNS log leaked TSIG secret" >&2
   exit 1
+fi
+
+docker logs "$container" >"$knot_log" 2>&1 || true
+
+cat >"$summary_out" <<EOF
+unsigned_axfr_rejected=1
+signed_axfr_succeeded=1
+oxidedns_ready_after_signed_axfr=1
+oxidedns_served_transferred_a=1
+oxidedns_served_transferred_tcp_soa=1
+oxidedns_transfer_metrics_checked=1
+tsig_secret_redaction_checked=1
+EOF
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/knot.conf" >"$artifact_dir/knot.conf.redacted"
+  sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+  cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
+  cp "$knot_log" "$artifact_dir/knot.log"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$primary_soa_out" "$artifact_dir/primary-soa.out"
+  cp "$unsigned_axfr_out" "$artifact_dir/unsigned-axfr.out"
+  cp "$signed_axfr_out" "$artifact_dir/signed-axfr.out"
+  cp "$answer_a_out" "$artifact_dir/oxidedns-answer-a.out"
+  cp "$tcp_soa_out" "$artifact_dir/oxidedns-tcp-soa.out"
+  cp "$readyz_out" "$artifact_dir/readyz.txt"
+  cp "$metrics_out" "$artifact_dir/metrics.txt"
+  cp "$summary_out" "$artifact_dir/knot-tsig-axfr-summary.env"
 fi
 
 echo "Knot Docker TSIG AXFR interop passed"
