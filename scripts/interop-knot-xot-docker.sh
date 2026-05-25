@@ -25,6 +25,7 @@ workdir="$repo_root/target/interop/knot-xot-$$"
 container="oxidedns-knot-xot-$$"
 server_name="primary.alpha.test"
 artifact_dir="${OXIDEDNS_KNOT_XOT_ARTIFACT_DIR:-}"
+traceability_tsv="$workdir/knot-xot-traceability.tsv"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -287,6 +288,19 @@ if grep -E 'BEGIN .*PRIVATE KEY|master secret|traffic secret|session key' "$work
   exit 1
 fi
 
+for expected_log in \
+  'xot_tls_session_established' \
+  'tls_version' \
+  'cipher_suite' \
+  'xot_tls_session_closed' \
+  'bytes_in' \
+  'bytes_out'; do
+  if ! grep -F "$expected_log" "$workdir/oxidedns.log" >/dev/null 2>&1; then
+    echo "OxideDNS XoT log missing expected field or event: $expected_log" >&2
+    exit 1
+  fi
+done
+
 cat >"$workdir/knot-xot-summary.env" <<EOF
 alpn_dot_negotiated=1
 oxidedns_ready_after_xot_axfr=1
@@ -295,7 +309,20 @@ oxidedns_served_transferred_cname=1
 oxidedns_served_transferred_tcp_soa=1
 oxidedns_transfer_metrics_checked=1
 oxidedns_xot_failure_absence_checked=1
+oxidedns_xot_established_log_checked=1
+oxidedns_xot_closed_log_checked=1
 oxidedns_tls_key_material_absence_checked=1
+EOF
+
+cat >"$traceability_tsv" <<'EOF'
+requirement	status	case	artifacts	note
+ODS-FR-XOT-001	retained-real-primary	knot_xot_axfr_tls	primary-version.txt; alpn-probe.txt; oxidedns.log; knot-xot-summary.env	OxideDNS successfully transfers AXFR over TLS from a real Knot primary; logs retain negotiated TLS version and cipher-suite fields for release review.
+ODS-FR-XOT-002	retained-real-primary	knot_xot_cipher_observed	oxidedns.log; alpn-probe.txt	The OxideDNS XoT session log records the negotiated cipher suite; broader prohibited-suite rejection remains covered by release TLS-matrix review.
+ODS-FR-XOT-003	retained-real-primary	knot_xot_port_override	oxidedns.toml; primary-version.txt	The primary uses an explicit per-primary XoT port override in configuration rather than cleartext TCP.
+ODS-FR-XOT-004	retained-real-primary	knot_xot_alpn_dot	alpn-probe.txt; oxidedns.log; knot-xot-summary.env	Knot and OxideDNS negotiate ALPN dot; missing-ALPN abort behavior remains covered by focused tests.
+ODS-FR-XOT-005	retained-real-primary	knot_xot_certificate_validation	server-certificate.txt; ca.crt; oxidedns.toml; readyz.json	OxideDNS trusts the configured CA and validates the SAN/SNI-bound real-primary certificate before publishing the transferred zone.
+ODS-FR-XOT-006	retained-real-primary	knot_xot_no_cleartext_fallback	oxidedns.log; metrics.txt; knot-xot-summary.env	The retained log has no XoT connection or TLS failure markers and transfer metrics show the TLS AXFR completed without cleartext fallback.
+ODS-FR-XOT-011	retained-real-primary	knot_xot_session_logging	oxidedns.log; knot-xot-summary.env	OxideDNS logs XoT TLS session establishment with version/cipher and session close with byte counters while retaining TLS key-material absence evidence.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
@@ -315,6 +342,7 @@ if [[ -n "$artifact_dir" ]]; then
   cp "$workdir/oxidedns-answer-cname.out" "$artifact_dir/oxidedns-answer-cname.out"
   cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
   cp "$workdir/knot-xot-summary.env" "$artifact_dir/knot-xot-summary.env"
+  cp "$traceability_tsv" "$artifact_dir/knot-xot-traceability.tsv"
 fi
 
 echo "Knot Docker XoT AXFR interop passed"
