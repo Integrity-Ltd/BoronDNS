@@ -474,8 +474,9 @@ current operator-relevant limitations are:
   areas have partial evidence rather than full release traceability.
 - SRS v0.7 Alpha adds NSID, configuration warning/dump/validate modes,
   canonical log fields, sysexits-style CLI behavior, and process `--version` /
-  `--help` requirements. Several of these are not yet implemented in the
-  release CLI shape.
+  `--help` requirements. The CLI now has local evidence for the core
+  configuration/usage exit-code paths and listen-socket bind failures; retained
+  release artifacts and broader non-bind sysexits coverage are still pending.
 - DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
   validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
   valid-cookie RRL exemption. Startup and BADCOOKIE logs plus bounded global and

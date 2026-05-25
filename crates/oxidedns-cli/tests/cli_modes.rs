@@ -1,5 +1,6 @@
 use std::{
     fs,
+    net::TcpListener,
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -7,6 +8,7 @@ use std::{
 
 const EX_CONFIG_INVALID: i32 = 2;
 const EX_USAGE: i32 = 64;
+const EX_CANTCREAT: i32 = 73;
 const EX_CONFIG: i32 = 78;
 
 #[test]
@@ -232,6 +234,43 @@ fn unrecognized_flag_exits_with_usage() {
         .expect("run oxidedns with invalid flag");
 
     assert_eq!(output.status.code(), Some(EX_USAGE));
+}
+
+#[test]
+fn serve_health_bind_failure_exits_with_cantcreat() {
+    let occupied = TcpListener::bind("127.0.0.1:0").expect("bind occupied health port");
+    let occupied_addr = occupied.local_addr().expect("occupied health address");
+    let config = write_config(
+        "health-bind-failure",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+            health = "{occupied_addr}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns serve with occupied health listener");
+
+    assert_eq!(output.status.code(), Some(EX_CANTCREAT));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to bind health listener"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
 }
 
 fn write_config(label: &str, contents: &str) -> PathBuf {

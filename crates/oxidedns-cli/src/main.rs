@@ -7,12 +7,13 @@ use anyhow::{Context, anyhow};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use oxidedns_core::{ConfigError, LogFormatConfig, ServerConfig};
-use oxidedns_server::Runtime;
+use oxidedns_server::{Runtime, RuntimeError};
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/oxidedns-secondary/config.toml";
 const EX_CONFIG_INVALID: u8 = 2;
 const EX_USAGE: u8 = 64;
 const EX_GENERAL: u8 = 1;
+const EX_CANTCREAT: u8 = 73;
 const EX_CONFIG: u8 = 78;
 const VERSION_TEXT: &str = concat!(
     "oxidedns ",
@@ -258,6 +259,19 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 ConfigError::Serialize(_) => EX_GENERAL,
             };
         }
+        if let Some(runtime_error) = cause.downcast_ref::<RuntimeError>() {
+            return match runtime_error {
+                RuntimeError::BindUdp { .. }
+                | RuntimeError::BindTcp { .. }
+                | RuntimeError::BindHealth { .. } => EX_CANTCREAT,
+                RuntimeError::InvalidRuntimeConfig(_) => EX_CONFIG_INVALID,
+                RuntimeError::Udp(_)
+                | RuntimeError::Tcp(_)
+                | RuntimeError::Health(_)
+                | RuntimeError::ShutdownSignal(_)
+                | RuntimeError::DnsCookieSecret(_) => EX_GENERAL,
+            };
+        }
     }
     EX_GENERAL
 }
@@ -378,6 +392,33 @@ mod tests {
         let parse = ServerConfig::from_toml_str("not = [").expect_err("parse error");
         let parse = anyhow!(parse).context("loading config");
         assert_eq!(exit_code_for_error(&parse), EX_CONFIG);
+    }
+
+    #[test]
+    fn runtime_bind_errors_map_to_cantcreat() {
+        let addr = "127.0.0.1:5300".parse().expect("socket address");
+        let source = || std::io::Error::new(std::io::ErrorKind::AddrInUse, "address in use");
+
+        let udp = anyhow!(RuntimeError::BindUdp {
+            addr,
+            source: source(),
+        })
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&udp), EX_CANTCREAT);
+
+        let tcp = anyhow!(RuntimeError::BindTcp {
+            addr,
+            source: source(),
+        })
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&tcp), EX_CANTCREAT);
+
+        let health = anyhow!(RuntimeError::BindHealth {
+            addr,
+            source: source(),
+        })
+        .context("starting runtime");
+        assert_eq!(exit_code_for_error(&health), EX_CANTCREAT);
     }
 
     #[test]
