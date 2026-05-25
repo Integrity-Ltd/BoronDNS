@@ -55,6 +55,7 @@ cat >"$snapshot_dir/commands.txt" <<'EOF'
 ./scripts/check.sh
 cargo check --manifest-path fuzz/Cargo.toml
 scripts/audit-invariants.sh
+scripts/audit-readonly-runtime.sh
 scripts/perf-smoke.sh
 scripts/interop-tcp-truncation-retry.sh
 scripts/interop-bind-axfr.sh
@@ -65,6 +66,7 @@ EOF
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
+run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' scripts/audit-readonly-runtime.sh"
 run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' scripts/perf-smoke.sh"
 run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
 run_and_capture interop-bind-axfr bash -lc "cd '$repo_root' && scripts/interop-bind-axfr.sh"
