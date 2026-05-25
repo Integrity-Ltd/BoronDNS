@@ -1,3 +1,5 @@
+![OxideDNS](docs/assets/oxidedns-banner.png)
+
 # OxideDNS
 
 OxideDNS is a secondary-only authoritative DNS server. It loads zone data from
