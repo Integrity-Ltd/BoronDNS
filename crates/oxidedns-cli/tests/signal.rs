@@ -16,24 +16,62 @@ fn serve_exits_successfully_on_sigint() {
     serve_exits_successfully_on_signal("-INT");
 }
 
-fn serve_exits_successfully_on_signal(signal: &str) {
+#[test]
+fn serve_ignores_sighup() {
     let config_path = write_test_config();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
-        .arg("serve")
-        .arg("--config")
-        .arg(&config_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn oxidedns serve");
+    let mut child = spawn_server(&config_path);
 
     wait_until_running(&mut child, Duration::from_millis(150));
-    let status = Command::new("kill")
-        .arg(signal)
-        .arg(child.id().to_string())
-        .status()
-        .expect("send signal");
-    assert!(status.success(), "kill {signal} should succeed");
+    send_signal("-HUP", child.id());
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        child.try_wait().expect("poll child after SIGHUP").is_none(),
+        "oxidedns should continue running after SIGHUP"
+    );
+
+    send_signal("-TERM", child.id());
+    let status = wait_for_exit(&mut child, Duration::from_secs(2), "-TERM after SIGHUP");
+    assert!(
+        status.success(),
+        "oxidedns should exit successfully after SIGTERM, got {status}"
+    );
+
+    let _ = fs::remove_file(config_path);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn serve_installs_required_ignore_dispositions() {
+    let config_path = write_test_config();
+    let mut child = spawn_server(&config_path);
+
+    wait_until_running(&mut child, Duration::from_millis(150));
+    let status =
+        fs::read_to_string(format!("/proc/{}/status", child.id())).expect("read child proc status");
+    let ignored = sig_ign_mask(&status);
+    assert_signal_ignored(ignored, 1, "SIGHUP");
+    assert_signal_ignored(ignored, 13, "SIGPIPE");
+
+    send_signal("-TERM", child.id());
+    let status = wait_for_exit(
+        &mut child,
+        Duration::from_secs(2),
+        "-TERM after SigIgn check",
+    );
+    assert!(
+        status.success(),
+        "oxidedns should exit successfully after SIGTERM, got {status}"
+    );
+
+    let _ = fs::remove_file(config_path);
+}
+
+fn serve_exits_successfully_on_signal(signal: &str) {
+    let config_path = write_test_config();
+    let mut child = spawn_server(&config_path);
+
+    wait_until_running(&mut child, Duration::from_millis(150));
+    send_signal(signal, child.id());
 
     let status = wait_for_exit(&mut child, Duration::from_secs(2), signal);
     assert!(
@@ -42,6 +80,26 @@ fn serve_exits_successfully_on_signal(signal: &str) {
     );
 
     let _ = fs::remove_file(config_path);
+}
+
+fn spawn_server(config_path: &std::path::Path) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("serve")
+        .arg("--config")
+        .arg(config_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn oxidedns serve")
+}
+
+fn send_signal(signal: &str, pid: u32) {
+    let status = Command::new("kill")
+        .arg(signal)
+        .arg(pid.to_string())
+        .status()
+        .expect("send signal");
+    assert!(status.success(), "kill {signal} should succeed");
 }
 
 fn write_test_config() -> std::path::PathBuf {
@@ -68,6 +126,25 @@ fn write_test_config() -> std::path::PathBuf {
     )
     .expect("write test config");
     path
+}
+
+#[cfg(target_os = "linux")]
+fn sig_ign_mask(status: &str) -> u128 {
+    let value = status
+        .lines()
+        .find_map(|line| line.strip_prefix("SigIgn:"))
+        .expect("SigIgn status line")
+        .trim();
+    u128::from_str_radix(value, 16).expect("parse SigIgn mask")
+}
+
+#[cfg(target_os = "linux")]
+fn assert_signal_ignored(mask: u128, signal_number: u32, name: &str) {
+    let bit = 1_u128 << (signal_number - 1);
+    assert!(
+        mask & bit != 0,
+        "{name} should be ignored in SigIgn mask {mask:#x}"
+    );
 }
 
 fn wait_until_running(child: &mut Child, timeout: Duration) {

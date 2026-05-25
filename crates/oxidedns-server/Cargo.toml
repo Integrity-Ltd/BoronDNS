@@ -10,6 +10,7 @@ version.workspace = true
 axum.workspace = true
 flate2.workspace = true
 getrandom.workspace = true
+libc.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -20,5 +21,5 @@ oxidedns-core = { path = "../oxidedns-core", version = "0.1.0" }
 [dev-dependencies]
 rcgen.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"

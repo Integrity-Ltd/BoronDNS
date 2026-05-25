@@ -72,8 +72,28 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    #[cfg(unix)]
+    if let Err(error) = oxidedns_server::install_process_signal_dispositions() {
+        eprintln!("failed to install process signal dispositions: {error}");
+        return ExitCode::from(EX_OSERR);
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("failed to initialise async runtime: {error}");
+            return ExitCode::from(EX_OSERR);
+        }
+    };
+
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {

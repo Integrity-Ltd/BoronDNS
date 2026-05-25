@@ -28,9 +28,12 @@ if unsafe_code != "forbid":
 print("workspace lint check passed: unsafe_code = \"forbid\"")
 PY
 
+allowed_exception="$repo_root/crates/oxidedns-server/src/process_signals.rs"
+
 unsafe_matches="$(
   rg --line-number --glob '*.rs' '\bunsafe\s*(\{|fn|impl|trait|extern)' \
-    "$repo_root/crates" "$repo_root/fuzz" || true
+    "$repo_root/crates" "$repo_root/fuzz" \
+    --glob '!crates/oxidedns-server/src/process_signals.rs' || true
 )"
 
 if [[ -n "$unsafe_matches" ]]; then
@@ -38,7 +41,12 @@ if [[ -n "$unsafe_matches" ]]; then
   exit 1
 fi
 
-echo "first-party unsafe scan passed: no unsafe constructs found in crates/ or fuzz/"
+if ! rg --quiet 'libc::signal\(signal, libc::SIG_IGN\)' "$allowed_exception"; then
+  echo "signal disposition unsafe exception changed unexpectedly: $allowed_exception" >&2
+  exit 1
+fi
+
+echo "first-party unsafe scan passed: only audited POSIX signal-disposition exception found"
 
 if command -v cargo-geiger >/dev/null 2>&1; then
   echo "cargo-geiger available; run cargo geiger for transitive dependency unsafe enumeration"

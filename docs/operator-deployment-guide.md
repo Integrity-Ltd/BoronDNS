@@ -220,8 +220,8 @@ Notes:
   capability lines when binding high ports.
 - Keep the configured graceful shutdown timeout below `TimeoutStopSec`.
   The example config uses `[limits].graceful_shutdown_secs = 30`.
-- The process handles SIGTERM and SIGINT for graceful shutdown. Do not rely on
-  SIGHUP for reload.
+- The process handles SIGTERM and SIGINT for graceful shutdown, ignores SIGHUP,
+  and sets SIGPIPE to ignored at startup. Do not rely on SIGHUP for reload.
 - Because OxideDNS writes no operational state, read-only root filesystems and
   strict service sandboxes are expected deployment shapes. Ensure configured
   config, TSIG, and TLS files remain readable by the service user.

@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -10,6 +12,8 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+mod process_signals;
 
 use axum::{
     Router,
@@ -62,6 +66,9 @@ pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
 pub const BUILD_RUST_VERSION: &str = env!("OXIDEDNS_BUILD_RUST_VERSION");
 pub const BUILD_TIMESTAMP: &str = env!("OXIDEDNS_BUILD_TIMESTAMP");
+
+#[cfg(unix)]
+pub use process_signals::install_process_signal_dispositions;
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
