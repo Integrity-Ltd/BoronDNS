@@ -320,6 +320,7 @@ XoT foundations are started:
 - focused log-inspection tests cover XoT TLS session establishment and close fields plus ALPN failure logging.
 - `scripts/interop-knot-xot-docker.sh` covers a real Knot DNS XoT primary path with generated local CA/server certificates, ALPN `dot`, OxideDNS XoT transfer configuration, readiness, served data, and transfer metrics.
 - `scripts/interop-knot-xot-tsig-docker.sh` covers a real Knot DNS XoT primary path with AXFR restricted to HMAC-SHA256 TSIG over TLS, proves unsigned XoT AXFR is rejected and signed XoT AXFR succeeds with `dig`, starts OxideDNS with matching XoT and TSIG configuration, verifies readiness, served data, transfer metrics, and no TSIG secret leakage.
+- XoT TCP connection reuse is not claimed for Engineering MVP. SRS v0.7 `ODS-FR-XOT-009` is a MAY, and the current implementation establishes a fresh XoT session per transfer.
   Broader real-primary XoT matrix coverage beyond Knot remains pending.
 
 Interop harness foundations:

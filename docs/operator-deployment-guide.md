@@ -557,7 +557,8 @@ current operator-relevant limitations are:
   real-primary IXFR behavior matrix evidence remains pending.
 - XoT has in-process TLS success, fault, structured logging, and revocation
   posture audit coverage plus a Knot XoT script; additional real-primary
-  evidence remains pending.
+  evidence remains pending. OxideDNS currently establishes a fresh XoT session per
+  transfer and makes no SRS release claim for optional connection reuse.
 - DNSSEC serving has unit, fake-primary runtime, Knot signed-primary runtime
   coverage for NSEC and NSEC3 paths, and a passive audit covering the
   secondary-only no-signing/no-validation/no-key-management posture; release
