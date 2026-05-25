@@ -15,6 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/rrl-udp-$$"
+artifact_dir="${OXIDEDNS_RRL_UDP_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -32,6 +33,9 @@ cleanup() {
     [[ -f "$workdir/fake-primary.stderr" ]] && { echo "---- fake-primary.stderr ----" >&2; tail -100 "$workdir/fake-primary.stderr" >&2; }
     [[ -f "$workdir/rrl-client.log" ]] && { echo "---- rrl-client.log ----" >&2; tail -100 "$workdir/rrl-client.log" >&2; }
     [[ -f "$workdir/oxidedns.log" ]] && { echo "---- oxidedns.log ----" >&2; tail -100 "$workdir/oxidedns.log" >&2; }
+    [[ -f "$workdir/client-summary.env" ]] && { echo "---- client-summary.env ----" >&2; cat "$workdir/client-summary.env" >&2; }
+    [[ -f "$workdir/metrics-summary.env" ]] && { echo "---- metrics-summary.env ----" >&2; cat "$workdir/metrics-summary.env" >&2; }
+    [[ -f "$workdir/metrics.txt" ]] && { echo "---- metrics.txt ----" >&2; tail -100 "$workdir/metrics.txt" >&2; }
   fi
   rm -rf "$workdir"
 }
@@ -54,6 +58,7 @@ fake_primary="$workdir/fake-primary.py"
 rrl_client="$workdir/rrl-client.py"
 primary_log="$workdir/fake-primary.log"
 oxidedns_conf="$workdir/oxidedns.toml"
+metrics_summary="$workdir/metrics-summary.env"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -108,7 +113,7 @@ def parse_question(packet):
     qname, name_len = parse_name(packet, 12)
     offset = 12 + name_len
     qtype, qclass = struct.unpack("!HH", packet[offset:offset + 4])
-    return qname, qtype, qclass
+    return qname, qtype, qclass, packet[12:offset + 4]
 
 
 def rr(owner, rrtype, rdata, ttl=300):
@@ -127,7 +132,7 @@ def soa_rdata():
     ])
 
 
-def axfr_response(qid):
+def axfr_response(qid, question):
     soa = rr(ZONE, SOA, soa_rdata())
     answers = [
         soa,
@@ -138,7 +143,7 @@ def axfr_response(qid):
         rr("ns.child.alpha.test.", A, bytes([192, 0, 2, 53])),
         soa,
     ]
-    return struct.pack("!HHHHHH", qid, 0x8000, 0, len(answers), 0, 0) + b"".join(answers)
+    return struct.pack("!HHHHHH", qid, 0x8000, 1, len(answers), 0, 0) + question + b"".join(answers)
 
 
 def read_exact(conn, size):
@@ -156,12 +161,12 @@ def handle_tcp(conn):
         length = struct.unpack("!H", read_exact(conn, 2))[0]
         query = read_exact(conn, length)
         qid = struct.unpack("!H", query[:2])[0]
-        qname, qtype, qclass = parse_question(query)
+        qname, qtype, qclass, question = parse_question(query)
         if qname.lower() != ZONE or qtype != AXFR or qclass != IN:
-            response = struct.pack("!HHHHHH", qid, 0x8004, 0, 0, 0, 0)
+            response = struct.pack("!HHHHHH", qid, 0x8004, 1, 0, 0, 0) + question
         else:
             log("TCP AXFR served")
-            response = axfr_response(qid)
+            response = axfr_response(qid, question)
         conn.sendall(struct.pack("!H", len(response)) + response)
 
 
@@ -345,20 +350,22 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+if [[ "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after fake-primary AXFR" >&2
   exit 1
 fi
 
 client_summary="$(python3 "$rrl_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/rrl-client.log")"
 echo "$client_summary"
+printf '%s\n' "$client_summary" | tr ' ' '\n' >"$workdir/client-summary.env"
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
   'oxidedns_zones_active 1' \
   'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
@@ -379,9 +386,32 @@ if (( subject < 40 || dropped < 15 || truncated < 15 || queries_truncated < 15 )
   exit 1
 fi
 
+cat >"$metrics_summary" <<EOF
+rrl_subject_total=$subject
+rrl_dropped_total=$dropped
+rrl_truncated_total=$truncated
+queries_truncated_total=$queries_truncated
+rrl_keys_tracked=5
+rrl_categories_checked=positive,nxdomain,nodata,referral,error
+EOF
+
 if ! grep -F "TCP AXFR served" "$primary_log" >/dev/null 2>&1; then
   echo "fake primary did not serve the initial AXFR" >&2
   exit 1
+fi
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  cp "$primary_log" "$artifact_dir/fake-primary.log"
+  cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
+  cp "$fake_primary" "$artifact_dir/fake-primary.py"
+  cp "$rrl_client" "$artifact_dir/rrl-client.py"
+  cp "$workdir/rrl-client.log" "$artifact_dir/rrl-client.log"
+  cp "$workdir/client-summary.env" "$artifact_dir/client-summary.env"
+  cp "$workdir/metrics-summary.env" "$artifact_dir/metrics-summary.env"
+  cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
 fi
 
 echo "RRL UDP runtime interop passed"

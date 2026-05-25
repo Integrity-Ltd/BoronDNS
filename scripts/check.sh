@@ -17,6 +17,8 @@ bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh
 bash -n scripts/interop-dnssec-serve.sh
 bash -n scripts/interop-dnssec-nsec3-serve.sh
+bash -n scripts/interop-rrl-udp.sh
+bash -n scripts/rrl-evidence-campaign.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 cargo fmt --all --check

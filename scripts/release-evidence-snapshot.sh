@@ -112,6 +112,7 @@ run_and_capture dns-cookie-dig bash -lc "cd '$repo_root' && OXIDEDNS_DNS_COOKIE_
 run_and_capture ixfr-notimp-fallback bash -lc "cd '$repo_root' && OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR='$snapshot_dir/ixfr-fallback-artifacts' scripts/interop-ixfr-notimp-fallback.sh"
 run_and_capture dnssec-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR='$snapshot_dir/dnssec-serve-artifacts' scripts/interop-dnssec-serve.sh"
 run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR='$snapshot_dir/dnssec-nsec3-artifacts' scripts/interop-dnssec-nsec3-serve.sh"
+run_and_capture rrl-udp bash -lc "cd '$repo_root' && OXIDEDNS_RRL_UDP_ARTIFACT_DIR='$snapshot_dir/rrl-udp-artifacts' scripts/interop-rrl-udp.sh"
 
 if [[ -n "${OXIDEDNS_PERF_BASELINE:-}" ]]; then
   run_and_capture perf-regression bash -lc \

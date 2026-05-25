@@ -180,6 +180,7 @@ run_one() {
   local run_id
   local run_log
   local command_file
+  local artifact_dir
   local status
   local started
   local finished
@@ -188,7 +189,9 @@ run_one() {
   printf -v run_id 'run-%03d' "$run_number"
   run_log="$evidence_dir/logs/$run_id.log"
   command_file="$evidence_dir/logs/$run_id.command"
+  artifact_dir="$evidence_dir/artifacts/$run_id"
   cmd=("$bash_bin" "$interop_script")
+  mkdir -p "$artifact_dir"
 
   {
     printf 'run=%s\n' "$run_id"
@@ -202,7 +205,7 @@ run_one() {
   set +e
   (
     cd "$repo_root"
-    "${cmd[@]}"
+    OXIDEDNS_RRL_UDP_ARTIFACT_DIR="$artifact_dir" "${cmd[@]}"
   ) >"$run_log" 2>&1
   status=$?
   set -e
