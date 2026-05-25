@@ -217,6 +217,9 @@ Production configuration notes:
 - Prefer `log_format = "json"` for supervised service and log aggregation.
   Warning and error entries are written to stderr; lower-level entries are
   written to stdout.
+- Before the configuration is parsed, OxideDNS emits JSON bootstrap records on
+  stderr for process start, configuration read, and validation success or
+  failure; those records are not reformatted by later logging settings.
 - Keep `[logging].max_entry_length_bytes` at the default unless the deployment's
   log pipeline requires a smaller bounded entry size; values below the minimum
   parseable truncation envelope are rejected at configuration validation.

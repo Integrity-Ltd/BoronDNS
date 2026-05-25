@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::{Level, warn};
 use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
 use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
@@ -215,6 +216,30 @@ struct LoadedConfig {
 }
 
 fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
+    bootstrap_log_info("process started", &bootstrap_build_fields());
+    bootstrap_log_info(
+        "reading configuration",
+        &[("config_path", path.display().to_string())],
+    );
+
+    let result = load_config_inner(path);
+    match &result {
+        Ok(_) => bootstrap_log_info(
+            "configuration validation succeeded",
+            &[("config_path", path.display().to_string())],
+        ),
+        Err(error) => bootstrap_log_error(
+            "configuration validation failed",
+            &[
+                ("config_path", path.display().to_string()),
+                ("error", format!("{error:#}")),
+            ],
+        ),
+    }
+    result
+}
+
+fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
     let mut config =
         ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
     let mut warnings =
@@ -229,6 +254,69 @@ fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
             .context("collecting runtime configuration warnings")?,
     );
     Ok(LoadedConfig { config, warnings })
+}
+
+fn bootstrap_build_fields() -> [(&'static str, String); 3] {
+    [
+        ("version", BUILD_VERSION.to_owned()),
+        ("commit", BUILD_COMMIT.to_owned()),
+        ("rust_version", BUILD_RUST_VERSION.to_owned()),
+    ]
+}
+
+fn bootstrap_log_info(message: &str, fields: &[(&str, String)]) {
+    bootstrap_log("info", message, fields);
+}
+
+fn bootstrap_log_error(message: &str, fields: &[(&str, String)]) {
+    bootstrap_log("error", message, fields);
+}
+
+fn bootstrap_log(level: &str, message: &str, fields: &[(&str, String)]) {
+    eprintln!("{}", bootstrap_log_entry(level, message, fields));
+}
+
+fn bootstrap_log_entry(level: &str, message: &str, fields: &[(&str, String)]) -> String {
+    let mut entry = format!(
+        "{{\"timestamp\":\"{}\",\"level\":\"{}\",\"category\":\"startup\",\"message\":\"{}\"",
+        bootstrap_timestamp(),
+        json_string(level),
+        json_string(message)
+    );
+    for (name, value) in fields {
+        entry.push_str(",\"");
+        entry.push_str(&json_string(name));
+        entry.push_str("\":\"");
+        entry.push_str(&json_string(value));
+        entry.push('"');
+    }
+    entry.push('}');
+    entry
+}
+
+fn bootstrap_timestamp() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
+fn json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", character as u32);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn apply_environment_overrides(
@@ -707,6 +795,21 @@ mod tests {
         assert!(text.contains("\nbuild timestamp: "));
         assert!(text.contains("\nrustc: rustc "));
         assert!(text.contains("\nSRS: OxideDNS Secondary SRS v0.7"));
+    }
+
+    #[test]
+    fn bootstrap_log_entry_is_json_startup_record() {
+        let entry = bootstrap_log_entry(
+            "info",
+            "reading configuration",
+            &[("config_path", "/tmp/config \"quoted\".toml".to_owned())],
+        );
+
+        assert!(entry.starts_with("{\"timestamp\":\""));
+        assert!(entry.contains("\"level\":\"info\""));
+        assert!(entry.contains("\"category\":\"startup\""));
+        assert!(entry.contains("\"message\":\"reading configuration\""));
+        assert!(entry.contains("\"config_path\":\"/tmp/config \\\"quoted\\\".toml\""));
     }
 
     #[test]

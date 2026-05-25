@@ -81,6 +81,44 @@ fn validate_config_counts_notify_interface_listeners() {
 }
 
 #[test]
+fn validate_config_emits_json_bootstrap_logs_before_configured_logging() {
+    let config = write_config(
+        "bootstrap-logs",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+            log_format = "plain"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("\"level\":\"info\""));
+    assert!(stderr.contains("\"category\":\"startup\""));
+    assert!(stderr.contains("\"message\":\"process started\""));
+    assert!(stderr.contains("\"message\":\"reading configuration\""));
+    assert!(stderr.contains("\"message\":\"configuration validation succeeded\""));
+    assert!(stderr.contains("\"config_path\":\""));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn dump_config_flag_redacts_tsig_secret_material() {
     let config = write_config(
         "dump",

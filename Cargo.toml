@@ -31,6 +31,7 @@ sha2 = "0.10"
 siphasher = "1.0.3"
 subtle = "2.6"
 thiserror = "2"
+time = { version = "0.3.47", features = ["formatting"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
 toml = "1"
