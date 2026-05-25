@@ -5,8 +5,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
-use oxidedns_core::{ConfigError, LogFormatConfig, ServerConfig};
+use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
 use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
     TransferError,
@@ -97,23 +98,26 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             println!("{}", version_text());
         }
         Mode::CheckConfig(config) | Mode::ValidateConfig(config) => {
-            let parsed = load_config(&config)?;
-            init_logging(&parsed)?;
+            let loaded = load_config(&config)?;
+            emit_config_warnings_to_stderr(&loaded.warnings);
+            init_logging(&loaded.config)?;
             println!(
                 "configuration ok: {} zone(s), {} UDP listener(s), {} TCP listener(s)",
-                parsed.zones.len(),
-                parsed.server.listen_udp.len(),
-                parsed.server.listen_tcp.len()
+                loaded.config.zones.len(),
+                loaded.config.server.listen_udp.len(),
+                loaded.config.server.listen_tcp.len()
             );
         }
         Mode::DumpConfig(config) => {
-            let parsed = load_config(&config)?;
-            print!("{}", parsed.to_redacted_toml()?);
+            let loaded = load_config(&config)?;
+            emit_config_warnings_to_stderr(&loaded.warnings);
+            print!("{}", loaded.config.to_redacted_toml()?);
         }
         Mode::Serve(config) => {
-            let parsed = load_config(&config)?;
-            init_logging(&parsed)?;
-            Runtime::new(parsed).run().await?;
+            let loaded = load_config(&config)?;
+            init_logging(&loaded.config)?;
+            emit_config_warnings_to_log(&loaded.warnings);
+            Runtime::new(loaded.config).run().await?;
         }
     }
 
@@ -172,27 +176,34 @@ fn version_text() -> String {
     )
 }
 
-fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
+struct LoadedConfig {
+    config: ServerConfig,
+    warnings: Vec<ConfigWarning>,
+}
+
+fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
     let mut config =
         ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
-    let warnings =
+    let mut warnings =
         apply_environment_overrides(&mut config).context("applying environment overrides")?;
-    emit_config_warnings(&warnings);
     config
         .validate()
         .context("validating effective configuration")?;
     oxidedns_server::validate_runtime_config(&config).context("validating runtime configuration")?;
-    Ok(config)
+    warnings.extend(config.configuration_warnings());
+    Ok(LoadedConfig { config, warnings })
 }
 
-fn apply_environment_overrides(config: &mut ServerConfig) -> Result<Vec<String>, ConfigError> {
+fn apply_environment_overrides(
+    config: &mut ServerConfig,
+) -> Result<Vec<ConfigWarning>, ConfigError> {
     apply_environment_overrides_from(config, std::env::vars_os())
 }
 
 fn apply_environment_overrides_from<I>(
     config: &mut ServerConfig,
     vars: I,
-) -> Result<Vec<String>, ConfigError>
+) -> Result<Vec<ConfigWarning>, ConfigError>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
@@ -225,9 +236,11 @@ where
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
             }
             _ if name.starts_with("ODS_") => {
-                warnings.push(format!(
-                    "warning category=configuration_warning env_var={name} message=\"unrecognised ODS_* environment variable ignored\""
-                ));
+                warnings.push(ConfigWarning {
+                    code: "unrecognised_rds_environment_variable",
+                    parameter: name,
+                    message: "unrecognised ODS_* environment variable ignored".to_owned(),
+                });
             }
             _ => {}
         }
@@ -235,10 +248,31 @@ where
     Ok(warnings)
 }
 
-fn emit_config_warnings(warnings: &[String]) {
+fn emit_config_warnings_to_stderr(warnings: &[ConfigWarning]) {
     for warning in warnings {
-        eprintln!("{warning}");
+        eprintln!("{}", config_warning_line(warning));
     }
+}
+
+fn emit_config_warnings_to_log(warnings: &[ConfigWarning]) {
+    for warning in warnings {
+        warn!(
+            category = "configuration_warning",
+            code = warning.code,
+            parameter = %warning.parameter,
+            message = %warning.message,
+            "configuration warning"
+        );
+    }
+}
+
+fn config_warning_line(warning: &ConfigWarning) -> String {
+    format!(
+        "warning category=configuration_warning code={} parameter={} message=\"{}\"",
+        warning.code,
+        warning.parameter,
+        warning.message.replace('"', "\\\"")
+    )
 }
 
 fn env_value_to_string(name: &str, value: OsString) -> Result<String, ConfigError> {
@@ -643,7 +677,11 @@ mod tests {
 
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("category=configuration_warning"));
-        assert!(warnings[0].contains("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"));
+        assert_eq!(warnings[0].code, "unrecognised_rds_environment_variable");
+        assert_eq!(
+            warnings[0].parameter,
+            "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
+        );
+        assert!(config_warning_line(&warnings[0]).contains("category=configuration_warning"));
     }
 }

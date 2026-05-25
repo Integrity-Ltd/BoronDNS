@@ -219,6 +219,7 @@ impl Runtime {
             self.config.limits.ixfr_disabled_cooldown_secs,
         ));
         let metrics = RuntimeMetrics::new_with_cookie_prefix_limit(self.config.rrl.max_keys);
+        metrics.set_configuration_warnings(self.config.configuration_warnings().len() as u64);
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
 
         info!(
@@ -2394,6 +2395,7 @@ fn metrics_body(
     append_query_latency_metrics(&mut body, metrics);
     append_dns_cookie_metrics(&mut body, snapshot);
     append_dns_cookie_prefix_metrics(&mut body, metrics);
+    append_configuration_warning_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_zone_status_metrics(&mut body, zones);
@@ -2482,6 +2484,17 @@ fn latency_bucket_label(bucket: f64) -> String {
         .trim_end_matches('0')
         .trim_end_matches('.')
         .to_owned()
+}
+
+fn append_configuration_warning_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_configuration_warnings_total Suspicious but valid configuration warnings detected at startup.\n\
+         # TYPE oxidedns_configuration_warnings_total gauge\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_configuration_warnings_total {}\n",
+        snapshot.configuration_warnings
+    ));
 }
 
 fn append_notify_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
@@ -3082,6 +3095,7 @@ struct RuntimeMetricsInner {
     dns_cookie_valid_server: AtomicU64,
     dns_cookie_invalid_server: AtomicU64,
     dns_cookie_badcookie: AtomicU64,
+    configuration_warnings: AtomicU64,
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
@@ -3120,6 +3134,7 @@ struct RuntimeMetricsSnapshot {
     dns_cookie_valid_server: u64,
     dns_cookie_invalid_server: u64,
     dns_cookie_badcookie: u64,
+    configuration_warnings: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -3435,6 +3450,12 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn set_configuration_warnings(&self, count: u64) {
+        self.inner
+            .configuration_warnings
+            .store(count, Ordering::Relaxed);
+    }
+
     fn record_dns_cookie_badcookie_for_source(
         &self,
         source: IpAddr,
@@ -3543,6 +3564,7 @@ impl RuntimeMetrics {
             dns_cookie_valid_server: self.inner.dns_cookie_valid_server.load(Ordering::Relaxed),
             dns_cookie_invalid_server: self.inner.dns_cookie_invalid_server.load(Ordering::Relaxed),
             dns_cookie_badcookie: self.inner.dns_cookie_badcookie.load(Ordering::Relaxed),
+            configuration_warnings: self.inner.configuration_warnings.load(Ordering::Relaxed),
         }
     }
 }
@@ -5352,6 +5374,7 @@ mod tests {
             QueryLatencyCategory::TcpCnameChain,
             std::time::Duration::from_millis(3),
         );
+        metrics_state.set_configuration_warnings(4);
         metrics_state.record_notify_received();
         metrics_state.record_notify_unauthorized();
         metrics_state.record_notify_refresh_action(NotifyRefreshAction::Signalled);
@@ -5482,6 +5505,7 @@ mod tests {
         assert!(metrics.contains(
             "oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix=\"192.0.2.0/24\"} 1"
         ));
+        assert!(metrics.contains("oxidedns_configuration_warnings_total 4"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(metrics.contains("oxidedns_transfer_sessions_completed_total{protocol=\"axfr\"} 1"));

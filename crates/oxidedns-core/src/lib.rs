@@ -4,4 +4,4 @@ pub mod dns;
 pub mod tsig;
 pub mod zone;
 
-pub use config::{ConfigError, LogFormatConfig, ServerConfig};
+pub use config::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};

@@ -191,6 +191,57 @@ fn unrecognized_rds_environment_override_warns_without_failing() {
 }
 
 #[test]
+fn suspicious_config_warnings_do_not_fail_validation() {
+    let config = write_config(
+        "suspicious",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+
+            [cookie]
+            policy = "disabled"
+
+            [rrl]
+            allowlist = ["0.0.0.0/0"]
+
+            [limits]
+            tcp_idle_timeout_secs = 121
+
+            [[tsig_keys]]
+            name = "legacy-key."
+            algorithm = "hmac-sha1"
+            secret = "c2VjcmV0LWtleQ=="
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            tsig_key = "legacy-key."
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config with suspicious config");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("category=configuration_warning"));
+    assert!(stderr.contains("code=dns_cookies_disabled"));
+    assert!(stderr.contains("code=rrl_global_allowlist"));
+    assert!(stderr.contains("code=tcp_idle_timeout_large"));
+    assert!(stderr.contains("code=tsig_hmac_sha1"));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn semantically_invalid_config_exits_with_config_invalid() {
     let config = write_config(
         "invalid",

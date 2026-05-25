@@ -50,6 +50,13 @@ pub struct ServerConfig {
     pub tsig_keys: Vec<TsigKeyConfig>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigWarning {
+    pub code: &'static str,
+    pub parameter: String,
+    pub message: String,
+}
+
 impl ServerConfig {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
@@ -179,6 +186,56 @@ impl ServerConfig {
         }
 
         Ok(())
+    }
+
+    pub fn configuration_warnings(&self) -> Vec<ConfigWarning> {
+        let mut warnings = Vec::new();
+
+        if self.cookie.policy == CookiePolicyConfig::Disabled {
+            warnings.push(ConfigWarning {
+                code: "dns_cookies_disabled",
+                parameter: "cookie.policy".to_owned(),
+                message: "DNS Cookies are disabled; this is an operationally significant security regression".to_owned(),
+            });
+        }
+
+        for allowlist in &self.rrl.allowlist {
+            if allowlist == "0.0.0.0/0" || allowlist == "::/0" {
+                warnings.push(ConfigWarning {
+                    code: "rrl_global_allowlist",
+                    parameter: "rrl.allowlist".to_owned(),
+                    message: format!(
+                        "RRL allowlist entry {allowlist} effectively disables response-rate limiting"
+                    ),
+                });
+            }
+        }
+
+        if self.limits.tcp_idle_timeout_secs > 120 {
+            warnings.push(ConfigWarning {
+                code: "tcp_idle_timeout_large",
+                parameter: "limits.tcp_idle_timeout_secs".to_owned(),
+                message: format!(
+                    "TCP idle timeout {} seconds is larger than the SRS suspicious-configuration threshold of 120 seconds",
+                    self.limits.tcp_idle_timeout_secs
+                ),
+            });
+        }
+
+        for key in &self.tsig_keys {
+            if key.algorithm.eq_ignore_ascii_case("hmac-sha1") {
+                warnings.push(ConfigWarning {
+                    code: "tsig_hmac_sha1",
+                    parameter: format!("tsig_keys.{}", key.name),
+                    message: format!(
+                        "TSIG key {} uses HMAC-SHA1; HMAC-SHA256 is preferred",
+                        key.name
+                    ),
+                });
+            }
+        }
+
+        warnings
     }
 
     fn validate_tsig_keys(&self) -> Result<HashSet<String>, ConfigError> {
@@ -912,6 +969,53 @@ mod tests {
                 53
             )))]
         );
+    }
+
+    #[test]
+    fn reports_suspicious_but_valid_configuration_warnings() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                policy = "disabled"
+
+                [rrl]
+                allowlist = ["0.0.0.0/0", "::/0"]
+
+                [limits]
+                tcp_idle_timeout_secs = 121
+
+                [[tsig_keys]]
+                name = "legacy-key."
+                algorithm = "hmac-sha1"
+                secret = "c2VjcmV0LWtleQ=="
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "legacy-key."
+            "#,
+        )
+        .expect("suspicious but valid config");
+
+        let warnings = config.configuration_warnings();
+        let codes = warnings
+            .iter()
+            .map(|warning| warning.code)
+            .collect::<Vec<_>>();
+
+        assert!(codes.contains(&"dns_cookies_disabled"));
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == "rrl_global_allowlist")
+                .count(),
+            2
+        );
+        assert!(codes.contains(&"tcp_idle_timeout_large"));
+        assert!(codes.contains(&"tsig_hmac_sha1"));
     }
 
     #[test]

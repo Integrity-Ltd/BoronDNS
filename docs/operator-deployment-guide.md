@@ -111,8 +111,20 @@ and are included in `--dump-config` output:
 
 Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
 `category=configuration_warning` messages and ignored. Variables outside the
-`ODS_*` namespace are ignored silently. Full suspicious-configuration catalogue
-handling remains tracked in the gap register.
+`ODS_*` namespace are ignored silently.
+
+Suspicious but valid configuration warnings are also non-fatal. The current
+implemented warning catalogue is:
+
+- `dns_cookies_disabled`: `[cookie] policy = "disabled"`.
+- `rrl_global_allowlist`: `[rrl] allowlist` contains `0.0.0.0/0` or `::/0`.
+- `tcp_idle_timeout_large`: `[limits] tcp_idle_timeout_secs` is greater than
+  120.
+- `tsig_hmac_sha1`: a configured TSIG key uses `hmac-sha1`.
+
+`--validate-config` and `--dump-config` print these warnings to stderr. `serve`
+emits them as structured startup logs. The `/metrics` endpoint exposes the
+current count as `oxidedns_configuration_warnings_total`.
 
 ## Configuration
 
