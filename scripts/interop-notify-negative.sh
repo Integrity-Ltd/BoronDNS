@@ -549,10 +549,18 @@ def main():
     )
     rows.append(f"unauthorized_source\tudp\t{discard['rcode_name']}\t")
     log("unauthorized_source discarded")
+    for repeat in range(1, 3):
+        discard = assert_discard(
+            f"unauthorized_source_repeat_{repeat}",
+            notify_packet(0x2100 + repeat, "notify-negative.test.", SOA),
+            bind_addr="127.0.0.2",
+        )
+        rows.append(f"unauthorized_source_repeat_{repeat}\tudp\t{discard['rcode_name']}\t")
+        log(f"unauthorized_source_repeat_{repeat} discarded")
 
     with open(SUMMARY_PATH, "w", encoding="utf-8") as handle:
         handle.write("\n".join(rows) + "\n")
-    print("notify_negative_cases=9")
+    print("notify_negative_cases=11")
 
 
 if __name__ == "__main__":
@@ -579,7 +587,7 @@ max_concurrent_transfers = 2
 axfr_timeout_secs = 2
 ixfr_timeout_secs = 1
 notify_dedup_secs = 60
-notify_log_rate_window_secs = 60
+notify_log_rate_window_secs = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
 zsm_initial_retry_max_secs = 3600
@@ -637,12 +645,23 @@ if (( live != 1 )); then
 fi
 
 client_summary="$(python3 "$client" "$oxidedns_dns_port" "$oxidedns_notify_port" "$client_log" "$summary_tsv")"
-sleep 0.2
+summary_logged=0
+for _ in {1..40}; do
+  if grep -q 'event=notify_log_rate_limit_summary' "$workdir/oxidedns.log"; then
+    summary_logged=1
+    break
+  fi
+  sleep 0.1
+done
+if (( summary_logged != 1 )); then
+  echo "OxideDNS log missing NOTIFY log-rate summary event" >&2
+  exit 1
+fi
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
   'oxidedns_zones_active 1' \
-  'oxidedns_notify_messages_received_total 9' \
-  'oxidedns_notify_messages_unauthorized_total 1' \
+  'oxidedns_notify_messages_received_total 11' \
+  'oxidedns_notify_messages_unauthorized_total 3' \
   'oxidedns_notify_refresh_actions_total{action="signalled"} 2' \
   'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
   'oxidedns_tsig_notify_verifications_total{result="ok"} 1' \
@@ -659,7 +678,12 @@ for expected_log in \
   'message="accepted NOTIFY" source=127.0.0.1 zone=notify-negative.test. soa_serial="Some(2026052502)" action=deduplicated' \
   'message="accepted NOTIFY" source=127.0.0.1 zone=notify-signed.test. soa_serial="Some(2026052503)" action=refresh_signalled' \
   'event=notify_unauthorized_discard' \
-  'event=notify_tsig_failure'; do
+  'event=notify_tsig_failure' \
+  'event=notify_log_rate_limit_summary' \
+  'suppressed_unauthorized=2' \
+  'suppressed_tsig_failures=1' \
+  'distinct_source_prefixes=1' \
+  'total_suppressed=3'; do
   if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
     echo "OxideDNS log missing expected negative NOTIFY event: $expected_log" >&2
     exit 1
@@ -671,14 +695,14 @@ requirement_id	evidence_state	runtime_case	artifacts	review_note
 ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_notify_interface	This harness receives NOTIFY on a configured notify listener over both UDP and TCP, with focused runtime coverage for the same configured listener.
 ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
 ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
-ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	An unauthorized source receives no response, increments unauthorized metrics, and emits the warning log.
+ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	Unauthorized sources receive no response, increment unauthorized metrics, emit the first warning log, and feed retained suppression-summary evidence for repeats.
 ODS-FR-NOTIFY-005	retained-runtime	signed_valid_and_tampered_notify	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; valid signed NOTIFY increments ok and receives signed NOERROR response evidence; tampered signed NOTIFY returns NOTAUTH with BADSIG evidence.
 ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages over UDP and TCP receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed; signed valid NOTIFY responses carry a NOERROR TSIG.
 ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	Unsigned and signed accepted NOTIFY messages record action=refresh_signalled and increment the refresh signalled metric.
 ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; oxidedns.log; crates/oxidedns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
 ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
 ODS-FR-NOTIFY-010	retained-runtime	notify_logging	oxidedns.log	Accepted unsigned, accepted signed, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
-ODS-FR-NOTIFY-011	retained-runtime-plus-support	first_warning_and_rate_limit_foundation	oxidedns.log; crates/oxidedns-server/src/lib.rs::notify_log_limiter_suppresses_repeats_and_summarizes	This harness retains first warning logs for unauthorized and TSIG-failure cases; suppression and periodic aggregate behavior remain covered by focused log-limiter tests.
+ODS-FR-NOTIFY-011	retained-runtime	log_rate_suppression_summary	oxidedns.log; notify-negative-summary.tsv	This harness retains first warning logs plus a periodic aggregate summary proving repeated unauthorized and TSIG-failure NOTIFY warnings are suppressed and counted.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
