@@ -428,6 +428,9 @@ XoT:
   TLS version, and cipher suite. Session close includes duration and byte
   counters. Certificate material, private keys, and TLS key material are not
   logged.
+- OxideDNS does not perform real-time XoT certificate revocation checks via CRL or
+  OCSP requests. Operators that require stricter revocation handling should use
+  short-lived primary certificates and automated trust-anchor rotation.
 
 Network and process hardening:
 
@@ -552,8 +555,9 @@ current operator-relevant limitations are:
 - Full per-requirement traceability against the SRS is still pending.
 - IXFR has BIND true incremental interop and fallback coverage, but broader
   real-primary IXFR behavior matrix evidence remains pending.
-- XoT has in-process TLS success, fault, and structured logging coverage plus a
-  Knot XoT script; additional real-primary evidence remains pending.
+- XoT has in-process TLS success, fault, structured logging, and revocation
+  posture audit coverage plus a Knot XoT script; additional real-primary
+  evidence remains pending.
 - DNSSEC serving has unit, fake-primary runtime, and Knot signed-primary
   runtime coverage for NSEC and NSEC3 paths; release traceability remains
   pending.
