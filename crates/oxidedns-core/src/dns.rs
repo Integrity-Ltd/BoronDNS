@@ -4451,6 +4451,54 @@ mod tests {
     }
 
     #[test]
+    fn delegated_child_referral_omits_parent_side_ns_address_as_glue() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("ns.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 53].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(
+            b"\x03www\x05child\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let response = store_response(&packet, &store);
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(flags & 0x0400, 0);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Ns as u16]
+        );
+        assert!(response_additional_types(&response).is_empty());
+    }
+
+    #[test]
     fn glue_below_delegation_is_not_served_as_authoritative_answer() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(

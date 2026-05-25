@@ -111,7 +111,7 @@ impl ZoneSnapshot {
                 && qname.canonical_key() == delegation.owner.canonical_key())
         {
             let authorities = delegation.records();
-            let additionals = self.glue_for_ns_records(&authorities, qclass);
+            let additionals = self.glue_for_ns_records(&delegation.owner, &authorities, qclass);
             return LookupResult::referral(authorities, additionals);
         }
 
@@ -491,6 +491,7 @@ impl ZoneSnapshot {
 
     fn glue_for_ns_records(
         &self,
+        delegation_owner: &DomainName,
         ns_records: &[ResourceRecord],
         qclass: u16,
     ) -> Vec<ResourceRecord> {
@@ -499,7 +500,7 @@ impl ZoneSnapshot {
             let Some(target) = ns_target(record) else {
                 continue;
             };
-            if !target.is_equal_or_subdomain_of(&self.origin) {
+            if !target.is_equal_or_subdomain_of(delegation_owner) {
                 continue;
             }
 
