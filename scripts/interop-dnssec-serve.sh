@@ -424,6 +424,18 @@ if SOA not in nxdomain_do["authority_types"] or NSEC not in nxdomain_do["authori
 if not nxdomain_do["opt_ttls"] or nxdomain_do["opt_ttls"][0] & 0x8000 == 0:
     raise AssertionError(f"NXDOMAIN DO response did not set response DO bit: {nxdomain_do}")
 
+nxdomain_non_do = exchange(0xD00E, "missing.alpha.test.", A, payload=4096, do=False)
+if nxdomain_non_do["rcode"] != 3 or nxdomain_non_do["answer_types"] or nxdomain_non_do["authority_types"] != [SOA]:
+    raise AssertionError(f"NXDOMAIN non-DO response did not suppress DNSSEC augmentation: {nxdomain_non_do}")
+if nxdomain_non_do["opt_ttls"] and nxdomain_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"NXDOMAIN non-DO response set response DO bit: {nxdomain_non_do}")
+
+nodata_non_do = exchange(0xD00F, "alpha.test.", A, payload=4096, do=False)
+if nodata_non_do["rcode"] != 0 or nodata_non_do["answer_types"] or nodata_non_do["authority_types"] != [SOA]:
+    raise AssertionError(f"NODATA non-DO response did not suppress DNSSEC augmentation: {nodata_non_do}")
+if nodata_non_do["opt_ttls"] and nodata_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"NODATA non-DO response set response DO bit: {nodata_non_do}")
+
 dnskey = exchange(0xD004, "alpha.test.", DNSKEY, payload=4096, do=False)
 if dnskey["answer_types"] != [DNSKEY]:
     raise AssertionError(f"direct DNSKEY query did not serve transferred DNSKEY: {dnskey}")
@@ -458,6 +470,14 @@ if not signed_child_referral_do["opt_ttls"] or signed_child_referral_do["opt_ttl
 if signed_child_referral_do["ad"] or signed_child_referral_do["cd"]:
     raise AssertionError(f"signed-child referral DO response set AD/CD unexpectedly: {signed_child_referral_do}")
 
+signed_child_referral_non_do = exchange(0xD010, "www.child.alpha.test.", A, payload=4096, do=False)
+if signed_child_referral_non_do["rcode"] != 0 or signed_child_referral_non_do["answer_types"]:
+    raise AssertionError(f"signed-child referral non-DO response was not a referral: {signed_child_referral_non_do}")
+if signed_child_referral_non_do["authority_types"] != [NS]:
+    raise AssertionError(f"signed-child referral non-DO did not suppress DNSSEC augmentation: {signed_child_referral_non_do}")
+if signed_child_referral_non_do["opt_ttls"] and signed_child_referral_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"signed-child referral non-DO response set response DO bit: {signed_child_referral_non_do}")
+
 unsigned_child_referral_do = exchange(0xD00D, "www.unsigned.alpha.test.", A, payload=4096, do=True)
 if unsigned_child_referral_do["rcode"] != 0 or unsigned_child_referral_do["answer_types"]:
     raise AssertionError(f"unsigned-child referral DO response was not a referral: {unsigned_child_referral_do}")
@@ -469,6 +489,14 @@ if not unsigned_child_referral_do["opt_ttls"] or unsigned_child_referral_do["opt
     raise AssertionError(f"unsigned-child referral DO response did not set response DO bit: {unsigned_child_referral_do}")
 if unsigned_child_referral_do["ad"] or unsigned_child_referral_do["cd"]:
     raise AssertionError(f"unsigned-child referral DO response set AD/CD unexpectedly: {unsigned_child_referral_do}")
+
+unsigned_child_referral_non_do = exchange(0xD011, "www.unsigned.alpha.test.", A, payload=4096, do=False)
+if unsigned_child_referral_non_do["rcode"] != 0 or unsigned_child_referral_non_do["answer_types"]:
+    raise AssertionError(f"unsigned-child referral non-DO response was not a referral: {unsigned_child_referral_non_do}")
+if unsigned_child_referral_non_do["authority_types"] != [NS]:
+    raise AssertionError(f"unsigned-child referral non-DO did not suppress DNSSEC augmentation: {unsigned_child_referral_non_do}")
+if unsigned_child_referral_non_do["opt_ttls"] and unsigned_child_referral_non_do["opt_ttls"][0] & 0x8000:
+    raise AssertionError(f"unsigned-child referral non-DO response set response DO bit: {unsigned_child_referral_non_do}")
 
 truncated = exchange(0xD005, "www.alpha.test.", A, payload=512, do=True)
 if not truncated["tc"]:
@@ -580,12 +608,16 @@ dnssec_serve_runtime_interop=1
 positive_do_rrsig=1
 positive_non_do_suppresses_rrsig=1
 nxdomain_do_nsec_rrsig=1
+nxdomain_non_do_suppresses_dnssec=1
+nodata_non_do_suppresses_dnssec=1
 direct_dnskey_served=1
 direct_rrsig_non_do_served=1
 direct_nsec_non_do_served=1
 direct_ds_do_rrsig=1
 signed_child_referral_ds_rrsig=1
+signed_child_referral_non_do_suppresses_dnssec=1
 unsigned_child_referral_nsec_rrsig=1
+unsigned_child_referral_non_do_suppresses_dnssec=1
 dnssec_truncation_checked=1
 non_edns_512_truncation_no_opt=1
 configured_nsid_empty_request=1
