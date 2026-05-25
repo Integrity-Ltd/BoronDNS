@@ -403,6 +403,11 @@ Set `OXIDEDNS_RELEASE_NOTES` to a completed release notes markdown file to run t
 release-note gate and verify that retained primary-version artifact paths are
 published in the notes.
 
+Set `OXIDEDNS_PERF_BASELINE` to a whitespace-delimited history file with rows shaped
+as `release metric value` to compare retained `perf-smoke-metrics.env` values
+against the rolling baseline. `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the
+default 10 percent regression threshold.
+
 Primary AXFR coverage:
 
 ```sh

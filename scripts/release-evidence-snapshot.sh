@@ -95,6 +95,20 @@ run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-
 run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit-maintainability.sh"
 run_and_capture audit-xot-revocation bash -lc "cd '$repo_root' && scripts/audit-xot-revocation.sh"
 run_and_capture audit-dnssec-passive bash -lc "cd '$repo_root' && scripts/audit-dnssec-passive.sh"
+run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' scripts/perf-smoke.sh"
+
+if [[ -n "${OXIDEDNS_PERF_BASELINE:-}" ]]; then
+  run_and_capture perf-regression bash -lc \
+    "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$OXIDEDNS_PERF_BASELINE' --threshold-pct '${OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
+else
+  cat >"$snapshot_dir/logs/perf-regression-skipped.log" <<'EOF'
+Performance regression comparison was not run by default.
+
+Set OXIDEDNS_PERF_BASELINE to a whitespace-delimited history file with rows shaped
+as: release metric value. OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT overrides the SRS
+default 10 percent threshold.
+EOF
+fi
 
 if [[ -n "${OXIDEDNS_RELEASE_NOTES:-}" ]]; then
   run_and_capture release-notes-gate bash -lc \

@@ -15,6 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/perf-smoke/$$"
+metrics_out="${OXIDEDNS_PERF_SMOKE_METRICS_OUT:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -376,6 +377,17 @@ for expected in \
 done
 
 client_summary="$(python3 "$perf_client" 127.0.0.1 "$oxidedns_dns_port" "$client_log")"
+summary_metric() {
+  local key="$1"
+  tr ' ' '\n' <<<"$client_summary" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
+}
+
+udp_queries="$(summary_metric udp_queries)"
+udp_qps="$(summary_metric qps)"
+latency_ms_min="$(summary_metric latency_ms_min)"
+latency_ms_median="$(summary_metric latency_ms_median)"
+latency_ms_p99="$(summary_metric latency_ms_p99)"
+latency_ms_max="$(summary_metric latency_ms_max)"
 records_served="$(awk -F= '/TCP AXFR served records=/ { print $2; exit }' "$primary_log")"
 if [[ -z "$records_served" ]]; then
   echo "fake performance primary did not serve AXFR" >&2
@@ -388,5 +400,23 @@ records = int("$records_served")
 print(f"{records / startup_seconds:.0f}" if startup_seconds > 0 else "inf")
 PY
 )"
+
+if [[ -n "$metrics_out" ]]; then
+  mkdir -p "$(dirname "$metrics_out")"
+  cat >"$metrics_out" <<EOF
+test_timestamp_utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+profile=perf_smoke_local
+zone=perf.test.
+startup_ready_ms=$startup_ready_ms
+axfr_records=$records_served
+axfr_ready_records_per_second=$ingest_records_per_second
+udp_queries=$udp_queries
+udp_qps=$udp_qps
+udp_latency_ms_min=$latency_ms_min
+udp_latency_ms_median=$latency_ms_median
+udp_latency_ms_p99=$latency_ms_p99
+udp_latency_ms_max=$latency_ms_max
+EOF
+fi
 
 echo "Performance smoke passed: startup_ready_ms=$startup_ready_ms axfr_records=$records_served axfr_ready_records_per_second=$ingest_records_per_second $client_summary"
