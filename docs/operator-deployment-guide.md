@@ -214,6 +214,12 @@ If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
 - `GET /healthz`: backward-compatible alias for `/readyz`.
 - `GET /metrics`: returns Prometheus-compatible text metrics.
 
+`/metrics` is rate limited per source IP. Configure it under `[health]` with
+`metrics_rate_limit_per_minute` (default `60`) and
+`metrics_rate_limit_idle_seconds` (default `300`). Over-limit scrapes receive
+HTTP 429, a `Retry-After` header, and a JSON body; `/livez`, `/readyz`, and
+`/healthz` are not rate limited.
+
 Basic checks:
 
 ```sh
@@ -235,8 +241,8 @@ The `/metrics` endpoint returns gzip-compressed output when the scrape request
 includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
 default. SRS v0.7 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior, broader retained health response-time
-evidence, and a per-source `/metrics` rate limit. Treat those as pending until
-the gap register says otherwise.
+evidence, and rate-limit behavior under production-representative scrape
+traffic. Treat those as pending until the gap register says otherwise.
 
 Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
 

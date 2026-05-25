@@ -8,6 +8,10 @@ log_level = "info"
 log_format = "json"
 nsid = "oxidedns-example"
 
+[health]
+metrics_rate_limit_per_minute = 60
+metrics_rate_limit_idle_seconds = 300
+
 [query]
 any_response = "minimal"
 

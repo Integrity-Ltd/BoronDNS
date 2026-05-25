@@ -35,6 +35,8 @@ pub enum ConfigError {
 pub struct ServerConfig {
     pub server: ServerSettings,
     #[serde(default)]
+    pub health: HealthConfig,
+    #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
     pub cookie: CookieConfig,
@@ -153,6 +155,7 @@ impl ServerConfig {
             ));
         }
         self.cookie.validate()?;
+        self.health.validate()?;
         self.rrl.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
@@ -209,6 +212,39 @@ pub struct ServerSettings {
     pub log_level: String,
     #[serde(default)]
     pub log_format: LogFormatConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HealthConfig {
+    #[serde(default = "default_metrics_rate_limit_per_minute")]
+    pub metrics_rate_limit_per_minute: u32,
+    #[serde(default = "default_metrics_rate_limit_idle_seconds")]
+    pub metrics_rate_limit_idle_seconds: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            metrics_rate_limit_per_minute: default_metrics_rate_limit_per_minute(),
+            metrics_rate_limit_idle_seconds: default_metrics_rate_limit_idle_seconds(),
+        }
+    }
+}
+
+impl HealthConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.metrics_rate_limit_per_minute == 0 {
+            return Err(ConfigError::Invalid(
+                "health.metrics_rate_limit_per_minute must be at least 1".to_owned(),
+            ));
+        }
+        if self.metrics_rate_limit_idle_seconds == 0 {
+            return Err(ConfigError::Invalid(
+                "health.metrics_rate_limit_idle_seconds must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -800,6 +836,14 @@ fn default_zsm_initial_retry_max_secs() -> u64 {
     3600
 }
 
+fn default_metrics_rate_limit_per_minute() -> u32 {
+    60
+}
+
+fn default_metrics_rate_limit_idle_seconds() -> u64 {
+    300
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,6 +873,8 @@ mod tests {
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
+        assert_eq!(config.health.metrics_rate_limit_per_minute, 60);
+        assert_eq!(config.health.metrics_rate_limit_idle_seconds, 300);
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
@@ -1318,6 +1364,76 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Disabled);
+    }
+
+    #[test]
+    fn parses_health_rate_limit_configuration() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [health]
+                metrics_rate_limit_per_minute = 120
+                metrics_rate_limit_idle_seconds = 45
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid health config");
+
+        assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
+        assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+    }
+
+    #[test]
+    fn rejects_zero_health_rate_limit_configuration() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [health]
+                metrics_rate_limit_per_minute = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero metrics rate limit must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("health.metrics_rate_limit_per_minute")
+        );
+    }
+
+    #[test]
+    fn rejects_zero_health_rate_limit_idle_seconds() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [health]
+                metrics_rate_limit_idle_seconds = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero metrics rate-limit idle timeout must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("health.metrics_rate_limit_idle_seconds")
+        );
     }
 
     #[test]

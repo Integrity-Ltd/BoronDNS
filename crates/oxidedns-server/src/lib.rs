@@ -13,7 +13,7 @@ use std::{
 
 use axum::{
     Router,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -40,7 +40,7 @@ use oxidedns_core::{
     ServerConfig,
     axfr::{self, AxfrError, IxfrResponse},
     config::{
-        CookieConfig, CookiePolicyConfig, RrlConfig, TransferPrimaryConfig,
+        CookieConfig, CookiePolicyConfig, HealthConfig, RrlConfig, TransferPrimaryConfig,
         TransferTransportConfig, ZoneConfig,
     },
     dns::{
@@ -295,6 +295,7 @@ impl Runtime {
                     runtime_status: runtime_status.clone(),
                     metrics: metrics.clone(),
                     refresh_registry: refresh_registry.clone(),
+                    metrics_rate_limiter: MetricsRateLimiter::from_config(self.config.health),
                     started_at: Instant::now(),
                     graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
                 },
@@ -2163,10 +2164,13 @@ async fn serve_health(
     let local_addr = listener.local_addr().map_err(RuntimeError::Health)?;
     info!(%local_addr, "health listener bound");
 
-    axum::serve(listener, health_router(state))
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-        .map_err(RuntimeError::Health)
+    axum::serve(
+        listener,
+        health_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await
+    .map_err(RuntimeError::Health)
 }
 
 fn health_router(state: HealthEndpointState) -> Router {
@@ -2212,7 +2216,15 @@ async fn readyz(State(state): State<HealthEndpointState>) -> Response {
     readiness_response(&state)
 }
 
-async fn metrics(headers: HeaderMap, State(state): State<HealthEndpointState>) -> Response {
+async fn metrics(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    if let Err(retry_after_seconds) = state.metrics_rate_limiter.check(peer.ip()) {
+        return rate_limited_response(retry_after_seconds);
+    }
+
     let body = metrics_body(&state.zones, &state.metrics, &state.refresh_registry);
     if accepts_gzip(&headers) {
         match gzip_bytes(body.as_bytes()) {
@@ -2244,6 +2256,18 @@ async fn metrics(headers: HeaderMap, State(state): State<HealthEndpointState>) -
             "text/plain; version=0.0.4; charset=utf-8",
         )],
         body,
+    )
+        .into_response()
+}
+
+fn rate_limited_response(retry_after_seconds: u64) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            (header::CONTENT_TYPE, "application/json".to_owned()),
+            (header::RETRY_AFTER, retry_after_seconds.to_string()),
+        ],
+        format!("{{\"error\":\"rate_limited\",\"retry_after_seconds\":{retry_after_seconds}}}"),
     )
         .into_response()
 }
@@ -2827,6 +2851,7 @@ struct HealthEndpointState {
     runtime_status: RuntimeStatus,
     metrics: RuntimeMetrics,
     refresh_registry: ZoneRefreshRegistry,
+    metrics_rate_limiter: MetricsRateLimiter,
     started_at: Instant,
     graceful_shutdown_secs: u64,
 }
@@ -2839,6 +2864,121 @@ impl HealthEndpointState {
         self.graceful_shutdown_secs
             .saturating_sub(elapsed.as_secs())
     }
+}
+
+const MAX_METRICS_RATE_LIMIT_SOURCES: usize = 4096;
+
+#[derive(Clone, Debug)]
+struct MetricsRateLimiter {
+    limit_per_minute: u32,
+    idle_timeout: Duration,
+    inner: Arc<Mutex<MetricsRateLimitState>>,
+}
+
+impl Default for MetricsRateLimiter {
+    fn default() -> Self {
+        Self::from_config(HealthConfig::default())
+    }
+}
+
+impl MetricsRateLimiter {
+    fn from_config(config: HealthConfig) -> Self {
+        Self {
+            limit_per_minute: config.metrics_rate_limit_per_minute,
+            idle_timeout: Duration::from_secs(config.metrics_rate_limit_idle_seconds),
+            inner: Arc::new(Mutex::new(MetricsRateLimitState::default())),
+        }
+    }
+
+    fn check(&self, source: IpAddr) -> Result<(), u64> {
+        self.check_at(source, Instant::now())
+    }
+
+    fn check_at(&self, source: IpAddr, now: Instant) -> Result<(), u64> {
+        let mut state = self.inner.lock().expect("metrics limiter mutex poisoned");
+        if let Some(idle_cutoff) = now.checked_sub(self.idle_timeout) {
+            state.evict_idle(idle_cutoff);
+        }
+        if !state.entries.contains_key(&source) {
+            state.evict_lru_until_below(MAX_METRICS_RATE_LIMIT_SOURCES);
+        }
+
+        let result = {
+            let entry = state
+                .entries
+                .entry(source)
+                .or_insert(MetricsRateLimitEntry {
+                    tokens: self.limit_per_minute as f64,
+                    last_refill: now,
+                    last_seen: now,
+                });
+            let elapsed = now.saturating_duration_since(entry.last_refill);
+            let refill = elapsed.as_secs_f64() * f64::from(self.limit_per_minute) / 60.0;
+            entry.tokens = (entry.tokens + refill).min(f64::from(self.limit_per_minute));
+            entry.last_refill = now;
+            entry.last_seen = now;
+
+            if entry.tokens >= 1.0 {
+                entry.tokens -= 1.0;
+                Ok(())
+            } else {
+                let seconds_until_token =
+                    ((1.0 - entry.tokens) * 60.0 / f64::from(self.limit_per_minute)).ceil();
+                Err((seconds_until_token as u64).max(1))
+            }
+        };
+        state.lru.push_back((source, now));
+        result
+    }
+}
+
+#[derive(Debug, Default)]
+struct MetricsRateLimitState {
+    entries: HashMap<IpAddr, MetricsRateLimitEntry>,
+    lru: VecDeque<(IpAddr, Instant)>,
+}
+
+impl MetricsRateLimitState {
+    fn evict_idle(&mut self, cutoff: Instant) {
+        while let Some((source, seen_at)) = self.lru.front().copied() {
+            match self.entries.get(&source) {
+                Some(entry) if entry.last_seen != seen_at => {
+                    self.lru.pop_front();
+                }
+                Some(entry) if entry.last_seen <= cutoff => {
+                    self.lru.pop_front();
+                    self.entries.remove(&source);
+                }
+                Some(_) => break,
+                None => {
+                    self.lru.pop_front();
+                }
+            }
+        }
+    }
+
+    fn evict_lru_until_below(&mut self, cap: usize) {
+        while self.entries.len() >= cap {
+            let Some((source, seen_at)) = self.lru.pop_front() else {
+                self.entries.clear();
+                break;
+            };
+            if self
+                .entries
+                .get(&source)
+                .is_some_and(|entry| entry.last_seen == seen_at)
+            {
+                self.entries.remove(&source);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MetricsRateLimitEntry {
+    tokens: f64,
+    last_refill: Instant,
+    last_seen: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -4931,7 +5071,7 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        config::{RrlConfig, TransferTransportConfig},
+        config::{HealthConfig, RrlConfig, TransferTransportConfig},
         dns::{
             AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName, Header,
             LookupTermination, Opcode, Rcode, RecordType, Transport,
@@ -4945,17 +5085,18 @@ mod tests {
 
     use super::{
         CookiePrefixMetricSettings, DnsCookieRuntimeSettings, HealthEndpointState,
-        IxfrCooldownRegistry, NotifyAuthority, NotifyRefreshAction, NotifyRefreshTracker,
-        NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
-        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings, RrlCategory, RrlDecision,
-        RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, TcpServerSettings,
-        TransferPlan, UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint,
-        drain_task_set, drain_tcp_connections, handle_tcp_connection, jitter_interval,
-        load_pem_certs, load_pem_private_key, observe_query_metrics, poll_soa_from_primary,
-        poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, response_category, response_opt_record, response_question_end,
-        response_rcode, rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
+        IxfrCooldownRegistry, MetricsRateLimiter, NotifyAuthority, NotifyRefreshAction,
+        NotifyRefreshTracker, NotifyTsigResult, QueryLatencyCategory, QueryLatencyHistogram,
+        QueryMetricObservation, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
+        RrlCategory, RrlDecision, RrlLimiter, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
+        TcpServerSettings, TransferPlan, UdpServerSettings, ZoneRefreshRegistry,
+        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, jitter_interval, load_pem_certs, load_pem_private_key,
+        observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+        prepare_notify_packet, prepare_notify_packet_with_metrics, query_id_from_random_bytes,
+        record_query_response_metric, record_query_termination_metric, refresh_zone_from_primaries,
+        response_category, response_opt_record, response_question_end, response_rcode,
+        rrl_truncated_response, serial_after, serve_health, serve_refresh_requests,
         serve_scheduled_refreshes, serve_tcp, serve_udp, sign_notify_response,
         signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
         transfer_query_id, validate_runtime_config, write_tcp_message,
@@ -4978,6 +5119,25 @@ mod tests {
 
         let runtime = Runtime::new(config);
         assert_eq!(runtime.zone_count(), 1);
+    }
+
+    #[test]
+    fn metrics_rate_limiter_is_per_source_and_evicts_idle_sources() {
+        let limiter = MetricsRateLimiter::from_config(HealthConfig {
+            metrics_rate_limit_per_minute: 1,
+            metrics_rate_limit_idle_seconds: 1,
+        });
+        let now = std::time::Instant::now();
+        let first: std::net::IpAddr = "192.0.2.10".parse().unwrap();
+        let second: std::net::IpAddr = "192.0.2.11".parse().unwrap();
+
+        assert_eq!(limiter.check_at(first, now), Ok(()));
+        assert_eq!(limiter.check_at(first, now), Err(60));
+        assert_eq!(limiter.check_at(second, now), Ok(()));
+        assert_eq!(
+            limiter.check_at(first, now + std::time::Duration::from_secs(2)),
+            Ok(())
+        );
     }
 
     #[test]
@@ -5253,6 +5413,7 @@ mod tests {
                 runtime_status: RuntimeStatus::new(),
                 metrics: metrics_state,
                 refresh_registry,
+                metrics_rate_limiter: MetricsRateLimiter::default(),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
             },
@@ -5399,6 +5560,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_endpoint_rate_limits_per_source_without_limiting_health() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_health(
+            listener,
+            HealthEndpointState {
+                zones,
+                runtime_status: RuntimeStatus::new(),
+                metrics: RuntimeMetrics::new(),
+                refresh_registry: ZoneRefreshRegistry::without_jitter(
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_secs(3600),
+                ),
+                metrics_rate_limiter: MetricsRateLimiter::from_config(HealthConfig {
+                    metrics_rate_limit_per_minute: 1,
+                    metrics_rate_limit_idle_seconds: 300,
+                }),
+                started_at: std::time::Instant::now(),
+                graceful_shutdown_secs: 30,
+            },
+            std::future::pending(),
+        ));
+
+        let first = http_request(addr, "GET", "/metrics").await;
+        assert!(first.starts_with("HTTP/1.1 200 OK"));
+
+        let limited = http_request(addr, "GET", "/metrics").await;
+        assert!(limited.starts_with("HTTP/1.1 429 Too Many Requests"));
+        assert!(limited.contains("content-type: application/json"));
+        assert!(limited.contains("retry-after: 60"));
+        assert!(limited.ends_with(r#"{"error":"rate_limited","retry_after_seconds":60}"#));
+
+        let livez = http_request(addr, "GET", "/livez").await;
+        assert!(livez.starts_with("HTTP/1.1 200 OK"));
+        let readyz = http_request(addr, "GET", "/readyz").await;
+        assert!(readyz.starts_with("HTTP/1.1 200 OK"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn health_endpoint_reports_draining_and_unready_during_shutdown() {
         let zones = ZoneStore::new();
         zones.insert_snapshot(ZoneSnapshot::active(
@@ -5420,6 +5629,7 @@ mod tests {
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_secs(3600),
                 ),
+                metrics_rate_limiter: MetricsRateLimiter::default(),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
             },
@@ -9960,6 +10170,7 @@ mod tests {
                 std::time::Duration::from_secs(60),
                 std::time::Duration::from_secs(3600),
             ),
+            metrics_rate_limiter: MetricsRateLimiter::default(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
         }
