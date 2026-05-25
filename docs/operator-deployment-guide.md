@@ -174,15 +174,15 @@ reference. Worked scenarios in this guide and the example configuration cover
 single-zone single-primary, multi-zone multi-primary, TSIG-protected,
 XoT-protected, and DNSSEC-served deployments. The major sections are:
 
-- `[server]`: legacy UDP/TCP DNS listeners, legacy optional health endpoint,
+- `[server]`: baseline UDP/TCP DNS listeners, optional health endpoint,
   log level, and log format. New deployments should prefer `[interfaces]` for
   network roles.
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
   16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
 - `[interfaces]`: the three active network roles. `interfaces.dns` overrides
-  the legacy DNS listener lists and is used for both UDP and TCP DNS service.
-  DNS entries may be legacy socket-address strings or `{ address, name }`
+  the baseline DNS listener lists and is used for both UDP and TCP DNS service.
+  DNS entries may be socket-address strings or `{ address, name }`
   pairs; the optional `name` is accepted for future XDP attachment planning and
   is ignored by the current kernel-socket backend. DNS sockets also receive
   primary-originated NOTIFY messages; use per-zone `notify_sources` to restrict
@@ -355,7 +355,7 @@ If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
 - `GET /readyz`: returns JSON readiness: HTTP 200 when at least one zone is
   active and the runtime is not draining, otherwise HTTP 503 with `not-ready`,
   `draining`, or `unhealthy` status details.
-- `GET /healthz`: backward-compatible alias for `/readyz`.
+- `GET /healthz`: readiness alias for `/readyz`.
 - `GET /metrics`: returns Prometheus-compatible text metrics.
 
 `/metrics` is rate limited per source IP. Configure it under `[health]` with
