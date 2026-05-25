@@ -472,9 +472,10 @@ artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
 `coverage-evidence/`, the Reference Hardware/Profile benchmark setup/report
 scaffold under `benchmark-handoff/`, and the long-run soak setup/report
-scaffold under `soak-handoff/`. The benchmark and soak handoffs are not
-completed benchmark or soak evidence; they are release/operations template sets
-for the later delegated runs. Set
+scaffold under `soak-handoff/`, and the release-governance setup under
+`release-handoff/`. The benchmark, soak, and release-governance handoffs are
+not completed benchmark, soak, or release-acceptance evidence; they are
+release/operations template sets for the later delegated runs. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
 and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
@@ -676,6 +677,13 @@ or use the `soak-handoff/` directory created by
 required report template, RSS/file-descriptor/metrics/event TSV schemas, weekly
 summary template, requirement traceability map, and operator sign-off scaffold
 for the later 30-day ODS-NFR-REL-003 run.
+
+Before release governance sign-off begins, run
+`scripts/capture-release-handoff.sh` or use the `release-handoff/` directory
+created by `scripts/release-evidence-snapshot.sh`. The handoff directory
+contains the evidence attachment map, role ownership TSV, scheduled
+CI/manual-run plan, signing runbook, release-note fill plan,
+external-operator acceptance scaffold, and release-readiness checklist.
 
 Upgrade procedure:
 

@@ -12,6 +12,7 @@ family-level traceability to per-requirement traceability.
 - Working evidence ledger: `docs/verification-ledger.md`.
 - Family traceability matrix: `docs/appendix-a-traceability-matrix.md`.
 - Release evidence snapshot: `scripts/release-evidence-snapshot.sh`.
+- Release/operations handoff: `scripts/capture-release-handoff.sh`.
 
 Every concrete test case or evidence command in this plan must reference SRS
 requirement identifiers directly or through the ledger/matrix row that owns the
@@ -86,6 +87,13 @@ audit, or external-operator steps as passing evidence for final SRS acceptance.
 For the local project MVP, long-running steps may be marked as delegated when
 the runnable harness, artifact format, and release/operations handoff are
 present.
+
+`scripts/capture-release-handoff.sh` is intentionally a setup artifact. It
+creates the release attachment map, scheduled CI/manual-run plan, signing
+runbook, release-note fill plan, external-operator acceptance scaffold, and
+release-readiness checklist for later SRS acceptance execution. A generated
+handoff directory proves the local MVP governance setup exists; it does not
+prove that release acceptance or external-operator sign-off has been completed.
 
 `scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
 creates the benchmark runbook, report template, performance/resource TSV

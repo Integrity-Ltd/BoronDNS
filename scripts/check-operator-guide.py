@@ -29,6 +29,7 @@ REQUIRED_TEXT = [
     "long-LOADING",
     "benchmark-handoff",
     "soak-handoff",
+    "release-handoff",
     "privilege",
     "security@integrity.hu",
     "ODS-FR-XOT-012",

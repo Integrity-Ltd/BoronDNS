@@ -95,6 +95,14 @@ TBD
 - Release/operations owner for delegated long-running evidence: TBD
 - Deferred execution rationale, if any: TBD
 
+## Release/Operations Handoff
+
+- Release handoff artifact: TBD
+- Scheduled CI/manual-run plan: TBD
+- Release readiness checklist: TBD
+- External operator acceptance artifact: TBD
+- Signing runbook or completed signing manifest: TBD
+
 ## Verification Responsibility Sign-off
 
 | Role | Responsible person or party | Scope | Sign-off |

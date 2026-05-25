@@ -59,5 +59,6 @@ require_text "scripts/release-evidence-snapshot.sh"
 require_text "campaign-summary.tsv"
 require_text "scripts/capture-benchmark-handoff.sh"
 require_text "scripts/capture-soak-handoff.sh"
+require_text "scripts/capture-release-handoff.sh"
 
 printf 'Test Plan check passed: %s\n' "$test_plan"

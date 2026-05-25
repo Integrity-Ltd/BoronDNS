@@ -41,6 +41,7 @@ for heading in \
   "## Failed Requirement Decisions" \
   "## RFC Compliance Assertions" \
   "## Long-Running Evidence Handoff" \
+  "## Release/Operations Handoff" \
   "## Verification Responsibility Sign-off"; do
   require_text "$heading"
 done
@@ -124,6 +125,15 @@ for handoff_field in \
   "Release/operations owner for delegated long-running evidence" \
   "Deferred execution rationale"; do
   require_text "$handoff_field"
+done
+
+for release_handoff_field in \
+  "Release handoff artifact" \
+  "Scheduled CI/manual-run plan" \
+  "Release readiness checklist" \
+  "External operator acceptance artifact" \
+  "Signing runbook or completed signing manifest"; do
+  require_text "$release_handoff_field"
 done
 
 if grep -F "TBD" "$notes_file" >/dev/null 2>&1; then
