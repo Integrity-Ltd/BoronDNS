@@ -37,6 +37,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub interfaces: InterfacesConfig,
     #[serde(default)]
+    pub logging: LoggingConfig,
+    #[serde(default)]
     pub health: HealthConfig,
     #[serde(default)]
     pub query: QuerySettings,
@@ -92,6 +94,7 @@ impl ServerConfig {
             ));
         }
         self.interfaces.validate(&self.server)?;
+        self.logging.validate()?;
 
         if self.zones.is_empty() {
             return Err(ConfigError::Invalid(
@@ -356,6 +359,32 @@ pub struct ServerSettings {
     pub log_level: String,
     #[serde(default)]
     pub log_format: LogFormatConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LoggingConfig {
+    #[serde(default = "default_logging_max_entry_length_bytes")]
+    pub max_entry_length_bytes: usize,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            max_entry_length_bytes: default_logging_max_entry_length_bytes(),
+        }
+    }
+}
+
+impl LoggingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_entry_length_bytes < minimum_log_entry_length_bytes() {
+            return Err(ConfigError::Invalid(format!(
+                "logging.max_entry_length_bytes must be at least {}",
+                minimum_log_entry_length_bytes()
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -865,6 +894,14 @@ fn default_log_level() -> String {
     "info".to_owned()
 }
 
+fn default_logging_max_entry_length_bytes() -> usize {
+    16_384
+}
+
+fn minimum_log_entry_length_bytes() -> usize {
+    128
+}
+
 fn default_dns_listeners() -> Vec<SocketAddr> {
     vec![
         SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53)),
@@ -1104,6 +1141,7 @@ mod tests {
         assert_eq!(config.server.log_level, "info");
         assert_eq!(config.server.log_format, LogFormatConfig::Json);
         assert_eq!(config.server.nsid, "");
+        assert_eq!(config.logging.max_entry_length_bytes, 16_384);
         assert!(config.interfaces.notify.is_empty());
         assert_eq!(config.udp_listeners(), config.server.listen_udp);
         assert_eq!(config.tcp_listeners(), config.server.listen_tcp);
@@ -1152,6 +1190,26 @@ mod tests {
                 53
             )))]
         );
+    }
+
+    #[test]
+    fn parses_logging_configuration() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [logging]
+                max_entry_length_bytes = 4096
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.logging.max_entry_length_bytes, 4096);
     }
 
     #[test]
@@ -1886,6 +1944,26 @@ mod tests {
                 .to_string()
                 .contains("health.metrics_rate_limit_idle_seconds")
         );
+    }
+
+    #[test]
+    fn rejects_too_small_log_entry_length_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [logging]
+                max_entry_length_bytes = 64
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("too-small log entry length limit must fail");
+
+        assert!(error.to_string().contains("logging.max_entry_length_bytes"));
     }
 
     #[test]

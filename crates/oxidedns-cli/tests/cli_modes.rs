@@ -144,6 +144,7 @@ fn dump_config_includes_rds_environment_overrides() {
         .env("ODS_SERVER_NSID", "env-nsid")
         .env("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120")
         .env("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45")
+        .env("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192")
         .env("ODS_TSIG_FUDGE_SECONDS", "30")
         .env("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600")
         .env("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200")
@@ -159,6 +160,7 @@ fn dump_config_includes_rds_environment_overrides() {
     assert!(stdout.contains("nsid = \"env-nsid\""));
     assert!(stdout.contains("metrics_rate_limit_per_minute = 120"));
     assert!(stdout.contains("metrics_rate_limit_idle_seconds = 45"));
+    assert!(stdout.contains("max_entry_length_bytes = 8192"));
     assert!(stdout.contains("fudge_seconds = 30"));
     assert!(stdout.contains("max_transfer_ingest_bytes = 104857600"));
     assert!(stdout.contains("zsm_max_interval_secs = 43200"));

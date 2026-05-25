@@ -1,12 +1,13 @@
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
 use clap::{ArgAction, Parser, Subcommand};
-use tracing::warn;
-use tracing_subscriber::EnvFilter;
+use tracing::{Level, warn};
+use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
 use oxidedns_core::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
 use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
@@ -28,6 +29,7 @@ const HELP_FOOTER: &str = concat!(
     "Project: internal OxideDNS repository; see README.md and docs/."
 );
 const EXAMPLE_CONFIG: &str = include_str!("../../../config/oxidedns.example.toml");
+const LOG_TRUNCATION_MARKER: &str = "...<truncated>";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -270,6 +272,10 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
             }
+            "ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES" => {
+                let value = env_value_to_string(&name, value)?;
+                config.logging.max_entry_length_bytes = parse_env_value(&name, &value)?;
+            }
             "ODS_TSIG_FUDGE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
@@ -398,20 +404,186 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
 
 fn init_logging(config: &ServerConfig) -> anyhow::Result<()> {
     let filter = log_filter(&config.server.log_level)?;
+    let max_entry_length_bytes = config.logging.max_entry_length_bytes;
+    let log_format = config.server.log_format;
 
     match config.server.log_format {
-        LogFormatConfig::Json => tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(filter)
-            .try_init()
-            .map_err(|error| anyhow!("initializing logging: {error}"))?,
-        LogFormatConfig::Plain => tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .try_init()
-            .map_err(|error| anyhow!("initializing logging: {error}"))?,
+        LogFormatConfig::Json => {
+            let writer = level_split_log_writer(max_entry_length_bytes, log_format);
+            tracing_subscriber::fmt()
+                .json()
+                .with_env_filter(filter)
+                .with_writer(writer)
+                .try_init()
+                .map_err(|error| anyhow!("initializing logging: {error}"))?
+        }
+        LogFormatConfig::Plain => {
+            let writer = level_split_log_writer(max_entry_length_bytes, log_format);
+            tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(writer)
+                .try_init()
+                .map_err(|error| anyhow!("initializing logging: {error}"))?
+        }
     }
 
     Ok(())
+}
+
+fn level_split_log_writer(
+    max_entry_length_bytes: usize,
+    format: LogFormatConfig,
+) -> impl for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> {
+    let stderr_writer =
+        move || LogEntryLimitWriter::new(io::stderr(), max_entry_length_bytes, format);
+    let stdout_writer =
+        move || LogEntryLimitWriter::new(io::stdout(), max_entry_length_bytes, format);
+    stderr_writer
+        .with_min_level(Level::WARN)
+        .or_else(stdout_writer)
+}
+
+struct LogEntryLimitWriter<W> {
+    inner: W,
+    buffer: Vec<u8>,
+    max_entry_length_bytes: usize,
+    format: LogFormatConfig,
+}
+
+impl<W> LogEntryLimitWriter<W> {
+    fn new(inner: W, max_entry_length_bytes: usize, format: LogFormatConfig) -> Self {
+        Self {
+            inner,
+            buffer: Vec::new(),
+            max_entry_length_bytes,
+            format,
+        }
+    }
+}
+
+impl<W: Write> LogEntryLimitWriter<W> {
+    fn write_entry(&mut self, entry: &[u8]) -> io::Result<()> {
+        if entry.len() <= self.max_entry_length_bytes {
+            self.inner.write_all(entry)?;
+            return Ok(());
+        }
+        let truncated = truncated_log_entry(self.format, entry, self.max_entry_length_bytes);
+        self.inner.write_all(&truncated)
+    }
+}
+
+impl<W: Write> Write for LogEntryLimitWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        while let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let entry = self.buffer.drain(..=newline).collect::<Vec<_>>();
+            self.write_entry(&entry)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.buffer.is_empty() {
+            let entry = std::mem::take(&mut self.buffer);
+            self.write_entry(&entry)?;
+        }
+        self.inner.flush()
+    }
+}
+
+fn truncated_log_entry(
+    format: LogFormatConfig,
+    entry: &[u8],
+    max_entry_length_bytes: usize,
+) -> Vec<u8> {
+    let entry_text = String::from_utf8_lossy(entry);
+    match format {
+        LogFormatConfig::Json => truncated_json_log_entry(&entry_text, max_entry_length_bytes),
+        LogFormatConfig::Plain => truncated_plain_log_entry(&entry_text, max_entry_length_bytes),
+    }
+}
+
+fn truncated_json_log_entry(entry_text: &str, max_entry_length_bytes: usize) -> Vec<u8> {
+    truncated_entry_with(entry_text, max_entry_length_bytes, |message| {
+        format!(
+            "{{\"message\":\"{}\",\"truncated\":true}}\n",
+            escape_json_string(message)
+        )
+        .into_bytes()
+    })
+}
+
+fn truncated_plain_log_entry(entry_text: &str, max_entry_length_bytes: usize) -> Vec<u8> {
+    truncated_entry_with(entry_text, max_entry_length_bytes, |message| {
+        format!(
+            "message=\"{}\" truncated=true\n",
+            escape_logfmt_string(message)
+        )
+        .into_bytes()
+    })
+}
+
+fn truncated_entry_with<F>(entry_text: &str, max_entry_length_bytes: usize, render: F) -> Vec<u8>
+where
+    F: Fn(&str) -> Vec<u8>,
+{
+    let cleaned = entry_text.trim_end_matches(['\r', '\n']);
+    let mut low = 0usize;
+    let mut high = cleaned.len();
+    let mut best = render(LOG_TRUNCATION_MARKER);
+
+    while low <= high {
+        let mid = (low + high) / 2;
+        let prefix_len = previous_char_boundary(cleaned, mid);
+        let message = format!("{}{}", &cleaned[..prefix_len], LOG_TRUNCATION_MARKER);
+        let candidate = render(&message);
+        if candidate.len() <= max_entry_length_bytes {
+            best = candidate;
+            low = mid.saturating_add(1);
+        } else if mid == 0 {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    best
+}
+
+fn previous_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn escape_json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", character as u32);
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn escape_logfmt_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn log_filter(configured_level: &str) -> anyhow::Result<EnvFilter> {
@@ -668,6 +840,7 @@ mod tests {
                 ("ODS_SERVER_NSID", "env-nsid"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE", "120"),
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
+                ("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
                 ("ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES", "104857600"),
                 ("ODS_LIMITS_ZSM_MAX_INTERVAL_SECS", "43200"),
@@ -688,6 +861,7 @@ mod tests {
         assert_eq!(config.server.nsid, "env-nsid");
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+        assert_eq!(config.logging.max_entry_length_bytes, 8192);
         assert_eq!(config.tsig.fudge_seconds, 30);
         assert_eq!(config.limits.max_transfer_ingest_bytes, 104_857_600);
         assert_eq!(config.limits.zsm_max_interval_secs, 43_200);
@@ -765,5 +939,45 @@ mod tests {
             "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
         );
         assert!(config_warning_line(&warnings[0]).contains("category=configuration_warning"));
+    }
+
+    #[test]
+    fn oversized_json_log_entry_is_truncated_to_parseable_structured_entry() {
+        let entry = format!("{{\"message\":\"{}\"}}\n", "x".repeat(512));
+        let truncated = truncated_log_entry(LogFormatConfig::Json, entry.as_bytes(), 160);
+        let text = String::from_utf8(truncated).expect("utf8 log entry");
+
+        assert!(text.len() <= 160);
+        assert!(text.ends_with('\n'));
+        assert!(text.starts_with("{\"message\":\""));
+        assert!(text.contains(LOG_TRUNCATION_MARKER));
+        assert!(text.contains("\"truncated\":true"));
+    }
+
+    #[test]
+    fn oversized_plain_log_entry_is_truncated_to_logfmt_entry() {
+        let entry = format!("INFO message=\"{}\"\n", "x".repeat(512));
+        let truncated = truncated_log_entry(LogFormatConfig::Plain, entry.as_bytes(), 160);
+        let text = String::from_utf8(truncated).expect("utf8 log entry");
+
+        assert!(text.len() <= 160);
+        assert!(text.ends_with('\n'));
+        assert!(text.starts_with("message=\""));
+        assert!(text.contains(LOG_TRUNCATION_MARKER));
+        assert!(text.contains("truncated=true"));
+    }
+
+    #[test]
+    fn log_entry_limit_writer_preserves_entries_under_limit() {
+        let mut output = Vec::new();
+        {
+            let mut writer = LogEntryLimitWriter::new(&mut output, 128, LogFormatConfig::Json);
+            writer
+                .write_all(b"{\"message\":\"short\"}\n")
+                .expect("write log entry");
+            writer.flush().expect("flush log entry");
+        }
+
+        assert_eq!(output, b"{\"message\":\"short\"}\n");
     }
 }

@@ -19,6 +19,10 @@ nsid = "oxidedns-example"
 # These addresses must not overlap the DNS listener sockets above.
 notify = []
 
+[logging]
+# Maximum bytes in any single structured log entry. Default: 16384.
+max_entry_length_bytes = 16384
+
 [health]
 # Per-source scrape budget for /metrics. Default: 60 requests per minute.
 metrics_rate_limit_per_minute = 60

@@ -160,6 +160,9 @@ reference. The major sections are:
 
 - `[server]`: UDP/TCP DNS listeners, optional health endpoint, log level, and
   log format.
+- `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
+  16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
+  truncation entry with `...<truncated>` and `truncated=true`.
 - `[interfaces]`: optional additional listener roles. Currently
   `interfaces.notify` opens extra UDP/TCP sockets for primary-originated NOTIFY
   traffic; ordinary DNS queries received on those sockets are still answered
@@ -209,6 +212,11 @@ Production configuration notes:
 - Keep `notify_sources` restricted to primary addresses or explicit NOTIFY
   relays.
 - Prefer `log_format = "json"` for supervised service and log aggregation.
+  Warning and error entries are written to stderr; lower-level entries are
+  written to stdout.
+- Keep `[logging].max_entry_length_bytes` at the default unless the deployment's
+  log pipeline requires a smaller bounded entry size; values below the minimum
+  parseable truncation envelope are rejected at configuration validation.
 - Bind `health` to loopback or a private management interface. The health and
   metrics HTTP endpoint is not an authenticated administration interface.
 - Set `[limits].edns_padding_block_size = 0` unless padding is intentionally
