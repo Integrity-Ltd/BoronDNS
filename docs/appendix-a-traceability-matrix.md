@@ -27,7 +27,7 @@ drift.
 
 | Requirement ID | Phase / status | Evidence pointer | Remaining acceptance gap |
 | --- | --- | --- | --- |
-| ODS-INV-001..ODS-INV-009 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/audit-invariants.sh`; `scripts/check.sh`; `docs/verification-ledger.md`; `crates/oxidedns-core/src/dns.rs` tests `dns_update_opcode_gets_notimp_without_zone_mutation` and `concurrent_snapshot_replacement_answers_from_one_zone_version` | Static invariant inspection now covers SRS v0.7 INV-001 through INV-009, including authoritative-only response composition, single-process operation, and no runtime code loading; add read-only root filesystem runtime evidence and panic-free query-path evidence before acceptance review. |
+| ODS-INV-001..ODS-INV-009 | Alpha / Partial | `docs/implementation-plan.md`; `scripts/audit-invariants.sh`; `scripts/check.sh`; `docs/verification-ledger.md`; `crates/oxidedns-core/src/dns.rs` tests `dns_update_opcode_gets_notimp_without_zone_mutation`, `concurrent_snapshot_replacement_answers_from_one_zone_version`, and `answer_datagram_does_not_panic_for_malformed_corpus` | Static invariant inspection now covers SRS v0.7 INV-001 through INV-009, including authoritative-only response composition, single-process operation, and no runtime code loading; local tests add focused malformed-input panic-free query-path evidence. Add read-only root filesystem runtime evidence and broader retained fuzz/panic-free artifacts before acceptance review. |
 
 ## Functional Requirements
 

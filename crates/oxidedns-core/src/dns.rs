@@ -2420,6 +2420,57 @@ mod tests {
     }
 
     #[test]
+    fn answer_datagram_does_not_panic_for_malformed_corpus() {
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+        let mut corpus = Vec::new();
+
+        for len in 0..=32 {
+            let mut packet = Vec::with_capacity(len);
+            for index in 0..len {
+                packet.push(((index * 37 + len * 11) & 0xff) as u8);
+            }
+            corpus.push(packet);
+        }
+
+        corpus.extend([
+            query(b"\xc0\x0c", 1, 1),
+            query(b"\xc0\xff", 1, 1),
+            query(b"\x3ftruncated-label", 1, 1),
+            query(b"\x04loop\xc0\x0c", 1, 1),
+            query(b"\xff", 1, 1),
+        ]);
+
+        let mut qdcount_overflow = query(&example_name(), 1, 1);
+        qdcount_overflow[4..6].copy_from_slice(&2u16.to_be_bytes());
+        corpus.push(qdcount_overflow);
+
+        let mut truncated_extra_section = query(&example_name(), 1, 1);
+        truncated_extra_section[10..12].copy_from_slice(&1u16.to_be_bytes());
+        truncated_extra_section.push(0);
+        corpus.push(truncated_extra_section);
+
+        let mut malformed_opt = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(&mut malformed_opt, 4096, 0, &[0, 1, 0]);
+        corpus.push(malformed_opt);
+
+        let mut response_packet = query(&example_name(), 1, 1);
+        response_packet[2] = 0x80;
+        corpus.push(response_packet);
+
+        let mut unsupported_opcode = query(&example_name(), 1, 1);
+        unsupported_opcode[2] = 0x78;
+        corpus.push(unsupported_opcode);
+
+        for packet in corpus {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = answer_datagram(&packet, &store);
+            }));
+            assert!(result.is_ok(), "answer_datagram panicked for {packet:02x?}");
+        }
+    }
+
+    #[test]
     fn unsupported_qclass_gets_refused_with_question() {
         let packet = query(&example_name(), 1, 3);
         let response = store_response(&packet, &ZoneStore::new());
