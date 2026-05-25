@@ -19,9 +19,11 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 workdir="$repo_root/target/interop/knot-ixfr-refresh-$$"
 container="oxidedns-knot-ixfr-refresh-$$"
+artifact_dir="${OXIDEDNS_KNOT_IXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -69,6 +71,16 @@ knot_conf="$workdir/knot.conf"
 oxidedns_conf="$workdir/oxidedns.toml"
 transfer_proxy="$workdir/transfer-proxy.py"
 transfer_proxy_log="$workdir/transfer-proxy.log"
+primary_initial_soa_out="$workdir/primary-initial-soa.out"
+readyz_out="$workdir/readyz.txt"
+oxidedns_initial_soa_out="$workdir/oxidedns-initial-soa.out"
+primary_updated_soa_out="$workdir/primary-updated-soa.out"
+primary_probe_ixfr_out="$workdir/primary-probe-ixfr.out"
+oxidedns_updated_answer_out="$workdir/oxidedns-updated-answer-a.out"
+oxidedns_updated_soa_out="$workdir/oxidedns-updated-soa.out"
+metrics_out="$workdir/metrics.txt"
+summary_out="$workdir/knot-ixfr-refresh-summary.env"
+knot_log="$workdir/knot.log"
 
 write_zone() {
   local serial="$1"
@@ -97,6 +109,7 @@ EOF
 }
 
 write_zone 2026052401 192.0.2.10 "knot ixfr interop v1"
+cp "$zone_file" "$workdir/alpha.test.initial.zone"
 
 cat >"$knot_conf" <<EOF
 server:
@@ -371,7 +384,7 @@ ixfr_timeout_secs = 5
 zsm_min_interval_secs = 1
 zsm_initial_retry_secs = 1
 zsm_initial_retry_max_secs = 2
-notify_dedup_secs = 0
+notify_dedup_secs = 1
 graceful_shutdown_secs = 2
 
 [[zones]]
@@ -418,6 +431,7 @@ for _ in {1..50}; do
 done
 
 primary_soa="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$primary_soa" >"$primary_initial_soa_out"
 if [[ "$primary_soa" != *"2026052401"* ]]; then
   echo "Knot IXFR primary did not answer initial SOA serial" >&2
   exit 1
@@ -430,23 +444,26 @@ oxidedns_pid=$!
 ready=""
 for _ in {1..100}; do
   if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-    [[ "$ready" == "ready" ]] && break
+    [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
   fi
   sleep 0.1
 done
 
-if [[ "$ready" != "ready" ]]; then
+printf '%s\n' "$ready" >"$readyz_out"
+if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
   echo "OxideDNS did not become ready after initial Knot AXFR through transfer proxy" >&2
   exit 1
 fi
 
 initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$initial_soa" >"$oxidedns_initial_soa_out"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
   echo "OxideDNS did not serve initial SOA serial" >&2
   exit 1
 fi
 
 write_zone 2026052402 192.0.2.42 "knot ixfr interop v2"
+cp "$zone_file" "$workdir/alpha.test.updated.zone"
 docker exec "$container" knotc -c /work/knot.conf -s /tmp/knot.sock -b zone-reload alpha.test. >/dev/null
 
 reloaded_soa=""
@@ -458,12 +475,14 @@ for _ in {1..80}; do
   sleep 0.1
 done
 
+printf '%s\n' "$reloaded_soa" >"$primary_updated_soa_out"
 if [[ "$reloaded_soa" != *"2026052402"* ]]; then
   echo "Knot IXFR primary did not load updated SOA serial" >&2
   exit 1
 fi
 
 probe_ixfr="$(dig "@127.0.0.1" -p "$knot_port" alpha.test. IXFR=2026052401 +tcp +time=2 +tries=1 +noall +answer +ttlid)"
+printf '%s\n' "$probe_ixfr" >"$primary_probe_ixfr_out"
 if [[ "$probe_ixfr" != *"2026052402"* ]] || [[ "$probe_ixfr" != *"2026052401"* ]]; then
   echo "Knot IXFR primary did not expose expected old and new SOA serials" >&2
   printf '%s\n' "$probe_ixfr" >&2
@@ -516,18 +535,21 @@ for _ in {1..160}; do
   sleep 0.1
 done
 
+printf '%s\n' "$updated_answer" >"$oxidedns_updated_answer_out"
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
   echo "OxideDNS did not publish updated A response after Knot IXFR refresh" >&2
   exit 1
 fi
 
 updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$updated_soa" >"$oxidedns_updated_soa_out"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
   echo "OxideDNS did not publish updated SOA serial after Knot IXFR refresh" >&2
   exit 1
 fi
 
 metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics" >"$metrics_out"
 ixfr_started="$(awk '$1 == "oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
 ixfr_succeeded="$(awk '$1 == "oxidedns_transfer_sessions_completed_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
 
@@ -556,6 +578,39 @@ if grep -q "TCP IXFR response_mode=incremental" "$transfer_proxy_log"; then
   if [[ "$metrics" != *'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
     echo "OxideDNS metrics missing updated Knot IXFR SOA serial" >&2
     exit 1
+  fi
+  docker logs "$container" >"$knot_log" 2>&1 || true
+  cat >"$summary_out" <<EOF
+primary_initial_serial=2026052401
+primary_updated_serial=2026052402
+oxidedns_initial_serial=2026052401
+oxidedns_updated_serial=2026052402
+incremental_ixfr_observed=1
+oxidedns_ixfr_attempt_recorded=1
+oxidedns_ixfr_success_recorded=1
+oxidedns_served_updated_a=1
+oxidedns_metrics_checked=1
+EOF
+  if [[ -n "$artifact_dir" ]]; then
+    mkdir -p "$artifact_dir"
+    cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
+    cp "$knot_conf" "$artifact_dir/knot.conf"
+    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/alpha.test.initial.zone" "$artifact_dir/alpha.test.initial.zone"
+    cp "$workdir/alpha.test.updated.zone" "$artifact_dir/alpha.test.updated.zone"
+    cp "$knot_log" "$artifact_dir/knot.log"
+    cp "$transfer_proxy_log" "$artifact_dir/transfer-proxy.log"
+    cp "$workdir/transfer-proxy.stderr" "$artifact_dir/transfer-proxy.stderr"
+    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$primary_initial_soa_out" "$artifact_dir/primary-initial-soa.out"
+    cp "$readyz_out" "$artifact_dir/readyz.txt"
+    cp "$oxidedns_initial_soa_out" "$artifact_dir/oxidedns-initial-soa.out"
+    cp "$primary_updated_soa_out" "$artifact_dir/primary-updated-soa.out"
+    cp "$primary_probe_ixfr_out" "$artifact_dir/primary-probe-ixfr.out"
+    cp "$oxidedns_updated_answer_out" "$artifact_dir/oxidedns-updated-answer-a.out"
+    cp "$oxidedns_updated_soa_out" "$artifact_dir/oxidedns-updated-soa.out"
+    cp "$metrics_out" "$artifact_dir/metrics.txt"
+    cp "$summary_out" "$artifact_dir/knot-ixfr-refresh-summary.env"
   fi
   echo "Knot IXFR refresh interop passed with true incremental IXFR evidence"
 elif grep -q "TCP IXFR response_mode=axfr-fallback" "$transfer_proxy_log"; then

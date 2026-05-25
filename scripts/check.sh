@@ -16,6 +16,7 @@ bash -n scripts/capture-log-evidence.sh
 bash -n scripts/capture-signal-evidence.sh
 bash -n scripts/capture-health-metrics-evidence.sh
 bash -n scripts/capture-malformed-query-evidence.sh
+bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
 bash -n scripts/interop-nsd-axfr-docker.sh
@@ -23,6 +24,8 @@ bash -n scripts/interop-knot-axfr-docker.sh
 bash -n scripts/interop-bind-tsig-axfr.sh
 bash -n scripts/interop-nsd-tsig-axfr-docker.sh
 bash -n scripts/interop-knot-tsig-axfr-docker.sh
+bash -n scripts/interop-bind-ixfr-refresh.sh
+bash -n scripts/interop-knot-ixfr-refresh-docker.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-dns-cookie-dig.sh
