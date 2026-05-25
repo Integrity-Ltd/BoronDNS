@@ -58,6 +58,11 @@ use oxidedns_core::{
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
 };
 
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
+pub const BUILD_RUST_VERSION: &str = env!("OXIDEDNS_BUILD_RUST_VERSION");
+pub const BUILD_TIMESTAMP: &str = env!("OXIDEDNS_BUILD_TIMESTAMP");
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("failed to bind UDP listener {addr}: {source}")]
@@ -2398,10 +2403,10 @@ fn metrics_body(
 }
 
 fn append_build_info_metric(body: &mut String) {
-    let version = prometheus_label_value(env!("CARGO_PKG_VERSION"));
-    let commit = prometheus_label_value(env!("OXIDEDNS_BUILD_COMMIT"));
-    let rust_version = prometheus_label_value(env!("OXIDEDNS_BUILD_RUST_VERSION"));
-    let build_timestamp = prometheus_label_value(env!("OXIDEDNS_BUILD_TIMESTAMP"));
+    let version = prometheus_label_value(BUILD_VERSION);
+    let commit = prometheus_label_value(BUILD_COMMIT);
+    let rust_version = prometheus_label_value(BUILD_RUST_VERSION);
+    let build_timestamp = prometheus_label_value(BUILD_TIMESTAMP);
     body.push_str(
         "# HELP oxidedns_secondary_build_info Build metadata embedded in the OxideDNS binary.\n\
          # TYPE oxidedns_secondary_build_info gauge\n",

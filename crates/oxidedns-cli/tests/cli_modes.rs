@@ -237,6 +237,77 @@ fn unrecognized_flag_exits_with_usage() {
 }
 
 #[test]
+fn version_flags_print_build_metadata() {
+    for flag in ["--version", "-V"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+            .arg(flag)
+            .output()
+            .expect("run oxidedns version flag");
+
+        assert!(
+            output.status.success(),
+            "{flag} failed, stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{flag} wrote stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.starts_with("oxidedns 0.1.0\n"), "{flag} stdout={stdout}");
+        assert!(
+            stdout.contains("\nbuild commit: "),
+            "{flag} stdout={stdout}"
+        );
+        assert!(
+            stdout.contains("\nbuild timestamp: "),
+            "{flag} stdout={stdout}"
+        );
+        assert!(stdout.contains("\nrustc: rustc "), "{flag} stdout={stdout}");
+    }
+}
+
+#[test]
+fn help_flags_print_operational_pointers() {
+    for flag in ["--help", "-h"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+            .arg(flag)
+            .output()
+            .expect("run oxidedns help flag");
+
+        assert!(
+            output.status.success(),
+            "{flag} failed, stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{flag} wrote stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Usage:"), "{flag} stdout={stdout}");
+        assert!(
+            stdout.contains("--validate-config"),
+            "{flag} stdout={stdout}"
+        );
+        assert!(stdout.contains("--dump-config"), "{flag} stdout={stdout}");
+        assert!(
+            stdout.contains("/etc/oxidedns-secondary/config.toml"),
+            "{flag} stdout={stdout}"
+        );
+        assert!(
+            stdout.contains("Operator Deployment Guide: docs/operator-deployment-guide.md"),
+            "{flag} stdout={stdout}"
+        );
+        assert!(stdout.contains("Project:"), "{flag} stdout={stdout}");
+    }
+}
+
+#[test]
 fn serve_health_bind_failure_exits_with_cantcreat() {
     let occupied = TcpListener::bind("127.0.0.1:0").expect("bind occupied health port");
     let occupied_addr = occupied.local_addr().expect("occupied health address");

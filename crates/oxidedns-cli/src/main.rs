@@ -4,10 +4,12 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use oxidedns_core::{ConfigError, LogFormatConfig, ServerConfig};
-use oxidedns_server::{Runtime, RuntimeError};
+use oxidedns_server::{
+    BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
+};
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/oxidedns-secondary/config.toml";
 const EX_CONFIG_INVALID: u8 = 2;
@@ -15,23 +17,25 @@ const EX_USAGE: u8 = 64;
 const EX_GENERAL: u8 = 1;
 const EX_CANTCREAT: u8 = 73;
 const EX_CONFIG: u8 = 78;
-const VERSION_TEXT: &str = concat!(
-    "oxidedns ",
-    env!("CARGO_PKG_VERSION"),
-    "\nSRS: OxideDNS Secondary SRS v0.7",
-    "\nRole: secondary-only authoritative DNS server",
-    "\nLicense: ",
-    env!("CARGO_PKG_LICENSE")
+const HELP_FOOTER: &str = concat!(
+    "Configuration: default path /etc/oxidedns-secondary/config.toml",
+    "; override subcommands with --config or OXIDEDNS_CONFIG.\n",
+    "Operator Deployment Guide: docs/operator-deployment-guide.md\n",
+    "Project: internal OxideDNS repository; see README.md and docs/."
 );
 
 #[derive(Debug, Parser)]
 #[command(
     name = "oxidedns",
-    version = VERSION_TEXT,
     about = "Secondary-only authoritative DNS server",
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    disable_version_flag = true,
+    after_help = HELP_FOOTER
 )]
 struct Cli {
+    #[arg(short = 'V', long, action = ArgAction::SetTrue, help = "Print version information and exit")]
+    version: bool,
+
     #[arg(
         long,
         value_name = "CONFIG",
@@ -86,6 +90,9 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
     match selected_mode(cli)? {
+        Mode::Version => {
+            println!("{}", version_text());
+        }
         Mode::CheckConfig(config) | Mode::ValidateConfig(config) => {
             let parsed = load_config(&config)?;
             init_logging(&parsed)?;
@@ -112,6 +119,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
+    Version,
     CheckConfig(PathBuf),
     ValidateConfig(PathBuf),
     DumpConfig(PathBuf),
@@ -121,6 +129,9 @@ enum Mode {
 fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
     let mut selected = Vec::new();
 
+    if cli.version {
+        selected.push(Mode::Version);
+    }
     if let Some(config) = cli.validate_config {
         selected.push(Mode::ValidateConfig(config_path(config)));
     }
@@ -149,6 +160,13 @@ fn default_config_path() -> PathBuf {
     std::env::var_os("OXIDEDNS_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
+}
+
+fn version_text() -> String {
+    format!(
+        "oxidedns {BUILD_VERSION}\nbuild commit: {BUILD_COMMIT}\nbuild timestamp: {BUILD_TIMESTAMP}\nrustc: {BUILD_RUST_VERSION}\nSRS: OxideDNS Secondary SRS v0.7\nRole: secondary-only authoritative DNS server\nLicense: {}",
+        env!("CARGO_PKG_LICENSE")
+    )
 }
 
 fn load_config(path: &Path) -> anyhow::Result<ServerConfig> {
@@ -385,6 +403,26 @@ mod tests {
     }
 
     #[test]
+    fn version_flag_selects_version_mode() {
+        let cli = Cli::try_parse_from(["oxidedns", "--version"]).expect("version CLI");
+        assert_eq!(selected_mode(cli).expect("mode"), Mode::Version);
+
+        let cli = Cli::try_parse_from(["oxidedns", "-V"]).expect("short version CLI");
+        assert_eq!(selected_mode(cli).expect("mode"), Mode::Version);
+    }
+
+    #[test]
+    fn version_text_contains_srs_build_metadata() {
+        let text = version_text();
+
+        assert!(text.starts_with("oxidedns 0.1.0\n"));
+        assert!(text.contains("\nbuild commit: "));
+        assert!(text.contains("\nbuild timestamp: "));
+        assert!(text.contains("\nrustc: rustc "));
+        assert!(text.contains("\nSRS: OxideDNS Secondary SRS v0.7"));
+    }
+
+    #[test]
     fn config_errors_map_to_srs_exit_codes() {
         let invalid = anyhow!(ConfigError::Invalid("bad setting".to_owned()));
         assert_eq!(exit_code_for_error(&invalid), EX_CONFIG_INVALID);
@@ -426,8 +464,8 @@ mod tests {
         let help = Cli::try_parse_from(["oxidedns", "--help"]).expect_err("help exits");
         assert!(!help.use_stderr());
 
-        let version = Cli::try_parse_from(["oxidedns", "--version"]).expect_err("version exits");
-        assert!(!version.use_stderr());
+        let version = Cli::try_parse_from(["oxidedns", "--version"]).expect("version parses");
+        assert_eq!(selected_mode(version).expect("mode"), Mode::Version);
 
         let unknown = Cli::try_parse_from(["oxidedns", "--definitely-not-valid"])
             .expect_err("unknown flag exits");
