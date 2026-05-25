@@ -93,9 +93,10 @@ This directory contains command logs captured for release review, including
 safe-Rust, maintainability, canonical log-field, and lazy log-formatting audit
 output. It is an evidence collection artifact, not a substitute for the SRS
 traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
-production benchmark reports. The default `soak-handoff/` artifact is a
-release/operations setup scaffold for the later long-duration soak; it is not a
-completed soak result.
+production benchmark reports. The default `benchmark-handoff/` and
+`soak-handoff/` artifacts are release/operations setup scaffolds for later
+Reference Hardware/Profile benchmark and long-duration soak execution; they are
+not completed benchmark or soak results.
 
 Successful real-primary interop runs copy their primary-version artifacts to
 interop-primary-versions/ with an INDEX.tsv mapping source and snapshot paths.
@@ -135,6 +136,7 @@ run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_M
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
 run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
+run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
 run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"

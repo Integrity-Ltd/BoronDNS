@@ -27,6 +27,7 @@ REQUIRED_TEXT = [
     "firewall",
     "clock synchronisation",
     "long-LOADING",
+    "benchmark-handoff",
     "soak-handoff",
     "privilege",
     "security@integrity.hu",

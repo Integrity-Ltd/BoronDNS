@@ -22,6 +22,7 @@ bash -n scripts/capture-malformed-query-evidence.sh
 bash -n scripts/capture-portability-evidence.sh
 bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
+bash -n scripts/capture-benchmark-handoff.sh
 bash -n scripts/capture-soak-handoff.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
@@ -48,6 +49,7 @@ scripts/audit-dnssec-passive.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
+scripts/capture-benchmark-handoff.sh
 scripts/capture-soak-handoff.sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings

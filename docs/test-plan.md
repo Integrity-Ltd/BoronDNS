@@ -37,7 +37,7 @@ The project uses the SRS v0.7 ODS-VER-011 cadence vocabulary exactly:
 | Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
 | Dependency security audit | Continuous | `cargo deny check` | `docs/verification-ledger.md` dependency audit row |
 | Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; local MVP requires setup, later release/operations execution retains the full campaign artifacts | retained fuzz campaign artifacts |
-| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/check-perf-regression.py` for rolling-history comparison; full reference-hardware benchmark execution is a later release/operations activity | retained performance/resource logs and regression baseline |
+| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the local MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/mvp-gap-register.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
 | Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
@@ -67,7 +67,7 @@ snapshot and release notes.
 | Periodic evidence | Required cadence | Current command or artifact | MVP gap |
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` | local MVP needs runnable setup and retained campaign summary format |
-| Performance regression run | Weekly on Reference Hardware Profile | `OXIDEDNS_PERF_SMOKE_METRICS_OUT=<file> scripts/perf-smoke.sh`; `scripts/check-perf-regression.py --candidate <file> --history <history>` | replace smoke-only evidence with SRS NFR benchmark suite and hosted schedule |
+| Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off scaffold; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
 | Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off scaffold | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
@@ -86,6 +86,13 @@ audit, or external-operator steps as passing evidence for final SRS acceptance.
 For the local project MVP, long-running steps may be marked as delegated when
 the runnable harness, artifact format, and release/operations handoff are
 present.
+
+`scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
+creates the benchmark runbook, report template, performance/resource TSV
+schemas, requirement traceability map, rolling-baseline history template, and
+operator sign-off scaffold for later Reference Hardware/Profile execution. A
+generated handoff directory proves the local MVP setup exists; it does not
+prove that production benchmarks have been executed.
 
 `scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
 the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement

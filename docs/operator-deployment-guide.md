@@ -470,9 +470,11 @@ verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. It also retains unused/dead-code audit
 artifacts under `unused-code-audit/` and resource smoke artifacts under
 `resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
-`coverage-evidence/` and the long-run soak setup/report scaffold under
-`soak-handoff/`. The soak handoff is not completed soak evidence; it is the
-release/operations template set for the later 30-day run. Set
+`coverage-evidence/`, the Reference Hardware/Profile benchmark setup/report
+scaffold under `benchmark-handoff/`, and the long-run soak setup/report
+scaffold under `soak-handoff/`. The benchmark and soak handoffs are not
+completed benchmark or soak evidence; they are release/operations template sets
+for the later delegated runs. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
 campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
@@ -659,12 +661,20 @@ Back up and version-control:
   campaign logs, dependency audit results, performance reports, and soak-test
   reports when those later release/operations runs are executed.
 
+Before release/operations benchmark execution begins, run
+`scripts/capture-benchmark-handoff.sh` or use the `benchmark-handoff/`
+directory created by `scripts/release-evidence-snapshot.sh`. The handoff
+directory contains the benchmark runbook, report template, metric/resource TSV
+schemas, baseline-history template, requirement traceability map, release-note
+snippet, and operator sign-off scaffold for the later Reference
+Hardware/Profile run.
+
 Before a release/operations soak begins, run `scripts/capture-soak-handoff.sh`
 or use the `soak-handoff/` directory created by
 `scripts/release-evidence-snapshot.sh`. The handoff directory contains the
-required report template, RSS/file-descriptor/metrics/event TSV schemas,
-weekly summary template, requirement traceability map, and operator sign-off
-scaffold for the later 30-day ODS-NFR-REL-003 run.
+required report template, RSS/file-descriptor/metrics/event TSV schemas, weekly
+summary template, requirement traceability map, and operator sign-off scaffold
+for the later 30-day ODS-NFR-REL-003 run.
 
 Upgrade procedure:
 
