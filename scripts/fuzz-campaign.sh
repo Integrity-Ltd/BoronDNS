@@ -88,6 +88,24 @@ record_versions() {
   } >"$versions_file"
 }
 
+write_summary_header() {
+  printf 'target\tstatus\texit_status\tduration_seconds\tlog_path\tartifact_dir\tcommand_file\n' \
+    >"$evidence_dir/campaign-summary.tsv"
+}
+
+append_summary_row() {
+  local target="$1"
+  local status="$2"
+  local exit_status="$3"
+  local log_path="$4"
+  local artifact_dir="$5"
+  local command_file="$6"
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$target" "$status" "$exit_status" "$duration" "$log_path" "$artifact_dir" "$command_file" \
+    >>"$evidence_dir/campaign-summary.tsv"
+}
+
 write_config() {
   local config_file="$1"
   {
@@ -174,6 +192,7 @@ run_target() {
   local target="$1"
   local target_log="$evidence_dir/logs/$target.log"
   local artifact_dir="$evidence_dir/artifacts/$target"
+  local command_file="$evidence_dir/logs/$target.command"
   local -a cmd
 
   mkdir -p "$artifact_dir"
@@ -189,12 +208,13 @@ run_target() {
     printf 'command='
     printf '%q ' "${cmd[@]}"
     printf '\n'
-  } >"$evidence_dir/logs/$target.command"
+  } >"$command_file"
 
   if ((dry_run)); then
     printf 'DRY RUN: '
     printf '%q ' "${cmd[@]}"
     printf '\n'
+    append_summary_row "$target" "dry-run" "0" "$target_log" "$artifact_dir" "$command_file"
     return 0
   fi
 
@@ -205,11 +225,13 @@ run_target() {
   ) >"$target_log" 2>&1 || {
     local status
     status=$?
+    append_summary_row "$target" "failed" "$status" "$target_log" "$artifact_dir" "$command_file"
     printf 'target failed: %s (exit %s)\n' "$target" "$status" >&2
     printf -- '---- %s tail ----\n' "$target_log" >&2
     tail -120 "$target_log" >&2 || true
     return "$status"
   }
+  append_summary_row "$target" "passed" "0" "$target_log" "$artifact_dir" "$command_file"
 }
 
 main() {
@@ -221,6 +243,7 @@ main() {
   mkdir -p "$evidence_dir/logs" "$evidence_dir/artifacts"
   write_config "$evidence_dir/config.txt"
   record_versions "$evidence_dir/tool-versions.txt"
+  write_summary_header
 
   if ((!dry_run)); then
     command -v "$cargo_bin" >/dev/null 2>&1 || die "$cargo_bin not found on PATH"

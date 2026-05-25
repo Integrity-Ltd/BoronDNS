@@ -475,7 +475,8 @@ scaffold under `benchmark-handoff/`, and the long-run soak setup/report
 scaffold under `soak-handoff/`. The benchmark and soak handoffs are not
 completed benchmark or soak evidence; they are release/operations template sets
 for the later delegated runs. Set
-`OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot,
+`OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
+and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
 campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
 interop commands listed in the gap register as part of the snapshot. The RRL

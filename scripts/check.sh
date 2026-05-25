@@ -24,6 +24,7 @@ bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/capture-benchmark-handoff.sh
 bash -n scripts/capture-soak-handoff.sh
+bash -n scripts/fuzz-campaign.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
@@ -51,6 +52,7 @@ scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
 scripts/capture-benchmark-handoff.sh
 scripts/capture-soak-handoff.sh
+scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

@@ -213,8 +213,9 @@ else
 Fuzz campaigns were not run by default.
 
 Set OXIDEDNS_EVIDENCE_RUN_FUZZ=1 to run scripts/fuzz-campaign.sh and retain its
-logs and artifacts inside this snapshot. OXIDEDNS_EVIDENCE_FUZZ_DURATION controls
-the per-target duration in seconds and defaults to 10.
+logs, artifacts, and campaign-summary.tsv inside this snapshot.
+OXIDEDNS_EVIDENCE_FUZZ_DURATION controls the per-target duration in seconds and
+defaults to 10.
 EOF
 fi
 
