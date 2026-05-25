@@ -113,6 +113,7 @@ pub enum Rcode {
     NxDomain = 3,
     NotImp = 4,
     Refused = 5,
+    YxDomain = 6,
     NotAuth = 9,
     BadCookie = 23,
 }
@@ -1750,6 +1751,7 @@ pub struct LookupResult {
 pub enum LookupTermination {
     CnameChainLimit,
     CnameLoop,
+    MalformedDname,
 }
 
 impl LookupResult {
@@ -1839,6 +1841,17 @@ impl LookupResult {
     pub fn nxdomain_with_answers(answers: Vec<ResourceRecord>, soa: Option<&Rrset>) -> Self {
         Self {
             rcode: Rcode::NxDomain,
+            authoritative: true,
+            answers,
+            authorities: negative_soa_records(soa),
+            additionals: Vec::new(),
+            termination: None,
+        }
+    }
+
+    pub fn yxdomain_with_answers(answers: Vec<ResourceRecord>, soa: Option<&Rrset>) -> Self {
+        Self {
+            rcode: Rcode::YxDomain,
             authoritative: true,
             answers,
             authorities: negative_soa_records(soa),
@@ -3932,6 +3945,73 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Dname as u16, RecordType::Cname as u16]
         );
+    }
+
+    #[test]
+    fn dname_synthesis_overflow_returns_yxdomain_without_cname() {
+        let long_label = "a".repeat(63);
+        let qname =
+            DomainName::from_absolute_str(&format!("{long_label}.d.example.test.")).unwrap();
+        let target = format!("{0}.{0}.{0}.target.test.", long_label);
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("d.example.test.").unwrap(),
+                    RecordType::Dname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata(&target)],
+                ),
+            ],
+        ));
+
+        let packet = query(&qname.to_wire(), RecordType::A as u16, 1);
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::YxDomain as u8);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 1);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Dname as u16]
+        );
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16]
+        );
+    }
+
+    #[test]
+    fn multiple_dname_records_return_servfail() {
+        let qname = DomainName::from_absolute_str("www.alias.example.test.").unwrap();
+        let zone = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                RecordType::Dname as u16,
+                1,
+                300,
+                vec![
+                    cname_rdata("target.example.test."),
+                    cname_rdata("other.example.test."),
+                ],
+            )],
+        );
+        let lookup = zone.lookup(&qname, RecordType::A as u16, 1);
+
+        assert_eq!(lookup.rcode, Rcode::ServFail);
+        assert_eq!(lookup.answers.len(), 2);
+        assert_eq!(lookup.termination, Some(LookupTermination::MalformedDname));
     }
 
     #[test]

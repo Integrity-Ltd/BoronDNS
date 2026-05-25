@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use thiserror::Error;
 use tracing::warn;
 
@@ -92,6 +94,9 @@ pub enum AxfrError {
 
     #[error("AXFR response contained a DNAME owner with CNAME data")]
     DnameCoexistsWithCname,
+
+    #[error("AXFR response contained a DNAME RRset with multiple records")]
+    MultipleDnameRecords,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1157,11 +1162,20 @@ fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Resul
 }
 
 fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<(), AxfrError> {
+    let mut dname_rrsets = HashSet::<(String, u16)>::new();
     for record in records {
-        if record.rr_type == RecordType::Dname as u16
-            && records.iter().any(|other| {
-                other.owner == record.owner && other.rr_type == RecordType::Cname as u16
-            })
+        if record.rr_type != RecordType::Dname as u16 {
+            continue;
+        }
+
+        let dname_key = (record.owner.canonical_key(), record.class);
+        if !dname_rrsets.insert(dname_key) {
+            return Err(AxfrError::MultipleDnameRecords);
+        }
+
+        if records
+            .iter()
+            .any(|other| other.owner == record.owner && other.rr_type == RecordType::Cname as u16)
         {
             return Err(AxfrError::DnameCoexistsWithCname);
         }
@@ -2734,6 +2748,34 @@ mod tests {
         .expect_err("DNAME with CNAME data");
 
         assert_eq!(error, AxfrError::DnameCoexistsWithCname);
+    }
+
+    #[test]
+    fn rejects_axfr_multiple_dname_records_for_owner() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let first = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("target.example.test."),
+        );
+        let second = record(
+            "redirect.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("other.example.test."),
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), first, second, soa],
+            )],
+        )
+        .expect_err("multiple DNAME records");
+
+        assert_eq!(error, AxfrError::MultipleDnameRecords);
     }
 
     #[test]

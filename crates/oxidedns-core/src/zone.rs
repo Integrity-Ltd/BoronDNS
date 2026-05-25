@@ -357,8 +357,38 @@ impl ZoneSnapshot {
     ) -> Option<LookupResult> {
         let dname_rrset = self.dname_for(qname, qclass)?;
         let dname_records = dname_rrset.records();
-        let target = dname_records.first().and_then(dname_target)?;
-        let synthesized_target = qname.with_replaced_suffix(&dname_rrset.owner, &target)?;
+        if dname_records.len() != 1 {
+            warn!(
+                qname = %qname,
+                zone = %self.origin,
+                dname_owner = %dname_rrset.owner,
+                record_count = dname_records.len(),
+                "DNAME RRset contained multiple records; returning SERVFAIL"
+            );
+            return Some(LookupResult::servfail_records_with_termination(
+                dname_records,
+                LookupTermination::MalformedDname,
+            ));
+        }
+        let Some(target) = dname_records.first().and_then(dname_target) else {
+            warn!(
+                qname = %qname,
+                zone = %self.origin,
+                dname_owner = %dname_rrset.owner,
+                "DNAME RRset contained invalid target RDATA; returning SERVFAIL"
+            );
+            return Some(LookupResult::servfail_records_with_termination(
+                dname_records,
+                LookupTermination::MalformedDname,
+            ));
+        };
+        let Some(synthesized_target) = qname.with_replaced_suffix(&dname_rrset.owner, &target)
+        else {
+            return Some(LookupResult::yxdomain_with_answers(
+                dname_records,
+                self.soa_rrset(qclass),
+            ));
+        };
 
         let mut answers = dname_records;
         answers.push(ResourceRecord {
