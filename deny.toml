@@ -1,3 +1,14 @@
+[graph]
+# MVP deployment is Linux/POSIX only per ODS-NFR-PORT-001/002. Keep the deny
+# graph scoped to Linux targets so target-conditional Windows crates in the
+# unified Cargo.lock do not create irrelevant duplicate-version noise.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]
+
 [licenses]
 allow = [
   "Apache-2.0",
