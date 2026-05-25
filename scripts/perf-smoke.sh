@@ -16,6 +16,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/perf-smoke/$$"
 metrics_out="${OXIDEDNS_PERF_SMOKE_METRICS_OUT:-}"
+artifact_dir="${OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -401,6 +402,24 @@ print(f"{records / startup_seconds:.0f}" if startup_seconds > 0 else "inf")
 PY
 )"
 
+metrics_after_client="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+if [[ "$metrics_after_client" != *'oxidedns_secondary_build_info{version="'* ]]; then
+  echo "metrics missing oxidedns_secondary_build_info evidence" >&2
+  exit 1
+fi
+if [[ "$metrics_after_client" != *'oxidedns_secondary_query_duration_seconds_bucket{query_category="udp_direct"'* ]]; then
+  echo "metrics missing udp_direct query latency histogram buckets" >&2
+  exit 1
+fi
+udp_direct_histogram_count="$(
+  awk '$1 == "oxidedns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"}" { print $2; exit }' \
+    <<<"$metrics_after_client"
+)"
+if [[ -z "$udp_direct_histogram_count" || "$udp_direct_histogram_count" == "0" ]]; then
+  echo "metrics missing non-zero udp_direct query latency histogram count" >&2
+  exit 1
+fi
+
 if [[ -n "$metrics_out" ]]; then
   mkdir -p "$(dirname "$metrics_out")"
   cat >"$metrics_out" <<EOF
@@ -416,6 +435,25 @@ udp_latency_ms_min=$latency_ms_min
 udp_latency_ms_median=$latency_ms_median
 udp_latency_ms_p99=$latency_ms_p99
 udp_latency_ms_max=$latency_ms_max
+EOF
+fi
+
+if [[ -n "$artifact_dir" ]]; then
+  mkdir -p "$artifact_dir"
+  printf '%s\n' "$metrics" >"$artifact_dir/metrics-before-client.prom"
+  printf '%s\n' "$metrics_after_client" >"$artifact_dir/metrics-after-client.prom"
+  curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >"$artifact_dir/readyz.json"
+  cp "$primary_log" "$artifact_dir/fake-primary.log"
+  cp "$client_log" "$artifact_dir/perf-client.log"
+  cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+  cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+  cat >"$artifact_dir/metrics-evidence.env" <<EOF
+build_info_present=true
+latency_histogram_metric=oxidedns_secondary_query_duration_seconds
+udp_direct_histogram_count=$udp_direct_histogram_count
+metrics_before_client=metrics-before-client.prom
+metrics_after_client=metrics-after-client.prom
+readyz_artifact=readyz.json
 EOF
 fi
 
