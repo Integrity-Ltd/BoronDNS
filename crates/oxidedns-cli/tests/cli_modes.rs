@@ -44,16 +44,16 @@ fn validate_config_flag_succeeds_with_valid_config() {
 }
 
 #[test]
-fn validate_config_counts_notify_interface_listeners() {
+fn validate_config_counts_dns_interface_listeners() {
     let config = write_config(
-        "notify-interface-count",
+        "dns-interface-count",
         r#"
             [server]
             listen_udp = ["127.0.0.1:5300"]
             listen_tcp = []
 
             [interfaces]
-            notify = ["127.0.0.1:5301"]
+            dns = ["127.0.0.1:5301"]
 
             [[zones]]
             name = "example.test."
@@ -74,7 +74,7 @@ fn validate_config_counts_notify_interface_listeners() {
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("configuration ok: 1 zone(s), 2 UDP listener(s), 1 TCP listener(s)")
+            .contains("configuration ok: 1 zone(s), 1 UDP listener(s), 1 TCP listener(s)")
     );
 
     let _ = fs::remove_file(config);

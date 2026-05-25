@@ -11,11 +11,11 @@ log_format = "json"
 nsid = "oxidedns-example"
 
 [interfaces]
-# DNS query sockets for both UDP and TCP. By default these sockets also receive
-# inbound NOTIFY when interfaces.notify is empty. String entries remain
-# accepted, but address/name pairs are preferred so future XDP attachment can
-# identify the intended NIC by name. The name is accepted and ignored by the
-# current socket backend.
+# DNS query sockets for both UDP and TCP. These sockets also receive inbound
+# NOTIFY from authorized primary addresses. String entries remain accepted, but
+# address/name pairs are preferred so future XDP attachment can identify the
+# intended NIC by name. The name is accepted and ignored by the current socket
+# backend.
 dns = [
   { address = "0.0.0.0:5300", name = "dns0" },
   { address = "[::]:5300", name = "dns0" },
@@ -26,9 +26,6 @@ mgmt = ["127.0.0.1:9443"]
 # Outbound transfer source addresses. Port must be 0 so the OS selects an
 # ephemeral source port; one IPv4 and one IPv6 source can be configured.
 transfer = ["0.0.0.0:0", "[::]:0"]
-# Optional additional UDP/TCP sockets for primary-originated NOTIFY traffic.
-# These addresses must not overlap the effective DNS listener sockets above.
-notify = []
 
 [logging]
 # Maximum bytes in any single structured log entry. Default: 16384.

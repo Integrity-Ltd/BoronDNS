@@ -246,18 +246,10 @@ impl ServerConfig {
 
     pub fn udp_listeners(&self) -> Vec<SocketAddr> {
         self.dns_udp_listeners()
-            .iter()
-            .chain(self.interfaces.notify.iter())
-            .copied()
-            .collect()
     }
 
     pub fn tcp_listeners(&self) -> Vec<SocketAddr> {
         self.dns_tcp_listeners()
-            .iter()
-            .chain(self.interfaces.notify.iter())
-            .copied()
-            .collect()
     }
 
     pub fn dns_udp_listeners(&self) -> Vec<SocketAddr> {
@@ -537,7 +529,7 @@ impl InterfacesConfig {
             .unwrap_or_default()
     }
 
-    fn validate(&self, server: &ServerSettings) -> Result<(), ConfigError> {
+    fn validate(&self, _server: &ServerSettings) -> Result<(), ConfigError> {
         if self.xot.is_some() {
             return Err(ConfigError::Invalid(
                 "interfaces.xot is obsolete; use per-primary transfer_primaries transport = \"xot\" and future interfaces.transfer settings instead"
@@ -548,6 +540,13 @@ impl InterfacesConfig {
         if self.dns.as_ref().is_some_and(Vec::is_empty) {
             return Err(ConfigError::Invalid(
                 "interfaces.dns must contain at least one listener when configured".to_owned(),
+            ));
+        }
+
+        if !self.notify.is_empty() {
+            return Err(ConfigError::Invalid(
+                "interfaces.notify is not part of the three-role interface model; receive NOTIFY on interfaces.dns and restrict accepted senders with zone notify_sources"
+                    .to_owned(),
             ));
         }
 
@@ -565,18 +564,6 @@ impl InterfacesConfig {
                 }
             }
         }
-
-        let configured_dns = self.dns_addrs();
-        let dns_udp = self
-            .dns
-            .as_ref()
-            .map(|_| configured_dns.as_slice())
-            .unwrap_or(&server.listen_udp);
-        let dns_tcp = self
-            .dns
-            .as_ref()
-            .map(|_| configured_dns.as_slice())
-            .unwrap_or(&server.listen_tcp);
 
         let mut transfer_ipv4 = false;
         let mut transfer_ipv6 = false;
@@ -599,23 +586,6 @@ impl InterfacesConfig {
                     ));
                 }
                 IpAddr::V6(_) => transfer_ipv6 = true,
-            }
-        }
-
-        for notify in &self.notify {
-            for dns in dns_udp {
-                if socket_addrs_overlap(*notify, *dns) {
-                    return Err(ConfigError::Invalid(format!(
-                        "interfaces.notify listener {notify} overlaps DNS UDP listener {dns}; notify and DNS listeners must use distinct sockets"
-                    )));
-                }
-            }
-            for dns in dns_tcp {
-                if socket_addrs_overlap(*notify, *dns) {
-                    return Err(ConfigError::Invalid(format!(
-                        "interfaces.notify listener {notify} overlaps DNS TCP listener {dns}; notify and DNS listeners must use distinct sockets"
-                    )));
-                }
             }
         }
 
@@ -1617,7 +1587,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_srs_interface_roles() {
+    fn parses_three_srs_interface_roles() {
         let config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1632,7 +1602,6 @@ mod tests {
                 ]
                 mgmt = ["127.0.0.3:9443"]
                 transfer = ["127.0.0.4:0", "[::1]:0"]
-                notify = ["127.0.0.5:5300"]
 
                 [[zones]]
                 name = "example.test."
@@ -1675,7 +1644,6 @@ mod tests {
             vec![
                 "127.0.0.2:5300".parse::<SocketAddr>().unwrap(),
                 "[::1]:5300".parse::<SocketAddr>().unwrap(),
-                "127.0.0.5:5300".parse::<SocketAddr>().unwrap(),
             ]
         );
         assert_eq!(
@@ -1939,8 +1907,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_notify_interface_listeners() {
-        let config = ServerConfig::from_toml_str(
+    fn rejects_notify_interface_listeners_under_three_role_model() {
+        let error = ServerConfig::from_toml_str(
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
@@ -1954,35 +1922,18 @@ mod tests {
                 primaries = ["192.0.2.53:53"]
             "#,
         )
-        .expect("valid config");
+        .expect_err("notify interface is not a fourth role");
 
-        assert_eq!(
-            config.interfaces.notify,
-            vec![
-                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
-                "[::1]:5302".parse::<SocketAddr>().unwrap(),
-            ]
-        );
-        assert_eq!(
-            config.udp_listeners(),
-            vec![
-                "127.0.0.1:5300".parse::<SocketAddr>().unwrap(),
-                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
-                "[::1]:5302".parse::<SocketAddr>().unwrap(),
-            ]
-        );
-        assert_eq!(
-            config.tcp_listeners(),
-            vec![
-                "127.0.0.1:5301".parse::<SocketAddr>().unwrap(),
-                "127.0.0.1:5302".parse::<SocketAddr>().unwrap(),
-                "[::1]:5302".parse::<SocketAddr>().unwrap(),
-            ]
+        assert!(
+            error
+                .to_string()
+                .contains("interfaces.notify is not part of the three-role interface model"),
+            "{error}"
         );
     }
 
     #[test]
-    fn rejects_notify_interface_overlap_with_dns_listeners() {
+    fn rejects_notify_interface_even_when_it_overlaps_with_dns_listeners() {
         for (label, config) in [
             (
                 "udp exact",
@@ -2033,11 +1984,9 @@ mod tests {
         ] {
             let error = ServerConfig::from_toml_str(config).expect_err(label);
             assert!(
-                error.to_string().contains("interfaces.notify listener"),
-                "{label}: {error}"
-            );
-            assert!(
-                error.to_string().contains("overlaps DNS"),
+                error
+                    .to_string()
+                    .contains("interfaces.notify is not part of the three-role interface model"),
                 "{label}: {error}"
             );
         }

@@ -173,20 +173,18 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
 - `[logging]`: logging safety limits. `max_entry_length_bytes` defaults to
   16384 and causes oversized JSON/logfmt entries to be replaced by a parseable
   truncation entry with `...<truncated>` and `truncated=true`.
-- `[interfaces]`: SRS v0.7 network roles. `interfaces.dns` overrides the
-  legacy DNS listener lists and is used for both UDP and TCP DNS service. DNS
-  entries may be legacy socket-address strings or `{ address, name }` pairs;
-  the optional `name` is accepted for future XDP attachment planning and is
-  ignored by the current kernel-socket backend;
-  `interfaces.mgmt` activates the health/metrics endpoint at
-  `health.default_port` unless an explicit health bind override is configured;
+- `[interfaces]`: the three active network roles. `interfaces.dns` overrides
+  the legacy DNS listener lists and is used for both UDP and TCP DNS service.
+  DNS entries may be legacy socket-address strings or `{ address, name }`
+  pairs; the optional `name` is accepted for future XDP attachment planning and
+  is ignored by the current kernel-socket backend. DNS sockets also receive
+  primary-originated NOTIFY messages; use per-zone `notify_sources` to restrict
+  accepted senders. `interfaces.mgmt` activates the health/metrics endpoint at
+  `health.default_port` unless an explicit health bind override is configured.
   `interfaces.transfer` binds outbound SOA polling, AXFR, IXFR, and XoT TCP
   sockets to configured same-family source sockets and requires port `0` for
-  ephemeral source-port selection; and
-  `interfaces.notify` adds UDP/TCP sockets for primary-originated NOTIFY
-  traffic. Ordinary DNS queries received on notify sockets are still answered
-  normally. Notify addresses must not overlap the effective DNS listener
-  sockets.
+  ephemeral source-port selection. `interfaces.notify` is rejected by current
+  builds; it is not a fourth interface role.
 - `[query]`: query response policy, including QTYPE ANY behavior.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
   timestamp tolerance windows, and optional in-process server-secret rotation.
@@ -224,7 +222,6 @@ nsid = "dns-bud-1"
 dns = ["127.0.0.1:5300"]
 mgmt = ["127.0.0.1:9443"]
 transfer = ["127.0.0.1:0"]
-notify = []
 
 [health]
 bind_address = "127.0.0.1"

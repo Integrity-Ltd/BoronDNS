@@ -37,12 +37,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_notify_port oxidedns_health_port < <(
+read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
   python3 - <<'PY'
 import socket
 
 sockets = []
-for _ in range(4):
+for _ in range(3):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     sockets.append(sock)
@@ -575,9 +575,6 @@ health = "127.0.0.1:$oxidedns_health_port"
 log_level = "info"
 log_format = "logfmt"
 
-[interfaces]
-notify = ["127.0.0.1:$oxidedns_notify_port"]
-
 [rrl]
 enabled = false
 
@@ -644,7 +641,7 @@ if (( live != 1 )); then
   exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$oxidedns_notify_port" "$client_log" "$summary_tsv")"
+client_summary="$(python3 "$client" "$oxidedns_dns_port" "$oxidedns_dns_port" "$client_log" "$summary_tsv")"
 summary_logged=0
 for _ in {1..40}; do
   if grep -q 'event=notify_log_rate_limit_summary' "$workdir/oxidedns.log"; then
@@ -692,7 +689,7 @@ done
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_notify_interface	This harness receives NOTIFY on a configured notify listener over both UDP and TCP, with focused runtime coverage for the same configured listener.
+ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_dns_interface	This harness receives NOTIFY on the configured DNS interface over both UDP and TCP, preserving the three-role interface model.
 ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
 ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
 ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	Unauthorized sources receive no response, increment unauthorized metrics, emit the first warning log, and feed retained suppression-summary evidence for repeats.

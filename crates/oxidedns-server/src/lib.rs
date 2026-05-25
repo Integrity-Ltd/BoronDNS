@@ -282,7 +282,6 @@ impl Runtime {
         info!(
             udp_listeners = self.config.udp_listeners().len(),
             tcp_listeners = self.config.tcp_listeners().len(),
-            notify_listeners = self.config.interfaces.notify.len(),
             zones = self.zones.len(),
             "OxideDNS runtime initialized"
         );
@@ -8146,18 +8145,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_serves_queries_and_notify_on_configured_notify_interface() {
+    async fn runtime_serves_queries_and_notify_on_configured_dns_interface() {
         let primary = spawn_axfr_primary().await;
-        let notify_addr = unused_udp_tcp_addr().await;
+        let dns_addr = unused_udp_tcp_addr().await;
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
-                listen_udp = ["127.0.0.1:0"]
+                listen_udp = []
                 listen_tcp = []
                 health = "127.0.0.1:0"
 
                 [interfaces]
-                notify = ["{notify_addr}"]
+                dns = ["{dns_addr}"]
 
                 [[zones]]
                 name = "example.test."
@@ -8179,25 +8178,25 @@ mod tests {
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let request = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
-        client.send_to(&request, notify_addr).await.unwrap();
+        client.send_to(&request, dns_addr).await.unwrap();
         let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
             .await
-            .expect("query response on notify interface");
+            .expect("query response on DNS interface");
         let header = Header::parse(&response).unwrap();
         assert_eq!(header.id, 0x1234);
         assert_eq!(header.ancount, 1);
         assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
 
         let notify = notify_packet(0x5678, "example.test.", RecordType::Soa as u16, 1);
-        client.send_to(&notify, notify_addr).await.unwrap();
+        client.send_to(&notify, dns_addr).await.unwrap();
         let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
             .await
-            .expect("NOTIFY response on notify interface");
+            .expect("NOTIFY response on DNS interface");
         let header = Header::parse(&response).unwrap();
         assert_eq!(header.id, 0x5678);
         assert_eq!(response_rcode(&response, &header), Rcode::NoError as u16);
 
-        let mut tcp_client = TcpStream::connect(notify_addr).await.unwrap();
+        let mut tcp_client = TcpStream::connect(dns_addr).await.unwrap();
         let tcp_notify = notify_packet(0x6789, "example.test.", RecordType::Soa as u16, 1);
         tcp_client
             .write_all(&frame_tcp_message(&tcp_notify))
