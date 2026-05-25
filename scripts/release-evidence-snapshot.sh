@@ -48,6 +48,32 @@ record_version() {
   } >>"$log"
 }
 
+require_positive_integer() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+    printf '%s must be a positive integer: %s\n' "$name" "$value" >&2
+    exit 1
+  }
+}
+
+run_rrl_campaign() {
+  local name="$1"
+  local campaign_dir="$snapshot_dir/$name"
+  local iterations="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS:-3}"
+  local duration="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION:-}"
+
+  if [[ -n "$duration" ]]; then
+    require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION "$duration"
+    run_and_capture "$name" bash -lc \
+      "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --duration '$duration' --evidence-dir '$campaign_dir'"
+  else
+    require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS "$iterations"
+    run_and_capture "$name" bash -lc \
+      "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --iterations '$iterations' --evidence-dir '$campaign_dir'"
+  fi
+}
+
 cat >"$snapshot_dir/README.md" <<EOF
 # OxideDNS Release Evidence Snapshot
 
@@ -117,6 +143,19 @@ run_and_capture dnssec-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_SERVE_
 run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR='$snapshot_dir/dnssec-nsec3-artifacts' scripts/interop-dnssec-nsec3-serve.sh"
 run_and_capture rrl-udp bash -lc "cd '$repo_root' && OXIDEDNS_RRL_UDP_ARTIFACT_DIR='$snapshot_dir/rrl-udp-artifacts' scripts/interop-rrl-udp.sh"
 
+if [[ "${OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN:-0}" == "1" ]]; then
+  run_rrl_campaign rrl-evidence-campaign
+else
+  cat >"$snapshot_dir/logs/rrl-evidence-campaign-skipped.log" <<'EOF'
+RRL evidence campaign was not run by default.
+
+Set OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1 to run scripts/rrl-evidence-campaign.sh
+inside this snapshot. OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS controls the
+iteration count and defaults to 3. OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION switches
+the campaign to wall-clock duration mode in seconds.
+EOF
+fi
+
 if [[ -n "${OXIDEDNS_PERF_BASELINE:-}" ]]; then
   run_and_capture perf-regression bash -lc \
     "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$OXIDEDNS_PERF_BASELINE' --threshold-pct '${OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
@@ -166,6 +205,11 @@ if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
     [[ "$command_line" == ./* || "$command_line" == scripts/* ]] || continue
     case "$command_line" in
       *scripts/release-evidence-snapshot.sh*|*scripts/engineering-mvp-evidence.sh*)
+        continue
+        ;;
+      scripts/rrl-evidence-campaign.sh*)
+        name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
+        run_rrl_campaign "interop-$name"
         continue
         ;;
     esac

@@ -464,8 +464,12 @@ compile check, cargo-deny output, tool versions, git state, and the current
 verification command list, including the Test Plan shape check and portability
 evidence under `portability-evidence/`. Set
 `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot,
-and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the interop commands listed in the
-gap register as part of the snapshot.
+set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
+campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
+interop commands listed in the gap register as part of the snapshot. The RRL
+campaign uses `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
+`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
+duration mode.
 
 Set `OXIDEDNS_RELEASE_NOTES` to a completed release notes markdown file to run the
 release-note gate and verify that retained primary-version artifact paths are

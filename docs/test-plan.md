@@ -76,8 +76,10 @@ snapshot and release notes.
 Release Gate evidence is captured with `scripts/release-evidence-snapshot.sh`.
 Set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` for release candidates that need retained
 interop artifacts, `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` for release-cadence fuzz evidence,
-and `OXIDEDNS_RELEASE_NOTES=<path>` to run the release-notes gate against the
-snapshot.
+`OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` for retained RRL campaign evidence, and
+`OXIDEDNS_RELEASE_NOTES=<path>` to run the release-notes gate against the snapshot.
+Use `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
+`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` for wall-clock duration campaigns.
 
 Gate review must not treat skipped interop, fuzz, performance, soak, security
 audit, or external-operator steps as passing evidence. Skipped gate steps remain
