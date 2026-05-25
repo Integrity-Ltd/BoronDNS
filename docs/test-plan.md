@@ -72,7 +72,11 @@ Manual real-primary smoke evidence is intentionally outside `scripts/check.sh`
 because it depends on Docker or host BIND availability. For developer/operator
 confidence after a local MVP build, run `scripts/interop-bind-axfr-docker.sh`
 and retain artifacts with `OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR`, as described
-in `docs/manual-bind-interop.md`.
+in `docs/manual-bind-interop.md`. For RFC 9432 catalog-zone confidence, run
+`scripts/interop-bind-catalog-zone-docker.sh` and retain artifacts with
+`OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR`; that harness mutates the BIND
+catalog while OxideDNS remains running and verifies live member add/remove
+behavior end to end.
 
 ## Periodic Execution
 

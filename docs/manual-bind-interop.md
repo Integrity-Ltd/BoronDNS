@@ -87,6 +87,24 @@ BIND, observes BIND-generated NOTIFY through a small UDP proxy, triggers a zone
 serial/data update, and confirms OxideDNS refreshes the served answer and
 metrics.
 
+## Catalog Zone Live Check
+
+Use the BIND catalog-zone Docker script to check the RFC 9432 catalog path with
+OxideDNS running throughout the test:
+
+```bash
+OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-catalog \
+  scripts/interop-bind-catalog-zone-docker.sh
+```
+
+The script starts BIND in Docker with `catalog.example.` and `member.example.`
+as ordinary authoritative zones, starts OxideDNS with only `[[catalog_zones]]`,
+verifies the catalog is not query-visible with `serve_catalog_zone = false`,
+then edits and reloads the BIND catalog zone while OxideDNS keeps running. It
+confirms that adding a member PTR makes OxideDNS transfer and serve
+`member.example.`, and that removing the PTR makes OxideDNS stop serving that
+catalog-managed member.
+
 ## RRL And Source-IP Rotation
 
 Docker is sufficient for the AXFR and basic query smoke above. It is not the
