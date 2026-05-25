@@ -1,6 +1,6 @@
 use std::{
     fs,
-    net::TcpListener,
+    net::{TcpListener, UdpSocket},
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -559,6 +559,78 @@ fn serve_health_bind_failure_exits_with_cantcreat() {
     assert_eq!(output.status.code(), Some(EX_CANTCREAT));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("failed to bind health listener"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn serve_udp_bind_failure_exits_with_cantcreat() {
+    let occupied = UdpSocket::bind("127.0.0.1:0").expect("bind occupied UDP port");
+    let occupied_addr = occupied.local_addr().expect("occupied UDP address");
+    let config = write_config(
+        "udp-bind-failure",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["{occupied_addr}"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns serve with occupied UDP listener");
+
+    assert_eq!(output.status.code(), Some(EX_CANTCREAT));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to bind UDP listener"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn serve_tcp_bind_failure_exits_with_cantcreat() {
+    let occupied = TcpListener::bind("127.0.0.1:0").expect("bind occupied TCP port");
+    let occupied_addr = occupied.local_addr().expect("occupied TCP address");
+    let config = write_config(
+        "tcp-bind-failure",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["{occupied_addr}"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns serve with occupied TCP listener");
+
+    assert_eq!(output.status.code(), Some(EX_CANTCREAT));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to bind TCP listener"),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
