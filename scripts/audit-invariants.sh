@@ -11,7 +11,11 @@ import sys
 
 repo_root = Path(sys.argv[1])
 unsafe_registry = repo_root / "docs" / "unsafe-boundaries.tsv"
-runtime_files = sorted((repo_root / "crates").glob("*/src/**/*.rs"))
+runtime_files = sorted(
+    path
+    for path in (repo_root / "crates").glob("*/src/**/*.rs")
+    if "crates/oxide-gun/" not in path.relative_to(repo_root).as_posix()
+)
 
 def runtime_text(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
@@ -24,11 +28,15 @@ runtime_sources = {
     path.relative_to(repo_root): runtime_text(path) for path in runtime_files
 }
 with unsafe_registry.open(newline="", encoding="utf-8") as handle:
-    audited_unsafe_adapter_paths = {
+    current_unsafe_adapter_paths = {
         Path(row["path"])
         for row in csv.DictReader(handle, delimiter="\t")
         if row["status"] == "current" and not row["path"].startswith("future:")
     }
+audited_unsafe_adapter_paths = {
+    path for path in current_unsafe_adapter_paths if path in runtime_sources
+}
+tool_unsafe_adapter_paths = current_unsafe_adapter_paths - audited_unsafe_adapter_paths
 expected_current_unsafe_adapters = {
     Path("crates/oxidedns-server/src/privilege.rs"),
     Path("crates/oxidedns-server/src/process_hardening.rs"),
@@ -212,6 +220,10 @@ print()
 print("audited_unsafe_boundaries:")
 for item in sorted(audited_unsafe_adapter_paths):
     print(f"  {item}: reviewed by scripts/audit-safe-rust.sh and excluded from network-input parsing paths")
+if tool_unsafe_adapter_paths:
+    print("audited_tool_unsafe_boundaries:")
+    for item in sorted(tool_unsafe_adapter_paths):
+        print(f"  {item}: reviewed by scripts/audit-safe-rust.sh and excluded from OxideDNS runtime invariant scope")
 
 if failures:
     print()

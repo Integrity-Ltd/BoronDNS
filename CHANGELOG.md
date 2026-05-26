@@ -4,6 +4,15 @@ All notable project-facing changes are recorded here. Formal release acceptance
 notes still use `docs/release-notes-template.md` when a release candidate needs
 full evidence pointers and sign-off.
 
+## Unreleased
+
+### Added
+
+- Added the initial `oxide-gun` crate: a DNS load/probe tool with TOML
+  configuration, process/drop receive modes, structured summary output, a local
+  responder `--self-test` E2E path, and an explicit Linux AF_XDP backend behind
+  the `xdp` Cargo feature for lab hosts.
+
 ## 0.1.2 - 2026-05-26
 
 ### Added

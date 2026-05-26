@@ -3,6 +3,7 @@ libc	posix-signal-disposition;posix-rlimit;posix-privilege-drop;posix-process-ha
 aya	xdp-af-xdp	deferred	future:packet-io-xdp	Future eBPF/XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.
 libbpf-rs	xdp-af-xdp	deferred	future:packet-io-xdp	Future eBPF/XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.
 xsk-rs	xdp-af-xdp	deferred	future:packet-io-xdp	Future AF_XDP support must enter through an audited packet-I/O adapter and a privileged deployment profile.
+xdp	oxidegun-xdp-af-xdp	current	crates/oxide-gun/src/xdp_backend.rs	OxideGun uses the pure-Rust xdp crate behind an explicit xdp Cargo feature and --backend xdp for AF_XDP load generation on dedicated Linux test interfaces; this does not promote the OxideDNS server XDP boundary.
 io-uring	io-uring-packet-io	deferred	future:packet-io-iouring	Future io_uring support must enter through an audited packet-I/O adapter with buffer-lifetime and cancellation tests.
 memmap2	nsd-packed-zone-store	deferred	future:packed-zone-store	Future packed zone-store or mapped-region work must enter through an audited zone-store adapter with bounds and publication tests.
 bytemuck	nsd-packed-zone-store;response-cache	deferred	future:packed-zone-store;future:response-cache	Future zero-copy packed-store or response-cache work must enter through audited adapters with alignment, bounds, TTL, and invalidation tests.

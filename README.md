@@ -44,6 +44,8 @@ for validation, config dumping, `check-config`, and `serve`.
 - `oxidedns-server`: runtime, listeners, transfers, health, metrics, RRL, XoT,
   and graceful shutdown.
 - `oxidedns-cli`: command-line entrypoint.
+- `oxide-gun`: OxideDNS test-tool DNS load generator with portable UDP self-tests
+  and an explicit Linux AF_XDP backend for lab hosts.
 
 The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 
@@ -53,6 +55,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Test plan](docs/test-plan.md)
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)
+- [OxideGun load generator](docs/oxide-gun.md)
 - [Catalog Zone MVP based on RFC 9432](docs/catalog-zone-mvp-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [MVP gap register](docs/mvp-gap-register.md)
