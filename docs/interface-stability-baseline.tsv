@@ -19,7 +19,7 @@ configuration	[tsig_keys].secret_file	stable	0.1	config/oxidedns.example.toml	ma
 configuration	[zones.transfer_primaries].client_key_pem	stable	0.1	config/oxidedns.example.toml	major	Optional inline XoT client private-key source; exactly one of client_key or client_key_pem is required when client_cert is set.
 configuration	[cookie] policy	stable	0.1	config/oxidedns.example.toml	major	DNS Cookie policy, secret, and tolerance settings.
 configuration	[rrl] policy	stable	0.1	config/oxidedns.example.toml	major	Process-wide RRL policy.
-environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown RDS variables.
+environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown ODS variables.
 cli	serve	stable	0.1	oxidedns --help	major	Default runtime mode.
 cli	check-config	stable	0.1	oxidedns --help	major	Explicit config validation command.
 cli	--config	stable	0.1	oxidedns --help	major	Configuration path selector.

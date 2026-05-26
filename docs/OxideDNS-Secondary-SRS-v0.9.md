@@ -111,7 +111,7 @@
 
 This Software Requirements Specification (SRS) defines the functional and non-functional requirements of OxideDNS-Secondary, a secondary-only authoritative DNS server written in Rust. It expands the RFC compliance target established in the Project Initiation Document (PID) into concrete, atomic, testable requirements suitable for implementation, review, and independent verification.
 
-This document is the normative reference for what the software shall do, what it shall not do, and the criteria against which its correctness will be judged. It does not prescribe internal design or implementation choices; those are addressed by the Architecture Document, which is informed by this SRS but maintained separately.
+This document is the normative reference for externally observable behaviour, explicit scope exclusions, and the criteria against which correctness will be judged. Internal design choices, data structures, concurrency models, and implementation evidence belong in the Architecture Document, Test Plan, verification ledger, or release notes unless they are necessary to define externally observable behaviour.
 
 ## 1.2 Relationship to the Project Initiation Document
 
@@ -158,7 +158,7 @@ ODS-<CATEGORY>-<AREA>-<NNN>
 
 where:
 
-- **RDS** denotes OxideDNS-Secondary.
+- **ODS** denotes the OxideDNS-Secondary requirement namespace.
 - **CATEGORY** is one of:
   - **FR** — Functional Requirement (defined in §4).
   - **NFR** — Non-Functional Requirement (defined in §5).
@@ -168,6 +168,8 @@ where:
   - **VER** — Verification Requirement (defined in §7). The AREA component is omitted.
 - **AREA** is a short uppercase mnemonic, 3 to 6 characters, identifying the protocol concern, non-functional concern, or interface (for example AXFR, TSIG, PERF, NET). Area codes are allocated centrally in Appendix D (Glossary) and shall not be reused for unrelated concerns.
 - **NNN** is a zero-padded three-digit sequence number, unique within the (CATEGORY, AREA) namespace, starting at 001.
+
+The v0.9.1 document still contains legacy suffixed identifiers (`ODS-FR-CORE-006a` and `ODS-FR-ZSM-006a`) that predate this cleanup pass and are retained temporarily to avoid breaking traceability against existing tests and code references. No new suffixed identifiers shall be allocated. A future non-behavioural traceability cleanup shall migrate those legacy identifiers to numeric identifiers and keep alias notes for historical references.
 
 Examples:
 
@@ -213,7 +215,7 @@ The following terms appear normatively throughout this document. A complete glos
 | Zone refresh | The process by which a secondary updates its in-memory zone data from a primary. |
 | PID | Project Initiation Document, v0.1, May 2026. |
 | SRS | This document. |
-| RDS | OxideDNS-Secondary. |
+| ODS | OxideDNS-Secondary requirement namespace. |
 
 ## 1.6 References
 
@@ -311,7 +313,7 @@ The following constraints are inherited from the PID and are binding. They are r
 
 **No persistent state.** Operational state is not written to persistent storage. Every startup is a cold start; the primary is the source of truth for zone data, and orchestrator configuration is the source of truth for everything else.
 
-**Static binary.** The build produces a statically linked binary with no runtime dynamic library dependencies, suitable for distroless and scratch container images.
+**Static release artifact.** The published Linux release artifact targets `x86_64-unknown-linux-musl` and is verified as a statically linked binary with no runtime shared-library dependencies. Non-release developer builds may use the host toolchain's normal dynamic-linking conventions and are not the portability baseline.
 
 **Container image size.** The published container image does not exceed 20 megabytes uncompressed (PID §6.1).
 
@@ -359,11 +361,11 @@ In v0.1 the section was assembled at draft maturity. In v0.6, following the §3 
 
 *Rationale.* The secondary-only scope is the defining design constraint of this project (PID §2.2). The security, simplicity, and auditability claims of the project derive from the absence of any write path other than authenticated zone transfer from a trusted primary.
 
-*Implications.* There is no DNS UPDATE (RFC 2136) handler: UPDATE messages are received on the DNS query interface (per ODS-FR-NOTIFY/QRY listening) but are rejected with RCODE NOTIMP per ODS-FR-CORE-007 and ODS-NEG-001; no UPDATE-message processing logic exists in the server. There is no zone-file editing interface, no administrative interface for modifying records, and no acceptance of out-of-band zone data injection. The complementary prohibitions are enumerated as negative requirements in §4.18.
+*Implications.* There is no DNS UPDATE (RFC 2136) handler: UPDATE messages are received on the DNS query interface (per ODS-FR-NOTIFY/QRY listening) but are rejected with RCODE NOTIMP per ODS-FR-CORE-005 and ODS-NEG-001; no UPDATE-message processing logic exists in the server. There is no zone-file editing interface, no administrative interface for modifying records, and no acceptance of out-of-band zone data injection. The complementary prohibitions are enumerated as negative requirements in §4.18.
 
 Zone-state data carried as optional content in NOTIFY messages — most notably the optional SOA RR in the NOTIFY answer section per RFC 1996 §3.7 — is not trusted as authoritative; the server validates current zone state via an independent SOA poll to the configured primary per ODS-FR-NOTIFY-005 and §4.16. The NOTIFY's hint is a trigger, not a data delivery.
 
-*Verification.* Static analysis of the codebase shall confirm that the only code paths producing changes to the in-memory zone store originate in the zone transfer client (AXFR/IXFR completion path, atomic publication per ODS-INV-003). Functional tests shall confirm that UPDATE messages, however formed, are rejected with RCODE NOTIMP per ODS-FR-CORE-007. Functional tests shall confirm that an SOA in the answer section of a NOTIFY does not alter the server's held SOA serial without an independent successful SOA poll.
+*Verification.* Static analysis of the codebase shall confirm that the only code paths producing changes to the in-memory zone store originate in the zone transfer client (AXFR/IXFR completion path, atomic publication per ODS-INV-003). Functional tests shall confirm that UPDATE messages, however formed, are rejected with RCODE NOTIMP per ODS-FR-CORE-005 and ODS-NEG-001. Functional tests shall confirm that an SOA in the answer section of a NOTIFY does not alter the server's held SOA serial without an independent successful SOA poll.
 
 *Status.* Reviewed v0.6 (architectural invariants audit closure).
 
@@ -505,9 +507,9 @@ Thread creation within the process — POSIX threads via `pthread_create`, Tokio
 
 *Implications.* No "policy as code" mechanism for RRL, ACLs, configuration validation, or any other operational decision; all such policies are expressed in the static TOML configuration schema per §6.2. The configuration file is data, parsed by the server; it does not contain executable expressions, embedded scripts, or any code-bearing construct. Any future post-MVP XDP/eBPF integration (Appendix C.6.1) MUST compile the kernel-side eBPF program at server build time and embed it in the server binary as compiled bytecode; runtime loading from external configuration of an eBPF program is forbidden. No "scriptable response transformation" feature is or will be added in this server's design. The configuration validation of ODS-IF-CONF-005 is implemented via Rust code paths, not via a runtime-evaluated rule language.
 
-The Rust `cargo build --release` output, when used to produce the published binary, is statically linked to the extent possible: dynamic linking against system libraries (`libc`, `libpthread`, `libssl` where applicable) is permitted as a consequence of platform conventions, but the project's first-party Rust code and Rust crate dependencies are linked statically into the binary.
+The published Linux binary target is `x86_64-unknown-linux-musl` and MUST be verified as static (`ldd` reports "not a dynamic executable" or equivalent). Developer and distribution builds that use another target MAY dynamically link to the host platform's standard C runtime libraries, but those builds are not the release portability artifact and MUST NOT be described as scratch-compatible unless binary inspection proves the claim.
 
-*Verification.* Static analysis confirming no `dlopen` family calls, no `Mmap::map_executable` patterns, and no embedded interpreter crates (`mlua`, `boa_engine`, `rusty_v8`, `wasmtime`, `wasmer`, etc.) in the dependency tree. Binary inspection (`ldd`, `objdump -p`) confirming the dynamic-library dependency set is limited to standard system libraries (libc, libpthread, libgcc_s, libm). CI-integrated dependency-tree audit at each release confirming no new code-loading capability is introduced.
+*Verification.* Static analysis confirming no `dlopen` family calls, no `Mmap::map_executable` patterns, and no embedded interpreter crates (`mlua`, `boa_engine`, `rusty_v8`, `wasmtime`, `wasmer`, etc.) in the dependency tree. Release binary inspection (`ldd`, `objdump -p`, or equivalent) confirming the published musl artifact has no runtime shared-library dependencies. CI-integrated dependency-tree audit at each release confirming no new code-loading capability is introduced.
 
 *Status.* Introduced v0.6 (architectural invariants audit closure).
 
@@ -647,14 +649,15 @@ Requirements are grouped thematically for readability; the grouping has no norma
 
 ### RRset semantics
 
-**ODS-FR-CORE-026.** The server MUST treat all resource records sharing owner name, class, and type as a single RRset and MUST return all members of that RRset together when the RRset is the subject of a positive answer. The server MUST NOT return a proper subset of an RRset in the answer section of a positive response.
-*Source.* RFC 2181 §5.
-*Verification.* Lookup tests confirming RRset integrity in responses, including responses near the UDP message size boundary (see §4.11 for EDNS interactions).
+**ODS-FR-CORE-026.** Except for RRSIG records, the server MUST treat all resource records sharing owner name, class, and type as a single RRset and MUST return all members of that RRset together when the RRset is the subject of a positive answer. The server MUST NOT return a proper subset of an RRset in the answer section of a positive response.
+*Source.* RFC 2181 §5; RFC 4034 §3.
+*Note.* RRSIG records are handled by DNSSEC-specific rules: each RRSIG covers an RRset identified by its Type Covered field, and multiple RRSIG records at the same owner name may cover different RRsets. They are therefore matched to the covered RRsets per ODS-FR-DNSSEC-003 rather than treated as one ordinary owner/class/type RRset.
+*Verification.* Lookup tests confirming RRset integrity in responses, including responses near the UDP message size boundary (see §4.11 for EDNS interactions), plus DNSSEC tests confirming RRSIG selection by Type Covered.
 
-**ODS-FR-CORE-027.** The server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency.
-*Source.* RFC 2181 §5.2.
-*Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary.
-*Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection.
+**ODS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency.
+*Source.* RFC 2181 §5.2; RFC 4034 §3.
+*Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows RFC 4034 §3: an RRSIG RR has the TTL of the RRset it covers, so RRSIG records at the same owner name may legitimately carry different TTLs when they cover RRsets with different TTLs.
+*Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection; DNSSEC transfer/serving tests with RRSIG records covering RRsets with different TTLs at the same owner name.
 
 ### Name octet handling
 
@@ -1572,9 +1575,9 @@ The area code **EDNS** is allocated.
 *Source.* RFC 6891 §6.1.
 *Verification.* Wire-format inspection of response OPT RRs.
 
-**ODS-FR-EDNS-009.** The DO bit in the response OPT RR's TTL field MUST be set in accordance with the DNSSEC response semantics specified in §4.13. The setting of DO in the response does not echo the query's DO setting verbatim; the §4.13 requirements govern.
-*Source.* RFC 6891 §6.1.4; RFC 4035 §3.2.1.
-*Verification.* Per §4.13.
+**ODS-FR-EDNS-009.** Where an inbound query contains an OPT RR, the response OPT RR's TTL field MUST copy the query's DO bit exactly. DNSSEC augmentation remains controlled by the query DO bit per §4.13; the response DO bit is not a signal that augmentation records were included.
+*Source.* RFC 6840 §5.6; RFC 3225 §3; RFC 6891 §6.1.4.
+*Verification.* Wire-format inspection of response OPT RRs for DO = 0 and DO = 1 queries, including signed-zone responses, unsigned-zone responses, REFUSED responses, error responses, and truncation paths.
 
 ### Extended RCODE
 
@@ -1766,9 +1769,9 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 
 ### Header bits in responses
 
-**ODS-FR-DNSSEC-009.** The DO bit in the response OPT RR's TTL field MUST be set to 1 when the response contains DNSSEC records included as augmentation under ODS-FR-DNSSEC-003 through ODS-FR-DNSSEC-007. In all other responses (including DO = 0 responses and responses to unsigned zones), the DO bit MUST be set to 0.
-*Source.* RFC 4035 §3.2.2; RFC 6840 §5.6.
-*Verification.* Wire-format inspection of response OPT RRs across signed and unsigned zone responses, DO = 0 and DO = 1 queries.
+**ODS-FR-DNSSEC-009.** The response DO bit MUST follow ODS-FR-EDNS-009: if the query contains an OPT RR, the response OPT RR copies the query's DO bit exactly, regardless of whether DNSSEC augmentation records were ultimately included. The presence or absence of RRSIG, NSEC, NSEC3, DS, DNSKEY, or NSEC3PARAM records is governed by ODS-FR-DNSSEC-002 through ODS-FR-DNSSEC-008 and by response-size truncation, not by recomputing the response DO bit from the final response contents.
+*Source.* RFC 6840 §5.6; RFC 4035 §3.2.1.
+*Verification.* Wire-format inspection of response OPT RRs across signed and unsigned zone responses, explicit DNSSEC QTYPE responses, non-authoritative REFUSED responses, error responses, DO = 0 and DO = 1 queries, and truncation paths.
 
 **ODS-FR-DNSSEC-010.** The server MUST set the AD (Authentic Data) bit to 0 in every response message regardless of query state.
 *Source.* RFC 6840 §5.8 (the AD bit's meaning in authoritative responses is unspecified; this server's posture is to never assert AD).
@@ -1776,8 +1779,8 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 *Verification.* Wire-format inspection of all response messages.
 
 **ODS-FR-DNSSEC-011.** The server MUST set the CD (Checking Disabled) bit to 0 in every response message regardless of query state.
-*Source.* RFC 6840 §5.9; RFC 4035 §3.2.2.
-*Note.* The CD bit is meaningful in responses from recursive servers; in authoritative responses it has no defined semantics. Setting CD = 0 is the unambiguous choice.
+*Source.* RFC 4035 §3.1.6.
+*Note.* RFC 4035 §3.1.6 says a security-aware authoritative name server SHOULD clear CD when composing an authoritative response. This SRS makes that stronger as a project policy because OxideDNS-Secondary is authoritative-only, performs no DNSSEC validation during query processing, and has no recursive response path where RFC 4035 §3.2.2's recursive copy rule would apply.
 *Verification.* Wire-format inspection.
 
 ### Algorithm opacity
@@ -3559,7 +3562,7 @@ The coarse-grained mapping is provided comprehensively in A.3 below. Fine-graine
 **RFC 2181 — Clarifications to the DNS Specification** (Elz & Bush, 1997).
 *Scope.* Partial (secondary/server-side).
 *Implementing sections.* §4.1 (CORE), §4.3 (NRESP), §4.12 (TCP), §4.14 (RR).
-*Key clauses.* §5 (RRset semantics) → CORE-026, CORE-027; §5.2 (TTL uniformity) → CORE-027; §6.1 (SOA at apex) → RR-002; §7 (NODATA) → CORE-022; §9 (response size, truncation) → TCP-008; §10.1 (CNAME exclusivity) → RR-005; §11 (name format) → CORE-028.
+*Key clauses.* §5 (RRset semantics) → CORE-026, CORE-027, except for the RRSIG-specific RFC 4034 carve-out; §5.2 (TTL uniformity) → CORE-027; §6.1 (SOA at apex) → RR-002; §7 (NODATA) → CORE-022; §9 (response size, truncation) → TCP-008; §10.1 (CNAME exclusivity) → RR-005; §11 (name format) → CORE-028.
 *Out-of-scope clauses.* §6.2 (zone publication, primary-side) — ODS-INV-001.
 
 **RFC 4343 — Domain Name System (DNS) Case Insensitivity Clarification** (Eastlake, 2006).
@@ -3636,7 +3639,7 @@ The coarse-grained mapping is provided comprehensively in A.3 below. Fine-graine
 **RFC 6891 — Extension Mechanisms for DNS (EDNS(0))** (Damas, Graff, Vixie, 2013).
 *Scope.* Full (insofar as authoritative-server-side; obsoletes RFC 2671).
 *Implementing sections.* §4.11 (EDNS), §4.12 (TCP for truncation interaction), §4.13 (DNSSEC for DO bit).
-*Key clauses.* §6.1.1 (OPT RR placement and multiplicity) → EDNS-002, EDNS-003; §6.1.2 (RDATA option encoding) → EDNS-001; §6.1.3 (extended RCODE, VERSION, DO bit) → EDNS-004, EDNS-010, DNSSEC-009; §6.1.4 (Z bits) → EDNS-008; §6.2.3 (UDP payload size handling) → EDNS-005; §6.2.5 (response size) → EDNS-006; §7 (response OPT semantics) → EDNS-007, EDNS-008.
+*Key clauses.* §6.1.1 (OPT RR placement and multiplicity) → EDNS-002, EDNS-003; §6.1.2 (RDATA option encoding) → EDNS-001; §6.1.3 (extended RCODE, VERSION) → EDNS-004, EDNS-010; §6.1.4 (Z bits other than DO) → EDNS-008; §6.2.3 (UDP payload size handling) → EDNS-005; §6.2.5 (response size) → EDNS-006; §7 (response OPT semantics) → EDNS-007, EDNS-008. DO-bit reply copying is specified by RFC 6840 §5.6 and mapped below.
 
 **RFC 7766 — DNS Transport over TCP — Implementation Requirements** (Dickinson, Dickinson, Bellis, Mankin, Wessels, 2016).
 *Scope.* Full.
@@ -3716,13 +3719,13 @@ The coarse-grained mapping is provided comprehensively in A.3 below. Fine-graine
 **RFC 4034 — Resource Records for the DNS Security Extensions** (Arends et al., 2005).
 *Scope.* Full (serve-only).
 *Implementing sections.* §4.13 (DNSSEC), §4.14 (RR).
-*Key clauses.* §2 (DNSKEY) → DNSSEC-001, RR catalogue; §3 (RRSIG) → DNSSEC-001, DNSSEC-003; §4 (NSEC) → DNSSEC-001, DNSSEC-004, DNSSEC-005; §5 (DS) → DNSSEC-001, DNSSEC-007; §6.2 (canonical form) → RR catalogue (RRSIG, NSEC).
+*Key clauses.* §2 (DNSKEY) → DNSSEC-001, RR catalogue; §3 (RRSIG) → DNSSEC-001, DNSSEC-003, CORE-026, CORE-027; §4 (NSEC) → DNSSEC-001, DNSSEC-004, DNSSEC-005; §5 (DS) → DNSSEC-001, DNSSEC-007; §6.2 (canonical form) → RR catalogue (RRSIG, NSEC).
 *Out-of-scope clauses.* Signing aspects (primary-side) — ODS-NEG-002.
 
 **RFC 4035 — Protocol Modifications for the DNS Security Extensions** (Arends et al., 2005).
 *Scope.* Partial (serve-only, no validation).
 *Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* §3.1 (response composition with DNSSEC RRs) → DNSSEC-003..007; §3.1.3 (negative response proofs) → DNSSEC-004, DNSSEC-005; §3.1.3.4 (wildcard proofs) → DNSSEC-006; §3.1.4 (referral proofs) → DNSSEC-007; §3.2.1 (DO bit handling) → DNSSEC-002, DNSSEC-008; §3.2.2 (DO bit in responses) → DNSSEC-009; §3.2.3 (CD, AD bits for authoritative) → DNSSEC-010, DNSSEC-011.
+*Key clauses.* §3.1 (response composition with DNSSEC RRs) → DNSSEC-003..007; §3.1.3 (negative response proofs) → DNSSEC-004, DNSSEC-005; §3.1.3.4 (wildcard proofs) → DNSSEC-006; §3.1.4 (referral proofs) → DNSSEC-007; §3.1.6 (AD and CD bits in authoritative responses) → DNSSEC-010, DNSSEC-011; §3.2.1 (recursive DO handling; useful for the DO = 0 stripping rule) → DNSSEC-002, DNSSEC-008.
 *Out-of-scope clauses.* §4 (resolver-side validation) — ODS-INV-001.
 
 **RFC 5155 — DNS Security (DNSSEC) Hashed Authenticated Denial of Existence (NSEC3)** (Laurie, Sisson, Arends, Blacka, 2008).
@@ -3734,7 +3737,7 @@ The coarse-grained mapping is provided comprehensively in A.3 below. Fine-graine
 **RFC 6840 — Clarifications and Implementation Notes for DNS Security (DNSSEC)** (Weiler & Blacka, 2013).
 *Scope.* Partial (serve-only clarifications).
 *Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* §5.6 (DO bit handling) → DNSSEC-009; §5.8 (AD bit) → DNSSEC-010; §5.9 (CD bit) → DNSSEC-011.
+*Key clauses.* §5.6 (DO bit copying in replies) → DNSSEC-009 and EDNS-009; §5.8 (AD bit in validating-resolver replies, used here to justify conservative AD = 0 posture) → DNSSEC-010. Authoritative CD clearing is mapped to RFC 4035 §3.1.6 above; RFC 6840 §5.9 concerns validating resolvers' upstream queries and is not a requirement source for this authoritative-only server.
 *Out-of-scope clauses.* Validator-side clarifications — ODS-INV-001.
 
 **RFC 6944 — Applicability Statement: DNS Security (DNSSEC) DNSKEY Algorithm Implementation Status** (Rose, 2013).
