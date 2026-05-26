@@ -146,7 +146,7 @@ Usage is further constrained as follows:
 
 ### 1.4.2 Atomicity of Requirements
 
-Each requirement shall express a single, testable assertion. Compound requirements of the form "the server MUST do X and SHOULD do Y" shall be split into separate requirements, each with its own identifier. This rule is absolute.
+Each requirement should express a single, testable assertion. Compound requirements of the form "the server MUST do X and SHOULD do Y" should be split into separate requirements, each with its own identifier. Where a requirement intentionally groups tightly coupled protocol behavior, configuration, logging, or metrics into one operational case, its verification text must identify the observable sub-cases to be tested. This keeps requirements maintainable without forcing identifier churn for coherent wire-protocol or operator-facing behaviors.
 
 ### 1.4.3 Requirement Identifiers
 
