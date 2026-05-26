@@ -21,6 +21,32 @@ without copying external source artifacts into Git.
 - Archived v0.1 SRS/SBVR files are historical artifacts. Stale wording in
   those files is not current product scope unless repeated in the current SRS.
 
+## Scope-Trim Handling
+
+The external review suggested a much smaller static-zone secondary DNS MVP and
+listed several features to defer. That is valid product-prioritisation advice
+for a project starting from zero, but it is not the current OxideDNS state. The
+repository already contains first-party code, tests, and documentation for the
+post-Alpha features below, so the documentation cleanup keeps them in
+Engineering MVP scope and records remaining formal-acceptance evidence
+separately.
+
+| Feature family | Current code ownership | Documentation posture |
+| --- | --- | --- |
+| IXFR and AXFR fallback | `crates/oxidedns-core/src/axfr.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; release-specific interop evidence remains tracked. |
+| XoT | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; TLS fault matrix and real-primary evidence remain acceptance work. |
+| Passive DNSSEC serving | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/zone.rs` | In Engineering MVP scope; server serves transferred records and does not sign or validate. |
+| RRL | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; release threshold confirmation remains a C.5/open evidence item. |
+| DNS Cookies | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; broader deployment interop remains release evidence. |
+| RFC 9432 catalog zones | `crates/oxidedns-core/src/catalog.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; `max_member_zones` remains an explicit implementation gap. |
+| Bounded EDE diagnostics | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope for `Not Ready` and NSEC3-cap diagnostics only. |
+| Opt-in CHAOS self-identification | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; disabled-by-default posture is retained. |
+
+The review's long-run verification and benchmark objections are handled by
+boundary, not deletion: setup/runbooks may remain, but completed long fuzz,
+reference-hardware benchmark, soak, signed-release, and external-operator
+evidence are not Engineering MVP deliverables.
+
 ## Primary Sources Checked
 
 | Topic | Primary source | Current disposition |

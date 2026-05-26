@@ -11,6 +11,12 @@ The project is currently aimed at an Engineering MVP: a working, testable
 secondary server with clear operating boundaries. It is not yet a final SRS
 release-acceptance build.
 
+The implemented Engineering MVP is wider than a minimal static-zone secondary
+server. Current code includes IXFR, XoT, passive DNSSEC serving, RRL, DNS
+Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
+self-identification. Those features remain in scope, with release-acceptance
+evidence gaps tracked separately.
+
 ## Start Here
 
 - New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
@@ -18,6 +24,7 @@ release-acceptance build.
 - Current implementation target: [Engineering MVP scope](docs/engineering-mvp-scope.md)
 - Verification status: [Verification ledger](docs/verification-ledger.md)
 - Full requirements: [OxideDNS Secondary SRS v0.9.1](docs/OxideDNS-Secondary-SRS-v0.9.1.md)
+- External SRS review handling: [SRS review disposition](docs/srs-review-disposition.md)
 
 ## Quick Local Commands
 

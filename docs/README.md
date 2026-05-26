@@ -6,6 +6,22 @@ specification, planning, and evidence documents.
 The current normative Software Requirements Specification is
 `OxideDNS-Secondary-SRS-v0.9.1.md`.
 
+The documentation set intentionally separates three things:
+
+- **Normative requirements** in the current SRS.
+- **Current Engineering MVP scope** in the scope, readiness, implementation, and
+  gap documents.
+- **Later release-acceptance evidence** such as long fuzz campaigns, reference
+  hardware benchmarks, soak execution, signed release evidence, and external
+  operator acceptance.
+
+Implemented protocol families must not be removed from Engineering MVP scope
+only because they exceed a minimal static-zone secondary-server cut. IXFR, XoT,
+passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, bounded EDE
+diagnostics, and opt-in CHAOS self-identification all have current code and test
+ownership; remaining work for those features is tracked as evidence or explicit
+implementation gaps.
+
 ## Current Requirements and Design
 
 - `OxideDNS-Secondary-SRS-v0.9.1.md`: current normative Software Requirements
