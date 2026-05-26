@@ -15,7 +15,12 @@ struct Config {
     duration: Duration,
     window: usize,
     names: usize,
+    zones: usize,
+    big_zones: usize,
+    big_names: usize,
+    small_names: usize,
     timeout: Duration,
+    randomize: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -95,6 +100,7 @@ fn main() {
             "duration_seconds={elapsed:.3} ",
             "server={server} port={port} ",
             "threads={threads} window={window} names={names} ",
+            "zones={zones} big_zones={big_zones} big_names={big_names} small_names={small_names} randomize={randomize} ",
             "sent={sent} received={received} errors={errors} dropped={dropped} ",
             "sent_per_second={sent_per_second:.0} ",
             "responses_per_second={received_per_second:.0} ",
@@ -112,6 +118,11 @@ fn main() {
         threads = config.threads,
         window = config.window,
         names = config.names,
+        zones = config.zones,
+        big_zones = config.big_zones,
+        big_names = config.big_names,
+        small_names = config.small_names,
+        randomize = config.randomize,
         sent = total.sent,
         received = total.received,
         errors = total.errors,
@@ -146,6 +157,7 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
     let mut stats = WorkerStats::default();
     let mut qid = (worker_id as u16).wrapping_mul(997);
     let mut next_name = worker_id;
+    let mut rng = XorShift64::new(worker_id as u64 + 0x9e3779b97f4a7c15);
     let mut sent_at: Vec<Option<Instant>> = vec![None; 65536];
     let mut in_flight = 0usize;
     let mut receive_buffer = [0u8; 2048];
@@ -156,7 +168,7 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 qid = qid.wrapping_add(1);
                 continue;
             }
-            let packet = query_packet(qid, next_name % config.names);
+            let packet = query_packet(qid, next_name, &config, &mut rng);
             match socket.send(&packet) {
                 Ok(_) => {
                     sent_at[qid as usize] = Some(Instant::now());
@@ -247,6 +259,7 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
     let mut stats = WorkerStats::default();
     let mut qid = (worker_id as u16).wrapping_mul(997);
     let mut next_name = worker_id;
+    let mut rng = XorShift64::new(worker_id as u64 + 0xd1b54a32d192ed03);
     let mut sent_at: Vec<Option<Instant>> = vec![None; 65536];
     let mut in_flight = 0usize;
     let mut write_queue = VecDeque::new();
@@ -259,7 +272,7 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 qid = qid.wrapping_add(1);
                 continue;
             }
-            let packet = query_packet(qid, next_name % config.names);
+            let packet = query_packet(qid, next_name, &config, &mut rng);
             let length = u16::try_from(packet.len()).expect("query fits DNS-over-TCP frame");
             write_queue.extend(length.to_be_bytes());
             write_queue.extend(packet);
@@ -412,8 +425,8 @@ fn expire_old(sent_at: &mut [Option<Instant>], in_flight: &mut usize, timeout: D
     }
 }
 
-fn query_packet(qid: u16, name_index: usize) -> Vec<u8> {
-    let qname = format!("host{name_index:06}.perf.test.");
+fn query_packet(qid: u16, sequence: usize, config: &Config, rng: &mut XorShift64) -> Vec<u8> {
+    let qname = query_name(sequence, config, rng);
     let mut packet = Vec::with_capacity(64);
     packet.extend_from_slice(&qid.to_be_bytes());
     packet.extend_from_slice(&0x0100u16.to_be_bytes());
@@ -427,6 +440,34 @@ fn query_packet(qid: u16, name_index: usize) -> Vec<u8> {
     packet
 }
 
+fn query_name(sequence: usize, config: &Config, rng: &mut XorShift64) -> String {
+    if config.zones == 1 {
+        let name_index = if config.randomize {
+            rng.next_usize(config.names)
+        } else {
+            sequence % config.names
+        };
+        return format!("host{name_index:06}.perf.test.");
+    }
+
+    let zone_index = if config.randomize {
+        rng.next_usize(config.zones)
+    } else {
+        (sequence / config.big_names.max(config.small_names)) % config.zones
+    };
+    let names_in_zone = if zone_index < config.big_zones {
+        config.big_names
+    } else {
+        config.small_names
+    };
+    let name_index = if config.randomize {
+        rng.next_usize(names_in_zone)
+    } else {
+        sequence % names_in_zone
+    };
+    format!("host{name_index:08}.zone{zone_index:05}.perf.test.")
+}
+
 fn name_wire(name: &str) -> Vec<u8> {
     let mut out = Vec::new();
     for label in name.trim_end_matches('.').split('.') {
@@ -435,6 +476,32 @@ fn name_wire(name: &str) -> Vec<u8> {
     }
     out.push(0);
     out
+}
+
+struct XorShift64 {
+    state: u64,
+}
+
+impl XorShift64 {
+    fn new(seed: u64) -> Self {
+        Self { state: seed | 1 }
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    fn next_usize(&mut self, upper: usize) -> usize {
+        if upper <= 1 {
+            return 0;
+        }
+        (self.next() as usize) % upper
+    }
 }
 
 fn latency_us(latencies: &[u64], percentile: f64) -> f64 {
@@ -458,7 +525,12 @@ fn parse_args() -> Result<Config, String> {
         duration: Duration::from_secs(10),
         window: 64,
         names: 10_000,
+        zones: 1,
+        big_zones: 1,
+        big_names: 10_000,
+        small_names: 10_000,
         timeout: Duration::from_millis(250),
+        randomize: false,
     };
 
     let mut args = env::args().skip(1);
@@ -484,10 +556,15 @@ fn parse_args() -> Result<Config, String> {
             }
             "--window" => config.window = parse_value("--window", &value()?)?,
             "--names" => config.names = parse_value("--names", &value()?)?,
+            "--zones" => config.zones = parse_value("--zones", &value()?)?,
+            "--big-zones" => config.big_zones = parse_value("--big-zones", &value()?)?,
+            "--big-names" => config.big_names = parse_value("--big-names", &value()?)?,
+            "--small-names" => config.small_names = parse_value("--small-names", &value()?)?,
             "--timeout-ms" => {
                 let timeout_ms: u64 = parse_value("--timeout-ms", &value()?)?;
                 config.timeout = Duration::from_millis(timeout_ms);
             }
+            "--random" => config.randomize = true,
             "--help" | "-h" => {
                 usage();
                 std::process::exit(0);
@@ -502,8 +579,17 @@ fn parse_args() -> Result<Config, String> {
     if config.window == 0 {
         return Err("--window must be greater than zero".to_owned());
     }
-    if config.names == 0 || config.names > 1_000_000 {
-        return Err("--names must be between 1 and 1000000".to_owned());
+    if config.names == 0 || config.names > 100_000_000 {
+        return Err("--names must be between 1 and 100000000".to_owned());
+    }
+    if config.zones == 0 || config.zones > 100_000 {
+        return Err("--zones must be between 1 and 100000".to_owned());
+    }
+    if config.big_zones > config.zones {
+        return Err("--big-zones must be less than or equal to --zones".to_owned());
+    }
+    if config.big_names == 0 || config.small_names == 0 {
+        return Err("--big-names and --small-names must be greater than zero".to_owned());
     }
 
     Ok(config)
@@ -526,6 +612,11 @@ fn usage() {
         "  --duration <SEC>    benchmark duration, default 10\n",
         "  --window <N>        outstanding queries per worker, default 64\n",
         "  --names <N>         host000000..hostNNNNNN names, default 10000\n",
+        "  --zones <N>         zone count for zoneNNNNN.perf.test mode, default 1\n",
+        "  --big-zones <N>     first N zones use --big-names, default 1\n",
+        "  --big-names <N>     names in each big zone, default 10000\n",
+        "  --small-names <N>   names in each small zone, default 10000\n",
         "  --timeout-ms <MS>   response timeout before a query is considered dropped, default 250\n",
+        "  --random            choose queried zones and names with deterministic worker-local RNG\n",
     ));
 }

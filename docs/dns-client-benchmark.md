@@ -45,6 +45,67 @@ The script writes retained artifacts under
 client output, the generated configuration, Prometheus metrics before and after
 the run, and `benchmark-results.tsv`.
 
+## Large Catalog Benchmark
+
+Use `scripts/benchmark-large-catalog-zones.sh` for the opt-in large-zone
+performance harness. It generates an RFC 9432 catalog zone plus a mixed
+large/small member-zone set, serves the catalog and members from BIND with
+TSIG-authenticated AXFR, starts OxideDNS pinned to four CPUs when `taskset` is
+available, waits for catalog readiness, then drives randomized UDP or TCP direct
+hit queries across the whole zone mix.
+
+The default target is an 8 GiB OxideDNS resident set after catalog load:
+
+```bash
+scripts/benchmark-large-catalog-zones.sh
+```
+
+For a 16 GiB target with TCP queries and Linux `perf record` samples:
+
+```bash
+OXIDEDNS_LARGE_BENCH_TARGET_RSS_MIB=16384 \
+OXIDEDNS_LARGE_BENCH_TRANSPORT=tcp \
+OXIDEDNS_LARGE_BENCH_SERVER_CPUS=4 \
+OXIDEDNS_LARGE_BENCH_CLIENT_THREADS=16 \
+OXIDEDNS_LARGE_BENCH_CLIENT_WINDOW=64 \
+OXIDEDNS_LARGE_BENCH_DURATION_SECONDS=60 \
+OXIDEDNS_LARGE_BENCH_PERF_RECORD=true \
+scripts/benchmark-large-catalog-zones.sh
+```
+
+Useful sizing knobs:
+
+- `OXIDEDNS_LARGE_BENCH_ZONES` controls the catalog member count.
+- `OXIDEDNS_LARGE_BENCH_BIG_ZONES` selects how many members receive the large
+  record count.
+- `OXIDEDNS_LARGE_BENCH_BIG_NAMES` overrides the computed large-zone owner-name
+  count when exact sizing matters.
+- `OXIDEDNS_LARGE_BENCH_SMALL_NAMES` controls the small-zone owner-name count.
+- `OXIDEDNS_LARGE_BENCH_TXT_BYTES` adjusts per-owner TXT payload size and is the
+  simplest way to move the resident set up or down without changing query
+  cardinality.
+
+The script writes retained artifacts under
+`target/evidence/large-catalog-benchmark-<timestamp>/`. The important machine
+readable files are:
+
+- `benchmark-phases.tsv` for phase timing, including
+  `oxidedns_startup_to_ready` catalog transfer/load time, `warmup_serve`, and
+  `measured_serve`.
+- `benchmark-results.tsv` for QPS, latency, RSS, sizing values, and the folded
+  `phase_*_duration_ms` rows.
+- `metrics-before.prom`, `metrics-after-warmup.prom`, and `metrics-after.prom`
+  for Prometheus snapshots before serving, after warmup, and after the measured
+  run.
+- `resource-samples.tsv`, `/proc` status snapshots, optional `perf-stat.csv`,
+  and optional `flamegraph.svg` when `perf record` plus Inferno tooling are
+  available.
+
+This harness is intentionally not executed by `scripts/check.sh`; only shell
+syntax is checked continuously. It is for local data-layout and serving-path
+optimization work, not Engineering MVP or release-acceptance evidence by
+itself.
+
 Interpretation:
 
 - `responses_per_second` is the observed direct-hit response rate for the

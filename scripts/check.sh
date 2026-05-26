@@ -69,6 +69,7 @@ bash -n scripts/interop-dnssec-serve.sh
 bash -n scripts/interop-dnssec-nsec3-serve.sh
 bash -n scripts/interop-rrl-udp.sh
 bash -n scripts/rrl-evidence-campaign.sh
+bash -n scripts/benchmark-large-catalog-zones.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 scripts/interop-chaos-queries.sh
