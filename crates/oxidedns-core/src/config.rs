@@ -912,6 +912,8 @@ pub struct MetricsConfig {
     pub latency_histogram_buckets: Vec<LatencyHistogramBucketSeconds>,
     #[serde(default)]
     pub pipeline_timing_enabled: bool,
+    #[serde(default)]
+    pub zone_shape_enabled: bool,
 }
 
 impl Default for MetricsConfig {
@@ -919,6 +921,7 @@ impl Default for MetricsConfig {
         Self {
             latency_histogram_buckets: default_latency_histogram_buckets(),
             pipeline_timing_enabled: false,
+            zone_shape_enabled: false,
         }
     }
 }
@@ -2006,6 +2009,8 @@ mod tests {
                 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1
             ]
         );
+        assert!(!config.metrics.pipeline_timing_enabled);
+        assert!(!config.metrics.zone_shape_enabled);
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
@@ -3480,6 +3485,7 @@ mod tests {
                 [metrics]
                 latency_histogram_buckets = [0.0002, 0.001, 0.01]
                 pipeline_timing_enabled = true
+                zone_shape_enabled = true
 
                 [[zones]]
                 name = "example.test."
@@ -3493,6 +3499,7 @@ mod tests {
             vec![0.0002, 0.001, 0.01]
         );
         assert!(config.metrics.pipeline_timing_enabled);
+        assert!(config.metrics.zone_shape_enabled);
     }
 
     #[test]

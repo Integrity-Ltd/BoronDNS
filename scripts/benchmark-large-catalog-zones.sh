@@ -415,6 +415,7 @@ enabled = false
 
 [metrics]
 pipeline_timing_enabled = $pipeline_timing_enabled
+zone_shape_enabled = true
 
 [limits]
 max_udp_payload = 1232

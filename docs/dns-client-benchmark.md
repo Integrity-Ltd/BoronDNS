@@ -105,6 +105,9 @@ readable files are:
   single- versus multi-RDATA RRsets, SmallVec spill count, RDATA payload bytes,
   owner-name count, empty non-terminal count, and canonical-name key interning
   savings. `benchmark-results.tsv` also includes aggregate `zone_shape_*` rows.
+  The benchmark enables `[metrics].zone_shape_enabled` explicitly; normal
+  deployments leave this scrape-time O(zone-size) metric family disabled unless
+  they are collecting memory-layout evidence.
 - `resource-samples.tsv`, `/proc` status snapshots, optional `perf-stat.csv`,
   and optional `flamegraph.svg` when `perf record` plus Inferno tooling are
   available.

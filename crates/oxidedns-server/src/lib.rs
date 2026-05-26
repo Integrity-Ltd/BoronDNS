@@ -493,6 +493,7 @@ impl Runtime {
                     metrics_rate_limiter: MetricsRateLimiter::from_config(self.config.health),
                     started_at: Instant::now(),
                     graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
+                    zone_shape_metrics_enabled: self.config.metrics.zone_shape_enabled,
                 },
                 async move {
                     let _ = health_shutdown_rx.await;
@@ -3644,6 +3645,7 @@ async fn metrics(
         &state.catalog_manager,
         &state.refresh_registry,
         state.started_at.elapsed().as_secs(),
+        state.zone_shape_metrics_enabled,
     );
     if accepts_gzip(&headers) {
         match gzip_bytes(body.as_bytes()) {
@@ -3739,6 +3741,7 @@ fn metrics_body(
     catalog_manager: &CatalogManager,
     refresh_registry: &ZoneRefreshRegistry,
     uptime_seconds: u64,
+    zone_shape_metrics_enabled: bool,
 ) -> String {
     let snapshot = metrics.snapshot();
     let mut body = format!(
@@ -3819,7 +3822,9 @@ fn metrics_body(
     append_tsig_metrics(&mut body, snapshot);
     append_catalog_member_metrics(&mut body, catalog_manager);
     append_zone_status_metrics(&mut body, zones, uptime_seconds);
-    append_zone_shape_metrics(&mut body, zones);
+    if zone_shape_metrics_enabled {
+        append_zone_shape_metrics(&mut body, zones);
+    }
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
@@ -4687,6 +4692,7 @@ struct HealthEndpointState {
     metrics_rate_limiter: MetricsRateLimiter,
     started_at: Instant,
     graceful_shutdown_secs: u64,
+    zone_shape_metrics_enabled: bool,
 }
 
 impl HealthEndpointState {
@@ -9188,6 +9194,7 @@ mod tests {
             &CatalogManager::default(),
             &refresh_registry,
             3600,
+            false,
         );
 
         assert!(metrics.contains("oxidedns_zone_loading_seconds{zone=\"example.test.\"} 0"));
@@ -9199,6 +9206,7 @@ mod tests {
             metrics
                 .contains("oxidedns_secondary_zone_loading_seconds{zone=\"loading.test.\"} 3600")
         );
+        assert!(!metrics.contains("oxidedns_zone_shape_rrsets"));
     }
 
     #[test]
@@ -9224,6 +9232,7 @@ mod tests {
             &catalog_manager,
             &refresh_registry,
             0,
+            false,
         );
 
         assert!(metrics.contains(
@@ -9349,6 +9358,7 @@ mod tests {
                 metrics_rate_limiter: MetricsRateLimiter::default(),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
+                zone_shape_metrics_enabled: true,
             },
             std::future::pending(),
         ));
@@ -9631,6 +9641,7 @@ mod tests {
                 }),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
+                zone_shape_metrics_enabled: false,
             },
             std::future::pending(),
         ));
@@ -9678,6 +9689,7 @@ mod tests {
                 metrics_rate_limiter: MetricsRateLimiter::default(),
                 started_at: std::time::Instant::now(),
                 graceful_shutdown_secs: 30,
+                zone_shape_metrics_enabled: false,
             },
             std::future::pending(),
         ));
@@ -11124,6 +11136,7 @@ mod tests {
             &CatalogManager::default(),
             &refresh_registry,
             0,
+            false,
         );
 
         assert!(body.contains(
@@ -11163,6 +11176,7 @@ mod tests {
             &CatalogManager::default(),
             &refresh_registry,
             0,
+            false,
         );
 
         assert!(body.contains(
@@ -11192,6 +11206,7 @@ mod tests {
             &CatalogManager::default(),
             &refresh_registry,
             0,
+            false,
         );
 
         assert!(!body.contains("oxidedns_query_pipeline_duration_seconds"));
@@ -15945,6 +15960,7 @@ mod tests {
             metrics_rate_limiter: MetricsRateLimiter::default(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
+            zone_shape_metrics_enabled: false,
         }
     }
 
