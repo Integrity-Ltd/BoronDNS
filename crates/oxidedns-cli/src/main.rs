@@ -400,6 +400,12 @@ where
                 let value = env_value_to_string(&name, value)?;
                 config.edns.extended_dns_errors = parse_extended_dns_errors(&name, &value)?;
             }
+            "ODS_CHAOS_VERSION" => {
+                config.chaos.version = env_value_to_string(&name, value)?;
+            }
+            "ODS_CHAOS_HOSTNAME" => {
+                config.chaos.hostname = env_value_to_string(&name, value)?;
+            }
             "ODS_DNSSEC_NSEC3_MAX_ITERATIONS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.dnssec.nsec3_max_iterations = parse_env_value(&name, &value)?;
@@ -1304,6 +1310,10 @@ mod tests {
                 metrics_rate_limit_per_minute = 60
                 metrics_rate_limit_idle_seconds = 300
 
+                [chaos]
+                version = ""
+                hostname = ""
+
                 [limits]
                 max_transfer_ingest_bytes = 4294967296
 
@@ -1334,6 +1344,8 @@ mod tests {
                 ("ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS", "45"),
                 ("ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES", "8192"),
                 ("ODS_EDNS_EXTENDED_DNS_ERRORS", "minimal"),
+                ("ODS_CHAOS_VERSION", "OxideDNS anycast"),
+                ("ODS_CHAOS_HOSTNAME", "bud-dns-1"),
                 ("ODS_DNSSEC_NSEC3_MAX_ITERATIONS", "0"),
                 ("ODS_TSIG_FUDGE_SECONDS", "30"),
                 ("ODS_TRANSFER_REQUIRE_TSIG", "true"),
@@ -1363,6 +1375,8 @@ mod tests {
             config.edns.extended_dns_errors,
             ExtendedDnsErrorsConfig::Minimal
         );
+        assert_eq!(config.chaos.version, "OxideDNS anycast");
+        assert_eq!(config.chaos.hostname, "bud-dns-1");
         assert_eq!(config.dnssec.nsec3_max_iterations, 0);
         assert_eq!(config.tsig.fudge_seconds, 30);
         assert!(config.transfer.require_tsig);

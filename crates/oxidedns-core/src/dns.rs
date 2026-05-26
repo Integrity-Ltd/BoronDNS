@@ -40,11 +40,14 @@ use crate::zone::{ResourceRecord, Rrset, ZoneState, ZoneStore};
 // - ODS-FR-COOKIE-004 ODS-FR-COOKIE-005 ODS-FR-COOKIE-006
 // - ODS-FR-COOKIE-007 ODS-FR-COOKIE-008 ODS-FR-COOKIE-009
 // - ODS-FR-COOKIE-010 ODS-FR-COOKIE-011
+// - ODS-FR-CHAS-001 ODS-FR-CHAS-002 ODS-FR-CHAS-003
+// - ODS-FR-CHAS-004 ODS-FR-CHAS-005 ODS-FR-CHAS-006
 pub const DNS_HEADER_LEN: usize = 12;
 pub const DEFAULT_MAX_UDP_PAYLOAD: u16 = 1232;
 pub const DEFAULT_MAX_CNAME_CHAIN: usize = 8;
 pub const DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS: u64 = 30;
 const DNS_CLASS_IN: u16 = 1;
+const DNS_CLASS_CH: u16 = 3;
 const DNS_CLASS_ANY: u16 = 255;
 const EDNS_NSID_OPTION: u16 = 3;
 const EDNS_COOKIE_OPTION: u16 = 10;
@@ -432,7 +435,40 @@ pub struct AnswerOptions<'a> {
     pub extended_dns_errors: ExtendedDnsErrorsMode,
     pub any_response: AnyResponseMode,
     pub nsid: &'a [u8],
+    pub chaos: ChaosOptions<'a>,
     pub dns_cookie: Option<DnsCookieContext<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChaosOptions<'a> {
+    pub version: &'a str,
+    pub hostname: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChaosQueryOutcome {
+    Answered,
+    MissingValue,
+    UnrecognizedName,
+    NonTxt,
+}
+
+impl ChaosQueryOutcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::MissingValue => "missing_value",
+            Self::UnrecognizedName => "unrecognized_name",
+            Self::NonTxt => "non_txt",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChaosQueryObservation {
+    pub qname: String,
+    pub qtype: u16,
+    pub outcome: ChaosQueryOutcome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -491,6 +527,7 @@ impl AnswerOptions<'_> {
             extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
+            chaos: ChaosOptions::default(),
             dns_cookie: None,
         }
     }
@@ -506,6 +543,7 @@ impl AnswerOptions<'_> {
             extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: &[],
+            chaos: ChaosOptions::default(),
             dns_cookie: None,
         }
     }
@@ -687,6 +725,10 @@ fn answer_query_message(
         ));
     }
 
+    if question.qclass == DNS_CLASS_CH {
+        return answer_chaos_query(header, &question, metadata, options);
+    }
+
     if let Some(response_code) = rejected_qtype(question.qtype) {
         return DatagramAction::Respond(build_response(
             header,
@@ -778,6 +820,141 @@ fn answer_query_message(
         metadata.with_dnssec_augmented(dnssec_augmented),
         options,
     ))
+}
+
+pub fn chaos_query_observation(
+    packet: &[u8],
+    nsid: &[u8],
+    chaos: ChaosOptions<'_>,
+) -> Option<ChaosQueryObservation> {
+    let header = Header::parse(packet).ok()?;
+    if header.is_response() || header.opcode() != Some(Opcode::Query) || header.qdcount != 1 {
+        return None;
+    }
+    let question = Question::parse(packet).ok()?;
+    if question.qclass != DNS_CLASS_CH {
+        return None;
+    }
+    Some(ChaosQueryObservation {
+        qname: question.qname.to_string(),
+        qtype: question.qtype,
+        outcome: classify_chaos_query(&question, nsid, chaos).outcome,
+    })
+}
+
+fn answer_chaos_query(
+    header: &Header,
+    question: &Question,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> DatagramAction {
+    let classification = classify_chaos_query(question, options.nsid, options.chaos);
+    let Some(value) = classification.value else {
+        return DatagramAction::Respond(build_response(
+            header,
+            Rcode::Refused,
+            false,
+            Some(question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        ));
+    };
+
+    DatagramAction::Respond(build_response(
+        header,
+        Rcode::NoError,
+        true,
+        Some(question),
+        &[ResourceRecord {
+            owner: question.qname.clone(),
+            rr_type: RecordType::Txt as u16,
+            class: DNS_CLASS_CH,
+            ttl: 0,
+            rdata: txt_character_string(value),
+        }],
+        &[],
+        &[],
+        metadata,
+        options,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChaosClassification<'a> {
+    outcome: ChaosQueryOutcome,
+    value: Option<&'a [u8]>,
+}
+
+fn classify_chaos_query<'a>(
+    question: &Question,
+    nsid: &'a [u8],
+    chaos: ChaosOptions<'a>,
+) -> ChaosClassification<'a> {
+    if question.qtype != RecordType::Txt as u16 {
+        return ChaosClassification {
+            outcome: ChaosQueryOutcome::NonTxt,
+            value: None,
+        };
+    }
+
+    match question.qname.canonical_key().as_str() {
+        "version.bind." | "version.server." => configured_chaos_value(chaos.version.as_bytes()),
+        "hostname.bind." | "id.server." => configured_chaos_value(chaos.hostname.as_bytes())
+            .or_else(|| printable_nsid_chaos_value(nsid)),
+        _ => ChaosClassification {
+            outcome: ChaosQueryOutcome::UnrecognizedName,
+            value: None,
+        },
+    }
+}
+
+impl<'a> ChaosClassification<'a> {
+    fn or_else(self, fallback: impl FnOnce() -> Self) -> Self {
+        if self.value.is_some() {
+            self
+        } else {
+            fallback()
+        }
+    }
+}
+
+fn configured_chaos_value(value: &[u8]) -> ChaosClassification<'_> {
+    if value.is_empty() {
+        ChaosClassification {
+            outcome: ChaosQueryOutcome::MissingValue,
+            value: None,
+        }
+    } else {
+        ChaosClassification {
+            outcome: ChaosQueryOutcome::Answered,
+            value: Some(value),
+        }
+    }
+}
+
+fn printable_nsid_chaos_value(nsid: &[u8]) -> ChaosClassification<'_> {
+    if !nsid.is_empty() && nsid.len() <= 255 && nsid.iter().all(|byte| (0x20..=0x7e).contains(byte))
+    {
+        ChaosClassification {
+            outcome: ChaosQueryOutcome::Answered,
+            value: Some(nsid),
+        }
+    } else {
+        ChaosClassification {
+            outcome: ChaosQueryOutcome::MissingValue,
+            value: None,
+        }
+    }
+}
+
+fn txt_character_string(value: &[u8]) -> Vec<u8> {
+    let mut rdata = Vec::with_capacity(value.len() + 1);
+    rdata.push(value.len() as u8);
+    rdata.extend_from_slice(value);
+    rdata
 }
 
 fn answer_notify_message(
@@ -2149,6 +2326,10 @@ mod tests {
         response_section_ttls(response, expected_type, Section::Answer)
     }
 
+    fn response_answer_classes(response: &[u8], expected_type: u16) -> Vec<u16> {
+        response_section_classes(response, expected_type, Section::Answer)
+    }
+
     fn response_authority_ttls(response: &[u8], expected_type: u16) -> Vec<u32> {
         response_section_ttls(response, expected_type, Section::Authority)
     }
@@ -2186,6 +2367,25 @@ mod tests {
             Section::Authority => header.nscount,
         };
         parse_response_record_ttls(response, &mut offset, count, expected_type)
+    }
+
+    fn response_section_classes(response: &[u8], expected_type: u16, section: Section) -> Vec<u16> {
+        let header = Header::parse(response).unwrap();
+        let mut offset = DNS_HEADER_LEN;
+        for _ in 0..header.qdcount {
+            let (_, consumed) = DomainName::parse(response, offset).unwrap();
+            offset += consumed + 4;
+        }
+
+        if matches!(section, Section::Authority) {
+            skip_response_records(response, &mut offset, header.ancount);
+        }
+
+        let count = match section {
+            Section::Answer => header.ancount,
+            Section::Authority => header.nscount,
+        };
+        parse_response_record_classes(response, &mut offset, count, expected_type)
     }
 
     fn response_sections(response: &[u8]) -> (ParsedSection, ParsedSection, ParsedSection) {
@@ -2241,6 +2441,28 @@ mod tests {
             *offset += 10 + rdlength;
         }
         ttls
+    }
+
+    fn parse_response_record_classes(
+        response: &[u8],
+        offset: &mut usize,
+        count: u16,
+        expected_type: u16,
+    ) -> Vec<u16> {
+        let mut classes = Vec::new();
+        for _ in 0..count {
+            let (_, consumed) = DomainName::parse(response, *offset).unwrap();
+            *offset += consumed;
+            let rr_type = u16::from_be_bytes([response[*offset], response[*offset + 1]]);
+            let class = u16::from_be_bytes([response[*offset + 2], response[*offset + 3]]);
+            let rdlength =
+                u16::from_be_bytes([response[*offset + 8], response[*offset + 9]]) as usize;
+            if rr_type == expected_type {
+                classes.push(class);
+            }
+            *offset += 10 + rdlength;
+        }
+        classes
     }
 
     fn response_opt_rdata(response: &[u8]) -> Option<Vec<u8>> {
@@ -2838,6 +3060,210 @@ mod tests {
     }
 
     #[test]
+    fn chaos_version_txt_defaults_to_refused() {
+        let packet = query(
+            &DomainName::from_absolute_str("version.bind.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+
+        let response = store_response(&packet, &ZoneStore::new());
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn chaos_version_txt_returns_configured_value() {
+        let packet = query(
+            &DomainName::from_absolute_str("version.server.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                chaos: ChaosOptions {
+                    version: "OxideDNS anycast",
+                    hostname: "",
+                },
+                ..AnswerOptions::default()
+            },
+        );
+        let flags = u16::from_be_bytes([response[2], response[3]]);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(flags & 0x0400, 0x0400);
+        assert_eq!(
+            response_answer_classes(&response, RecordType::Txt as u16),
+            vec![DNS_CLASS_CH]
+        );
+        assert_eq!(
+            response_answer_ttls(&response, RecordType::Txt as u16),
+            vec![0]
+        );
+        assert_eq!(
+            response_answer_rdatas(&response, RecordType::Txt as u16),
+            vec![b"\x10OxideDNS anycast".to_vec()]
+        );
+    }
+
+    #[test]
+    fn chaos_hostname_txt_uses_config_then_printable_nsid_fallback() {
+        for (chaos, nsid, expected) in [
+            (
+                ChaosOptions {
+                    version: "",
+                    hostname: "bud-dns-1",
+                },
+                b"ignored".as_slice(),
+                b"\x09bud-dns-1".to_vec(),
+            ),
+            (
+                ChaosOptions {
+                    version: "",
+                    hostname: "",
+                },
+                b"nsid-bud-2".as_slice(),
+                b"\x0ansid-bud-2".to_vec(),
+            ),
+        ] {
+            let packet = query(
+                &DomainName::from_absolute_str("id.server.")
+                    .unwrap()
+                    .to_wire(),
+                RecordType::Txt as u16,
+                DNS_CLASS_CH,
+            );
+            let response = store_response_with_options(
+                &packet,
+                &ZoneStore::new(),
+                AnswerOptions {
+                    chaos,
+                    nsid,
+                    ..AnswerOptions::default()
+                },
+            );
+
+            assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+            assert_eq!(
+                response_answer_rdatas(&response, RecordType::Txt as u16),
+                vec![expected]
+            );
+        }
+    }
+
+    #[test]
+    fn chaos_hostname_txt_refuses_nonprintable_nsid() {
+        let packet = query(
+            &DomainName::from_absolute_str("hostname.bind.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                nsid: b"bud\x00node",
+                ..AnswerOptions::default()
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn chaos_unsupported_names_and_non_txt_types_are_refused() {
+        for (name, qtype) in [
+            ("authors.bind.", RecordType::Txt as u16),
+            ("site.example.", RecordType::Txt as u16),
+            ("version.bind.", RecordType::A as u16),
+            ("version.bind.", RecordType::Axfr as u16),
+            ("version.bind.", 255),
+        ] {
+            let packet = query(
+                &DomainName::from_absolute_str(name).unwrap().to_wire(),
+                qtype,
+                DNS_CLASS_CH,
+            );
+            let response = store_response_with_options(
+                &packet,
+                &ZoneStore::new(),
+                AnswerOptions {
+                    chaos: ChaosOptions {
+                        version: "OxideDNS",
+                        hostname: "node",
+                    },
+                    ..AnswerOptions::default()
+                },
+            );
+
+            assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+            assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+            assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
+        }
+    }
+
+    #[test]
+    fn in_class_version_name_uses_normal_zone_lookup() {
+        let packet = query(
+            &DomainName::from_absolute_str("version.bind.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_IN,
+        );
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                chaos: ChaosOptions {
+                    version: "OxideDNS",
+                    hostname: "node",
+                },
+                ..AnswerOptions::default()
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn chaos_query_observation_classifies_supported_cases() {
+        let packet = query(
+            &DomainName::from_absolute_str("version.bind.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+
+        let observation = chaos_query_observation(
+            &packet,
+            &[],
+            ChaosOptions {
+                version: "OxideDNS",
+                hostname: "",
+            },
+        )
+        .expect("CHAOS observation");
+
+        assert_eq!(observation.qname, "version.bind.");
+        assert_eq!(observation.qtype, RecordType::Txt as u16);
+        assert_eq!(observation.outcome, ChaosQueryOutcome::Answered);
+    }
+
+    #[test]
     fn outside_served_zones_gets_refused() {
         let packet = query(&example_name(), 1, 1);
         let zones = [DomainName::from_absolute_str("other.test.").unwrap()];
@@ -3261,6 +3687,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -3331,6 +3758,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Full,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -4019,6 +4447,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -5579,6 +6008,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -5628,6 +6058,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -5677,6 +6108,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: b"dns-bud-1",
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -5709,6 +6141,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: Some(context),
             },
         );
@@ -5748,6 +6181,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: Some(context),
             },
         );
@@ -5861,6 +6295,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: Some(context),
             },
         );
@@ -5902,6 +6337,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: Some(context),
             },
         );
@@ -5946,6 +6382,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: Some(context),
             },
         );
@@ -6316,6 +6753,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );
@@ -6350,6 +6788,7 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: &[],
+                chaos: ChaosOptions::default(),
                 dns_cookie: None,
             },
         );

@@ -59,6 +59,7 @@ bash -n scripts/interop-unknown-rr.sh
 bash -n scripts/interop-unknown-rr-bad-transfer.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
+bash -n scripts/interop-chaos-queries.sh
 bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh
 bash -n scripts/interop-dnssec-serve.sh
@@ -67,6 +68,7 @@ bash -n scripts/interop-rrl-udp.sh
 bash -n scripts/rrl-evidence-campaign.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
+scripts/interop-chaos-queries.sh
 scripts/capture-unsafe-dependency-evidence.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh

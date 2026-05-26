@@ -4,11 +4,12 @@ This directory contains the OxideDNS / OxideDNS-Secondary project
 specification, planning, and evidence documents.
 
 The current normative Software Requirements Specification is
-`OxideDNS-Secondary-SRS-v0.9.md`.
+`OxideDNS-Secondary-SRS-v0.9.md`, currently carrying the v0.9.1 requirement
+set.
 
 ## Files
 
-- `OxideDNS-Secondary-SRS-v0.9.md`: current normative Software Requirements Specification.
+- `OxideDNS-Secondary-SRS-v0.9.md`: current normative Software Requirements Specification, updated through v0.9.1.
 - `OxideDNS-Secondary-SRS-v0.1.md`: previous SRS baseline retained for history.
 - `OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion specification.
 - `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary.
@@ -30,4 +31,5 @@ The current normative Software Requirements Specification is
 - `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance assertion register.
 
 The planning and evidence documents are companion working artifacts. They remain
-subordinate to SRS v0.9 when scope or behavioral wording differs.
+subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
+wording differs.

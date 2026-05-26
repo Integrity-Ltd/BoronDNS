@@ -19,6 +19,7 @@ CANONICAL_CATEGORIES = {
     "xot",
     "rrl",
     "cookie",
+    "chaos",
     "configuration_warning",
     "signal",
     "startup",

@@ -69,6 +69,13 @@ any_response = "minimal"
 # diagnostic EDE codes for selected operational states, without extra text.
 extended_dns_errors = "off"
 
+[chaos]
+# Optional CH/TXT self-identification. Empty values make version.bind. and
+# version.server. REFUSED. hostname.bind. and id.server. fall back to printable
+# [server].nsid when hostname is empty.
+version = ""
+hostname = ""
+
 [dnssec]
 # Maximum NSEC3 iterations accepted when composing negative DNSSEC proofs.
 # Default: 100, the legacy soft ceiling from RFC 9276 / BCP 236.

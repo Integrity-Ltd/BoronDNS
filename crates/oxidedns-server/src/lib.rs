@@ -36,10 +36,11 @@ use oxidedns_core::{
         TransferPrimaryConfig, TransferTransportConfig, ZoneConfig,
     },
     dns::{
-        AnswerOptions, AnyResponseMode, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction,
-        DnsCookieContext, DnsCookiePolicy, DnsCookieRequestStatus, DomainName,
-        ExtendedDnsErrorsMode, Header, LookupResult, LookupTermination, Opcode, Question, Rcode,
-        RecordType, Transport, answer_message_with_notify_hooks_and_query_observer,
+        AnswerOptions, AnyResponseMode, ChaosOptions, ChaosQueryOutcome,
+        DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction, DnsCookieContext, DnsCookiePolicy,
+        DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode, Header, LookupResult,
+        LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
+        answer_message_with_notify_hooks_and_query_observer, chaos_query_observation,
         dns_cookie_request_status, request_has_valid_dns_server_cookie,
     },
     tsig::{
@@ -507,6 +508,8 @@ impl Runtime {
             let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
+            let chaos_version = self.config.chaos.version.clone();
+            let chaos_hostname = self.config.chaos.hostname.clone();
             let notify_authority = notify_authority.clone();
             let notify_refresh = notify_refresh.clone();
             let notify_refresh_tx = notify_refresh_tx.clone();
@@ -521,6 +524,8 @@ impl Runtime {
                 extended_dns_errors,
                 any_response,
                 nsid,
+                chaos_version,
+                chaos_hostname,
                 dns_cookie_secrets: dns_cookie_secrets.clone(),
                 dns_cookie,
                 cookie_prefix_metrics,
@@ -555,6 +560,8 @@ impl Runtime {
             let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
             let nsid = self.config.server.nsid.as_bytes().to_vec();
+            let chaos_version = self.config.chaos.version.clone();
+            let chaos_hostname = self.config.chaos.hostname.clone();
             let tcp_connections = tcp_connections.clone();
             let tcp_source_connections = tcp_source_connections.clone();
             let tcp_settings = TcpServerSettings {
@@ -572,6 +579,8 @@ impl Runtime {
                 extended_dns_errors,
                 any_response,
                 nsid,
+                chaos_version,
+                chaos_hostname,
                 dns_cookie_secrets: dns_cookie_secrets.clone(),
                 dns_cookie,
                 cookie_prefix_metrics,
@@ -2859,6 +2868,11 @@ async fn serve_udp(
             settings.cookie_prefix_metrics,
             &settings.metrics,
         );
+        let chaos = ChaosOptions {
+            version: &settings.chaos_version,
+            hostname: &settings.chaos_hostname,
+        };
+        let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
         let compose_started = settings.metrics.start_pipeline_timer();
         let action = answer_message_with_notify_hooks_and_query_observer(
             &prepared.packet,
@@ -2873,6 +2887,7 @@ async fn serve_udp(
                 extended_dns_errors: settings.extended_dns_errors,
                 any_response: settings.any_response,
                 nsid: &settings.nsid,
+                chaos,
                 dns_cookie,
             },
             |qname, qclass| {
@@ -2912,6 +2927,13 @@ async fn serve_udp(
                 );
             }
             DatagramAction::Respond(response) => {
+                record_chaos_query_if_observed(
+                    chaos_observation.as_ref(),
+                    &response,
+                    &settings.metrics,
+                    peer_ip,
+                    "udp",
+                );
                 let response = match sign_tsig_response(response, prepared.response_tsig) {
                     Ok(response) => response,
                     Err(error) => {
@@ -3070,6 +3092,33 @@ fn record_dns_cookie_badcookie_if_emitted(
         %peer_ip,
         reason = ?reason,
         "DNS Cookie BADCOOKIE response emitted"
+    );
+}
+
+fn record_chaos_query_if_observed(
+    observation: Option<&oxidedns_core::dns::ChaosQueryObservation>,
+    response: &[u8],
+    metrics: &RuntimeMetrics,
+    peer_ip: IpAddr,
+    transport: &'static str,
+) {
+    let Some(observation) = observation else {
+        return;
+    };
+    metrics.record_chaos_query(observation.outcome);
+    let rcode = Header::parse(response)
+        .ok()
+        .map(|header| response_rcode(response, &header))
+        .unwrap_or_default();
+    debug!(
+        category = "chaos",
+        %peer_ip,
+        transport,
+        qname = %observation.qname,
+        qtype = observation.qtype,
+        outcome = observation.outcome.label(),
+        rcode,
+        "CHAOS-class query handled"
     );
 }
 
@@ -3388,6 +3437,8 @@ struct UdpServerSettings {
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
     dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
@@ -3462,6 +3513,8 @@ async fn serve_tcp(
                 settings.extended_dns_errors,
                 settings.any_response,
                 settings.nsid,
+                settings.chaos_version,
+                settings.chaos_hostname,
                 settings.dns_cookie_secrets,
                 settings.dns_cookie,
                 settings.cookie_prefix_metrics,
@@ -3757,6 +3810,7 @@ fn metrics_body(
     append_dns_cookie_prefix_metrics(&mut body, metrics);
     append_configuration_warning_metrics(&mut body, snapshot);
     append_dnssec_metrics(&mut body, snapshot);
+    append_chaos_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
     append_catalog_member_metrics(&mut body, catalog_manager);
@@ -3952,6 +4006,30 @@ fn append_dnssec_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
         "oxidedns_dnssec_nsec3_iterations_exceed_cap_total {}\n",
         snapshot.nsec3_iterations_exceed_cap
     ));
+}
+
+fn append_chaos_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_chaos_queries_total CHAOS-class query outcomes.\n\
+         # TYPE oxidedns_chaos_queries_total counter\n",
+    );
+    for (outcome, count) in [
+        (ChaosQueryOutcome::Answered, snapshot.chaos_answered),
+        (
+            ChaosQueryOutcome::MissingValue,
+            snapshot.chaos_missing_value,
+        ),
+        (
+            ChaosQueryOutcome::UnrecognizedName,
+            snapshot.chaos_unrecognized_name,
+        ),
+        (ChaosQueryOutcome::NonTxt, snapshot.chaos_non_txt),
+    ] {
+        body.push_str(&format!(
+            "oxidedns_chaos_queries_total{{outcome=\"{}\"}} {count}\n",
+            outcome.label()
+        ));
+    }
 }
 
 fn append_notify_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
@@ -4749,6 +4827,10 @@ struct RuntimeMetricsInner {
     dns_cookie_badcookie: AtomicU64,
     configuration_warnings: AtomicU64,
     nsec3_iterations_exceed_cap: AtomicU64,
+    chaos_answered: AtomicU64,
+    chaos_missing_value: AtomicU64,
+    chaos_unrecognized_name: AtomicU64,
+    chaos_non_txt: AtomicU64,
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
     zone_queries: Mutex<HashMap<String, u64>>,
@@ -4795,6 +4877,10 @@ struct RuntimeMetricsSnapshot {
     dns_cookie_badcookie: u64,
     configuration_warnings: u64,
     nsec3_iterations_exceed_cap: u64,
+    chaos_answered: u64,
+    chaos_missing_value: u64,
+    chaos_unrecognized_name: u64,
+    chaos_non_txt: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -5210,6 +5296,16 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_chaos_query(&self, outcome: ChaosQueryOutcome) {
+        let counter = match outcome {
+            ChaosQueryOutcome::Answered => &self.inner.chaos_answered,
+            ChaosQueryOutcome::MissingValue => &self.inner.chaos_missing_value,
+            ChaosQueryOutcome::UnrecognizedName => &self.inner.chaos_unrecognized_name,
+            ChaosQueryOutcome::NonTxt => &self.inner.chaos_non_txt,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_dns_cookie_badcookie_for_source(
         &self,
         source: IpAddr,
@@ -5430,6 +5526,10 @@ impl RuntimeMetrics {
                 .inner
                 .nsec3_iterations_exceed_cap
                 .load(Ordering::Relaxed),
+            chaos_answered: self.inner.chaos_answered.load(Ordering::Relaxed),
+            chaos_missing_value: self.inner.chaos_missing_value.load(Ordering::Relaxed),
+            chaos_unrecognized_name: self.inner.chaos_unrecognized_name.load(Ordering::Relaxed),
+            chaos_non_txt: self.inner.chaos_non_txt.load(Ordering::Relaxed),
         }
     }
 }
@@ -5460,6 +5560,8 @@ struct TcpServerSettings {
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
     dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
@@ -7849,6 +7951,8 @@ async fn handle_tcp_connection(
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
     dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
@@ -7874,6 +7978,8 @@ async fn handle_tcp_connection(
         extended_dns_errors,
         any_response,
         nsid,
+        chaos_version,
+        chaos_hostname,
         dns_cookie_secrets,
         dns_cookie,
         cookie_prefix_metrics,
@@ -7904,6 +8010,8 @@ async fn handle_tcp_connection_with_query_hook(
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
     dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
@@ -7961,6 +8069,8 @@ async fn handle_tcp_connection_with_query_hook(
             extended_dns_errors,
             any_response,
             nsid.clone(),
+            chaos_version.clone(),
+            chaos_hostname.clone(),
             dns_cookie_secrets.clone(),
             dns_cookie,
             cookie_prefix_metrics,
@@ -8038,6 +8148,8 @@ async fn handle_tcp_packet(
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
     nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
     dns_cookie_secrets: DnsCookieSecretStore,
     dns_cookie: DnsCookieRuntimeSettings,
     cookie_prefix_metrics: CookiePrefixMetricSettings,
@@ -8110,6 +8222,11 @@ async fn handle_tcp_packet(
         cookie_prefix_metrics,
         &metrics,
     );
+    let chaos = ChaosOptions {
+        version: &chaos_version,
+        hostname: &chaos_hostname,
+    };
+    let chaos_observation = chaos_query_observation(&prepared.packet, &nsid, chaos);
     let compose_started = metrics.start_pipeline_timer();
     let action = answer_message_with_notify_hooks_and_query_observer(
         &prepared.packet,
@@ -8124,6 +8241,7 @@ async fn handle_tcp_packet(
             extended_dns_errors,
             any_response,
             nsid: &nsid,
+            chaos,
             dns_cookie,
         },
         |qname, qclass| {
@@ -8158,6 +8276,13 @@ async fn handle_tcp_packet(
             );
         }
         DatagramAction::Respond(response) => {
+            record_chaos_query_if_observed(
+                chaos_observation.as_ref(),
+                &response,
+                &metrics,
+                peer_ip,
+                "tcp",
+            );
             record_dns_cookie_badcookie_if_emitted(
                 dns_cookie_metrics,
                 &response,
@@ -8287,8 +8412,9 @@ mod tests {
         axfr::{IxfrResponse, frame_tcp_message},
         config::{HealthConfig, RrlConfig, TransferPrimaryConfig, TransferTransportConfig},
         dns::{
-            AnyResponseMode, DnsCookiePolicy, DnsCookieRequestStatus, DomainName,
-            ExtendedDnsErrorsMode, Header, LookupTermination, Opcode, Rcode, RecordType, Transport,
+            AnyResponseMode, ChaosQueryOutcome, DnsCookiePolicy, DnsCookieRequestStatus,
+            DomainName, ExtendedDnsErrorsMode, Header, LookupTermination, Opcode, Rcode,
+            RecordType, Transport,
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -9100,6 +9226,10 @@ mod tests {
             cookie_prefix_metrics,
         );
         metrics_state.record_nsec3_iterations_exceed_cap();
+        metrics_state.record_chaos_query(ChaosQueryOutcome::Answered);
+        metrics_state.record_chaos_query(ChaosQueryOutcome::MissingValue);
+        metrics_state.record_chaos_query(ChaosQueryOutcome::UnrecognizedName);
+        metrics_state.record_chaos_query(ChaosQueryOutcome::NonTxt);
         let refresh_registry = ZoneRefreshRegistry::without_jitter(
             std::time::Duration::from_secs(60),
             std::time::Duration::from_secs(60),
@@ -9201,6 +9331,10 @@ mod tests {
         ));
         assert!(metrics.contains("oxidedns_secondary_configuration_warnings_total 4"));
         assert!(metrics.contains("oxidedns_dnssec_nsec3_iterations_exceed_cap_total 1"));
+        assert!(metrics.contains("oxidedns_chaos_queries_total{outcome=\"answered\"} 1"));
+        assert!(metrics.contains("oxidedns_chaos_queries_total{outcome=\"missing_value\"} 1"));
+        assert!(metrics.contains("oxidedns_chaos_queries_total{outcome=\"unrecognized_name\"} 1"));
+        assert!(metrics.contains("oxidedns_chaos_queries_total{outcome=\"non_txt\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"axfr\"} 1"));
         assert!(metrics.contains("oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"} 0"));
         assert!(
@@ -11248,6 +11382,8 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                chaos_version: String::new(),
+                chaos_hostname: String::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
@@ -11384,6 +11520,8 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                chaos_version: String::new(),
+                chaos_hostname: String::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
@@ -11471,6 +11609,8 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                chaos_version: String::new(),
+                chaos_hostname: String::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
@@ -13562,6 +13702,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13648,6 +13790,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13726,6 +13870,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13811,6 +13957,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13875,6 +14023,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13922,6 +14072,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -13983,6 +14135,8 @@ mod tests {
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
                 Vec::new(),
+                String::new(),
+                String::new(),
                 dns_cookie_secret_store_for_test(),
                 dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics_for_test(),
@@ -14034,6 +14188,8 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                chaos_version: String::new(),
+                chaos_hostname: String::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
@@ -14094,6 +14250,8 @@ mod tests {
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
                 nsid: Vec::new(),
+                chaos_version: String::new(),
+                chaos_hostname: String::new(),
                 dns_cookie_secrets: dns_cookie_secret_store_for_test(),
                 dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
                 cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
@@ -15411,6 +15569,8 @@ mod tests {
             extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
             nsid: Vec::new(),
+            chaos_version: String::new(),
+            chaos_hostname: String::new(),
             dns_cookie_secrets: dns_cookie_secret_store_for_test(),
             dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
             cookie_prefix_metrics: cookie_prefix_metrics_for_test(),

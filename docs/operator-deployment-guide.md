@@ -134,6 +134,8 @@ and are included in `--dump-config` output:
 - `ODS_SERVER_LOG_LEVEL`
 - `ODS_SERVER_LOG_FORMAT`
 - `ODS_SERVER_NSID`
+- `ODS_CHAOS_VERSION`
+- `ODS_CHAOS_HOSTNAME`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE`
 - `ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS`
 - `ODS_TSIG_FUDGE_SECONDS`
@@ -148,6 +150,9 @@ Unrecognised variables matching `ODS_*` are emitted to stderr as non-fatal
 Suspicious but valid configuration warnings are also non-fatal. The current
 implemented warning catalogue is:
 
+- `chaos_version_discloses_build`: `[chaos].version` looks like a precise
+  build version. Public deployments should prefer an empty value or a softer
+  family/anycast label.
 - `dns_cookies_disabled`: `[cookie] policy = "disabled"`.
 - `rrl_global_allowlist`: `[rrl] allowlist` contains `0.0.0.0/0` or `::/0`.
 - `tcp_idle_timeout_large`: `[limits] tcp_idle_timeout_secs` is greater than
@@ -197,6 +202,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   `minimal` enables RFC 8914 EDE INFO-CODE 14 for not-ready zones and
   INFO-CODE 27 for NSEC3 iteration-cap downgrades when the client sent an OPT
   RR.
+- `[chaos]`: optional CHAOS-class CH/TXT self-identification. Empty
+  `version` makes `version.bind.` and `version.server.` REFUSED. Empty
+  `hostname` makes `hostname.bind.` and `id.server.` fall back to printable
+  `[server].nsid` when available, otherwise REFUSED.
 - `[dnssec]`: DNSSEC serving safeguards. `nsec3_max_iterations = 100` limits
   NSEC3 denial-proof hashing work; responses above the cap keep the base RCODE
   but may omit NSEC3 proof RRsets and, with minimal EDE enabled, include EDE
@@ -417,6 +426,7 @@ NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
 per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, the
 `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and the
+`oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
 bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
 seconds and default to the SRS v0.9 bucket list.

@@ -2,9 +2,9 @@
 
 ## OxideDNS-Secondary
 
-**Document Version:** v0.9 (Draft 9)
-**Date:** 25 May 2026
-**Status:** Draft — Alpha implementation audit closure
+**Document Version:** v0.9.1 (Draft 9, point release 1)
+**Date:** 26 May 2026
+**Status:** Draft — CHAOS class self-identification addition, OxideDNS namespace alignment
 
 ---
 
@@ -14,8 +14,8 @@
 |---|---|
 | Project | OxideDNS-Secondary |
 | Document | Software Requirements Specification (SRS) |
-| Version | v0.9 |
-| Date | 25 May 2026 |
+| Version | v0.9.1 |
+| Date | 26 May 2026 |
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
@@ -34,6 +34,7 @@
 | v0.7 | 24 May 2026 | DT | **Verification strategy audit closure — final audit cycle revision.** §7 intro updated (removed obsolete "future revision" note regarding VER category, which was registered in earlier revisions). **Method catalog (§7.1) expanded** with four new methods: Property-based test, Differential test, Static analysis (elevated as distinct method from Inspection), Security audit. **ODS-VER-001 reformulated** from self-referential tautology to a coherence requirement (Verification fields must reference methods enumerated in §7.1). **Six new VER requirements**: ODS-VER-010 (pre-release verification gate with release-notes capture); ODS-VER-011 (Continuous / Periodic / Gate verification classification); ODS-VER-012 (regression detection and triage policy, with configurable performance-regression threshold); ODS-VER-013 (interoperability primary version recording for reproducibility); ODS-VER-014 (RFC compliance assertion publication in release notes and primary documentation); ODS-VER-015 (verification responsibility allocation). **ODS-VER-007 (Alpha milestone) corrected**: §6.6 PROC requirements added to Alpha scope (PROC-001/-002/-003); §6.1 NET-008 marked optional; §6.2 CONF-008–-012 included in Alpha; §5.6 OBS-005 added to Alpha. **ODS-VER-009 (traceability matrix) extended** with explicit update cadence (synchronous with each release). **Appendix C.5 updated** with v0.7 resolutions. **Closing audit-cycle note** added at end of §7. With this revision the audit cycle initiated at v0.2 is complete: functional (§4) in v0.3, non-functional (§5) in v0.4, interface (§6) in v0.5, architectural invariants (§3) in v0.6, verification (§7) in v0.7. |
 | v0.8 | 25 May 2026 | DT | **Zone Provisioning feature addition; CIA-driven security expansion.** **New §4.20 Zone Provisioning** introduces the ZoneProvider abstraction, allowing the set of zones served by a server instance to be derived from explicit `[[zones]]` configuration and/or DNS Catalog Zones per RFC 9432 via `[[catalog_zones]]`. New area code **PROV** allocated. New requirements ODS-FR-PROV-001 through ODS-FR-PROV-014 covering explicit zones, catalog parsing, member-zone lifecycle (provisioning, de-provisioning), security constraints, and resource limits. **ODS-INV-005 (Static Configuration) clarified**: catalog-derived member-zone set added to the enumerated examples of runtime-derived state explicitly excluded from the "configuration" scope of the invariant. The invariant's *Implications* paragraph extended to note that the configured explicit and catalog-zone sources are static, while the derived catalog member set is runtime-derived state akin to zone contents and the zone state machine state. **Appendix C.3.9 (DNS Catalog Zones) removed** from the exclusions list and promoted to in-scope; the rationale-for-exclusion has been resolved by the §4.20 design which preserves ODS-INV-005 by isolating statically configured catalog-zone coordinates from the runtime-derived member set. **New security requirements from CIA threat-model analysis (§5.3)**: ODS-NFR-SEC-008 (TSIG key material loadable from environment variables with zeroization at load), ODS-NFR-SEC-009 (transfer authentication advisory and `require_tsig` flag), ODS-NFR-SEC-010 (mandatory catalog-zone TSIG authentication; refusal to start with a catalog zone without TSIG key), ODS-NFR-SEC-011 (catalog must not redirect member-zone primary coordinates), ODS-NFR-SEC-012 (multi-primary catalog support for SPOF mitigation), ODS-NFR-SEC-013 (`max_member_zones` resource exhaustion cap), ODS-NFR-SEC-014 (per-transfer-session timeout for tarpit defence), ODS-NFR-SEC-015 (catalog member-zone name syntactic validation). **New observability requirement ODS-NFR-OBS-008**: catalog-specific Prometheus metrics catalogue. **§6.2 extended**: ODS-IF-CONF-013 specifies `[[zones]]` and `[[catalog_zones]]` zone-provisioning configuration. **§6.4 extended**: ODS-NFR-OBS-004 `/readyz` semantics updated to include catalog-zone state. **Appendix D.5.2 area code registry updated** with PROV. **Note on audit feedback**: the in-progress code audit of the OxideDNS Alpha implementation is being tracked in a separate workstream; its findings will be incorporated in a subsequent revision (v0.9, scope TBD). |
 | v0.9 | 25 May 2026 | DT | **Alpha implementation audit closure.** Incorporates findings from the structured functional review of the OxideDNS Alpha (MVP 1.0) implementation conducted against this SRS. The audit confirmed that the implementation faithfully realises the requirements of v0.8 in the wire-protocol, transfer-client, NOTIFY, TSIG, XoT, EDNS, TCP, DNSSEC-serving, zone state machine, RRL, DNS Cookies, configuration, logging, health/metrics, process-security, and zone-provisioning layers, with a small set of functional gaps and a small set of clarifications to existing requirements. **Functional additions from audit:** ODS-FR-DNSSEC-014 (NSEC3 iteration count cap per RFC 9276 / BCP 236) addresses a CPU-amplification risk in serving zones signed with high-iteration NSEC3 parameters; the cap value is configurable per ODS-IF-CONF-015 and a configuration warning `nsec3_iterations_large` is added to the §6.2 warning catalogue when the configured cap exceeds the BCP 236 recommended ceiling. ODS-FR-QRY-025 (DNAME synthesis name-length overflow handling per RFC 6672 §5.3.1) requires the server to return YXDOMAIN (RCODE 6) when CNAME synthesis from a DNAME would produce a name exceeding the 255-octet domain-name length limit; the prior text of ODS-FR-QRY-014 was silent on this specific failure mode. ODS-FR-AXFR-025 (out-of-zone glue tolerance, optional) introduces a configuration-controlled option, off by default, to relax the strict out-of-zone owner-name rejection of ODS-FR-AXFR-012 for compatibility with primary configurations that emit traditional out-of-zone glue; the relaxation is bounded to A/AAAA records only and is logged when exercised. ODS-FR-AXFR-026 (DNAME multiplicity validation per RFC 6672 §2.4) requires the transfer ingestion layer to reject AXFR or IXFR streams that present more than one DNAME RR at the same owner name within the same zone. **Configuration interface additions from audit:** ODS-IF-CONF-014 (environment-variable override re-validation) requires the configuration validator to re-run the structural and cross-field validation after applying environment-variable overrides per ODS-IF-CONF-012, ensuring that an override cannot place the configuration outside the validity envelope established at TOML parse time. ODS-IF-CONF-015 (NSEC3 max iterations parameter) and ODS-IF-CONF-016 (out-of-zone glue tolerance parameter) provide the configuration surface for ODS-FR-DNSSEC-014 and ODS-FR-AXFR-025 respectively. **Interoperability matrix extension:** ODS-VER-003 extended to require XoT interop coverage against BIND 9 in addition to the already-required Knot DNS XoT coverage, reflecting BIND 9's stable XoT server support from version 9.18 onward. **Implementation evidence confirmations from audit:** the audit recorded confirmations against several existing requirements that are noted in Appendix C.5 (the implementation enforces the panic-freedom and `unsafe`-discipline of ODS-INV-006 with zero `unwrap()` and zero `panic!()` invocations in production code paths; the bind-then-drop privilege model of ODS-NFR-SEC-004 is enforced via a process_signals + privilege module with audited POSIX FFI; secret material is held in zeroizing wrappers and redacted in structured-log Debug formatters per ODS-NFR-SEC-001 / ODS-IF-LOG-005; the NOTIFY discard logging rate-limit per ODS-FR-NOTIFY-009 is implemented with per-source-prefix granularity). These confirmations do not change the requirements; they record that the requirements are met by the Alpha implementation. **Appendix C.5 updated** with the audit-closure entries. **No invariant changes**: §3 (ODS-INV-001 through ODS-INV-009) is unchanged. **No NEG changes**: §4.18 is unchanged. |
+| v0.9.1 | 26 May 2026 | DT | **CHAOS class self-identification addition.** Incorporates the 26 May 2026 v0.9.1 SRS attachment after normalising legacy non-OxideDNS naming to the project-canonical `OxideDNS`/`ODS-` namespace and preserving the already-adopted OxideDNS v0.9 corrections for catalog-zone configuration (`[[zones]]` and `[[catalog_zones]]`), DNS-interface NOTIFY handling, and the bounded EDE profile. Introduces §4.21 (CHAOS Class Query Handling) and allocates functional area code **CHAS**. New requirements ODS-FR-CHAS-001 through ODS-FR-CHAS-006 specify opt-in `version.bind.` / `version.server.` and `hostname.bind.` / `id.server.` CH/TXT responses, REFUSED defaults, REFUSED handling for unsupported CHAOS names and non-TXT CHAOS queries, IN-class orthogonality, and low-noise counters/logging. Adds ODS-IF-CONF-018 for the `[chaos]` configuration subtree; ODS-IF-CONF-017 remains allocated to the bounded Extended DNS Errors profile from v0.9 implementation alignment, so the incoming v0.9.1 `CONF-017` allocation is renumbered to avoid identifier collision. No invariant changes. No NEG changes. |
 
 ---
 
@@ -72,6 +73,7 @@
    - 4.18 Negative Requirements
    - 4.19 DNS Cookies
    - 4.20 Zone Provisioning *(new in v0.8)*
+   - 4.21 CHAOS Class Query Handling *(new in v0.9.1)*
 5. [Non-Functional Requirements](#5-non-functional-requirements)
    - 5.1 Performance
    - 5.2 Reliability and Availability
@@ -588,7 +590,7 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §4.1.1.
 *Verification.* Wire-format inspection.
 
-**ODS-FR-CORE-014.** In responses, the server MUST set the AA bit to 1 when the answer is authoritative for the queried name (a direct match, NODATA, NXDOMAIN, or wildcard synthesis within a served zone) and MUST set the AA bit to 0 for referral responses to delegated child zones. For all other response categories — REFUSED (per ODS-FR-CORE-018, ODS-FR-CORE-019), FORMERR (per ODS-FR-CORE-006, ODS-FR-CORE-007, ODS-FR-CORE-008), NOTIMP (per ODS-FR-CORE-005, ODS-FR-QRY-008), SERVFAIL (per ODS-FR-QRY-021, ODS-FR-QRY-022), NOTAUTH (per ODS-FR-TSIG-013), and any other response not falling into the authoritative-positive or authoritative-negative categories above — the AA bit MUST be set to 0.
+**ODS-FR-CORE-014.** In responses, the server MUST set the AA bit to 1 when the answer is authoritative for the queried name (a direct match, NODATA, NXDOMAIN, or wildcard synthesis within a served zone) or when returning an opt-in NOERROR response for a recognised CHAOS-class self-identification query per ODS-FR-CHAS-001 and ODS-FR-CHAS-002. The server MUST set the AA bit to 0 for referral responses to delegated child zones. For all other response categories — REFUSED (per ODS-FR-CORE-018, ODS-FR-CORE-019, ODS-FR-CHAS-001, ODS-FR-CHAS-002, ODS-FR-CHAS-003, and ODS-FR-CHAS-004), FORMERR (per ODS-FR-CORE-006, ODS-FR-CORE-007, ODS-FR-CORE-008), NOTIMP (per ODS-FR-CORE-005, ODS-FR-QRY-008), SERVFAIL (per ODS-FR-QRY-021, ODS-FR-QRY-022), NOTAUTH (per ODS-FR-TSIG-013), and any other response not falling into the authoritative-positive, authoritative-negative, or recognised CHAOS self-identification categories above — the AA bit MUST be set to 0.
 *Source.* RFC 1034 §4.3.1; RFC 1035 §4.1.1; defensive interpretation for error categories not explicitly addressed by RFC 1035.
 *Verification.* Wire-format inspection across answer categories including referrals, REFUSED, FORMERR, NOTIMP, SERVFAIL, and NOTAUTH responses.
 
@@ -606,9 +608,9 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §3.2.5.
 *Verification.* Lookup tests with QCLASS = ANY.
 
-**ODS-FR-CORE-018.** The server MUST respond with RCODE = 5 (REFUSED) to queries with QCLASS values other than IN or ANY when no zone of the requested class is served.
+**ODS-FR-CORE-018.** Except for the CHAOS-class self-identification surface specified in §4.21, the server MUST respond with RCODE = 5 (REFUSED) to queries with QCLASS values other than IN or ANY when no zone of the requested class is served.
 *Source.* RFC 1035 §3.2.4. REFUSED is selected over NOTAUTH because the server is not authoritative for any zone of the requested class.
-*Note.* This requirement entails that traditional CHAOS-class informational queries — `version.bind`, `id.server`, `hostname.bind`, `authors.bind`, and similar names in QCLASS = CH — receive REFUSED rather than informational responses. This is a deliberate design choice consistent with the project's reduced-attack-surface stance and PID §2.2 (minimal codebase target). Operators who want to expose server identity or version information SHOULD use the NSID mechanism (ODS-FR-EDNS-016) instead, which is an opt-in EDNS option requested per-query by the client. Operators who want to expose server identity in CH-class for compatibility with existing monitoring infrastructure must use a different secondary implementation.
+*Note.* CHAOS-class `TXT` queries for the explicitly enumerated names in ODS-FR-CHAS-001 and ODS-FR-CHAS-002 are handled by the §4.21 meta-query path. All other non-IN/non-ANY class queries, including unsupported CHAOS names and non-TXT CHAOS queries per ODS-FR-CHAS-003 and ODS-FR-CHAS-004, remain refused.
 *Verification.* Lookup tests with QCLASS = CH, HS, NONE, and reserved values, including the traditional CH-class informational queries.
 
 ### Authoritative lookup and response construction
@@ -2394,6 +2396,56 @@ The area code **PROV** is allocated.
 *Note.* The decision to ignore `primaries` properties is a deliberate security stance, not an oversight. Honouring `primaries` would allow a compromised catalog primary to redirect member-zone transfers to attacker-controlled hosts. The catalog-zone implementation here is intentionally narrower than the full RFC 9432 specification permits.
 *Verification.* Tests with catalog zones containing `primaries` properties; verify the static-configuration defaults are used and the properties are ignored.
 
+## 4.21 CHAOS Class Query Handling
+
+This subsection specifies the server's response policy to queries in the `CHAOS` (CH) class: a class historically allocated for the Chaosnet protocol (RFC 1035 §3.2.4) and commonly used by DNS operational tooling to probe authoritative or recursive servers for self-identifying information. The de-facto probe names in scope here are `version.bind.` and `version.server.` for software-family identity, and `hostname.bind.` and `id.server.` for server-instance identity in anycast or load-balanced deployments.
+
+The default policy is conservative: the server discloses nothing unless the operator explicitly configures a response. Where operators opt in, the configured values are operator-chosen strings, not automatically generated build identifiers. The recommended public-facing convention is to disclose software family and topology, for example `"OxideDNS unicast"` or `"OxideDNS anycast"`, while reserving precise build-version information for authenticated or local operational channels such as the `--version` CLI output, image metadata, release manifests, and structured startup logs.
+
+CHAOS-class handling is a meta-query path that precedes normal zone lookup. CHAOS queries do not enter the in-memory zone store of §4.15 and do not imply that the server is authoritative for a CHAOS zone. Responses are still constructed entirely from local server state under ODS-INV-007; the server performs no recursion or external lookup to answer them.
+
+The area code **CHAS** is allocated.
+
+### Recognised CHAOS TXT names
+
+**ODS-FR-CHAS-001.** The server MUST recognise inbound DNS queries with QCLASS = 3 (CHAOS / CH), QTYPE = 16 (TXT), and QNAME equal to `version.bind.` or `version.server.` (case-insensitive label comparison per RFC 1035 §2.3.3). When `chaos.version` (per ODS-IF-CONF-018) is configured to a non-empty string, the server MUST construct a response with RCODE = 0 (NOERROR), AA = 1, an answer-section RR whose owner name is the queried name, CLASS = CHAOS, TYPE = TXT, TTL = 0, and RDATA consisting of one TXT character-string carrying the configured value. When `chaos.version` is empty or absent, the server MUST respond with RCODE = 5 (REFUSED) and no answer-section RRs.
+*Source.* RFC 1035 §3.2.4; RFC 1035 §3.3.14; de-facto operational practice originating with BIND.
+*Note.* The configured value is bounded by the 255-octet TXT character-string limit. Operators may choose a precise build string on internal-only deployments, but public-facing deployments SHOULD prefer a soft-identifying value or the default REFUSED behaviour. TTL = 0 is used because these responses are diagnostic and should not be cached for operationally meaningful periods.
+*Verification.* Conformance tests with CH/TXT queries for both QNAMEs, with and without `chaos.version` configured; wire-format inspection of class, type, TTL, TXT framing, AA, and REFUSED default behaviour. *Added in v0.9.1.*
+
+**ODS-FR-CHAS-002.** The server MUST recognise inbound DNS queries with QCLASS = CHAOS, QTYPE = TXT, and QNAME equal to `hostname.bind.` or `id.server.` (case-insensitive). The response value MUST be selected as follows:
+- if `chaos.hostname` (per ODS-IF-CONF-018) is configured to a non-empty value, that value is used;
+- otherwise, if the configured NSID value (per ODS-FR-EDNS-017) is non-empty and consists only of printable ASCII octets (0x20 through 0x7E inclusive), the NSID value is used;
+- otherwise, the server MUST respond with RCODE = 5 (REFUSED).
+
+Where a value is selected, the response MUST be constructed as in ODS-FR-CHAS-001: NOERROR, AA = 1, one CHAOS/TXT answer RR with TTL = 0, and a single TXT character-string carrying the selected value.
+*Source.* RFC 5001 §3; de-facto operational practice.
+*Note.* The NSID fallback avoids duplicating the same node identifier in two configuration locations. The printable-ASCII restriction exists because NSID is opaque octet content and may contain values that are not suitable for TXT presentation; operators using non-printable NSID values can configure `chaos.hostname` explicitly.
+*Verification.* Tests covering explicit `chaos.hostname`, printable NSID fallback, non-printable NSID refusal, and both values absent. *Added in v0.9.1.*
+
+### Unsupported CHAOS names and types
+
+**ODS-FR-CHAS-003.** For inbound queries with QCLASS = CHAOS, QTYPE = TXT, and QNAME other than the names enumerated in ODS-FR-CHAS-001 and ODS-FR-CHAS-002 — including `authors.bind.`, `id.authors.`, and site-specific CHAOS names — the server MUST respond with RCODE = 5 (REFUSED) and no answer-section RRs. The server MUST NOT implement `authors.bind.` or any other software-author-credit name.
+*Source.* Operational minimal-disclosure policy; explicit project decision against BIND-specific authorship-credit names.
+*Note.* REFUSED is preferred over NXDOMAIN because the CHAOS class is not represented as a zone in the §4.15 zone store; there is no authoritative CHAOS zone in which the name could be proven to exist or not exist.
+*Verification.* CH/TXT tests for `authors.bind.`, `id.authors.`, and arbitrary CHAOS names; verify REFUSED independent of configuration. *Added in v0.9.1.*
+
+**ODS-FR-CHAS-004.** For inbound queries with QCLASS = CHAOS and QTYPE other than TXT, the server MUST respond with RCODE = 5 (REFUSED), regardless of QNAME, with no answer-section RRs and no SOA in the authority section. The server MUST NOT attempt to construct CHAOS-class A, AAAA, ANY, AXFR, SOA, or other non-TXT data responses.
+*Source.* RFC 1035 §3.2.4; operational minimal-disclosure policy.
+*Verification.* Tests with CH/A, CH/AAAA, CH/ANY, CH/SOA, and CH/AXFR queries for recognised and arbitrary names; verify REFUSED in all cases. *Added in v0.9.1.*
+
+### Class orthogonality
+
+**ODS-FR-CHAS-005.** The CHAOS-class handler MUST NOT be reachable for queries with QCLASS = IN, even where the QNAME matches one of the recognised CHAOS names (`version.bind.`, `hostname.bind.`, etc.). IN-class queries for these names MUST follow the standard zone-lookup machinery of §4.2: if no served zone is authoritative for the name, the response is REFUSED per ODS-FR-CORE-019; if a served zone is authoritative, the response reflects that zone's actual content.
+*Source.* DNS class orthogonality; ODS-INV-007.
+*Verification.* IN/TXT tests for `version.bind.` and related names; verify the response is determined by zone authority and not by `[chaos]` configuration. *Added in v0.9.1.*
+
+### Logging and metrics
+
+**ODS-FR-CHAS-006.** The server MUST maintain in-memory counters for CHAOS-class queries, distinguishing at minimum: answered queries; queries refused because the relevant configuration value was empty or absent; queries refused because the CHAOS name was unrecognised; and queries refused because QTYPE was not TXT. These counters MUST be exposed globally via the metrics endpoint per §5.6 and §6.4. CHAOS-class queries MUST be logged at debug level only, recording at minimum source address, QNAME, QTYPE, and resulting RCODE.
+*Source.* Operational observability; consistency with the low-noise counter discipline used for DNS Cookies and NOTIFY.
+*Verification.* Counter inspection under controlled CHAOS-query traffic across each branch; log-output inspection at info and debug levels. *Added in v0.9.1.*
+
 # 5. Non-Functional Requirements
 
 This section specifies properties of the system beyond its functional behaviour: how fast it must be, how reliable, how secure, how maintainable, how portable, how observable, and what resource bounds it must respect. The functional requirements of §4 specify *what* the server does; the non-functional requirements of this section specify *under what constraints*.
@@ -2887,7 +2939,8 @@ Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Man
 - XoT trust anchors expiring within 30 days (certificate-rotation reminder);
 - TSIG keys configured with HMAC-SHA1 (RFC 8945 §6 marks SHA-1 as legacy; SHA-256 is preferred);
 - TCP idle timeout larger than 120 seconds (resource-holding risk);
-- AXFR/IXFR ingestion size cap (ODS-FR-AXFR-024) below 100 MiB (likely operationally insufficient).
+- AXFR/IXFR ingestion size cap (ODS-FR-AXFR-024) below 100 MiB (likely operationally insufficient);
+- `chaos.version` configured to a precise build-version-shaped value, making an operator-visible software-build disclosure choice.
 
 The exhaustive list and individual messages are part of the Operator Deployment Guide per ODS-NFR-MAINT-009. Warnings MUST be emitted as structured log entries with distinct categorisation (e.g., `category: configuration_warning`) to support operator filtering and orchestrator gating. The server MUST also expose a configuration-warning count via the metrics endpoint per ODS-NFR-OBS-005, allowing operators to alert on the count being non-zero.
 *Source.* Operational requirement; resolution of v0.4 audit finding about non-aborting configuration concerns.
@@ -2977,6 +3030,25 @@ The interaction with TSIG key definitions (the separately-defined `[[tsig_keys]]
 **ODS-IF-CONF-017.** The server MUST accept a configurable Extended DNS Errors profile under the `[edns]` configuration subtree or equivalent. The parameter name MUST be `extended_dns_errors`; accepted values are `off` and `minimal`. The default value MUST be `off`. The `minimal` value enables only the bounded diagnostic mappings specified in ODS-FR-EDNS-018 and MUST NOT enable arbitrary policy disclosure or free-form EXTRA-TEXT.
 *Source.* ODS-FR-EDNS-018; RFC 8914 §2.
 *Verification.* Configuration round-trip tests for both values; environment-override tests; wire-format tests confirming that `off` suppresses EDE and `minimal` enables only the specified mappings. *Added in v0.9 implementation alignment.*
+
+**ODS-IF-CONF-018.** The server MUST accept optional CHAOS-class self-identification values under a `[chaos]` configuration subtree. The schema is:
+
+```toml
+[chaos]
+# Response to `version.bind.` / `version.server.` CH/TXT queries
+# (ODS-FR-CHAS-001). Empty or absent means REFUSED.
+version = ""
+
+# Response to `hostname.bind.` / `id.server.` CH/TXT queries
+# (ODS-FR-CHAS-002). Empty or absent means fall back to [server].nsid
+# when NSID is configured and printable; otherwise REFUSED.
+hostname = ""
+```
+
+The configuration validator (per ODS-IF-CONF-005) MUST verify that `chaos.version` and `chaos.hostname`, when present, are strings whose encoded value fits in one DNS TXT character-string (0 through 255 octets). The `[chaos]` section itself is optional. Where `chaos.version` is configured to a precise build-version-shaped value, for example a semantic-version prefix matching `^[0-9]+\.[0-9]+\.[0-9]+`, the server SHOULD emit the `chaos_version_discloses_build` startup warning per ODS-IF-CONF-008. The warning is informational and MUST NOT prevent startup.
+*Source.* §4.21; ODS-FR-CHAS-001; ODS-FR-CHAS-002.
+*Note.* The incoming v0.9.1 SRS attachment allocated this configuration requirement as `ODS-IF-CONF-017`; this repository already uses `ODS-IF-CONF-017` for the bounded Extended DNS Errors profile. The CHAOS configuration requirement is therefore numbered `ODS-IF-CONF-018` to preserve identifier stability and avoid collision.
+*Verification.* Configuration round-trip tests across absent, empty, populated, and oversized values; environment-override tests where supported; warning emission test for build-version-shaped `chaos.version`. *Added in v0.9.1.*
 
 ## 6.3 Logging Interface
 
@@ -3179,7 +3251,7 @@ oxidedns <version>
 build commit: <commit>
 build timestamp: <build-timestamp>
 rustc: <rustc-version>
-SRS: OxideDNS Secondary SRS v0.9
+SRS: OxideDNS Secondary SRS v0.9.1
 Role: secondary-only authoritative DNS server
 License: MIT OR Apache-2.0
 ```
@@ -4455,6 +4527,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Out-of-zone glue tolerance (compatibility option) | §4.6, ODS-FR-AXFR-025; §6.2, ODS-IF-CONF-016 | Add optional, off-by-default tolerance | **Resolved (v0.9): added; ODS-FR-AXFR-025, ODS-IF-CONF-016** |
 | Environment-variable override re-validation gap | §6.2, ODS-IF-CONF-014 | Re-run validator after override | **Resolved (v0.9): specified; ODS-IF-CONF-014** |
 | XoT interoperability coverage against BIND 9 | §7.2, ODS-VER-003 | Add BIND 9 to XoT row of matrix | **Resolved (v0.9): added; ODS-VER-003** |
+| CHAOS class self-identification | §4.21, ODS-FR-CHAS-001..006; §6.2, ODS-IF-CONF-018 | Add conservative, opt-in CH/TXT `version.bind` and `id.server` profile | **Resolved in specification (v0.9.1); implemented locally with config, metrics/logging, unit tests, and UDP/TCP client E2E coverage** |
 | Implementation confirmation: zero `unwrap()` / `panic!()` in Alpha production code | §3.6, ODS-INV-006 | Audit confirmation of panic-freedom discipline | **Confirmed (v0.9): Alpha implementation; ODS-INV-006** |
 | Implementation confirmation: bind-then-drop privilege model | §5.3, ODS-NFR-SEC-004 | Audit confirmation of privilege drop ordering | **Confirmed (v0.9): Alpha implementation; ODS-NFR-SEC-004** |
 | Implementation confirmation: secret zeroization and Debug redaction | §5.3, ODS-NFR-SEC-001; §6.3, ODS-IF-LOG-005 | Audit confirmation of secret handling | **Confirmed (v0.9): Alpha implementation; ODS-NFR-SEC-001, ODS-IF-LOG-005** |
@@ -4605,7 +4678,9 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **CD bit.** Checking Disabled bit (RFC 4035). Used in queries from validating resolvers. This server sets CD = 0 unconditionally in responses (ODS-FR-DNSSEC-011).
 
-**Class.** DNS resource class (RFC 1035 §3.2.4). This server primarily handles class IN (Internet, class 1). *See also.* QCLASS.
+**CHAOS class.** DNS resource class 3 (CH), historically allocated for Chaosnet and now commonly used by DNS tooling for diagnostic TXT probes such as `version.bind.` and `id.server.`. OxideDNS support is specified in §4.21.
+
+**Class.** DNS resource class (RFC 1035 §3.2.4). This server primarily handles class IN (Internet, class 1) and the bounded CHAOS-class meta-query profile in §4.21. *See also.* QCLASS.
 
 **Client Cookie.** The 8-octet portion of the DNS COOKIE EDNS option supplied by the client; an unpredictable token that the server echoes back so the client can verify response binding to the original query. See §4.19 and RFC 7873 §4.
 
@@ -4893,6 +4968,7 @@ Area codes are short uppercase mnemonics (3–6 characters) registered in the ta
 | RRL | §4.17 | Response Rate Limiting |
 | COOKIE | §4.19 | DNS Cookies (RFC 7873, RFC 9018) |
 | PROV | §4.20 | Zone Provisioning (explicit zones and RFC 9432 catalog zones) |
+| CHAS | §4.21 | CHAOS class query handling (`version.bind`, `hostname.bind`, etc.) |
 
 #### Non-functional area codes (ODS-NFR-`AREA`-NNN)
 

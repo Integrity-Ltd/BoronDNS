@@ -57,6 +57,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub edns: EdnsConfig,
     #[serde(default)]
+    pub chaos: ChaosConfig,
+    #[serde(default)]
     pub dnssec: DnssecConfig,
     #[serde(default)]
     pub cookie: CookieConfig,
@@ -133,6 +135,7 @@ impl ServerConfig {
         }
         self.logging.validate()?;
         self.metrics.validate()?;
+        self.chaos.validate()?;
         self.dnssec.validate()?;
 
         if self.zones.is_empty() && self.catalog_zones.is_empty() {
@@ -456,6 +459,14 @@ impl ServerConfig {
                     self.dnssec.nsec3_max_iterations,
                     default_nsec3_max_iterations()
                 ),
+            });
+        }
+
+        if looks_like_precise_build_version(&self.chaos.version) {
+            warnings.push(ConfigWarning {
+                code: "chaos_version_discloses_build",
+                parameter: "chaos.version".to_owned(),
+                message: "chaos.version looks like a precise build version; public-facing deployments should prefer a soft-identifying value or the default REFUSED behavior".to_owned(),
             });
         }
 
@@ -1013,6 +1024,45 @@ impl Default for EdnsConfig {
             extended_dns_errors: ExtendedDnsErrorsConfig::Off,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ChaosConfig {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub hostname: String,
+}
+
+impl ChaosConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_txt_character_string("chaos.version", &self.version)?;
+        validate_txt_character_string("chaos.hostname", &self.hostname)?;
+        Ok(())
+    }
+}
+
+fn validate_txt_character_string(parameter: &str, value: &str) -> Result<(), ConfigError> {
+    if value.len() > 255 {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must fit in one DNS TXT character-string of at most 255 octets"
+        )));
+    }
+    Ok(())
+}
+
+fn looks_like_precise_build_version(value: &str) -> bool {
+    let mut parts = value.splitn(4, '.');
+    let (Some(major), Some(minor), Some(patch)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !major.is_empty()
+        && !minor.is_empty()
+        && !patch.is_empty()
+        && major.chars().all(|ch| ch.is_ascii_digit())
+        && minor.chars().all(|ch| ch.is_ascii_digit())
+        && patch.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -2687,6 +2737,55 @@ mod tests {
             ExtendedDnsErrorsMode::Minimal
         );
         assert_eq!(config.dnssec.nsec3_max_iterations, 0);
+    }
+
+    #[test]
+    fn parses_chaos_settings_and_warns_on_precise_version() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [chaos]
+                version = "1.2.3"
+                hostname = "bud-anycast-1"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.chaos.version, "1.2.3");
+        assert_eq!(config.chaos.hostname, "bud-anycast-1");
+        assert!(
+            config
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "chaos_version_discloses_build")
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_chaos_txt_values() {
+        let oversized = "x".repeat(256);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [chaos]
+                version = "{oversized}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+        ))
+        .expect_err("oversized CHAOS version should be rejected");
+
+        assert!(error.to_string().contains("chaos.version"));
     }
 
     #[test]
