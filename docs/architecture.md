@@ -1,9 +1,9 @@
 # OxideDNS Architecture and Release Governance Scaffold
 
-Status: working MVP architecture document, not final MVP acceptance evidence.
+Status: working architecture document, not final formal SRS MVP acceptance evidence.
 
 This document records architecture and governance decisions that the SRS expects
-to be retained before MVP acceptance. It currently covers module organisation
+to be retained before formal SRS MVP acceptance. It currently covers module organisation
 for `ODS-NFR-MAINT-002`, the release-signing choice for
 `ODS-NFR-MAINT-008`, source-level functional requirement references for
 `ODS-NFR-MAINT-004`, and verification responsibility allocation for
@@ -57,7 +57,7 @@ source-line target.
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
 | Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Interface compatibility posture | Externally observable configuration, CLI, exit-code, environment, signal, metric, log-field, health, and network-role surfaces are tracked in `docs/interface-stability-baseline.tsv` under the policy in `docs/interface-compatibility-policy.md`; `scripts/check-interface-compatibility.py` checks the current baseline and can compare a previous release baseline. | `ODS-NFR-MAINT-006`, `ODS-IF-CONF-002` |
-| Reproducible build posture | `cargo build --locked` with fixed `OXIDEDNS_BUILD_*` values is the baseline command; `scripts/capture-reproducible-build-handoff.sh` records the runbook and schemas, while bit-identical independent build evidence is still required before MVP acceptance. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
+| Reproducible build posture | `cargo build --locked` with fixed `OXIDEDNS_BUILD_*` values is the baseline command; `scripts/capture-reproducible-build-handoff.sh` records the runbook and schemas, while bit-identical independent build evidence is still required before formal SRS MVP acceptance. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
 | Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
 | Continuous verification posture | `scripts/check.sh` is the current local continuous verification entry point. Hosted CI is intentionally deferred while the repository remains private to avoid spending CI minutes on heavyweight evidence tooling before a public-release gate exists. | `ODS-VER-011`, `ODS-NFR-SEC-006` |
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |

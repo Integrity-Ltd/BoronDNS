@@ -647,7 +647,7 @@ tested primary implementation version, OS or container package context,
 configuration artifacts, transport, and security mode. A script skip is missing
 evidence, not passing interop evidence.
 
-`scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP gate
+`scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP evidence profile
 under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
 fuzz compile, invariant audit, portability inventory/probes, unused/dead-code
 audit, resource smoke evidence, coverage evidence, performance smoke, and BIND
@@ -693,7 +693,7 @@ as `release metric value` to compare retained `perf-smoke-metrics.env` values
 against the rolling baseline. `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the
 default 10 percent regression threshold.
 
-For the MVP gate, release notes must also include the external operator
+For the formal SRS MVP release gate, release notes must also include the external operator
 acceptance signature, accepting operator identity, and accepted scope statement
 required by `ODS-VER-008` and `ODS-VER-015`.
 

@@ -2523,7 +2523,7 @@ After the grace period expires, the server MUST exit regardless of remaining in-
 The server MUST NOT exhibit unbounded memory growth attributable to its own data structures (RRL state, connection-pool entries, in-flight query tracking) under the stable-workload conditions above.
 *Source.* Operational requirement for long-running infrastructure services.
 *Note.* Memory growth caused by external factors (a primary delivering progressively larger zones across the soak period, a steadily growing population of distinct client source prefixes) is not in scope; the requirement isolates growth attributable to the server's internal state management.
-*Verification.* 30-day soak testing per ODS-NFR-REL-003 (as part of MVP acceptance per ODS-VER-008) on the Reference Hardware Profile with stable workload; RSS measurements at 24-hour and 30-day marks; computation of the growth percentage against the configured threshold.
+*Verification.* 30-day soak testing per ODS-NFR-REL-003 (as part of the formal SRS MVP release acceptance defined by ODS-VER-008) on the Reference Hardware Profile with stable workload; RSS measurements at 24-hour and 30-day marks; computation of the growth percentage against the configured threshold.
 
 **ODS-NFR-REL-004.** Network errors on inbound or outbound connections — malformed packets, mid-transfer connection drops, kernel buffer exhaustion, transient `EAGAIN`/`EWOULDBLOCK` conditions, ICMP unreachables, peer TCP RST, TLS handshake-level failures on XoT — MUST NOT cause process termination. Errors MUST be handled per the requirements of §4.6, §4.7, §4.8, §4.10, and §4.12; the process continues serving subsequent traffic. File-descriptor exhaustion is prevented structurally by ODS-NFR-RES-004 (startup `rlimit` check); should it occur despite that check (e.g., due to FD leak), accept failures MUST be logged at error level and MUST NOT terminate the process.
 *Source.* Operational requirement.
@@ -2819,7 +2819,7 @@ The area code **RES** is allocated.
 
 **ODS-NFR-RES-002.** Memory consumption per zone SHOULD scale approximately linearly with the number of records in the zone, with a target per-record overhead (including indices and metadata) of less than 500 bytes.
 *Source.* Operational requirement; informed by typical secondary deployment sizing.
-*Note.* For the MVP implementation using straightforward in-memory data structures (e.g., `BTreeMap`-backed zone store, the implementation choice recorded in the Architecture Document), the 500-byte target is aspirational and may not be met; verification at the MVP gate is performed against the actual measured value, with the value recorded in release notes. The post-MVP packed-binary zone store of Appendix C.6.2, once introduced, is expected to meet or substantially exceed this target. Operators sizing memory for large zone-count deployments should consult the actual per-release figure.
+*Note.* For the current straightforward in-memory implementation (e.g., `BTreeMap`-backed zone store, the implementation choice recorded in the Architecture Document), the 500-byte target is aspirational and may not be met; verification at the formal SRS MVP release gate is performed against the actual measured value, with the value recorded in release notes. The post-MVP packed-binary zone store of Appendix C.6.2, once introduced, is expected to meet or substantially exceed this target. Operators sizing memory for large zone-count deployments should consult the actual per-release figure.
 *Verification.* Memory profiling with zones of varying record counts on the Reference Hardware Profile.
 
 **ODS-NFR-RES-003.** The server MUST support concurrent service of at least 10,000 zones with a combined record count up to 10 million records on a host with 16 GiB of available memory.
@@ -2877,7 +2877,7 @@ All three interface roles MAY be satisfied by the same address (wildcard or spec
 *Source.* Operational requirement for production deployments; performance and security isolation between query, management, and transfer traffic planes. Decisions recorded in DTK review sessions 24 May 2026 (v0.2 introduction; v0.5 rename and clarifications).
 *Verification.* Configuration tests with separate bind addresses per role; network-layer inspection confirming DNS traffic reaches only the DNS interface, health/metrics traffic reaches only the management interface (modulo the optional `health.bind_address` override), and outbound transfer traffic uses the configured transfer interface; error-emission tests confirming the obsolete `interface.xot` key is rejected.
 
-**ODS-IF-NET-006.** The DNS query interface MUST NOT suppress ICMPv4 Fragmentation Needed messages (type 3, code 4) or ICMPv6 Packet Too Big messages (type 2) destined for addresses on that interface. In kernel-managed socket deployments (the MVP implementation), these messages are generated and processed by the host operating system; the server has no application-level ICMP handling to implement. The server's Operator Deployment Guide MUST explicitly document this requirement so that operators configuring host-level or infrastructure firewalls on the DNS query interface do not inadvertently suppress these message types, which would break Path MTU Discovery and degrade or block large EDNS responses over UDP.
+**ODS-IF-NET-006.** The DNS query interface MUST NOT suppress ICMPv4 Fragmentation Needed messages (type 3, code 4) or ICMPv6 Packet Too Big messages (type 2) destined for addresses on that interface. In the current kernel-managed socket deployment model, these messages are generated and processed by the host operating system; the server has no application-level ICMP handling to implement. The server's Operator Deployment Guide MUST explicitly document this requirement so that operators configuring host-level or infrastructure firewalls on the DNS query interface do not inadvertently suppress these message types, which would break Path MTU Discovery and degrade or block large EDNS responses over UDP.
 *Source.* RFC 8900 (IP Fragmentation Considered Fragile); RFC 4821 (Packetisation Layer Path MTU Discovery); operational requirement for EDNS0 UDP response delivery. The requirement is documentation-enforcement, not application code, in the MVP; it preponderantly becomes implementation-level in any future kernel-bypass (XDP) variant — see Appendix C.6.
 *Verification.* Deployment Guide review confirming explicit statement of the ICMP requirement for the DNS query interface; firewall-configuration checklist inspection.
 
@@ -3341,7 +3341,7 @@ A release with any ODS-FR, ODS-NFR, ODS-IF, ODS-INV, or ODS-NEG requirement mark
 **ODS-VER-011.** Verification methods are classified by execution cadence into three categories:
 - **Continuous** — executed in CI on every commit to the main branch, with results being build-blocking. Continuous methods comprise: Static analysis, Unit test, Property-based test, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per ODS-NFR-SEC-006).
 - **Periodic** — executed on a documented schedule independently of commits. Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per ODS-NFR-SEC-002, scheduled at least weekly), Performance test (weekly performance-regression run per ODS-VER-012), Soak test (continuous, with weekly snapshot reports), Differential test against current primary releases (scheduled at least monthly).
-- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: full Interoperability matrix per ODS-VER-003 against all three primaries; full Performance test on Reference Hardware Profile of Appendix E.1 against Reference Query Mix of Appendix E.3 for all ODS-NFR-PERF requirements; 30-day Soak test on the Reference Hardware Profile for the MVP gate per ODS-NFR-REL-003; Security audit at major release boundaries; External operator acceptance for the MVP gate per ODS-VER-008.
+- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: full Interoperability matrix per ODS-VER-003 against all three primaries; full Performance test on Reference Hardware Profile of Appendix E.1 against Reference Query Mix of Appendix E.3 for all ODS-NFR-PERF requirements; 30-day Soak test on the Reference Hardware Profile for the formal SRS MVP release gate per ODS-NFR-REL-003; Security audit at major release boundaries; External operator acceptance for the formal SRS MVP release gate per ODS-VER-008.
 
 The classification of each requirement's verification (per its declared method per ODS-VER-001) into Continuous, Periodic, or Gate cadence MUST be recorded in the Test Plan; the Test Plan's CI configuration MUST enact the classification. Inspection and Operational test fall under Gate cadence by default; Static analysis falls under Continuous; the remaining methods may be Continuous, Periodic, or Gate depending on the specific requirement and per-test cost.
 *Source.* Operational requirement; release-engineering discipline; resolution of v0.6 audit finding about CI vs gate verification distinction.
@@ -3417,13 +3417,13 @@ The PID establishes Alpha and MVP milestones. The acceptance criteria for each a
 - Interface requirements: §6.1 in full — three-interface segregation per ODS-IF-NET-005 through -007, plus the ODS-IF-NET-008 prohibition on exposing a fourth active NOTIFY interface role. §6.2 (CONF) in full, including the v0.5-introduced CONF-008 (warning catalogue), CONF-009 (`--dump-config`), CONF-010 (`--validate-config`), CONF-011 (parameter naming convention), CONF-012 (environment variable naming convention). §6.3 in full, including the v0.5-introduced LOG-005 through LOG-008. §6.4 (HEALTH) in full, including `/livez`, `/readyz`, the `/healthz` readiness alias, response time bounds, and metrics rate limiting. §6.5 in full, including the v0.5-introduced SIGPIPE handling clarification. §6.6 (PROC): ODS-IF-PROC-001 (exit code convention), ODS-IF-PROC-002 (`--version`), and ODS-IF-PROC-003 (`--help`) are required for Alpha; ODS-IF-PROC-004 (`--example-config`, MAY-level) is optional in Alpha as it is in MVP.
 - Non-functional requirements: §5.2 (REL) -001 to -005 (REL-006 overload behaviour, REL-007 clock-skew tolerance deferred to MVP), §5.3 (SEC) -001 to -005 (SEC-006 continuous dependency audit, SEC-007 CVE policy deferred to MVP), §5.4 (MAINT) -001, -003, -004 (MAINT-002 module organisation, MAINT-005 reproducible builds, MAINT-006 backward-compat, MAINT-007 test coverage, MAINT-008 signed releases, MAINT-009 Operator Deployment Guide deferred to MVP), §5.5 (PORT) -001 to -004 (PORT-005 init-system independence verified at MVP), §5.6 (OBS) -001, -002, -004, -005, -006, and -007, §5.7 (RES) -001 (container image size);
 - Interoperability per §7.2 with **at least one** of {NSD, Knot DNS, BIND 9} as primary; the specific primary version tested MUST be recorded per ODS-VER-013.
-- Zone Provisioning (§4.20): ODS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements ODS-FR-PROV-005 through ODS-FR-PROV-014 and the catalog-related security NFRs ODS-NFR-SEC-010 through ODS-NFR-SEC-015 are not required for Alpha but remain in scope for the later MVP gate. ODS-NFR-SEC-008 (TSIG environment-variable loading) and ODS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
+- Zone Provisioning (§4.20): ODS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements ODS-FR-PROV-005 through ODS-FR-PROV-014 and the catalog-related security NFRs ODS-NFR-SEC-010 through ODS-NFR-SEC-015 are not required for Alpha but remain in scope for the formal SRS MVP release gate. ODS-NFR-SEC-008 (TSIG environment-variable loading) and ODS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
 
-Not required for Alpha, but required by the formal MVP gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XOT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extension ODS-NFR-OBS-008 (catalog metrics), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal MVP gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
+Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XOT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extension ODS-NFR-OBS-008 (catalog metrics), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal SRS MVP release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
 *Source.* PID §6.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of ODS-VER-011 (Gate methods).
 
-**ODS-VER-008 — MVP Milestone.** The MVP milestone is achieved when the following are demonstrably satisfied:
+**ODS-VER-008 — MVP Milestone.** This requirement defines the formal SRS MVP release gate. It is separate from the repository's bounded Engineering MVP profile used for local implementation readiness. The formal MVP milestone is achieved when the following are demonstrably satisfied:
 
 - All requirements of §3 through §6 to their full normative content;
 - Interoperability per §7.2 with all three primaries (NSD, Knot DNS, BIND 9);
@@ -3438,7 +3438,7 @@ Not required for Alpha, but required by the formal MVP gate: §4.7 (IXFR), §4.9
 - External operator acceptance per §7.1 by at least one production-representative operator.
 
 *Source.* PID §6.
-*Verification.* Acceptance review at the MVP milestone gate.
+*Verification.* Acceptance review at the formal SRS MVP release gate.
 
 ## 7.5 Verification Evidence and Traceability
 
@@ -3463,7 +3463,7 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 - **Periodic methods** per ODS-VER-011 are scheduled by the CI infrastructure (long-cadence Fuzz test, Performance test) or executed manually by the project's release engineer at the documented cadence (Differential test, Soak test snapshots).
 - **Gate methods** per ODS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
 - **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through MVP, this role is held by DT.
-- **External operator acceptance** per ODS-VER-008 (MVP gate) introduces a third-party verifier; the acceptance signature, the identity of the accepting operator, and the operator's accepted scope statement are recorded in the MVP release notes.
+- **External operator acceptance** per ODS-VER-008 (formal SRS MVP release gate) introduces a third-party verifier; the acceptance signature, the identity of the accepting operator, and the operator's accepted scope statement are recorded in the MVP release notes.
 - **Security audit** per the §7.1 method definition is procured from a third-party security specialist firm; the engagement is recorded in the Architecture Document with the auditor identity, scope, and findings tracking process.
 
 Where a single individual fills multiple roles (typical for the project's small team), the role accountability is unaffected; the individual signs off in each capacity. Where a role is unfilled (e.g., the release-engineer role is shared rotationally), the rotation schedule is recorded in the Architecture Document.
@@ -3493,7 +3493,7 @@ The SRS has been subjected to a structured per-section audit cycle initiated in 
 | Architectural invariants | v0.6 | §3 | Precision refinements to ODS-INV-001 through -006; three new foundational invariants (Authoritative-Only Response Composition, Single-Process Architecture, Static Composition). |
 | Verification | v0.7 (this revision) | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; ODS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
 
-The audit cycle is complete with v0.7. Future revisions to this SRS are expected to address: (a) Pending items in Appendix C.5 as project decisions are made; (b) C.6 post-MVP scope items as they are promoted into scope; (c) operational learnings from Alpha and MVP gate executions; (d) RFC errata published after this revision's date. Audit cycles of equivalent depth are not anticipated unless triggered by substantive architectural change.
+The audit cycle is complete with v0.7. Future revisions to this SRS are expected to address: (a) Pending items in Appendix C.5 as project decisions are made; (b) C.6 post-MVP scope items as they are promoted into scope; (c) operational learnings from Alpha and formal SRS MVP release-gate executions; (d) RFC errata published after this revision's date. Audit cycles of equivalent depth are not anticipated unless triggered by substantive architectural change.
 
 The SRS body is considered structurally stable from v0.7 onward; subsequent revisions are expected to be additive (new requirements within the established framework) or corrective (defect fixes), not structurally transformative.
 
@@ -3531,7 +3531,7 @@ Each requirement carries a verification status per ODS-VER-009:
 
 - **Not Verified** — verification has not yet been performed.
 - **Verified** — verification has been performed; the date and evidence reference are recorded.
-- **Deferred** — verification is deferred to a specific milestone (typically MVP per ODS-VER-008).
+- **Deferred** — verification is deferred to a specific milestone (typically the formal SRS MVP release gate per ODS-VER-008).
 - **Not Applicable** — the requirement has been Deprecated or replaced; the row is retained for identifier stability.
 
 Status tracking is maintained per A.6.
@@ -4581,9 +4581,9 @@ This section records architectural enhancements that have been explicitly consid
 
 *Rationale for deferral.* Native XDP requires driver-mode support (`XDP_FLAGS_DRV_MODE`), which is unavailable in virtual machines under most hypervisors (KVM, VMware, Hyper-V). The MVP deployment model is container-first on general-purpose Linux hosts, which may be VMs. Generic/SKB-mode XDP is available in VMs but provides no meaningful performance benefit over standard socket I/O. The feature becomes viable only in deployments with a dedicated physical NIC (or SR-IOV Virtual Function) passed through directly to the container — a deployment precondition that is outside the MVP scope.
 
-*Entry condition for re-evaluation.* Performance benchmarking of the MVP implementation reveals that the 50,000 qps per core target (ODS-NFR-PERF-001) cannot be met without kernel bypass, or an operational environment with SR-IOV NIC passthrough becomes available as a standard deployment target.
+*Entry condition for re-evaluation.* Performance benchmarking of the current implementation reveals that the 50,000 qps per core target (ODS-NFR-PERF-001) cannot be met without kernel bypass, or an operational environment with SR-IOV NIC passthrough becomes available as a standard deployment target.
 
-*Architectural constraints on the MVP implementation.*
+*Architectural constraints on the current implementation.*
 - The DNS query socket layer MUST be encapsulated behind a trait abstraction (e.g., `trait PacketIo`) so that the XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
 - The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the MVP.
 - When ODS-IF-NET-006 is re-evaluated for the XDP variant, the ICMP Fragmentation Needed / Packet Too Big handling that the kernel currently performs transparently MUST be re-implemented in the XDP programme, since the bypass eliminates the kernel path that would otherwise generate these responses.
@@ -4598,10 +4598,10 @@ This section records architectural enhancements that have been explicitly consid
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
 
-*Architectural constraints on the MVP implementation.*
+*Architectural constraints on the current implementation.*
 - The zone store MUST be accessed exclusively through a trait interface (e.g., `trait ZoneStore`) so the packed-binary implementation can substitute without changes to the query-processing or zone-transfer layers.
 - The AXFR ingestion path MUST be clearly separated from the query-serving path; ingestion builds a new store instance which is atomically published, never modified in place.
-- The MVP implementation MUST record per-record memory overhead in benchmarking output so that the entry condition above can be evaluated against measured data.
+- The current implementation MUST record per-record memory overhead in benchmarking output so that the entry condition above can be evaluated against measured data.
 
 *Note.* An additional optimisation within this item is pre-computing NSEC/NSEC3 denial-of-existence responses at ingestion time rather than generating them at query time. This is independent of the arena layout and may be profitably evaluated separately.
 
@@ -4613,7 +4613,7 @@ This section records architectural enhancements that have been explicitly consid
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
 
-*Architectural constraints on the MVP implementation.*
+*Architectural constraints on the current implementation.*
 - The response-assembly path MUST be cleanly separated from the send path, so that a cached pre-built buffer can be substituted for the assembled buffer transparently.
 - DNSSEC-signed responses cached in this layer MUST be subject to TTL decay: the cache MUST NOT serve a pre-built response whose minimum RRSIG expiration minus current time is less than a configurable floor (suggested: 60 seconds). Alternatively, the cache may be restricted to unsigned responses only in the initial implementation.
 - The cache MUST be keyed on the DO-bit value (DO=0 and DO=1 responses differ in the presence of DNSSEC records) and MUST treat them as separate entries.

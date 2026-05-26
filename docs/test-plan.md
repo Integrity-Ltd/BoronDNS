@@ -44,7 +44,7 @@ The project uses the SRS v0.9.1 ODS-VER-011 cadence vocabulary exactly:
 | Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
 | Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, external operator acceptance | release notes, interface compatibility evidence, info verbosity profile, and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
-| External operator acceptance | Gate | Production-representative external deployment and signed scope statement for MVP acceptance | MVP release notes |
+| External operator acceptance | Gate | Production-representative external deployment and signed scope statement for formal SRS MVP release acceptance | MVP release notes |
 
 ## Continuous Execution
 
@@ -197,5 +197,5 @@ release-note gate checks that the release notes include:
 - failed-requirement project decisions and remediation targets;
 - RFC compliance assertions;
 - verification responsibility sign-off;
-- for the MVP gate, external operator acceptance signature, accepting operator
+- for the formal SRS MVP release gate, external operator acceptance signature, accepting operator
   identity, and accepted scope statement.

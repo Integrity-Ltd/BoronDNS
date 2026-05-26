@@ -118,7 +118,7 @@ The historical Alpha subset required:
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary,
   with the tested primary version recorded per `ODS-VER-013`.
 
-Historically deferred from Alpha to the SRS MVP acceptance gate (`ODS-VER-008`)
+Historically deferred from Alpha to the formal SRS MVP release gate (`ODS-VER-008`)
 per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, full DNS
 Cookies, expanded RR catalogue, `/livez` and `/readyz` split conformance,
 health response-time and metrics rate-limit requirements, performance NFR
