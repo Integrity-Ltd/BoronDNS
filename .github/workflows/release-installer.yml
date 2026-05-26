@@ -1,4 +1,4 @@
-name: Release installer
+name: Release artifacts
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-installer:
-    name: Build x86_64 musl installer
+    name: Build x86_64 musl artifacts
     runs-on: ubuntu-24.04
 
     steps:
@@ -49,6 +49,12 @@ jobs:
       - name: Docker installer smoke
         run: scripts/test-installer-docker.sh
 
+      - name: Build Docker image archive
+        run: scripts/package-docker-image.sh
+
+      - name: Docker image smoke
+        run: scripts/test-docker-image.sh
+
       - name: Verify static binary
         run: |
           ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin | tee target/dist/release-binary-ldd.txt
@@ -64,6 +70,10 @@ jobs:
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.inspect.json
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/manifest.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/file.txt
@@ -79,6 +89,8 @@ jobs:
           notes="target/dist/release-notes-$version.md"
           tarball="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
           binary="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.bin"
+          docker_image="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
+          docker_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 
           cat > "$notes" <<EOF
           OxideDNS $version
@@ -86,9 +98,14 @@ jobs:
           Assets:
           - Installer archive: $(basename "$tarball")
           - Static binary: $(basename "$binary")
-          - SHA256 files are attached for both assets.
+          - Docker image archive: $(basename "$docker_image")
+          - SHA256 files are attached for the installer, binary, and Docker image archive.
 
           Target: x86_64-unknown-linux-musl
+
+          Docker image use:
+          xz -dc $(basename "$docker_image") | docker load
+          docker run --rm oxidedns:$version --version
           EOF
 
           gh release create "$tag" \
@@ -98,4 +115,7 @@ jobs:
             "$tarball" \
             "$tarball.sha256" \
             "$binary" \
-            "$binary.sha256"
+            "$binary.sha256" \
+            "$docker_image" \
+            "$docker_image.sha256" \
+            "$docker_manifest"

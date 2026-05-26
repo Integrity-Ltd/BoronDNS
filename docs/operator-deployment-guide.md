@@ -84,6 +84,42 @@ Install it to a host path managed by the operator:
 sudo install -m 0755 target/release/oxidedns /usr/local/sbin/oxidedns
 ```
 
+The tag-push release workflow publishes three local-use artifacts for
+`x86_64-unknown-linux-musl`: the installer archive, the raw static binary, and
+an Alpine-based Docker image archive. Each public artifact has a sibling
+`.sha256` file. The Docker image is attached as
+`oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
+does not publish a registry image, so operators should load the release asset
+explicitly rather than using `docker pull`:
+
+```sh
+sha256sum -c oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+xz -dc oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
+docker run --rm oxidedns:<version> --version
+```
+
+Recommended Docker runtime hardening:
+
+```sh
+docker run -d --name oxidedns \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 128 \
+  -p 53:5300/udp \
+  -p 53:5300/tcp \
+  -p 127.0.0.1:8080:8080/tcp \
+  -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
+  oxidedns:<version>
+```
+
+The image runs as UID/GID `53053`, binds unprivileged container ports by
+default, and expects configuration at
+`/etc/oxidedns-secondary/config.toml`. Mapping host port 53 to container port
+5300 avoids adding `CAP_NET_BIND_SERVICE`; if an operator changes the container
+configuration to bind port 53 directly, grant only that capability rather than
+running privileged.
+
 Create the default configuration directory and install a starting config:
 
 ```sh
@@ -846,8 +882,10 @@ current operator-relevant limitations are:
 - Full performance target runs, 30-day soak execution, and 24-hour fuzz
   campaigns per parser target are later SRS acceptance execution items; the
   local project MVP only needs their setup, artifact formats, and handoff path.
-- Container image size and static-binary release packaging are SRS targets; the
-  repository currently documents source build and script-driven evidence paths.
+- Container image size and static-binary release packaging are covered by the
+  tag-push release workflow through the installer archive, static binary,
+  Alpine Docker image archive, and SHA256 sidecars. Registry publication remains
+  intentionally out of scope for the current private-repository phase.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.
 - There is no runtime configuration reload, no administrative API,

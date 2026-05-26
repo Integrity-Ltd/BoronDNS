@@ -45,6 +45,7 @@ bash -n scripts/capture-unsafe-dependency-evidence.sh
 bash -n scripts/capture-interface-compatibility-evidence.sh
 bash -n scripts/fuzz-campaign.sh
 bash -n scripts/engineering-mvp-evidence.sh
+bash -n scripts/package-docker-image.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
 bash -n scripts/interop-bind-axfr-docker.sh
@@ -60,6 +61,7 @@ bash -n scripts/interop-unknown-rr-bad-transfer.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-chaos-queries.sh
+bash -n scripts/test-docker-image.sh
 bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh
 bash -n scripts/interop-dnssec-serve.sh

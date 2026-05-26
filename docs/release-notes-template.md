@@ -9,6 +9,8 @@ running `scripts/check-release-notes.sh`.
 - Release candidate commit: TBD
 - Release date UTC: TBD
 - Evidence snapshot: TBD
+- Release artifacts: installer `.tar.xz`, static binary, Alpine Docker image
+  `.tar.xz`, and SHA256 sidecars.
 
 ## Verification Summary
 
@@ -104,6 +106,10 @@ CLI, metrics, logs, health endpoints, and network behavior.
 - Vulnerability disclosure changes: TBD
 - Vulnerability disclosure policy reviewed: TBD
 - Release signing mechanism and verification instructions: TBD
+- Docker image verification: TBD
+- Docker image hardening notes: non-root UID/GID 53053, read-only root
+  filesystem compatible, dropped-capability runtime command, no registry
+  publication for this release phase.
 - Security audit findings and remediation actions: TBD
 
 ## Long-Running Evidence Handoff

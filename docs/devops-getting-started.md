@@ -103,7 +103,44 @@ sudo OXIDEDNS_ZONE=example.com. \
   ./install.sh --yes
 ```
 
-## 6. Create a Config
+## 6. Build the Docker Image Archive
+
+The tag-push release workflow also builds an Alpine-based Docker image and
+publishes it as a compressed Docker archive, not as a registry image. Build and
+smoke-test the same artifact locally with:
+
+```bash
+scripts/package-docker-image.sh
+scripts/test-docker-image.sh
+```
+
+The output is written under `target/dist/` as
+`oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
+matching `.sha256` file. Load it into a local Docker daemon with:
+
+```bash
+xz -dc target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
+docker run --rm oxidedns:<version> --version
+```
+
+Recommended runtime hardening keeps the image non-root, read-only, and without
+ambient Linux capabilities. Map host port 53 to the image's unprivileged 5300
+listener instead of adding `CAP_NET_BIND_SERVICE`:
+
+```bash
+docker run -d --name oxidedns \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 128 \
+  -p 53:5300/udp \
+  -p 53:5300/tcp \
+  -p 127.0.0.1:8080:8080/tcp \
+  -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
+  oxidedns:<version>
+```
+
+## 7. Create a Config
 
 Start from the checked-in example:
 
@@ -132,7 +169,7 @@ Validate before starting:
 ./target/release/oxidedns --dump-config /tmp/oxidedns.toml
 ```
 
-## 7. Run Locally
+## 8. Run Locally
 
 ```bash
 ./target/release/oxidedns serve --config /tmp/oxidedns.toml
@@ -151,7 +188,7 @@ If the configured primary is not reachable, health can stay unready while the
 zone remains in `LOADING`. That is expected for a config that still points at
 documentation/example addresses.
 
-## 8. Default Host Layout
+## 9. Default Host Layout
 
 The default runtime path is:
 
@@ -168,7 +205,7 @@ sudo install -m 0640 /tmp/oxidedns.toml /etc/oxidedns-secondary/config.toml
 
 Then `oxidedns serve` can run without an explicit `--config` argument.
 
-## 9. Service Manager Notes
+## 10. Service Manager Notes
 
 For privileged port 53, prefer one of:
 
