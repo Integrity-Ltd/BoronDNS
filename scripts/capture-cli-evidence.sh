@@ -75,10 +75,10 @@ run_capture checked-in-config-dump cargo run -q -p oxidedns-cli -- \
 run_capture redacted-config-dump cargo run -q -p oxidedns-cli -- \
     --dump-config "$redaction_config_path"
 
-require_text "$evidence_dir/version-long.stdout" "oxidedns 0.1.1"
+require_text "$evidence_dir/version-long.stdout" "oxidedns 0.1.2"
 require_text "$evidence_dir/version-long.stdout" "build commit:"
 require_text "$evidence_dir/version-long.stdout" "rustc:"
-require_text "$evidence_dir/version-short.stdout" "oxidedns 0.1.1"
+require_text "$evidence_dir/version-short.stdout" "oxidedns 0.1.2"
 
 require_text "$evidence_dir/help-long.stdout" "--version"
 require_text "$evidence_dir/help-long.stdout" "--help"

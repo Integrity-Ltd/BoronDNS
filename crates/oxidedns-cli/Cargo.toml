@@ -16,8 +16,8 @@ tokio.workspace = true
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-oxidedns-core = { path = "../oxidedns-core", version = "0.1.1" }
-oxidedns-server = { path = "../oxidedns-server", version = "0.1.1" }
+oxidedns-core = { path = "../oxidedns-core", version = "0.1.2" }
+oxidedns-server = { path = "../oxidedns-server", version = "0.1.2" }
 
 [dev-dependencies]
 getrandom.workspace = true

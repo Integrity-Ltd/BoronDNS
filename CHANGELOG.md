@@ -4,7 +4,7 @@ All notable project-facing changes are recorded here. Formal release acceptance
 notes still use `docs/release-notes-template.md` when a release candidate needs
 full evidence pointers and sign-off.
 
-## Unreleased
+## 0.1.2 - 2026-05-26
 
 ### Added
 
@@ -15,6 +15,11 @@ full evidence pointers and sign-off.
   including manifest and SHA256 sidecars.
 - Added BIND packet-torture interop coverage that transfers a broad valid RR
   corpus and compares served packet content against BIND behavior.
+- Added PowerDNS Authoritative plus PostgreSQL catalog TSIG interop coverage,
+  including live member add/remove and member-zone record update while OxideDNS
+  remains running.
+- Added Debian 12 beta VM container-operator notes for the release Docker image
+  archive, including host-network, three-interface deployment guidance.
 - Added a large catalog-zone benchmark harness with mixed zone sizes, randomized
   TCP/UDP clients, phase timing, optional perf capture, and opt-in zone-shape
   metrics.
