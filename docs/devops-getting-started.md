@@ -58,6 +58,14 @@ OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
   scripts/interop-bind-axfr-docker.sh
 ```
 
+For broader packet-content coverage against BIND, including a generated
+multi-type torture zone and a retained `dumpcap` capture, run:
+
+```bash
+OXIDEDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR=target/evidence/bind-packet-torture \
+  scripts/interop-bind-packet-torture-docker.sh
+```
+
 See [Manual BIND interop smoke](manual-bind-interop.md) for the Docker and
 host-installed BIND variants, retained artifacts, and the VM/bare-metal note for
 large RRL source-IP rotation.

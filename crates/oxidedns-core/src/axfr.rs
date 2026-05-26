@@ -1146,7 +1146,7 @@ fn validate_uri_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
     if rdata.len() < 5 {
         return Err(AxfrError::InvalidRdata);
     }
-    validate_character_strings_from(rdata, 4, None)
+    Ok(())
 }
 
 fn validate_svcb_like_rdata(rdata: &[u8]) -> Result<(), AxfrError> {
@@ -3185,11 +3185,6 @@ mod tests {
                 vec![0, 10, 0, 20],
                 "URI missing target",
             ),
-            (
-                RecordType::Uri as u16,
-                vec![0, 10, 0, 20, 3, b'h', b't'],
-                "URI truncated target string",
-            ),
         ];
 
         for (rr_type, rdata, context) in cases {
@@ -3209,6 +3204,27 @@ mod tests {
 
             assert_eq!(error, AxfrError::InvalidRdata, "{context}");
         }
+    }
+
+    #[test]
+    fn accepts_axfr_uri_with_raw_target_octets() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let uri = record(
+            "uri.example.test.",
+            RecordType::Uri as u16,
+            vec![
+                0, 10, 0, 20, b'h', b't', b't', b'p', b's', b':', b'/', b'/', b'e', b'x',
+            ],
+        );
+
+        parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(0x1234, vec![soa.clone(), apex_ns(), uri, soa])],
+        )
+        .expect("URI target is raw RFC 7553 octets, not DNS character-string RDATA");
     }
 
     #[test]

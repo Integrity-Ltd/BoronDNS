@@ -4128,10 +4128,10 @@ The complete normative catalogue, reproduced from §4.14:
 ### B.2.22 URI — Uniform Resource Identifier (code 256)
 
 *RFC.* RFC 7553 §4.5.
-*RDATA.* `PRIORITY` (uint16) `|` `WEIGHT` (uint16) `|` `TARGET` (character-string-style octet sequence; the URI itself, not a DNS domain name).
+*RDATA.* `PRIORITY` (uint16) `|` `WEIGHT` (uint16) `|` `TARGET` (one or more raw URI octets; the URI itself, not a DNS domain name and not DNS `character-string` wire format).
 *Compression.* Not applicable.
 *Owner-name convention.* `_service._proto.name` (similar to SRV).
-*Notes.* The TARGET field is the URI in its string form, length-prefix encoded. The server treats the URI octets opaquely — no URI parsing or normalisation.
+*Notes.* RFC 7553 §4.5 defines the TARGET as all remaining RDATA octets after the two uint16 fields, without the presentation-format quotes and with length greater than zero. The server validates that the target is present and treats the URI octets opaquely — no URI parsing or normalisation.
 
 ## B.3 Pseudo-Resource Records
 

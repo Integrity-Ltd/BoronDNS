@@ -49,6 +49,7 @@ bash -n scripts/package-docker-image.sh
 bash -n scripts/axfr-traceability.sh
 bash -n scripts/interop-bind-axfr.sh
 bash -n scripts/interop-bind-axfr-docker.sh
+bash -n scripts/interop-bind-packet-torture-docker.sh
 bash -n scripts/interop-nsd-axfr-docker.sh
 bash -n scripts/interop-knot-axfr-docker.sh
 bash -n scripts/interop-bind-tsig-axfr.sh
