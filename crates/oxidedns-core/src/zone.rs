@@ -37,6 +37,7 @@ pub struct ZoneSnapshot {
     pub state: ZoneState,
     pub serial: Option<u32>,
     pub soa_timers: Option<SoaTimers>,
+    origin_key: NameKey,
     rrsets: HashMap<RrsetKey, Rrset>,
     name_classes: HashMap<NameKey, ClassSet>,
     empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
@@ -68,11 +69,13 @@ struct DnssecAugmentationState {
 
 impl ZoneSnapshot {
     pub fn loading(origin: DomainName) -> Self {
+        let origin_key = NameKey::from(origin.canonical_key());
         Self {
             origin,
             state: ZoneState::Loading,
             serial: None,
             soa_timers: None,
+            origin_key,
             rrsets: HashMap::new(),
             name_classes: HashMap::new(),
             empty_non_terminal_classes: HashMap::new(),
@@ -83,6 +86,7 @@ impl ZoneSnapshot {
 
     pub fn active(origin: DomainName, serial: Option<u32>, rrsets: Vec<Rrset>) -> Self {
         let mut name_interner = NameInterner::default();
+        let origin_key = name_interner.intern_domain(&origin);
         let mut by_key = HashMap::new();
         for rrset in rrsets {
             by_key.insert(
@@ -95,7 +99,7 @@ impl ZoneSnapshot {
                 rrset,
             );
         }
-        let soa_timers = soa_timers_from_rrsets(&origin, &by_key);
+        let soa_timers = soa_timers_from_rrsets(&origin_key, &by_key);
         let indexes = ZoneSnapshotIndexes::build(&origin, &by_key, &mut name_interner);
 
         Self {
@@ -103,6 +107,7 @@ impl ZoneSnapshot {
             state: ZoneState::Active,
             serial,
             soa_timers,
+            origin_key,
             rrsets: by_key,
             name_classes: indexes.name_classes,
             empty_non_terminal_classes: indexes.empty_non_terminal_classes,
@@ -117,6 +122,7 @@ impl ZoneSnapshot {
             state,
             serial: self.serial,
             soa_timers: self.soa_timers,
+            origin_key: self.origin_key.clone(),
             rrsets: self.rrsets.clone(),
             name_classes: self.name_classes.clone(),
             empty_non_terminal_classes: self.empty_non_terminal_classes.clone(),
@@ -204,9 +210,9 @@ impl ZoneSnapshot {
         max_cname_chain: usize,
         any_response: AnyResponseMode,
     ) -> LookupResult {
+        let qname_key = qname.canonical_key();
         if let Some(delegation) = self.delegation_for(qname, qclass)
-            && !(qtype == RecordType::Ds as u16
-                && qname.canonical_key() == delegation.owner.canonical_key())
+            && !(qtype == RecordType::Ds as u16 && qname_key == delegation.owner.canonical_key())
         {
             let authorities = delegation.records();
             let additionals = self.glue_for_ns_records(&delegation.owner, &authorities, qclass);
@@ -215,7 +221,7 @@ impl ZoneSnapshot {
 
         if qtype == 255 {
             let answers = self
-                .any_rrsets_at_name(qname, qclass, any_response)
+                .any_rrsets_at_name_key(qname_key.as_str(), qclass, any_response)
                 .into_iter()
                 .flat_map(Rrset::records)
                 .collect::<Vec<_>>();
@@ -224,7 +230,7 @@ impl ZoneSnapshot {
                 let additionals = self.additionals_for_answer_records(&answers, qclass);
                 return LookupResult::positive_with_additionals(answers, additionals);
             }
-        } else if let Some(rrset) = self.rrset(qname, qtype, qclass) {
+        } else if let Some(rrset) = self.rrset_by_name_key(qname_key.as_str(), qtype, qclass) {
             let answers = rrset.records();
             let additionals = self.additionals_for_answer_records(&answers, qclass);
             return LookupResult::positive_with_additionals(answers, additionals);
@@ -239,7 +245,7 @@ impl ZoneSnapshot {
             return dname_result;
         }
 
-        if self.name_exists(qname, qclass) || self.is_empty_non_terminal(qname, qclass) {
+        if self.name_exists_or_is_empty_non_terminal_key(qname_key.as_str(), qclass) {
             LookupResult::nodata(self.soa_rrset(qclass))
         } else if let Some(wildcard_result) =
             self.lookup_wildcard(qname, qtype, qclass, max_cname_chain, any_response)
@@ -956,9 +962,8 @@ impl ZoneSnapshot {
             if !candidate.is_equal_or_subdomain_of(&self.origin) {
                 return None;
             }
-            if self.name_exists(&candidate, qclass)
-                || self.is_empty_non_terminal(&candidate, qclass)
-            {
+            let candidate_key = candidate.canonical_key();
+            if self.name_exists_or_is_empty_non_terminal_key(candidate_key.as_str(), qclass) {
                 return Some(candidate);
             }
             if candidate == self.origin {
@@ -969,22 +974,36 @@ impl ZoneSnapshot {
     }
 
     fn rrset(&self, owner: &DomainName, rr_type: u16, qclass: u16) -> Option<&Rrset> {
+        let owner_key = owner.canonical_key();
+        self.rrset_by_name_key(owner_key.as_str(), rr_type, qclass)
+    }
+
+    fn rrset_by_name_key(&self, owner_key: &str, rr_type: u16, qclass: u16) -> Option<&Rrset> {
         if qclass == 255 {
-            let owner_key = owner.canonical_key();
             self.rrsets
-                .values()
-                .find(|rrset| rrset.owner.canonical_key() == owner_key && rrset.rr_type == rr_type)
+                .iter()
+                .find(|(key, rrset)| key.owner.as_ref() == owner_key && rrset.rr_type == rr_type)
+                .map(|(_, rrset)| rrset)
         } else {
-            self.rrsets.get(&RrsetKey::new(owner, rr_type, qclass))
+            self.rrsets
+                .get(&RrsetKey::new_from_key(owner_key, rr_type, qclass))
         }
     }
 
     fn rrsets_at_name(&self, owner: &DomainName, qclass: u16) -> Vec<&Rrset> {
         let owner_key = owner.canonical_key();
+        self.rrsets_at_name_key(owner_key.as_str(), qclass)
+    }
+
+    fn rrsets_at_name_key(&self, owner_key: &str, qclass: u16) -> Vec<&Rrset> {
         self.rrsets
-            .values()
-            .filter(|rrset| {
-                rrset.owner.canonical_key() == owner_key && (qclass == 255 || rrset.class == qclass)
+            .iter()
+            .filter_map(|(key, rrset)| {
+                if key.owner.as_ref() == owner_key && (qclass == 255 || rrset.class == qclass) {
+                    Some(rrset)
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -1007,34 +1026,62 @@ impl ZoneSnapshot {
         rrsets
     }
 
+    fn any_rrsets_at_name_key(
+        &self,
+        owner_key: &str,
+        qclass: u16,
+        any_response: AnyResponseMode,
+    ) -> Vec<&Rrset> {
+        let mut rrsets = self
+            .rrsets_at_name_key(owner_key, qclass)
+            .into_iter()
+            .filter(|rrset| !is_dnssec_proof_or_signature_type(rrset.rr_type))
+            .collect::<Vec<_>>();
+        rrsets.sort_by_key(|rrset| (rrset.class, rrset.rr_type));
+        if any_response == AnyResponseMode::Minimal {
+            rrsets.truncate(1);
+        }
+        rrsets
+    }
+
     fn name_exists(&self, name: &DomainName, qclass: u16) -> bool {
+        let name_key = name.canonical_key();
+        self.name_exists_key(name_key.as_str(), qclass)
+    }
+
+    fn name_exists_key(&self, name_key: &str, qclass: u16) -> bool {
         self.name_classes
-            .get(name.canonical_key().as_str())
+            .get(name_key)
             .is_some_and(|classes| classes_match(classes, qclass))
     }
 
-    fn is_empty_non_terminal(&self, name: &DomainName, qclass: u16) -> bool {
-        if self.name_exists(name, qclass) {
-            return false;
-        }
-
-        self.empty_non_terminal_classes
-            .get(name.canonical_key().as_str())
-            .is_some_and(|classes| classes_match(classes, qclass))
+    fn name_exists_or_is_empty_non_terminal_key(&self, name_key: &str, qclass: u16) -> bool {
+        self.name_exists_key(name_key, qclass)
+            || self
+                .empty_non_terminal_classes
+                .get(name_key)
+                .is_some_and(|classes| classes_match(classes, qclass))
     }
 
     fn soa_rrset(&self, qclass: u16) -> Option<&Rrset> {
         let class = if qclass == 255 { 1 } else { qclass };
-        self.rrsets
-            .get(&RrsetKey::new(&self.origin, RecordType::Soa as u16, class))
+        self.rrsets.get(&RrsetKey::from_name_key(
+            self.origin_key.clone(),
+            RecordType::Soa as u16,
+            class,
+        ))
     }
 }
 
 fn soa_timers_from_rrsets(
-    origin: &DomainName,
+    origin_key: &NameKey,
     rrsets: &HashMap<RrsetKey, Rrset>,
 ) -> Option<SoaTimers> {
-    let soa = rrsets.get(&RrsetKey::new(origin, RecordType::Soa as u16, 1))?;
+    let soa = rrsets.get(&RrsetKey::from_name_key(
+        origin_key.clone(),
+        RecordType::Soa as u16,
+        1,
+    ))?;
     soa.rdatas.first().and_then(|rdata| soa_timers(rdata))
 }
 
@@ -1662,9 +1709,17 @@ struct RrsetKey {
 }
 
 impl RrsetKey {
-    fn new(owner: &DomainName, rr_type: u16, class: u16) -> Self {
+    fn new_from_key(owner_key: &str, rr_type: u16, class: u16) -> Self {
         Self {
-            owner: NameKey::from(owner.canonical_key()),
+            owner: NameKey::from(owner_key),
+            rr_type,
+            class,
+        }
+    }
+
+    fn from_name_key(owner: NameKey, rr_type: u16, class: u16) -> Self {
+        Self {
+            owner,
             rr_type,
             class,
         }
