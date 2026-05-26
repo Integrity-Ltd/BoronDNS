@@ -443,11 +443,11 @@ def main():
     require(((badvers["opt"]["ttl"] >> 16) & 0xFF) == 0, badvers)
     record(rows, "badvers_version_1", badvers, "extended_rcode=16 response_version=0")
 
-    do_cleared = response_summary(udp_exchange(query_packet(0x4103, "www.edns.test.", payload=4096, do=True)))
-    require(do_cleared["rcode"] == 0, do_cleared)
-    require(do_cleared["opt"] is not None, "DO response missed OPT")
-    require(do_cleared["opt"]["ttl"] & 0x8000 == 0, do_cleared)
-    record(rows, "do_query_without_dnssec_aug_clears_response_do", do_cleared, "response_do=0")
+    do_copied = response_summary(udp_exchange(query_packet(0x4103, "www.edns.test.", payload=4096, do=True)))
+    require(do_copied["rcode"] == 0, do_copied)
+    require(do_copied["opt"] is not None, "DO response missed OPT")
+    require(do_copied["opt"]["ttl"] & 0x8000, do_copied)
+    record(rows, "do_query_without_dnssec_aug_copies_response_do", do_copied, "response_do=1")
 
     assert_payload_boundary(rows, 0x4104, 256, 512, "payload_floor_512")
     assert_payload_boundary(rows, 0x4105, 512, 512, "payload_exact_floor_512")
@@ -551,7 +551,7 @@ ODS-FR-EDNS-005\tretained-runtime\tpayload_floor_512; payload_exact_floor_512\te
 ODS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; oxidedns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
 ODS-FR-EDNS-007\tretained-runtime\tvalid_edns_unknown_option; non_edns_512_no_opt\tedns-summary.tsv; client.log\tResponses include OPT only when the query contained OPT.
 ODS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; oxidedns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
-ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_clears_response_do\tedns-summary.tsv; crates/oxidedns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=0; DNSSEC-augmented DO behavior remains covered by DNSSEC unit/runtime evidence.
+ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copies_response_do\tedns-summary.tsv; crates/oxidedns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=1 per RFC 6840 query-DO copy semantics; DNSSEC-augmented, explicit-type, error, and truncation paths remain covered by unit/runtime evidence.
 ODS-FR-EDNS-010\tretained-runtime\tbadvers_version_1\tedns-summary.tsv\tBADVERS uses the response OPT extended-RCODE field for RCODE 16.
 ODS-FR-EDNS-011\tretained-runtime\tudp_keepalive_ignored; tcp_keepalive_advertised\tedns-summary.tsv\tThe keepalive option is ignored over UDP and recognized over TCP.
 ODS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; oxidedns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.

@@ -548,10 +548,8 @@ assert_ad_cd_clear("unsigned-child referral non-DO", unsigned_child_referral_non
 truncated = exchange(0xD005, "www.alpha.test.", A, payload=512, do=True)
 if not truncated["tc"]:
     raise AssertionError(f"small-payload DNSSEC response was not truncated: {truncated}")
-if RRSIG in truncated["answer_types"] and (not truncated["opt_ttls"] or truncated["opt_ttls"][0] & 0x8000 == 0):
-    raise AssertionError(f"truncated response kept DNSSEC records but cleared DO bit: {truncated}")
-if RRSIG not in truncated["answer_types"] and truncated["opt_ttls"] and truncated["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"truncated response removed DNSSEC records but kept DO bit: {truncated}")
+if not truncated["opt_ttls"] or truncated["opt_ttls"][0] & 0x8000 == 0:
+    raise AssertionError(f"truncated DO response did not copy the query DO bit: {truncated}")
 assert_ad_cd_clear("truncated DNSSEC", truncated)
 
 non_edns_truncated = exchange(0xD006, "large.alpha.test.", TXT, payload=None, do=False)

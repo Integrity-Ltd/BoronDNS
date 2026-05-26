@@ -1223,7 +1223,6 @@ fn build_response_inner(
         encode_opt_record(
             edns,
             metadata.extended_rcode,
-            metadata.dnssec_augmented,
             metadata.extended_dns_error,
             options,
             metadata.udp_ceiling(options),
@@ -1493,7 +1492,6 @@ fn encode_mx_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut NameCo
 fn encode_opt_record(
     edns: EdnsMetadata,
     extended_rcode: u16,
-    dnssec_augmented: bool,
     extended_dns_error: Option<ExtendedDnsError>,
     options: AnswerOptions,
     udp_ceiling: usize,
@@ -1511,7 +1509,7 @@ fn encode_opt_record(
     response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
     response.extend_from_slice(&options.max_udp_payload.to_be_bytes());
     let ext_rcode = ((extended_rcode >> 4) as u32) << 24;
-    let ttl = ext_rcode | u32::from(dnssec_augmented) << 15;
+    let ttl = ext_rcode | u32::from(edns.do_bit) << 15;
     response.extend_from_slice(&ttl.to_be_bytes());
     response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
     response.extend_from_slice(&rdata);
@@ -4146,7 +4144,7 @@ mod tests {
             response_authority_types(&response),
             vec![RecordType::Soa as u16]
         );
-        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
         assert_eq!(
             response_ede_info_codes(&response),
             vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
@@ -5982,7 +5980,7 @@ mod tests {
             u16::from_be_bytes([response[opt_offset + 3], response[opt_offset + 4]]),
             DEFAULT_MAX_UDP_PAYLOAD
         );
-        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
     }
 
     #[test]
@@ -6443,14 +6441,14 @@ mod tests {
     }
 
     #[test]
-    fn response_opt_clears_do_bit_without_dnssec_augmentation() {
+    fn response_opt_copies_query_do_bit_without_dnssec_augmentation() {
         let mut packet = query(&example_name(), RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0x8000, &[]);
 
         let response = store_response(&packet, &ZoneStore::new());
 
         assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
-        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
     }
 
     #[test]
@@ -6579,7 +6577,7 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Rrsig as u16]
         );
-        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
     }
 
     #[test]
@@ -6829,7 +6827,7 @@ mod tests {
 
         assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
         assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
-        assert_eq!(response_opt_ttl(&response), Some(1 << 24));
+        assert_eq!(response_opt_ttl(&response), Some((1 << 24) | 0x8000));
     }
 
     #[test]
@@ -6882,7 +6880,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_do_response_clears_do_when_rrsig_is_removed() {
+    fn truncated_do_response_copies_query_do_when_rrsig_is_removed() {
         let store = ZoneStore::new();
         let mut large_rrsig = rrsig_rdata(RecordType::A);
         large_rrsig.extend(vec![0; 400]);
@@ -6915,7 +6913,7 @@ mod tests {
         assert!(response.len() <= 128);
         assert_eq!(flags & 0x0200, 0x0200);
         assert_eq!(response_answer_types(&response), vec![RecordType::A as u16]);
-        assert_eq!(response_opt_ttl(&response), Some(0));
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
     }
 
     #[test]

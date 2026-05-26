@@ -51,7 +51,7 @@ evidence are not Engineering MVP deliverables.
 
 | Topic | Primary source | Current disposition |
 | --- | --- | --- |
-| Response DO bit | RFC 6840 section 5.6 | Current SRS requires response OPT DO to copy query DO. Current implementation and old interop evidence still need alignment. |
+| Response DO bit | RFC 6840 section 5.6 | Current SRS and implementation require response OPT DO to copy query DO. Older retained evidence that described augmentation-derived response DO is legacy only. |
 | Authoritative CD/AD posture | RFC 4035 section 3.1.6 plus RFC 6840 section 5.8/5.9 context | SRS treats CD clearing as an authoritative-server policy stronger than the RFC SHOULD, not as resolver behavior. |
 | RRSIG RRset exception | RFC 4034 section 3 and RFC 4035 DNSSEC response handling | SRS has an explicit RRSIG carve-out from normal RRset/TTL rules. |
 | NSEC3 iteration cap | RFC 9276 section 2.4 | SRS treats proof omission above the cap as an availability/CPU-protection downgrade with optional diagnostic EDE, not normal authenticated denial. |
@@ -72,7 +72,7 @@ Primary source links:
 | ODS/RDS namespace mismatch | Accepted and fixed in current SRS. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; archived v0.1 files are explicitly non-current in `docs/README.md`. |
 | Suffixed IDs such as `ODS-FR-CORE-006a` violate the numeric scheme | Accepted as a cleanup debt, not silently renumbered. Current SRS forbids new suffixed IDs and records the two existing aliases as temporary traceability debt. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/zsm-engineering-mvp-matrix.tsv`; source comments in `crates/`. |
 | UPDATE rejection cross-reference pointed at `CORE-007` | Accepted and fixed in current SRS. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |
-| Response DO-bit semantics were wrong | Accepted as a protocol bug. Current SRS is corrected; implementation and interop scripts are still tracked as an alignment gap. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/implementation-plan.md`; `docs/dnssec-conformance-matrix.tsv`; `docs/mvp-gap-register.md`. |
+| Response DO-bit semantics were wrong | Accepted as a protocol bug. Current SRS, implementation, and focused interop scripts now use RFC 6840 query-DO copy semantics. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `crates/oxidedns-core/src/dns.rs`; `scripts/interop-edns-behavior.sh`; `scripts/interop-dnssec-serve.sh`. |
 | CD-bit handling needed authoritative-server context | Accepted and fixed as explicit authoritative policy. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |
 | RRSIG records were incorrectly covered by ordinary RRset wording | Accepted and fixed with an RRSIG carve-out. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |
 | Static binary wording contradicted dynamic-link allowances | Accepted and fixed. Release artifact is the musl static target; developer/distribution builds may differ and must not be called scratch-compatible without inspection. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/architecture.md`; release packaging scripts. |
@@ -86,14 +86,10 @@ Primary source links:
 
 ## Current Intentional Code Alignment Gaps
 
-The review exposed one known protocol-code divergence that is intentionally
-tracked instead of hidden:
-
-- Response OPT DO-bit handling: the SRS now follows RFC 6840 section 5.6, but
-  code and retained interop evidence still include the older
-  augmentation-derived response DO behavior. Release work must update the core
-  response builder and affected interop scripts before claiming final DNSSEC
-  or EDNS acceptance.
+No protocol-code divergence from the review is intentionally being carried as
+current Engineering MVP scope. Remaining items in the gap register are
+release-evidence or explicitly deferred implementation items, such as the
+catalog member-zone resource cap.
 
 ## Implemented Features Kept In Scope
 

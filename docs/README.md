@@ -95,8 +95,6 @@ subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
 wording differs.
 
 Known implementation-alignment gaps are recorded in `implementation-plan.md`,
-`mvp-gap-register.md`, and the traceability matrices. In particular, the v0.9.1
-SRS cleanup corrected response DO-bit handling to RFC 6840 query-bit copy
-semantics; older evidence that describes augmentation-derived response DO-bit
-behaviour is legacy evidence until the implementation and interop scripts are
-updated.
+`mvp-gap-register.md`, and the traceability matrices. The v0.9.1 SRS cleanup
+corrected response DO-bit handling to RFC 6840 query-bit copy semantics, and
+current unit/runtime evidence now follows that rule.
