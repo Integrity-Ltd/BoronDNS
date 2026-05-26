@@ -87,8 +87,10 @@ catalog_after_remove_axfr_out="$workdir/catalog-after-remove-axfr.out"
 catalog_hidden_out="$workdir/catalog-hidden.out"
 member_before_out="$workdir/member-before.out"
 member_added_out="$workdir/member-added.out"
+member_updated_out="$workdir/member-updated.out"
 member_removed_out="$workdir/member-removed.out"
 metrics_after_add_out="$workdir/metrics-after-add.txt"
+metrics_after_update_out="$workdir/metrics-after-update.txt"
 metrics_after_remove_out="$workdir/metrics-after-remove.txt"
 summary_tsv="$workdir/powerdns-postgres-catalog-tsig-summary.tsv"
 traceability_tsv="$workdir/powerdns-postgres-catalog-tsig-traceability.tsv"
@@ -320,6 +322,35 @@ if [[ "$metrics_after_add" != *'oxidedns_zone_soa_serial{zone="member.example."}
     exit 1
 fi
 
+pdnsutil_run rrset replace member.example www.member.example A 60 "192.0.2.99" >"$workdir/pdnsutil-member-update-rrset.out"
+pdnsutil_run zone increase-serial member.example >"$workdir/pdnsutil-member-update-serial.out"
+pdnsutil_run zone list member.example >"$workdir/pdnsutil-member-after-update.out"
+if ! grep -F 'www.member.example' "$workdir/pdnsutil-member-after-update.out" | grep -F '192.0.2.99' >/dev/null; then
+    echo "PowerDNS member.example did not contain updated www A record" >&2
+    exit 1
+fi
+
+member_updated=""
+for _ in {1..120}; do
+    member_updated="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
+    if [[ "$member_updated" == "192.0.2.99" ]]; then
+        break
+    fi
+    sleep 0.25
+done
+printf '%s\n' "$member_updated" >"$member_updated_out"
+if [[ "$member_updated" != "192.0.2.99" ]]; then
+    echo "OxideDNS did not refresh the PowerDNS member-zone record update" >&2
+    exit 1
+fi
+
+metrics_after_update="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics_after_update" >"$metrics_after_update_out"
+if [[ "$metrics_after_update" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052502'* ]]; then
+    echo "OxideDNS metrics after PowerDNS member update missing incremented SOA serial" >&2
+    exit 1
+fi
+
 pdnsutil_run catalog set member.example >"$workdir/pdnsutil-catalog-remove.out"
 pdnsutil_run zone increase-serial catalog.example >"$workdir/pdnsutil-catalog-remove-serial.out"
 pdnsutil_run catalog list-members catalog.example >"$workdir/pdnsutil-catalog-members-removed.out"
@@ -367,8 +398,8 @@ docker logs "$pdns_container" >"$workdir/pdns.log" 2>&1 || true
 docker logs "$postgres_container" >"$workdir/postgres.log" 2>&1 || true
 
 {
-    printf 'primary\tbackend\ttransfer_security\tmember_added_answer\tmember_removed_answer\n'
-    printf 'powerdns\tpostgres\t%s\t%s\t%s\n' "tsig-hmac-sha256" "$member_added" "${member_removed:-<empty>}"
+    printf 'primary\tbackend\ttransfer_security\tmember_added_answer\tmember_updated_answer\tmember_removed_answer\n'
+    printf 'powerdns\tpostgres\t%s\t%s\t%s\t%s\n' "tsig-hmac-sha256" "$member_added" "$member_updated" "${member_removed:-<empty>}"
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<'EOF'
@@ -376,7 +407,8 @@ requirement_id	evidence_method	scenario	artifacts	rationale
 RFC9432-CATALOG-MVP-010	retained-real-primary	powerdns_postgres_catalog_producer	primary-version.txt; pdnsutil-catalog-members-added.out	PowerDNS Authoritative with PostgreSQL/gpgsql generates RFC 9432 catalog membership using producer-zone metadata.
 RFC9432-CATALOG-MVP-011	retained-real-primary	powerdns_catalog_tsig	catalog-unsigned-axfr.out; catalog-signed-axfr.out; pdns.log	Unsigned catalog AXFR is denied and TSIG-signed catalog AXFR succeeds.
 RFC9432-CATALOG-MVP-012	retained-real-primary	powerdns_catalog_member_add	member-added.out; metrics-after-add.txt; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while a PowerDNS catalog assignment adds member.example. and then transfers and serves that member zone.
-RFC9432-CATALOG-MVP-013	retained-real-primary	powerdns_catalog_member_remove	member-removed.out; metrics-after-remove.txt; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while a PowerDNS catalog assignment is removed and then stops serving the catalog-managed member zone.
+RFC9432-CATALOG-MVP-013	retained-real-primary	powerdns_member_zone_update	member-updated.out; metrics-after-update.txt; pdnsutil-member-after-update.out; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while the PowerDNS PostgreSQL-backed member zone changes, detects the incremented SOA serial, refreshes the zone, and serves the updated record.
+RFC9432-CATALOG-MVP-014	retained-real-primary	powerdns_catalog_member_remove	member-removed.out; metrics-after-remove.txt; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while a PowerDNS catalog assignment is removed and then stops serving the catalog-managed member zone.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
@@ -386,11 +418,13 @@ if [[ -n "$artifact_dir" ]]; then
         primary-version.txt pdns.log postgres.log \
         catalog-unsigned-axfr.out catalog-signed-axfr.out catalog-after-add-axfr.out \
         catalog-after-remove-axfr.out catalog-hidden.out \
-        member-before.out member-added.out member-removed.out \
-        metrics-after-add.txt metrics-after-remove.txt \
+        member-before.out member-added.out member-updated.out member-removed.out \
+        metrics-after-add.txt metrics-after-update.txt metrics-after-remove.txt \
         pdnsutil-tsig-import.out pdnsutil-catalog-load.out pdnsutil-catalog-kind.out \
         pdnsutil-catalog-tsig.out pdnsutil-member-load.out pdnsutil-member-kind.out \
         pdnsutil-member-tsig.out pdnsutil-catalog-add.out pdnsutil-catalog-remove.out \
+        pdnsutil-member-update-rrset.out pdnsutil-member-update-serial.out \
+        pdnsutil-member-after-update.out \
         pdnsutil-catalog-add-serial.out pdnsutil-catalog-remove-serial.out \
         pdnsutil-catalog-members-added.out pdnsutil-catalog-members-removed.out \
         powerdns-postgres-catalog-tsig-summary.tsv \

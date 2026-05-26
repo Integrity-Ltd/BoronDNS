@@ -62,6 +62,7 @@ bash -n scripts/interop-unknown-rr-bad-transfer.sh
 bash -n scripts/interop-negative-responses.sh
 bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-chaos-queries.sh
+bash -n scripts/interop-powerdns-postgres-catalog-tsig-docker.sh
 bash -n scripts/test-docker-image.sh
 bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh

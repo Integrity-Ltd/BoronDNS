@@ -133,7 +133,8 @@ zone data in PostgreSQL, enables TSIG-only AXFR for both the catalog and member
 zone, starts OxideDNS with only `[[catalog_zones]]`, and then changes the
 PowerDNS catalog assignment live. It verifies unsigned catalog AXFR is denied,
 TSIG-signed catalog transfer succeeds, catalog queries stay hidden, member add
-starts serving, and member removal stops serving while OxideDNS remains running.
+starts serving, an in-place PowerDNS member-zone record update refreshes into
+OxideDNS, and member removal stops serving while OxideDNS remains running.
 
 ## RRL And Source-IP Rotation
 

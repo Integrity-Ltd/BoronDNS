@@ -85,7 +85,8 @@ add/remove. For the intended PowerDNS plus PostgreSQL primary shape, run
 `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh` and retain artifacts
 with `OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR`; that harness uses PowerDNS
 producer catalog metadata, PostgreSQL/gpgsql storage, TSIG-only catalog/member
-transfers, and live catalog assignment add/remove.
+transfers, live catalog assignment add/remove, and an in-place member-zone
+record update while OxideDNS remains running.
 
 ## Periodic Execution
 
