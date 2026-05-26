@@ -2,7 +2,7 @@
 
 This plan tracks the path from the current Rust project to a working
 secondary-authoritative DNS server while preserving traceability to Tibor's SRS
-v0.7.
+v0.9/v0.9.1.
 
 The project MVP in this repository is not the same work item as executing SRS
 acceptance locally. Engineering MVP must not require completed long-running
@@ -26,8 +26,11 @@ The detailed Engineering MVP boundary is recorded in
 
 ## Engineering MVP Target
 
-The near-term implementation target is now aligned to the SRS v0.9 Alpha gate
-plus already-started MVP protocol work:
+The near-term implementation target is the current Engineering MVP, not a
+minimal Alpha trim. GPT-style review feedback that recommends deferring
+implemented protocol features is treated as prioritization advice only; the
+project keeps implemented, tested slices in scope and separates them from later
+release-acceptance evidence.
 
 - static TOML configuration with no runtime reload;
 - secondary-only operation from configured primaries;
@@ -38,7 +41,19 @@ plus already-started MVP protocol work:
 - authorized NOTIFY-triggered refresh;
 - TSIG HMAC-SHA256 for transfer, NOTIFY, and ordinary signed-query handling;
 - EDNS support including NSID request/response behavior;
-- SRS v0.9 architectural invariants INV-001 through INV-009, including
+- bounded Extended DNS Errors for implemented diagnostic cases, including
+  not-ready responses and NSEC3-iteration-cap proof omission;
+- IXFR refresh with AXFR fallback where primary behavior requires it;
+- XoT transfer transport, including TSIG-over-XoT and focused TLS failure
+  coverage;
+- passive DNSSEC serving of transferred DNSSEC RRsets and denial proofs, without
+  signing, validation, key management, or RFC 5011 behavior;
+- RRL and DNS Cookies as implemented UDP abuse-resistance mechanisms;
+- RFC 9432 catalog-zone provisioning, including live member add/remove and
+  catalog observability;
+- opt-in CHAOS CH/TXT self-identification queries with conservative REFUSED
+  defaults;
+- SRS v0.9/v0.9.1 architectural invariants INV-001 through INV-009, including
   authoritative-only response composition, single-process operation, and no
   runtime code loading;
 - no eBPF/XDP, AF_XDP, io_uring, NSD-style packed arena, or hot response-cache
@@ -46,9 +61,9 @@ plus already-started MVP protocol work:
   require isolated safe adapters, `/// # Safety` API documentation,
   `// SAFETY:` block rationales, dependency-gate promotion, and
   adapter-specific fault tests before implementation;
-- SRS v0.9 Alpha interface surface: static configuration including validation
+- SRS v0.9/v0.9.1 interface surface: static configuration including validation
   and dump modes, canonical structured logging, process exit/help/version
-  behavior, health/metrics, and graceful shutdown;
+  behavior, health/metrics, management readiness, and graceful shutdown;
 - health, readiness, metrics, long-LOADING zone warnings, structured logs, and
   graceful shutdown;
 - safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
@@ -60,10 +75,11 @@ plus already-started MVP protocol work:
   and NOTIFY, with primary version/configuration evidence recorded for each
   real-primary run and the broader matrix tracked separately.
 
-The Engineering MVP may include more than the Alpha subset where implementation
-has already moved ahead, such as IXFR, XoT, DNSSEC serving of transferred data,
-RRL, and DNS Cookies. Those features still need SRS acceptance evidence before
-they are claimed complete.
+The Engineering MVP intentionally includes more than the historical Alpha
+subset where code and focused evidence already exist. Remaining gaps for IXFR,
+XoT, DNSSEC serving, RRL, DNS Cookies, catalog zones, EDE, CHAOS, and broad
+EDNS behavior are therefore release-evidence, interop-matrix, and traceability
+gaps unless `docs/mvp-gap-register.md` names a concrete implementation gap.
 
 ## SRS Acceptance Execution Target
 
@@ -76,16 +92,20 @@ The later ODS-VER-008 acceptance execution target remains:
 - parser fuzzing run for at least 24 hours per parser without findings;
 - dependency security audit clean;
 - vulnerability disclosure policy published;
-- DNS Cookies, IXFR, full TSIG, XoT, DNSSEC serving, RRL, expanded RR catalogue,
-  and all v0.7 interface/NFR additions fully implemented and verified;
+- DNS Cookies, IXFR, full TSIG, XoT, DNSSEC serving, RRL, catalog zones, EDE,
+  CHAOS, expanded RR catalogue, and the v0.9/v0.9.1 interface/NFR additions
+  verified with release-grade retained evidence;
 - test coverage targets met;
 - signed release artifacts produced;
 - SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
 - at least one production-representative external operator has independently deployed and validated the server.
 
-## SRS Alpha Reference
+## Historical SRS Alpha Reference
 
-The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
+The SRS Alpha gate remains useful as historical context, but it is no longer
+the active feature boundary. Engineering MVP includes the implemented
+post-Alpha slices listed above and in `docs/mvp-gap-register.md`.
+The historical Alpha subset required:
 
 - all architectural invariants, including INV-007 through INV-009;
 - DNS core, query processing, negative responses, unknown RR handling, anti-spoofing, AXFR, NOTIFY, EDNS including NSID, TCP, RFC 1035 RR types plus AAAA, zone store, and zone state machine;
@@ -98,16 +118,19 @@ The SRS Alpha gate is the practical route to Engineering MVP. Alpha requires:
 - interoperability with at least one of NSD, Knot DNS, or BIND 9 as primary,
   with the tested primary version recorded per `ODS-VER-013`.
 
-Deferred from Alpha to the SRS MVP acceptance gate (`ODS-VER-008`) per SRS
-ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, full DNS Cookies,
-expanded RR catalogue, `/livez` and `/readyz` split conformance, health
-response-time and metrics rate-limit requirements, performance NFR conformance,
-full security/maintainability verification, reliability/resource/observability
-extensions, and second and third primary interop.
+Historically deferred from Alpha to the SRS MVP acceptance gate (`ODS-VER-008`)
+per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL, full DNS
+Cookies, expanded RR catalogue, `/livez` and `/readyz` split conformance,
+health response-time and metrics rate-limit requirements, performance NFR
+conformance, full security/maintainability verification,
+reliability/resource/observability extensions, and second and third primary
+interop. Many of those feature slices are now implemented; this paragraph is not
+a deferral list. The current status and remaining evidence gaps are recorded in
+`docs/mvp-gap-register.md`.
 
 `--example-config` is implemented and retained in release CLI evidence, but SRS
-v0.7 makes ODS-IF-PROC-004 a MAY-level command. It is therefore useful for the
-Engineering MVP workflow without being an Alpha or MVP acceptance blocker.
+v0.9 makes ODS-IF-PROC-004 a MAY-level command. It is therefore useful for the
+Engineering MVP workflow without being an acceptance blocker.
 
 ## Pending C.5 Decision Overlay
 
@@ -290,7 +313,8 @@ Slice 7 has TSIG HMAC-SHA foundations:
 - ordinary DNS queries bearing an unknown TSIG key return NOTAUTH; unsupported algorithms, too-short truncated MACs, stale timestamps outside the configured fudge, malformed, misplaced, or invalid TSIGs are handled before core answer construction.
 - NOTIFY messages with embedded SOA records accept RFC-compliant compression in SOA MNAME/RNAME RDATA, matching BIND 9 NOTIFY behavior.
 
-EDNS/query-size work is partially started:
+EDNS/query-size work is implemented for the Engineering MVP profile, with a
+known response-DO alignment gap retained after the RFC 6840 cleanup:
 
 - inbound OPT pseudo-RRs are parsed from the additional section;
 - malformed EDNS option RDATA, duplicate OPT records, and misplaced OPT records return FORMERR;
@@ -307,7 +331,8 @@ EDNS/query-size work is partially started:
   `[server].nsid`, unsupported CHAOS names and non-TXT CHAOS types are REFUSED,
   and IN-class queries for the same names remain ordinary zone lookups.
 
-DNSSEC work is partially started:
+Passive DNSSEC serving is implemented for the Engineering MVP profile, with no
+claim of signing, validation, key management, or rollover behavior:
 
 - DO=1 positive responses include stored RRSIG records covering RRsets placed in the response.
 - DO=1 referral responses include existing DS RRsets for signed child delegations, existing NSEC no-DS proofs for unsigned child delegations, and stored RRSIG records covering the referral NS, DS, and NSEC RRsets.
@@ -353,13 +378,13 @@ Slice 8 has health endpoint and SRS interface foundations:
 - `--version` and `-V` print multi-line SRS build metadata from the same embedded build constants used by `oxidedns_secondary_build_info`, including version, build commit, RFC 3339 build timestamp, and Rust compiler version; `--help` and `-h` print usage, flag descriptions, default configuration path, Operator Deployment Guide pointer, and project pointer; `--example-config` prints the checked-in example TOML without reading a configuration file and that output validates successfully through `--validate-config`;
 - JSON logs include an RFC 3339 UTC timestamp, level, target, message, and structured event key-value fields; logfmt logs include the same canonical core fields as `key=value` pairs and preserve event fields; `scripts/capture-log-evidence.sh` captures representative JSON/logfmt runtime streams, running-service long-LOADING threshold warning records, and bounded logfmt truncation records for release review; plain logs use the standard `tracing-subscriber` text formatter and remain outside the final JSON/logfmt acceptance claim.
 
-DNS Cookie foundations are started:
+DNS Cookie support is implemented for the Engineering MVP profile:
 
 - DNS Cookies default to lenient RFC 9018 version-1 server-cookie behavior, can be disabled or made strict under `[cookie]`, and use a random 128-bit server secret generated at startup without disk persistence;
 - `[cookie].secret_rotation_interval_secs` defaults to `0`, preserving the SRS default of one secret per process lifetime, and non-zero values enable in-process periodic regeneration with redacted fingerprint logs; a rotation invalidates cookies issued under the previous secret like a process restart, and the server continues with the prior secret if a rotation attempt cannot obtain fresh randomness;
 - UDP and TCP query paths fetch the current in-memory cookie secret for each query, so rotated secrets apply consistently across ordinary DNS and NOTIFY-capable listener sockets.
 
-RRL foundations are started:
+RRL support is implemented for the Engineering MVP profile:
 
 - RRL is enabled by default under process-wide `[rrl]` configuration, with configurable IPv4/IPv6 source prefix lengths, per-category rates, slip value, maximum tracked accounting keys, and allowlist entries;
 - UDP query responses are accounted by `(source IP prefix, response category)` for positive, NXDOMAIN, NODATA, referral, and error buckets; TCP responses, non-query responses, valid DNS Cookie responses, and valid TSIG-authenticated query responses are not subject to this UDP RRL path;
@@ -371,7 +396,7 @@ RRL foundations are started:
 - `scripts/rrl-evidence-campaign.sh` runs the RRL UDP interop script repeatedly by iteration count or wall-clock duration, retains wrapper config, tool versions, git state, per-run command files, logs, per-run raw RRL artifacts, per-run summaries, `threshold-decision.tsv`, `aggregate.tsv`, and `aggregate-summary.env` under `target/rrl-evidence/<timestamp>/`, and fails the campaign on the first failed interop run.
 - `scripts/release-evidence-snapshot.sh` can retain the RRL evidence campaign under the release snapshot with `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`; the campaign can be bounded with `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION`.
 
-XoT foundations are started:
+XoT support is implemented for the Engineering MVP profile:
 
 - legacy `primaries = ["addr"]` remains the plain TCP transfer shorthand for existing deployments and test harnesses;
 - explicit `[[zones.transfer_primaries]]` entries can select `transport = "tcp"` or `transport = "xot"` per primary, and cannot be mixed with the legacy shorthand inside one zone;

@@ -14,6 +14,11 @@ The Engineering MVP is the current local target for OxideDNS. It is not the SRS
   code, unsafe-boundary, and traceability checks.
 - Documentation that records current implementation evidence and the remaining
   release-acceptance gaps without claiming final SRS acceptance.
+- Implemented post-Alpha protocol slices listed in `docs/implementation-plan.md`
+  and `docs/mvp-gap-register.md`, including IXFR, XoT, passive DNSSEC serving,
+  RRL, DNS Cookies, catalog zones, EDE, and CHAOS queries. These are not removed
+  from Engineering MVP scope merely because they exceed a minimal static-zone
+  secondary-server trim.
 
 ## Out Of Scope
 
