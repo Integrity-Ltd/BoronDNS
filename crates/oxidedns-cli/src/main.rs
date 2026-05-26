@@ -1055,7 +1055,7 @@ mod tests {
     fn version_text_contains_srs_build_metadata() {
         let text = version_text();
 
-        assert!(text.starts_with("oxidedns 0.1.0\n"));
+        assert!(text.starts_with("oxidedns 0.1.1\n"));
         assert!(text.contains("\nbuild commit: "));
         assert!(text.contains("\nbuild timestamp: "));
         assert!(text.contains("\nrustc: rustc "));

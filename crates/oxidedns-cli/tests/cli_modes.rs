@@ -626,7 +626,7 @@ fn version_flags_print_build_metadata() {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.starts_with("oxidedns 0.1.0\n"),
+            stdout.starts_with("oxidedns 0.1.1\n"),
             "{flag} stdout={stdout}"
         );
         assert!(

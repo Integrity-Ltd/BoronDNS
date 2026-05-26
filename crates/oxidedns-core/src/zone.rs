@@ -39,6 +39,12 @@ pub struct ZoneSnapshot {
     rrsets: HashMap<RrsetKey, Rrset>,
 }
 
+struct DnssecAugmentationState {
+    dnssec_augmented: bool,
+    nsec3_iterations_exceeded: bool,
+    nsec3_max_iterations: u16,
+}
+
 impl ZoneSnapshot {
     pub fn loading(origin: DomainName) -> Self {
         Self {
@@ -161,53 +167,55 @@ impl ZoneSnapshot {
         nsec3_max_iterations: u16,
     ) -> (LookupResult, bool, bool) {
         let mut seen = HashSet::new();
-        let mut dnssec_augmented = false;
-        let mut nsec3_iterations_exceeded = false;
+        let mut dnssec_state = DnssecAugmentationState {
+            dnssec_augmented: false,
+            nsec3_iterations_exceeded: false,
+            nsec3_max_iterations,
+        };
         let nodata_candidate =
             lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
         let nxdomain_candidate =
             lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
         let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &lookup);
-        let authorities = self.add_referral_dnssec_augmentations(
-            lookup.authorities,
-            &mut dnssec_augmented,
-            &mut nsec3_iterations_exceeded,
-            nsec3_max_iterations,
-        );
+        let authorities =
+            self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_state);
         let authorities = self.add_nodata_nsec_augmentations(
             qname,
             qtype,
             qclass,
             nodata_candidate,
             authorities,
-            &mut dnssec_augmented,
-            &mut nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state,
         );
         let authorities = self.add_nxdomain_nsec_augmentations(
             qname,
             qclass,
             nxdomain_candidate,
             authorities,
-            &mut dnssec_augmented,
-            &mut nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state,
         );
         let authorities = self.add_wildcard_nsec_augmentations(
             qname,
             qclass,
             wildcard_candidate,
             authorities,
-            &mut dnssec_augmented,
-            &mut nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state,
         );
-        let answers =
-            self.add_rrsig_augmentations(lookup.answers, &mut seen, &mut dnssec_augmented);
-        let authorities =
-            self.add_rrsig_augmentations(authorities, &mut seen, &mut dnssec_augmented);
-        let additionals =
-            self.add_rrsig_augmentations(lookup.additionals, &mut seen, &mut dnssec_augmented);
+        let answers = self.add_rrsig_augmentations(
+            lookup.answers,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        let authorities = self.add_rrsig_augmentations(
+            authorities,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
+        let additionals = self.add_rrsig_augmentations(
+            lookup.additionals,
+            &mut seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
 
         (
             LookupResult {
@@ -216,8 +224,8 @@ impl ZoneSnapshot {
                 additionals,
                 ..lookup
             },
-            dnssec_augmented,
-            nsec3_iterations_exceeded,
+            dnssec_state.dnssec_augmented,
+            dnssec_state.nsec3_iterations_exceeded,
         )
     }
 
@@ -565,9 +573,7 @@ impl ZoneSnapshot {
     fn add_referral_dnssec_augmentations(
         &self,
         authorities: Vec<ResourceRecord>,
-        dnssec_augmented: &mut bool,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
+        dnssec_state: &mut DnssecAugmentationState,
     ) -> Vec<ResourceRecord> {
         let mut augmented = authorities.clone();
         let mut seen = authorities
@@ -584,16 +590,19 @@ impl ZoneSnapshot {
                 .or_else(|| self.rrset(&record.owner, RecordType::Nsec as u16, record.class));
 
             if let Some(proof_rrset) = proof_rrset {
-                push_rrset_records(proof_rrset, &mut augmented, &mut seen, dnssec_augmented);
+                push_rrset_records(
+                    proof_rrset,
+                    &mut augmented,
+                    &mut seen,
+                    &mut dnssec_state.dnssec_augmented,
+                );
             } else {
                 self.push_nsec3_for_name(
                     &record.owner,
                     record.class,
                     &mut augmented,
                     &mut seen,
-                    dnssec_augmented,
-                    nsec3_iterations_exceeded,
-                    nsec3_max_iterations,
+                    dnssec_state,
                 );
             }
         }
@@ -607,9 +616,7 @@ impl ZoneSnapshot {
         qclass: u16,
         nodata_candidate: bool,
         authorities: Vec<ResourceRecord>,
-        dnssec_augmented: &mut bool,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
+        dnssec_state: &mut DnssecAugmentationState,
     ) -> Vec<ResourceRecord> {
         if !nodata_candidate
             || !authorities
@@ -626,17 +633,14 @@ impl ZoneSnapshot {
             .map(record_identity)
             .collect::<HashSet<_>>();
         if let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) {
-            push_rrset_records(nsec_rrset, &mut augmented, &mut seen, dnssec_augmented);
-        } else {
-            self.push_nsec3_for_name(
-                qname,
-                qclass,
+            push_rrset_records(
+                nsec_rrset,
                 &mut augmented,
                 &mut seen,
-                dnssec_augmented,
-                nsec3_iterations_exceeded,
-                nsec3_max_iterations,
+                &mut dnssec_state.dnssec_augmented,
             );
+        } else {
+            self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
         }
         augmented
     }
@@ -647,9 +651,7 @@ impl ZoneSnapshot {
         qclass: u16,
         nxdomain_candidate: bool,
         authorities: Vec<ResourceRecord>,
-        dnssec_augmented: &mut bool,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
+        dnssec_state: &mut DnssecAugmentationState,
     ) -> Vec<ResourceRecord> {
         if !nxdomain_candidate
             || !authorities
@@ -664,41 +666,35 @@ impl ZoneSnapshot {
             .iter()
             .map(record_identity)
             .collect::<HashSet<_>>();
-        self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
-        self.push_nsec3_for_name(
+        self.push_nsec_covering_name(
             qname,
             qclass,
             &mut augmented,
             &mut seen,
-            dnssec_augmented,
-            nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state.dnssec_augmented,
         );
+        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
         if let Some(closest_encloser) = self.closest_encloser(qname, qclass) {
             self.push_nsec_covering_name(
                 &closest_encloser.wildcard_child(),
                 qclass,
                 &mut augmented,
                 &mut seen,
-                dnssec_augmented,
+                &mut dnssec_state.dnssec_augmented,
             );
             self.push_nsec3_for_name(
                 &closest_encloser,
                 qclass,
                 &mut augmented,
                 &mut seen,
-                dnssec_augmented,
-                nsec3_iterations_exceeded,
-                nsec3_max_iterations,
+                dnssec_state,
             );
             self.push_nsec3_for_name(
                 &closest_encloser.wildcard_child(),
                 qclass,
                 &mut augmented,
                 &mut seen,
-                dnssec_augmented,
-                nsec3_iterations_exceeded,
-                nsec3_max_iterations,
+                dnssec_state,
             );
         }
         augmented
@@ -741,9 +737,7 @@ impl ZoneSnapshot {
         qclass: u16,
         wildcard_candidate: bool,
         authorities: Vec<ResourceRecord>,
-        dnssec_augmented: &mut bool,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
+        dnssec_state: &mut DnssecAugmentationState,
     ) -> Vec<ResourceRecord> {
         if !wildcard_candidate {
             return authorities;
@@ -754,16 +748,14 @@ impl ZoneSnapshot {
             .iter()
             .map(record_identity)
             .collect::<HashSet<_>>();
-        self.push_nsec_covering_name(qname, qclass, &mut augmented, &mut seen, dnssec_augmented);
-        self.push_nsec3_for_name(
+        self.push_nsec_covering_name(
             qname,
             qclass,
             &mut augmented,
             &mut seen,
-            dnssec_augmented,
-            nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state.dnssec_augmented,
         );
+        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
         augmented
     }
 
@@ -773,20 +765,23 @@ impl ZoneSnapshot {
         qclass: u16,
         records: &mut Vec<ResourceRecord>,
         seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
-        dnssec_augmented: &mut bool,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
+        dnssec_state: &mut DnssecAugmentationState,
     ) {
         let Some(nsec3_rrset) = self.nsec3_rrset_for_name(
             name,
             qclass,
-            nsec3_iterations_exceeded,
-            nsec3_max_iterations,
+            &mut dnssec_state.nsec3_iterations_exceeded,
+            dnssec_state.nsec3_max_iterations,
         ) else {
             return;
         };
 
-        push_rrset_records(nsec3_rrset, records, seen, dnssec_augmented);
+        push_rrset_records(
+            nsec3_rrset,
+            records,
+            seen,
+            &mut dnssec_state.dnssec_augmented,
+        );
     }
 
     fn nsec3_rrset_for_name(
