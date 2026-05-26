@@ -46,3 +46,16 @@ maximum send pressure. `--recv-mode process` also opens RX rings and classifies
 returned DNS responses by header fields. Hardware-lab validation should compare
 OxideGun TX/RX counters with NIC counters and packet capture on the DUT-side
 link.
+
+For a privileged local smoke test without a physical XDP NIC, build the debug
+binary with the `xdp` feature and run the veth/netns smoke through `pkexec`:
+
+```bash
+cargo build -p oxide-gun --features xdp
+pkexec ./scripts/oxide-gun-xdp-veth-smoke.sh "$(pwd)/target/debug/oxide-gun"
+```
+
+This creates two temporary network namespaces, sends four DNS queries through
+AF_XDP on a veth interface, captures them with `tcpdump` in the peer namespace,
+and removes the namespaces on exit. It validates AF_XDP bind/TX behavior and DNS
+wire output, but it is not a zero-copy or hardware-throughput benchmark.
