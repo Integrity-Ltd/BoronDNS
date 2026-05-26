@@ -65,6 +65,31 @@ source-line target.
 | Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
 | Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit the catalog transfer policy, and do not create an administrative API or primary-serving path. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-mvp-rfc9432.md`, Appendix C.3.9 MVP update |
 
+## Catalog-Zone Runtime Shape
+
+The SRS specifies catalog-zone behaviour, not the internal abstraction shape.
+The current implementation uses a deliberately small runtime model:
+
+- `crates/oxidedns-core/src/catalog.rs` parses the transferred catalog snapshot,
+  validates the RFC 9432 version property, and extracts member PTR records.
+- `CatalogManager` in `crates/oxidedns-server/src/lib.rs` owns the applied
+  catalog membership state used for metrics and reconciliation.
+- Catalog member zones inherit transfer primaries, TSIG, NOTIFY source policy,
+  transfer source binding, and transfer limits from the static
+  `[[catalog_zones]]` entry. Catalog `primaries` properties are ignored by
+  policy.
+- A successful catalog refresh reconciles the previous and newly parsed member
+  sets. Added members schedule normal zone acquisition with refresh reason
+  `Catalog`; removed managed members are withdrawn from in-memory service.
+- Static `[[zones]]` entries win over catalog membership for the same apex.
+  Metrics still expose the catalog listing with `managed="false"` so operators
+  can see the overlap without allowing catalog data to override static
+  configuration.
+- `serve_catalog_zone = false` keeps the catalog zone out of normal query
+  lookup. If an operator opts into `serve_catalog_zone = true`, the catalog
+  content is served as ordinary authoritative data and must be treated as
+  sensitive operational metadata per RFC 9432 security guidance.
+
 ## Line Count Posture
 
 `scripts/audit-maintainability.sh` measures first-party production Rust source
