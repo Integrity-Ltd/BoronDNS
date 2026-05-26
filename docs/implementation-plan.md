@@ -154,7 +154,9 @@ pending-decision list is SRS Appendix C.5.
 2. In-memory zone data model.
    - Represent RRsets atomically by owner, class, and type.
    - Implement most-specific-zone lookup.
-   - Support RFC 1035 RR types plus AAAA for Alpha.
+   - Support the current encoded RR catalogue, including RFC 1035 baseline
+     types, AAAA, and implemented transfer/query handling for expanded
+     name-bearing and DNSSEC-related RR types.
 
 3. Authoritative query answers.
    - Positive RRset answers.
@@ -233,7 +235,7 @@ Slice 1 has a tested UDP query/response foundation:
 
 Slice 2 has an in-memory zone snapshot model with atomic publication through the shared `ZoneStore`.
 
-Slice 5 is in progress:
+Slice 5 has implemented AXFR foundations and current IXFR refresh/fallback work:
 
 - AXFR query construction is implemented only for TCP framing;
 - runtime AXFR query IDs are drawn from the operating system CSPRNG and sample the full 16-bit QID space;
@@ -265,7 +267,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - primaries that return FORMERR or NOTIMP to IXFR are placed in a per-zone IXFR-disabled cooldown, configured by `[limits].ixfr_disabled_cooldown_secs` and defaulting to 3600 seconds, during which refresh attempts use AXFR for that primary.
 - `scripts/interop-ixfr-notimp-fallback.sh` covers the external process path for initial AXFR, IXFR NOTIMP fallback to AXFR, and the next refresh using AXFR while IXFR cooldown is active; it can retain fake-primary, config, query, metrics, summary, and OxideDNS log artifacts with `OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR`.
 
-Slice 4 is in progress:
+Slice 4 has implemented TCP query transport foundations:
 
 - TCP listeners bind from static configuration;
 - DNS-over-TCP messages use the two-octet length prefix;
