@@ -734,6 +734,7 @@ dependencies = [
  "sha1",
  "sha2",
  "siphasher",
+ "smallvec",
  "subtle",
  "thiserror",
  "toml",

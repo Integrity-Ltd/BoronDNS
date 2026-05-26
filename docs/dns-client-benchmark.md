@@ -112,8 +112,43 @@ Interpretation:
   selected transport.
 - `latency_us_p99` and `latency_us_p999` are client-observed round-trip
   latencies.
+- TCP loopback runs are useful for isolating OxideDNS in-memory lookup,
+  response composition, Tokio scheduling, DNS-over-TCP framing, and local socket
+  write cost. They are not a substitute for NIC-facing UDP/TCP capacity testing
+  on the Reference Hardware/Profile.
+- When the load client runs with a large per-thread window, client-observed
+  latency includes queue depth. Compare it with `client_window * client_threads
+  / responses_per_second` before treating p50/p99 as pure per-query CPU time.
+- With `OXIDEDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED=true`, the Prometheus
+  `oxidedns_query_pipeline_duration_seconds_*` metrics split server-side parse,
+  lookup, compose, and send time. These are the main evidence source for deciding
+  whether a tuning pass should target data layout, response composition,
+  transport, or client/kernel effects.
 - Non-zero `dropped` means the offered load exceeded the local server/client
   path or kernel buffers for that run.
 - This is a local engineering benchmark. The full SRS Reference Hardware/Profile
   acceptance campaign still requires the release benchmark handoff and operator
   sign-off artifacts.
+
+## 0.1.2 Engineering Tuning Goal
+
+The 0.1.2 performance slice is intentionally bounded to measured Rust and build
+profile work:
+
+- keep the authoritative in-memory design and avoid eBPF/XDP/NSD-style packet
+  cache work for this release;
+- keep `ZoneStore` snapshot publication through `Arc<ZoneSnapshot>` rather than
+  introducing DashMap or ArcSwap until contention evidence justifies it;
+- keep the large-catalog benchmark as the primary local data-layout harness;
+- tune the release build with ThinLTO, a single codegen unit, stripped symbols,
+  and abort-on-panic release semantics;
+- retain a profiling build profile with line tables and symbols for perf/flame
+  graph runs;
+- prefer compact indexes and data-layout changes that preserve current query
+  behavior and are validated by focused tests plus before/after benchmark
+  artifacts.
+
+The current evidence indicates that the first-order query bottleneck was full
+zone scanning during response composition, not mutex contention or packet I/O.
+Future eBPF/XDP work still belongs behind the documented packet-I/O adapter and
+privileged deployment boundary.

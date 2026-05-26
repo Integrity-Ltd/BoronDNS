@@ -4,6 +4,7 @@ use std::{
 };
 
 use sha1::{Digest, Sha1};
+use smallvec::SmallVec;
 use tracing::warn;
 
 use crate::dns::{
@@ -37,8 +38,8 @@ pub struct ZoneSnapshot {
     pub serial: Option<u32>,
     pub soa_timers: Option<SoaTimers>,
     rrsets: HashMap<RrsetKey, Rrset>,
-    name_classes: HashMap<String, HashSet<u16>>,
-    empty_non_terminal_classes: HashMap<String, HashSet<u16>>,
+    name_classes: HashMap<String, ClassSet>,
+    empty_non_terminal_classes: HashMap<String, ClassSet>,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
 }
@@ -968,11 +969,13 @@ fn soa_timers_from_rrsets(
 }
 
 struct ZoneSnapshotIndexes {
-    name_classes: HashMap<String, HashSet<u16>>,
-    empty_non_terminal_classes: HashMap<String, HashSet<u16>>,
+    name_classes: HashMap<String, ClassSet>,
+    empty_non_terminal_classes: HashMap<String, ClassSet>,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
 }
+
+type ClassSet = SmallVec<[u16; 1]>;
 
 impl ZoneSnapshotIndexes {
     fn build(origin: &DomainName, rrsets: &HashMap<RrsetKey, Rrset>) -> Self {
@@ -987,8 +990,8 @@ impl ZoneSnapshotIndexes {
             indexes
                 .name_classes
                 .entry(key.owner.clone())
-                .or_default()
-                .insert(rrset.class);
+                .and_modify(|classes| insert_class(classes, rrset.class))
+                .or_insert_with(|| class_set(rrset.class));
             indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class);
 
             if rrset.rr_type == RecordType::Ns as u16 && rrset.owner != *origin {
@@ -1010,8 +1013,8 @@ impl ZoneSnapshotIndexes {
 
             self.empty_non_terminal_classes
                 .entry(name.canonical_key())
-                .or_default()
-                .insert(class);
+                .and_modify(|classes| insert_class(classes, class))
+                .or_insert_with(|| class_set(class));
 
             if name == *origin {
                 break;
@@ -1021,8 +1024,20 @@ impl ZoneSnapshotIndexes {
     }
 }
 
-fn classes_match(classes: &HashSet<u16>, qclass: u16) -> bool {
+fn classes_match(classes: &ClassSet, qclass: u16) -> bool {
     qclass == 255 || classes.contains(&qclass)
+}
+
+fn class_set(class: u16) -> ClassSet {
+    let mut classes = SmallVec::new();
+    classes.push(class);
+    classes
+}
+
+fn insert_class(classes: &mut ClassSet, class: u16) {
+    if !classes.contains(&class) {
+        classes.push(class);
+    }
 }
 
 fn qclass_matches(class: u16, qclass: u16) -> bool {
@@ -1499,7 +1514,7 @@ pub struct Rrset {
     pub rr_type: u16,
     pub class: u16,
     pub ttl: u32,
-    rdatas: Vec<Vec<u8>>,
+    rdatas: SmallVec<[Vec<u8>; 1]>,
 }
 
 impl Rrset {
@@ -1515,7 +1530,7 @@ impl Rrset {
             rr_type,
             class,
             ttl,
-            rdatas,
+            rdatas: SmallVec::from_vec(rdatas),
         }
     }
 

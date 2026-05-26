@@ -186,7 +186,7 @@ pub enum IxfrError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IxfrResponse {
-    Updated(ZoneSnapshot),
+    Updated(Box<ZoneSnapshot>),
     Current,
 }
 
@@ -555,6 +555,7 @@ pub fn parse_ixfr_response_with_options(
         messages,
         options,
     )
+    .map(Box::new)
     .map(IxfrResponse::Updated)
     .map_err(IxfrError::Axfr)
 }
@@ -618,11 +619,11 @@ fn apply_ixfr_incremental(
     }
     validate_zone_record_set(zone_apex, &records, options).map_err(IxfrError::Axfr)?;
 
-    Ok(IxfrResponse::Updated(ZoneSnapshot::active(
+    Ok(IxfrResponse::Updated(Box::new(ZoneSnapshot::active(
         zone_apex.clone(),
         Some(final_serial),
         rrsets_from_records(records),
-    )))
+    ))))
 }
 
 fn remove_record(

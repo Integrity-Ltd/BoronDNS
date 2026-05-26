@@ -7777,7 +7777,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                     Ok(IxfrResponse::Updated(snapshot)) => {
                         context.metrics.record_ixfr_succeeded();
                         let serial = snapshot.serial;
-                        zones.insert_snapshot(snapshot.clone());
+                        zones.insert_snapshot((*snapshot).clone());
                         info!(
                             zone = %plan.origin,
                             %primary,
@@ -7785,7 +7785,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                             reason = %context.reason,
                             "IXFR completed"
                         );
-                        return RefreshZoneOutcome::success(snapshot);
+                        return RefreshZoneOutcome::success(*snapshot);
                     }
                     Ok(IxfrResponse::Current) => {
                         context.metrics.record_ixfr_succeeded();

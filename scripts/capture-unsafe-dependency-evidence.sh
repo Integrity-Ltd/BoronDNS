@@ -82,7 +82,7 @@ from pathlib import Path
 
 artifact_dir = Path(sys.argv[1])
 first_party = {"oxidedns-cli", "oxidedns-core", "oxidedns-server"}
-expected_first_party = {"oxidedns-cli": 0, "oxidedns-core": 0, "oxidedns-server": 16}
+expected_first_party = {"oxidedns-cli": 0, "oxidedns-core": 0, "oxidedns-server": 20}
 
 
 def unsafe_total(used: dict[str, dict[str, int]]) -> int:

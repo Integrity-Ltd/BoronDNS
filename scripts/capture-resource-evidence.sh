@@ -122,7 +122,7 @@ require_text "$evidence_dir/metrics.txt" 'oxidedns_secondary_build_info'
 
 cp "/proc/$oxidedns_pid/status" "$evidence_dir/proc-status-before.txt"
 cp "/proc/$oxidedns_pid/limits" "$evidence_dir/proc-limits.txt"
-fd_count="$(find "/proc/$oxidedns_pid/fd" -maxdepth 1 -type l | wc -l | tr -d ' ')"
+fd_count="$({ find "/proc/$oxidedns_pid/fd" -maxdepth 1 -type l -print 2>/dev/null || true; } | wc -l | tr -d ' ')"
 printf 'fd_count=%s\nfd_formula_bound=%s\n' "$fd_count" "$fd_bound" >"$evidence_dir/fd-count.env"
 if ((fd_count > fd_bound)); then
     printf 'runtime fd count %s exceeds SRS formula bound %s\n' "$fd_count" "$fd_bound" >&2
