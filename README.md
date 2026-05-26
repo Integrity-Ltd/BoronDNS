@@ -59,6 +59,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Catalog Zone MVP based on RFC 9432](docs/catalog-zone-mvp-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [MVP gap register](docs/mvp-gap-register.md)
+- [SRS review disposition](docs/srs-review-disposition.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [Release notes template](docs/release-notes-template.md)

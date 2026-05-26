@@ -29,6 +29,9 @@ set.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence gaps.
 - `appendix-a-traceability-matrix.md`: first-pass working traceability matrix.
 - `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance assertion register.
+- `srs-review-disposition.md`: disposition register for the external SRS review,
+  including accepted protocol fixes, rejected scope-trim suggestions, and known
+  implementation-alignment gaps.
 
 The planning and evidence documents are companion working artifacts. They remain
 subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
