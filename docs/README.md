@@ -81,14 +81,14 @@ implementation gaps.
 
 ## Archived Historical Inputs
 
-These files are retained for provenance only. They are not current requirements
-and are not maintained against v0.9.1:
+These files are retained under `docs/archive/` for provenance only. They are not
+current requirements and are not maintained against v0.9.1:
 
-- `OxideDNS-Secondary-SRS-v0.1.md`: previous SRS baseline.
-- `OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion from the
-  v0.1 baseline.
-- `OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary for the
-  v0.1 baseline.
+- `archive/OxideDNS-Secondary-SRS-v0.1.md`: previous SRS baseline.
+- `archive/OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion
+  from the v0.1 baseline.
+- `archive/OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary
+  for the v0.1 baseline.
 
 The planning and evidence documents are companion working artifacts. They remain
 subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
