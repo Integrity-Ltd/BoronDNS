@@ -4533,8 +4533,8 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Environment-variable override re-validation gap | §6.2, ODS-IF-CONF-014 | Re-run validator after override | **Resolved (v0.9): specified; ODS-IF-CONF-014** |
 | XoT interoperability coverage against BIND 9 | §7.2, ODS-VER-003 | Add BIND 9 to XoT row of matrix | **Resolved (v0.9): added; ODS-VER-003** |
 | CHAOS class self-identification | §4.21, ODS-FR-CHAS-001..006; §6.2, ODS-IF-CONF-018 | Add conservative, opt-in CH/TXT `version.bind` and `id.server` profile | **Resolved in specification (v0.9.1); implemented locally with config, metrics/logging, unit tests, and UDP/TCP client E2E coverage** |
-| Property-based testing in Alpha scope | §7.1 | Add `proptest`-based invariant rules to parser/zone-lookup paths | **Pending (Alpha audit recommendation): non-normative, tracked in Test Plan** |
-| Server module decomposition (server/lib.rs monolith) | §5.4, ODS-NFR-MAINT-002 | Decompose `server::health` and `server::transfer` from monolithic `server/lib.rs` | **Pending (Alpha audit recommendation): non-normative; module organisation per ODS-NFR-MAINT-002 to be tracked in Architecture Document** |
+| Property-based testing in Alpha scope | §7.1 | Add `proptest`-based invariant rules to parser/zone-lookup paths | **Pending: non-normative quality-improvement candidate; tracked in Test Plan** |
+| Server module decomposition (server/lib.rs monolith) | §5.4, ODS-NFR-MAINT-002 | Decompose `server::health` and `server::transfer` from monolithic `server/lib.rs` | **Pending: non-normative maintainability candidate; module organisation per ODS-NFR-MAINT-002 to be tracked in Architecture Document** |
 | `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | Pending |
 | PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | Pending |
 | External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | Pending |
