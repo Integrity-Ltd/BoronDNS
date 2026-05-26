@@ -87,6 +87,12 @@ Changing the set of configured catalogs, their primaries, TSIG references, or
 the `serve_catalog_zone` policy requires a process restart. The member-zone set
 inside a catalog is dynamic and follows successful catalog transfers.
 
+The current implementation does not yet expose the `ODS-NFR-SEC-013`
+catalog-member resource bound (`max_member_zones` or equivalent). Until that
+gap is closed, operators should treat catalog producers as trusted capacity
+inputs and constrain catalog size at the producer or deployment boundary. The
+release gap is tracked in `docs/mvp-gap-register.md`.
+
 ## Observability
 
 Catalog membership changes are visible through structured logs and metrics.
