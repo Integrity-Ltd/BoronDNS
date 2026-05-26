@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SRS_PATH = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.md"
+SRS_PATH = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 APPENDIX_PATH = ROOT / "docs" / "appendix-a-traceability-matrix.md"
 
 ID_PATTERN = r"ODS-[A-Z]+(?:-[A-Z0-9]+)?-\d{3}"

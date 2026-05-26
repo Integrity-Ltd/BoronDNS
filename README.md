@@ -17,7 +17,7 @@ release-acceptance build.
 - Detailed operations reference: [Operator deployment guide](docs/operator-deployment-guide.md)
 - Current implementation target: [Engineering MVP scope](docs/engineering-mvp-scope.md)
 - Verification status: [Verification ledger](docs/verification-ledger.md)
-- Full requirements: [OxideDNS Secondary SRS v0.9.1](docs/OxideDNS-Secondary-SRS-v0.9.md)
+- Full requirements: [OxideDNS Secondary SRS v0.9.1](docs/OxideDNS-Secondary-SRS-v0.9.1.md)
 
 ## Quick Local Commands
 

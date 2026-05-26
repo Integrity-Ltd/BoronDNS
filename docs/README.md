@@ -4,12 +4,11 @@ This directory contains the OxideDNS / OxideDNS-Secondary project
 specification, planning, and evidence documents.
 
 The current normative Software Requirements Specification is
-`OxideDNS-Secondary-SRS-v0.9.md`, currently carrying the v0.9.1 requirement
-set.
+`OxideDNS-Secondary-SRS-v0.9.1.md`.
 
 ## Current Requirements and Design
 
-- `OxideDNS-Secondary-SRS-v0.9.md`: current normative Software Requirements
+- `OxideDNS-Secondary-SRS-v0.9.1.md`: current normative Software Requirements
   Specification, updated through the v0.9.1 requirement set.
 - `architecture.md`: current module map, implementation decisions, deferred
   acceleration/storage tracks, unsafe-boundary posture, and release-governance

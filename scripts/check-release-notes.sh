@@ -5,7 +5,7 @@ usage() {
     cat >&2 <<'EOF'
 usage: scripts/check-release-notes.sh RELEASE_NOTES.md [EVIDENCE_SNAPSHOT_DIR]
 
-Checks the SRS v0.9 release-note gate shape for ODS-VER-010, ODS-VER-013,
+Checks the SRS v0.9.1 release-note gate shape for ODS-VER-010, ODS-VER-013,
 ODS-VER-014, and ODS-VER-015. When an evidence snapshot directory is provided,
 each retained interop primary-version artifact listed in its INDEX.tsv must be
 referenced by snapshot-relative path in the release notes.
@@ -89,7 +89,7 @@ for primary_doc_text in \
     "ODS-VER-014" \
     "RFC number" \
     "Compliance status" \
-    "SRS v0.9"; do
+    "SRS v0.9.1"; do
     if ! grep -F "$primary_doc_text" "$repo_root/docs/rfc-compliance-assertions.md" "$repo_root/docs/operator-deployment-guide.md" >/dev/null 2>&1; then
         printf 'primary RFC compliance documentation missing required text: %s\n' "$primary_doc_text" >&2
         exit 1

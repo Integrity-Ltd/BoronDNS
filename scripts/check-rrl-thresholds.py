@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "oxidedns.example.toml"
-SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.md"
+SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 DOC = ROOT / "docs" / "rrl-release-thresholds.md"
 
 EXPECTED = {

@@ -122,19 +122,19 @@ def check_three_role_docs(repo_root: Path) -> None:
     if "accepts authorized NOTIFY on the DNS listeners" not in readme:
         fail("README.md must state that NOTIFY is accepted on DNS listeners")
 
-    srs = (repo_root / "docs" / "OxideDNS-Secondary-SRS-v0.9.md").read_text(
+    srs = (repo_root / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md").read_text(
         encoding="utf-8"
     )
     if "with `dns`, `mgmt`, `transfer`, and `notify` sub-keys" in srs:
-        fail("SRS v0.9 still exposes notify as an active [interfaces] sub-key")
+        fail("SRS v0.9.1 still exposes notify as an active [interfaces] sub-key")
     if "ODS-IF-NET-008 (optional `interface.notify`)" in srs:
-        fail("SRS v0.9 still describes ODS-IF-NET-008 as optional interface.notify")
+        fail("SRS v0.9.1 still describes ODS-IF-NET-008 as optional interface.notify")
     if "new `interface.notify`" in srs:
-        fail("SRS v0.9 audit history still claims interface.notify was added")
+        fail("SRS v0.9.1 audit history still claims interface.notify was added")
     if "Add optional `interface.notify`" in srs:
-        fail("SRS v0.9 C.5 still asks to add optional interface.notify")
+        fail("SRS v0.9.1 C.5 still asks to add optional interface.notify")
     if "MUST NOT expose a fourth `notify` role" not in srs:
-        fail("SRS v0.9 must preserve the ODS-IF-NET-008 three-role clarification")
+        fail("SRS v0.9.1 must preserve the ODS-IF-NET-008 three-role clarification")
 
 
 def check_previous_diff(
