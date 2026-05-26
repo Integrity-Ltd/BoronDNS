@@ -3819,6 +3819,7 @@ fn metrics_body(
     append_tsig_metrics(&mut body, snapshot);
     append_catalog_member_metrics(&mut body, catalog_manager);
     append_zone_status_metrics(&mut body, zones, uptime_seconds);
+    append_zone_shape_metrics(&mut body, zones);
     append_zone_scheduler_metrics(&mut body, zones, refresh_registry);
     append_zone_query_metrics(&mut body, zones, metrics);
     body
@@ -4287,6 +4288,86 @@ fn zone_loading_seconds(state: ZoneState, uptime_seconds: u64) -> u64 {
         uptime_seconds
     } else {
         0
+    }
+}
+
+fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
+    body.push_str(
+        "# HELP oxidedns_zone_shape_rrsets RRsets held in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_rrsets gauge\n\
+         # HELP oxidedns_zone_shape_rdata_records RDATA records held in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_rdata_records gauge\n\
+         # HELP oxidedns_zone_shape_single_rdata_rrsets RRsets with exactly one RDATA record in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_single_rdata_rrsets gauge\n\
+         # HELP oxidedns_zone_shape_multi_rdata_rrsets RRsets with more than one RDATA record in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_multi_rdata_rrsets gauge\n\
+         # HELP oxidedns_zone_shape_spilled_rdata_rrsets RRsets whose SmallVec RDATA storage spilled to the heap in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_spilled_rdata_rrsets gauge\n\
+         # HELP oxidedns_zone_shape_max_rdata_per_rrset Maximum RDATA records in one RRset for each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_max_rdata_per_rrset gauge\n\
+         # HELP oxidedns_zone_shape_owner_names Owner names present in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_owner_names gauge\n\
+         # HELP oxidedns_zone_shape_empty_non_terminal_names Empty non-terminal names indexed in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_empty_non_terminal_names gauge\n\
+         # HELP oxidedns_zone_shape_rdata_payload_bytes RDATA payload bytes held in each active zone snapshot.\n\
+         # TYPE oxidedns_zone_shape_rdata_payload_bytes gauge\n\
+         # HELP oxidedns_zone_shape_name_key_logical_bytes Logical canonical-name key bytes referenced by zone indexes before interning.\n\
+         # TYPE oxidedns_zone_shape_name_key_logical_bytes gauge\n\
+         # HELP oxidedns_zone_shape_name_key_unique_bytes Unique canonical-name key bytes retained by zone indexes after interning.\n\
+         # TYPE oxidedns_zone_shape_name_key_unique_bytes gauge\n\
+         # HELP oxidedns_zone_shape_name_key_deduplicated_bytes Logical canonical-name key bytes avoided by zone index interning.\n\
+         # TYPE oxidedns_zone_shape_name_key_deduplicated_bytes gauge\n",
+    );
+
+    for snapshot in zones.snapshots() {
+        if snapshot.state != ZoneState::Active {
+            continue;
+        }
+        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let shape = snapshot.shape_summary();
+        for (metric, value) in [
+            ("oxidedns_zone_shape_rrsets", shape.rrset_count),
+            ("oxidedns_zone_shape_rdata_records", shape.rdata_count),
+            (
+                "oxidedns_zone_shape_single_rdata_rrsets",
+                shape.single_rdata_rrset_count,
+            ),
+            (
+                "oxidedns_zone_shape_multi_rdata_rrsets",
+                shape.multi_rdata_rrset_count,
+            ),
+            (
+                "oxidedns_zone_shape_spilled_rdata_rrsets",
+                shape.spilled_rdata_rrset_count,
+            ),
+            (
+                "oxidedns_zone_shape_max_rdata_per_rrset",
+                shape.max_rdata_per_rrset,
+            ),
+            ("oxidedns_zone_shape_owner_names", shape.owner_name_count),
+            (
+                "oxidedns_zone_shape_empty_non_terminal_names",
+                shape.empty_non_terminal_name_count,
+            ),
+            (
+                "oxidedns_zone_shape_rdata_payload_bytes",
+                shape.rdata_payload_bytes,
+            ),
+            (
+                "oxidedns_zone_shape_name_key_logical_bytes",
+                shape.name_key_logical_bytes,
+            ),
+            (
+                "oxidedns_zone_shape_name_key_unique_bytes",
+                shape.name_key_unique_bytes,
+            ),
+            (
+                "oxidedns_zone_shape_name_key_deduplicated_bytes",
+                shape.name_key_deduplicated_bytes,
+            ),
+        ] {
+            body.push_str(&format!("{metric}{{zone=\"{zone}\"}} {value}\n"));
+        }
     }
 }
 
@@ -9393,6 +9474,29 @@ mod tests {
         assert!(metrics.contains("oxidedns_zone_soa_serial{zone=\"example.test.\"} 1"));
         assert!(!metrics.contains("oxidedns_secondary_zone_soa_serial{zone=\"loading.test.\"}"));
         assert!(metrics.contains("oxidedns_secondary_zone_soa_serial{zone=\"example.test.\"} 1"));
+        assert!(metrics.contains("oxidedns_zone_shape_rrsets{zone=\"example.test.\"} 1"));
+        assert!(metrics.contains("oxidedns_zone_shape_rdata_records{zone=\"example.test.\"} 1"));
+        assert!(
+            metrics.contains("oxidedns_zone_shape_single_rdata_rrsets{zone=\"example.test.\"} 1")
+        );
+        assert!(
+            metrics.contains("oxidedns_zone_shape_multi_rdata_rrsets{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_zone_shape_spilled_rdata_rrsets{zone=\"example.test.\"} 0")
+        );
+        assert!(
+            metrics.contains("oxidedns_zone_shape_max_rdata_per_rrset{zone=\"example.test.\"} 1")
+        );
+        assert!(metrics.contains("oxidedns_zone_shape_owner_names{zone=\"example.test.\"} 1"));
+        assert!(
+            metrics
+                .contains("oxidedns_zone_shape_empty_non_terminal_names{zone=\"example.test.\"} 0")
+        );
+        assert!(metrics.contains(
+            "oxidedns_zone_shape_name_key_deduplicated_bytes{zone=\"example.test.\"} 13"
+        ));
+        assert!(!metrics.contains("oxidedns_zone_shape_rrsets{zone=\"loading.test.\"}"));
         assert!(metrics.contains(
             "oxidedns_zone_last_success_timestamp_seconds{zone=\"example.test.\"} 1700000000"
         ));

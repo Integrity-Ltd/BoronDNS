@@ -462,7 +462,9 @@ NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
 per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
 `oxidedns_secondary_build_info` gauge, the
 `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and the
-`oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics, and the
+`oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics,
+`oxidedns_zone_shape_*` active-zone shape gauges for RRset/RDATA cardinality and
+canonical-name key interning evidence, and the
 `oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
 bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
 seconds and default to the SRS v0.9 bucket list.

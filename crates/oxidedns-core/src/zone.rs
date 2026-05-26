@@ -38,10 +38,26 @@ pub struct ZoneSnapshot {
     pub serial: Option<u32>,
     pub soa_timers: Option<SoaTimers>,
     rrsets: HashMap<RrsetKey, Rrset>,
-    name_classes: HashMap<String, ClassSet>,
-    empty_non_terminal_classes: HashMap<String, ClassSet>,
+    name_classes: HashMap<NameKey, ClassSet>,
+    empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZoneShapeSummary {
+    pub rrset_count: usize,
+    pub rdata_count: usize,
+    pub single_rdata_rrset_count: usize,
+    pub multi_rdata_rrset_count: usize,
+    pub spilled_rdata_rrset_count: usize,
+    pub max_rdata_per_rrset: usize,
+    pub owner_name_count: usize,
+    pub empty_non_terminal_name_count: usize,
+    pub rdata_payload_bytes: usize,
+    pub name_key_logical_bytes: usize,
+    pub name_key_unique_bytes: usize,
+    pub name_key_deduplicated_bytes: usize,
 }
 
 struct DnssecAugmentationState {
@@ -66,15 +82,21 @@ impl ZoneSnapshot {
     }
 
     pub fn active(origin: DomainName, serial: Option<u32>, rrsets: Vec<Rrset>) -> Self {
+        let mut name_interner = NameInterner::default();
         let mut by_key = HashMap::new();
         for rrset in rrsets {
             by_key.insert(
-                RrsetKey::new(&rrset.owner, rrset.rr_type, rrset.class),
+                RrsetKey::new_interned(
+                    &rrset.owner,
+                    rrset.rr_type,
+                    rrset.class,
+                    &mut name_interner,
+                ),
                 rrset,
             );
         }
         let soa_timers = soa_timers_from_rrsets(&origin, &by_key);
-        let indexes = ZoneSnapshotIndexes::build(&origin, &by_key);
+        let indexes = ZoneSnapshotIndexes::build(&origin, &by_key, &mut name_interner);
 
         Self {
             origin,
@@ -110,6 +132,58 @@ impl ZoneSnapshot {
 
     pub fn records(&self) -> Vec<ResourceRecord> {
         self.rrsets.values().flat_map(Rrset::records).collect()
+    }
+
+    pub fn shape_summary(&self) -> ZoneShapeSummary {
+        let mut summary = ZoneShapeSummary {
+            rrset_count: self.rrsets.len(),
+            owner_name_count: self.name_classes.len(),
+            empty_non_terminal_name_count: self.empty_non_terminal_classes.len(),
+            ..ZoneShapeSummary::default()
+        };
+
+        for rrset in self.rrsets.values() {
+            let rdata_count = rrset.rdatas.len();
+            summary.rdata_count += rdata_count;
+            summary.rdata_payload_bytes += rrset.rdatas.iter().map(Vec::len).sum::<usize>();
+            summary.max_rdata_per_rrset = summary.max_rdata_per_rrset.max(rdata_count);
+            if rdata_count == 1 {
+                summary.single_rdata_rrset_count += 1;
+            } else if rdata_count > 1 {
+                summary.multi_rdata_rrset_count += 1;
+            }
+            if rrset.rdatas.spilled() {
+                summary.spilled_rdata_rrset_count += 1;
+            }
+        }
+
+        let mut unique_name_keys = HashSet::<NameKey>::new();
+        for key in self.rrsets.keys() {
+            summary.name_key_logical_bytes += key.owner.len();
+            unique_name_keys.insert(key.owner.clone());
+        }
+        for key in self.name_classes.keys() {
+            summary.name_key_logical_bytes += key.len();
+            unique_name_keys.insert(key.clone());
+        }
+        for key in self.empty_non_terminal_classes.keys() {
+            summary.name_key_logical_bytes += key.len();
+            unique_name_keys.insert(key.clone());
+        }
+        for key in self
+            .delegation_rrsets
+            .iter()
+            .chain(self.dname_rrsets.iter())
+        {
+            summary.name_key_logical_bytes += key.owner.len();
+            unique_name_keys.insert(key.owner.clone());
+        }
+
+        summary.name_key_unique_bytes = unique_name_keys.iter().map(|key| key.len()).sum();
+        summary.name_key_deduplicated_bytes = summary
+            .name_key_logical_bytes
+            .saturating_sub(summary.name_key_unique_bytes);
+        summary
     }
 
     pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
@@ -901,11 +975,7 @@ impl ZoneSnapshot {
                 .values()
                 .find(|rrset| rrset.owner.canonical_key() == owner_key && rrset.rr_type == rr_type)
         } else {
-            self.rrsets.get(&RrsetKey {
-                owner: owner.canonical_key(),
-                rr_type,
-                class: qclass,
-            })
+            self.rrsets.get(&RrsetKey::new(owner, rr_type, qclass))
         }
     }
 
@@ -939,7 +1009,7 @@ impl ZoneSnapshot {
 
     fn name_exists(&self, name: &DomainName, qclass: u16) -> bool {
         self.name_classes
-            .get(&name.canonical_key())
+            .get(name.canonical_key().as_str())
             .is_some_and(|classes| classes_match(classes, qclass))
     }
 
@@ -949,7 +1019,7 @@ impl ZoneSnapshot {
         }
 
         self.empty_non_terminal_classes
-            .get(&name.canonical_key())
+            .get(name.canonical_key().as_str())
             .is_some_and(|classes| classes_match(classes, qclass))
     }
 
@@ -969,16 +1039,21 @@ fn soa_timers_from_rrsets(
 }
 
 struct ZoneSnapshotIndexes {
-    name_classes: HashMap<String, ClassSet>,
-    empty_non_terminal_classes: HashMap<String, ClassSet>,
+    name_classes: HashMap<NameKey, ClassSet>,
+    empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
 }
 
 type ClassSet = SmallVec<[u16; 1]>;
+type NameKey = Arc<str>;
 
 impl ZoneSnapshotIndexes {
-    fn build(origin: &DomainName, rrsets: &HashMap<RrsetKey, Rrset>) -> Self {
+    fn build(
+        origin: &DomainName,
+        rrsets: &HashMap<RrsetKey, Rrset>,
+        name_interner: &mut NameInterner,
+    ) -> Self {
         let mut indexes = Self {
             name_classes: HashMap::new(),
             empty_non_terminal_classes: HashMap::new(),
@@ -992,7 +1067,7 @@ impl ZoneSnapshotIndexes {
                 .entry(key.owner.clone())
                 .and_modify(|classes| insert_class(classes, rrset.class))
                 .or_insert_with(|| class_set(rrset.class));
-            indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class);
+            indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class, name_interner);
 
             if rrset.rr_type == RecordType::Ns as u16 && rrset.owner != *origin {
                 indexes.delegation_rrsets.push(key.clone());
@@ -1004,7 +1079,13 @@ impl ZoneSnapshotIndexes {
         indexes
     }
 
-    fn index_empty_non_terminals(&mut self, origin: &DomainName, owner: &DomainName, class: u16) {
+    fn index_empty_non_terminals(
+        &mut self,
+        origin: &DomainName,
+        owner: &DomainName,
+        class: u16,
+        name_interner: &mut NameInterner,
+    ) {
         let mut parent = owner.parent();
         while let Some(name) = parent {
             if !name.is_equal_or_subdomain_of(origin) {
@@ -1012,7 +1093,7 @@ impl ZoneSnapshotIndexes {
             }
 
             self.empty_non_terminal_classes
-                .entry(name.canonical_key())
+                .entry(name_interner.intern_domain(&name))
                 .and_modify(|classes| insert_class(classes, class))
                 .or_insert_with(|| class_set(class));
 
@@ -1021,6 +1102,27 @@ impl ZoneSnapshotIndexes {
             }
             parent = name.parent();
         }
+    }
+}
+
+#[derive(Default)]
+struct NameInterner {
+    names: HashMap<String, NameKey>,
+}
+
+impl NameInterner {
+    fn intern_domain(&mut self, name: &DomainName) -> NameKey {
+        self.intern(name.canonical_key())
+    }
+
+    fn intern(&mut self, name: String) -> NameKey {
+        if let Some(existing) = self.names.get(name.as_str()) {
+            return existing.clone();
+        }
+
+        let interned = NameKey::from(name.as_str());
+        self.names.insert(name, interned.clone());
+        interned
     }
 }
 
@@ -1554,7 +1656,7 @@ impl Rrset {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RrsetKey {
-    owner: String,
+    owner: NameKey,
     rr_type: u16,
     class: u16,
 }
@@ -1562,7 +1664,20 @@ struct RrsetKey {
 impl RrsetKey {
     fn new(owner: &DomainName, rr_type: u16, class: u16) -> Self {
         Self {
-            owner: owner.canonical_key(),
+            owner: NameKey::from(owner.canonical_key()),
+            rr_type,
+            class,
+        }
+    }
+
+    fn new_interned(
+        owner: &DomainName,
+        rr_type: u16,
+        class: u16,
+        name_interner: &mut NameInterner,
+    ) -> Self {
+        Self {
+            owner: name_interner.intern_domain(owner),
             rr_type,
             class,
         }
@@ -1596,6 +1711,44 @@ mod tests {
                 expire: 604800,
                 minimum: 300,
             })
+        );
+    }
+
+    #[test]
+    fn shape_summary_reports_rrset_and_name_key_distribution() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let www = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let api = DomainName::from_absolute_str("api.deep.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(origin, RecordType::Soa as u16, 1, 300, vec![soa_rdata()]),
+                Rrset::new(
+                    www,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1], vec![192, 0, 2, 2]],
+                ),
+                Rrset::new(api, RecordType::A as u16, 1, 300, vec![vec![192, 0, 2, 3]]),
+            ],
+        );
+
+        let shape = snapshot.shape_summary();
+        assert_eq!(shape.rrset_count, 3);
+        assert_eq!(shape.rdata_count, 4);
+        assert_eq!(shape.single_rdata_rrset_count, 2);
+        assert_eq!(shape.multi_rdata_rrset_count, 1);
+        assert_eq!(shape.spilled_rdata_rrset_count, 1);
+        assert_eq!(shape.max_rdata_per_rrset, 2);
+        assert_eq!(shape.owner_name_count, 3);
+        assert_eq!(shape.empty_non_terminal_name_count, 2);
+        assert_eq!(shape.rdata_payload_bytes, soa_rdata().len() + 12);
+        assert!(shape.name_key_logical_bytes > shape.name_key_unique_bytes);
+        assert_eq!(
+            shape.name_key_deduplicated_bytes,
+            shape.name_key_logical_bytes - shape.name_key_unique_bytes
         );
     }
 

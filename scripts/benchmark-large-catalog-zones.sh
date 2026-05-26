@@ -30,6 +30,7 @@ big_zone_count="${OXIDEDNS_LARGE_BENCH_BIG_ZONES:-16}"
 small_names="${OXIDEDNS_LARGE_BENCH_SMALL_NAMES:-1000}"
 names_per_gib="${OXIDEDNS_LARGE_BENCH_NAMES_PER_GIB:-700000}"
 txt_bytes="${OXIDEDNS_LARGE_BENCH_TXT_BYTES:-1024}"
+address_records_per_name="${OXIDEDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:-1}"
 duration="${OXIDEDNS_LARGE_BENCH_DURATION_SECONDS:-60}"
 warmup_duration="${OXIDEDNS_LARGE_BENCH_WARMUP_SECONDS:-10}"
 transport="${OXIDEDNS_LARGE_BENCH_TRANSPORT:-tcp}"
@@ -85,6 +86,7 @@ for pair in \
     "OXIDEDNS_LARGE_BENCH_SMALL_NAMES:$small_names" \
     "OXIDEDNS_LARGE_BENCH_NAMES_PER_GIB:$names_per_gib" \
     "OXIDEDNS_LARGE_BENCH_TXT_BYTES:$txt_bytes" \
+    "OXIDEDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:$address_records_per_name" \
     "OXIDEDNS_LARGE_BENCH_DURATION_SECONDS:$duration" \
     "OXIDEDNS_LARGE_BENCH_SERVER_CPUS:$server_cpus" \
     "OXIDEDNS_LARGE_BENCH_CLIENT_THREADS:$client_threads" \
@@ -157,6 +159,12 @@ metric_value() {
     local metric="$1"
     local path="$2"
     awk -v metric="$metric" '$1 == metric { print $2; exit }' "$path"
+}
+
+metric_sum() {
+    local metric="$1"
+    local path="$2"
+    awk -v metric="$metric" '$1 ~ "^" metric "(\\{|$)" { sum += $2 } END { print sum + 0 }' "$path"
 }
 
 append_resource_sample() {
@@ -243,6 +251,7 @@ small_zone_count=$small_zone_count
 big_names=$big_names
 small_names=$small_names
 txt_bytes=$txt_bytes
+address_records_per_name=$address_records_per_name
 transport=$transport
 duration_seconds=$duration
 warmup_seconds=$warmup_duration
@@ -261,7 +270,7 @@ health_port=$health_port
 workdir=$workdir
 EOF
 
-python3 - "$workdir" "$zone_count" "$big_zone_count" "$big_names" "$small_names" "$txt_bytes" "$tsig_name" "$tsig_secret" <<'PY'
+python3 - "$workdir" "$zone_count" "$big_zone_count" "$big_names" "$small_names" "$txt_bytes" "$address_records_per_name" "$tsig_name" "$tsig_secret" <<'PY'
 import pathlib
 import sys
 
@@ -271,8 +280,9 @@ big_zone_count = int(sys.argv[3])
 big_names = int(sys.argv[4])
 small_names = int(sys.argv[5])
 txt_bytes = int(sys.argv[6])
-tsig_name = sys.argv[7]
-tsig_secret = sys.argv[8]
+address_records_per_name = int(sys.argv[7])
+tsig_name = sys.argv[8]
+tsig_secret = sys.argv[9]
 zones_dir = workdir / "zones"
 catalog = "catalog.perf.test."
 
@@ -357,8 +367,10 @@ for zone_index in range(zone_count):
         total_rrs += 3
         for name_index in range(names):
             label = f"host{name_index:08}"
-            handle.write(f"{label} IN A 192.0.{(name_index // 256) % 256}.{name_index % 256}\n")
-            total_rrs += 1
+            for address_index in range(address_records_per_name):
+                address_ordinal = (name_index * address_records_per_name) + address_index
+                handle.write(f"{label} IN A 192.0.{(address_ordinal // 256) % 256}.{address_ordinal % 256}\n")
+                total_rrs += 1
             if txt_payload:
                 handle.write(f"{label} IN TXT {txt_payload}\n")
                 total_rrs += 1
@@ -373,6 +385,7 @@ summary = [
     f"total_owner_names\t{total_owner_names}",
     f"total_member_rrs\t{total_rrs}",
     f"txt_payload_bytes\t{txt_bytes}",
+    f"address_records_per_name\t{address_records_per_name}",
 ]
 (workdir / "zone-generation-summary.tsv").write_text("\n".join(summary) + "\n", encoding="utf-8")
 PY
@@ -625,6 +638,8 @@ if [[ -f "$artifact_dir/perf.data" ]] && command -v perf >/dev/null 2>&1; then
 fi
 
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
+awk '$1 ~ /^oxidedns_zone_shape_/ { print }' "$artifact_dir/metrics-after.prom" \
+    >"$artifact_dir/zone-shape.prom"
 cp "/proc/$oxidedns_pid/status" "$artifact_dir/proc-status-after.txt"
 if [[ -e "/proc/$oxidedns_pid/smaps_rollup" ]]; then
     cp "/proc/$oxidedns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-after.txt" \
@@ -649,6 +664,15 @@ dropped="$(summary_value dropped)"
 errors="$(summary_value errors)"
 rss_after_kib="$(awk '/VmRSS:/ { print $2; exit }' "/proc/$oxidedns_pid/status")"
 rss_after_mib=$(((rss_after_kib + 1023) / 1024))
+zone_shape_rrsets="$(metric_sum oxidedns_zone_shape_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_rdata_records="$(metric_sum oxidedns_zone_shape_rdata_records "$artifact_dir/metrics-after.prom")"
+zone_shape_single_rdata_rrsets="$(metric_sum oxidedns_zone_shape_single_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_multi_rdata_rrsets="$(metric_sum oxidedns_zone_shape_multi_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_spilled_rdata_rrsets="$(metric_sum oxidedns_zone_shape_spilled_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_rdata_payload_bytes="$(metric_sum oxidedns_zone_shape_rdata_payload_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_logical_bytes="$(metric_sum oxidedns_zone_shape_name_key_logical_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_unique_bytes="$(metric_sum oxidedns_zone_shape_name_key_unique_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_deduplicated_bytes="$(metric_sum oxidedns_zone_shape_name_key_deduplicated_bytes "$artifact_dir/metrics-after.prom")"
 
 cat >"$artifact_dir/benchmark-results.tsv" <<EOF
 metric	value	unit
@@ -658,6 +682,7 @@ big_zone_count	$big_zone_count	zones
 big_names_per_zone	$big_names	names
 small_names_per_zone	$small_names	names
 txt_payload_bytes	$txt_bytes	bytes
+address_records_per_name	$address_records_per_name	records
 target_rss_mib	$target_rss_mib	MiB
 rss_mib_after_load	$rss_mib	MiB
 rss_mib_after_run	$rss_after_mib	MiB
@@ -677,6 +702,15 @@ errors	$errors	responses
 pipeline_timing_enabled	$pipeline_timing_enabled	boolean
 perf_stat_enabled	$perf_stat_enabled	boolean
 perf_record_enabled	$perf_record_enabled	boolean
+zone_shape_rrsets	$zone_shape_rrsets	rrsets
+zone_shape_rdata_records	$zone_shape_rdata_records	records
+zone_shape_single_rdata_rrsets	$zone_shape_single_rdata_rrsets	rrsets
+zone_shape_multi_rdata_rrsets	$zone_shape_multi_rdata_rrsets	rrsets
+zone_shape_spilled_rdata_rrsets	$zone_shape_spilled_rdata_rrsets	rrsets
+zone_shape_rdata_payload_bytes	$zone_shape_rdata_payload_bytes	bytes
+zone_shape_name_key_logical_bytes	$zone_shape_name_key_logical_bytes	bytes
+zone_shape_name_key_unique_bytes	$zone_shape_name_key_unique_bytes	bytes
+zone_shape_name_key_deduplicated_bytes	$zone_shape_name_key_deduplicated_bytes	bytes
 EOF
 
 awk -F'\t' 'NR > 1 { printf "phase_%s_duration_ms\t%s\tmilliseconds\n", $1, $4 }' \
@@ -703,6 +737,11 @@ The benchmark enables pipeline timing metrics by default and can collect Linux
 \`perf stat\` plus optional \`perf record\` data. If \`inferno-collapse-perf\`
 and \`inferno-flamegraph\` are installed, a \`flamegraph.svg\` is produced from
 the recorded samples.
+
+Zone-shape metrics are retained in \`zone-shape.prom\` and summarized into
+\`benchmark-results.tsv\`. They expose RRset/RDATA cardinality, SmallVec spill
+counts, payload bytes, and canonical-name key interning savings so memory-layout
+tuning can be tied to the loaded catalog shape.
 
 This is a local optimization harness. It is intentionally not part of
 \`scripts/check.sh\` or the Engineering MVP evidence path.

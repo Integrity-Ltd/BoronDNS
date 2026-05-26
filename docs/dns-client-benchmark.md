@@ -84,6 +84,10 @@ Useful sizing knobs:
 - `OXIDEDNS_LARGE_BENCH_TXT_BYTES` adjusts per-owner TXT payload size and is the
   simplest way to move the resident set up or down without changing query
   cardinality.
+- `OXIDEDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME` controls how many A records
+  are generated for each synthetic host owner. The default is `1`; values above
+  `1` intentionally create multi-RDATA A RRsets for validating the `SmallVec`
+  inline-capacity assumption.
 
 The script writes retained artifacts under
 `target/evidence/large-catalog-benchmark-<timestamp>/`. The important machine
@@ -97,6 +101,10 @@ readable files are:
 - `metrics-before.prom`, `metrics-after-warmup.prom`, and `metrics-after.prom`
   for Prometheus snapshots before serving, after warmup, and after the measured
   run.
+- `zone-shape.prom` for the loaded active-zone shape: RRset count, RDATA count,
+  single- versus multi-RDATA RRsets, SmallVec spill count, RDATA payload bytes,
+  owner-name count, empty non-terminal count, and canonical-name key interning
+  savings. `benchmark-results.tsv` also includes aggregate `zone_shape_*` rows.
 - `resource-samples.tsv`, `/proc` status snapshots, optional `perf-stat.csv`,
   and optional `flamegraph.svg` when `perf record` plus Inferno tooling are
   available.
@@ -124,6 +132,11 @@ Interpretation:
   lookup, compose, and send time. These are the main evidence source for deciding
   whether a tuning pass should target data layout, response composition,
   transport, or client/kernel effects.
+- The `zone_shape_single_rdata_rrsets`, `zone_shape_multi_rdata_rrsets`, and
+  `zone_shape_spilled_rdata_rrsets` rows show whether `SmallVec<[T; 1]>` matches
+  the loaded corpus or whether a wider inline capacity should be tested. The
+  `zone_shape_name_key_*_bytes` rows quantify canonical-name key duplication
+  avoided by interning inside each `ZoneSnapshot`.
 - Non-zero `dropped` means the offered load exceeded the local server/client
   path or kernel buffers for that run.
 - This is a local engineering benchmark. The full SRS Reference Hardware/Profile
