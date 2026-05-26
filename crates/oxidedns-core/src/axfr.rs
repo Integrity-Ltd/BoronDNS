@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 use tracing::warn;
@@ -287,6 +287,50 @@ pub fn parse_axfr_response_with_options(
     )
 }
 
+pub fn axfr_response_message_apex_soa_count(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    message: &[u8],
+    require_question: bool,
+) -> Result<usize, AxfrError> {
+    let header = Header::parse(message).map_err(|_| AxfrError::MalformedMessage)?;
+    if header.id != qid {
+        return Err(AxfrError::MismatchedQid);
+    }
+    if !header.is_response() {
+        return Err(AxfrError::NotResponse);
+    }
+    if header.opcode_value() != 0 {
+        return Err(AxfrError::MismatchedOpcode);
+    }
+    let rcode = (header.flags & 0x000f) as u8;
+    if rcode != 0 {
+        return Err(AxfrError::ErrorRcode(rcode));
+    }
+
+    let mut offset = validate_axfr_response_question(
+        message,
+        header.qdcount,
+        zone_apex,
+        RecordType::Axfr as u16,
+        qclass,
+        require_question,
+    )?;
+    let mut apex_soa_count = 0usize;
+    for _ in 0..header.ancount {
+        let (record, consumed) = parse_record(message, offset)?;
+        offset += consumed;
+        if record.rr_type == RecordType::Soa as u16
+            && record.class == qclass
+            && record.owner == *zone_apex
+        {
+            apex_soa_count += 1;
+        }
+    }
+    Ok(apex_soa_count)
+}
+
 fn parse_axfr_response_with_question(
     qid: u16,
     zone_apex: &DomainName,
@@ -303,6 +347,7 @@ fn parse_axfr_response_with_question(
     let mut zone_serial = None;
     let mut zone_records = Vec::new();
     let mut complete = false;
+    let mut saw_response_question = false;
 
     for message in messages {
         let header = Header::parse(message).map_err(|_| AxfrError::MalformedMessage)?;
@@ -320,8 +365,17 @@ fn parse_axfr_response_with_question(
             return Err(AxfrError::ErrorRcode(rcode));
         }
 
-        let mut offset =
-            validate_axfr_response_question(message, header.qdcount, zone_apex, qtype, qclass)?;
+        let mut offset = validate_axfr_response_question(
+            message,
+            header.qdcount,
+            zone_apex,
+            qtype,
+            qclass,
+            !saw_response_question,
+        )?;
+        if header.qdcount == 1 {
+            saw_response_question = true;
+        }
         for _ in 0..header.ancount {
             if complete {
                 return Err(AxfrError::TrailingRecords);
@@ -634,7 +688,11 @@ fn validate_axfr_response_question(
     zone_apex: &DomainName,
     qtype: u16,
     qclass: u16,
+    require_question: bool,
 ) -> Result<usize, AxfrError> {
+    if qdcount == 0 && !require_question {
+        return Ok(DNS_HEADER_LEN);
+    }
     validate_response_question(message, qdcount, zone_apex, qtype, qclass).map_err(|error| {
         match error {
             ResponseQuestionError::MalformedMessage => AxfrError::MalformedMessage,
@@ -1276,14 +1334,13 @@ fn is_dnssec_cname_exception_type(rr_type: u16) -> bool {
 }
 
 fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
+    let mut rrset_indexes = HashMap::<(String, u16, u16), usize>::new();
     let mut rrsets = Vec::<RrsetAccumulator>::new();
 
     for record in records {
-        if let Some(existing) = rrsets.iter_mut().find(|rrset| {
-            rrset.owner == record.owner
-                && rrset.rr_type == record.rr_type
-                && rrset.class == record.class
-        }) {
+        let key = (record.owner.canonical_key(), record.rr_type, record.class);
+        if let Some(&index) = rrset_indexes.get(&key) {
+            let existing = &mut rrsets[index];
             if existing.ttl != record.ttl {
                 warn!(
                     owner = %record.owner,
@@ -1298,6 +1355,7 @@ fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
             existing.ttl = existing.ttl.min(record.ttl);
             existing.rdatas.push(record.rdata);
         } else {
+            rrset_indexes.insert(key, rrsets.len());
             rrsets.push(RrsetAccumulator {
                 owner: record.owner,
                 rr_type: record.rr_type,
@@ -1383,6 +1441,28 @@ mod tests {
         out.extend_from_slice(&qname.to_wire());
         out.extend_from_slice(&qtype.to_be_bytes());
         out.extend_from_slice(&qclass.to_be_bytes());
+        for answer in answers {
+            out.extend_from_slice(&answer.owner.to_wire());
+            out.extend_from_slice(&answer.rr_type.to_be_bytes());
+            out.extend_from_slice(&answer.class.to_be_bytes());
+            out.extend_from_slice(&answer.ttl.to_be_bytes());
+            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
+            out.extend_from_slice(&answer.rdata);
+        }
+        out
+    }
+
+    fn transfer_response_message_without_question(
+        qid: u16,
+        answers: Vec<ResourceRecord>,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&qid.to_be_bytes());
+        out.extend_from_slice(&0x8000u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
         for answer in answers {
             out.extend_from_slice(&answer.owner.to_wire());
             out.extend_from_slice(&answer.rr_type.to_be_bytes());
@@ -1630,6 +1710,55 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn parses_multi_message_axfr_with_empty_later_question_sections() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let first = axfr_message(0x1234, vec![soa.clone(), ns]);
+        let second = transfer_response_message_without_question(0x1234, vec![a, soa]);
+        let snapshot = parse_axfr_response(0x1234, &apex, 1, &[first, second])
+            .expect("multi-message AXFR with omitted later questions");
+
+        assert_eq!(snapshot.state, crate::zone::ZoneState::Active);
+        assert_eq!(snapshot.serial, Some(1));
+        assert!(
+            snapshot
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .len()
+                == 1
+        );
+    }
+
+    #[test]
+    fn rejects_axfr_without_initial_response_question() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[transfer_response_message_without_question(
+                0x1234,
+                vec![soa.clone(), ns, soa],
+            )],
+        )
+        .expect_err("missing initial AXFR question");
+
+        assert_eq!(error, AxfrError::MismatchedQuestion);
     }
 
     #[test]

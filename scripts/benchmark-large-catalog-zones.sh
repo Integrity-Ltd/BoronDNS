@@ -153,6 +153,12 @@ record_phase() {
     printf 'benchmark_phase name=%s duration_ms=%s\n' "$name" "$duration_ms" | tee -a "$artifact_dir/phase-events.log"
 }
 
+metric_value() {
+    local metric="$1"
+    local path="$2"
+    awk -v metric="$metric" '$1 == metric { print $2; exit }' "$path"
+}
+
 append_resource_sample() {
     local rss=""
     local vsz=""
@@ -248,6 +254,7 @@ pipeline_timing_enabled=$pipeline_timing_enabled
 perf_stat_enabled=$perf_stat_enabled
 perf_record_enabled=$perf_record_enabled
 perf_frequency=$perf_frequency
+expected_active_zones=$((zone_count + 1))
 bind_port=$bind_port
 dns_port=$dns_port
 health_port=$health_port
@@ -475,7 +482,7 @@ oxidedns_pid=$!
 ready_deadline="${OXIDEDNS_LARGE_BENCH_READY_TIMEOUT_SECONDS:-3600}"
 ready=0
 for _ in $(seq 1 "$ready_deadline"); do
-    if curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json" 2>/dev/null; then
+    if curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-first.json" 2>/dev/null; then
         ready=1
         break
     fi
@@ -485,11 +492,30 @@ if ((ready != 1)); then
     echo "OxideDNS did not become ready for large catalog benchmark" >&2
     exit 1
 fi
+
+expected_active_zones=$((zone_count + 1))
+active_zones=0
+for _ in $(seq 1 "$ready_deadline"); do
+    if curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom" 2>/dev/null; then
+        active_zones="$(metric_value oxidedns_zones_active "$artifact_dir/metrics-before.prom")"
+        active_zones="${active_zones:-0}"
+        if ((active_zones >= expected_active_zones)); then
+            break
+        fi
+    fi
+    sleep 1
+done
+if ((active_zones < expected_active_zones)); then
+    printf 'OxideDNS only reached %s active zones; expected %s for loaded catalog benchmark\n' \
+        "$active_zones" "$expected_active_zones" >&2
+    exit 1
+fi
+printf 'active_zones_after_load=%s\n' "$active_zones" >>"$artifact_dir/run.env"
 phase_finished_ns="$(now_ns)"
 record_phase "oxidedns_startup_to_ready" "$phase_started_ns" "$phase_finished_ns"
 phase_started_ns="$phase_finished_ns"
 
-curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
+curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
 cp "/proc/$oxidedns_pid/status" "$artifact_dir/proc-status-before.txt"
 if [[ -e "/proc/$oxidedns_pid/smaps_rollup" ]]; then
     cp "/proc/$oxidedns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-before.txt" \

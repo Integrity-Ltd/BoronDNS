@@ -1961,6 +1961,7 @@ async fn transfer_axfr_from_primary_inner(
         })?;
 
     let mut messages = Vec::new();
+    let mut saw_initial_soa = false;
     let mut ingest = TransferIngestTracker::new("AXFR", primary.addr, session.max_ingest_bytes);
     loop {
         let mut length_prefix = [0u8; 2];
@@ -2002,16 +2003,19 @@ async fn transfer_axfr_from_primary_inner(
                 }
             }
         })?;
-        messages.push(message);
-
-        match axfr::parse_axfr_response_with_options(
+        let apex_soa_count = axfr::axfr_response_message_apex_soa_count(
             qid,
             zone_apex,
             qclass,
-            &messages,
-            session.parse_options,
-        ) {
-            Ok(_) => {
+            &message,
+            !saw_initial_soa,
+        )
+        .map_err(TransferError::Axfr)?;
+        if apex_soa_count > 0 {
+            let complete = saw_initial_soa || apex_soa_count >= 2;
+            saw_initial_soa = true;
+            if complete {
+                messages.push(message);
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
                     session.tsig.key,
@@ -2030,10 +2034,10 @@ async fn transfer_axfr_from_primary_inner(
                     Err(TransferError::Tsig(TsigError::MissingTerminalTsig)) => {}
                     Err(error) => return Err(error),
                 }
+                continue;
             }
-            Err(AxfrError::MissingTerminatingSoa) => {}
-            Err(error) => return Err(TransferError::Axfr(error)),
         }
+        messages.push(message);
     }
 }
 

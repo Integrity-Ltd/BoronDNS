@@ -37,6 +37,10 @@ pub struct ZoneSnapshot {
     pub serial: Option<u32>,
     pub soa_timers: Option<SoaTimers>,
     rrsets: HashMap<RrsetKey, Rrset>,
+    name_classes: HashMap<String, HashSet<u16>>,
+    empty_non_terminal_classes: HashMap<String, HashSet<u16>>,
+    delegation_rrsets: Vec<RrsetKey>,
+    dname_rrsets: Vec<RrsetKey>,
 }
 
 struct DnssecAugmentationState {
@@ -53,6 +57,10 @@ impl ZoneSnapshot {
             serial: None,
             soa_timers: None,
             rrsets: HashMap::new(),
+            name_classes: HashMap::new(),
+            empty_non_terminal_classes: HashMap::new(),
+            delegation_rrsets: Vec::new(),
+            dname_rrsets: Vec::new(),
         }
     }
 
@@ -65,6 +73,7 @@ impl ZoneSnapshot {
             );
         }
         let soa_timers = soa_timers_from_rrsets(&origin, &by_key);
+        let indexes = ZoneSnapshotIndexes::build(&origin, &by_key);
 
         Self {
             origin,
@@ -72,6 +81,10 @@ impl ZoneSnapshot {
             serial,
             soa_timers,
             rrsets: by_key,
+            name_classes: indexes.name_classes,
+            empty_non_terminal_classes: indexes.empty_non_terminal_classes,
+            delegation_rrsets: indexes.delegation_rrsets,
+            dname_rrsets: indexes.dname_rrsets,
         }
     }
 
@@ -82,6 +95,10 @@ impl ZoneSnapshot {
             serial: self.serial,
             soa_timers: self.soa_timers,
             rrsets: self.rrsets.clone(),
+            name_classes: self.name_classes.clone(),
+            empty_non_terminal_classes: self.empty_non_terminal_classes.clone(),
+            delegation_rrsets: self.delegation_rrsets.clone(),
+            dname_rrsets: self.dname_rrsets.clone(),
         }
     }
 
@@ -487,23 +504,21 @@ impl ZoneSnapshot {
     }
 
     fn delegation_for(&self, qname: &DomainName, qclass: u16) -> Option<&Rrset> {
-        self.rrsets
-            .values()
+        self.delegation_rrsets
+            .iter()
+            .filter_map(|key| self.rrsets.get(key))
             .filter(|rrset| {
-                rrset.rr_type == RecordType::Ns as u16
-                    && (qclass == 255 || rrset.class == qclass)
-                    && rrset.owner != self.origin
-                    && qname.is_equal_or_subdomain_of(&rrset.owner)
+                qclass_matches(rrset.class, qclass) && qname.is_equal_or_subdomain_of(&rrset.owner)
             })
             .max_by_key(|rrset| rrset.owner.label_count())
     }
 
     fn dname_for(&self, qname: &DomainName, qclass: u16) -> Option<&Rrset> {
-        self.rrsets
-            .values()
+        self.dname_rrsets
+            .iter()
+            .filter_map(|key| self.rrsets.get(key))
             .filter(|rrset| {
-                rrset.rr_type == RecordType::Dname as u16
-                    && (qclass == 255 || rrset.class == qclass)
+                qclass_matches(rrset.class, qclass)
                     && rrset.owner != *qname
                     && qname.is_equal_or_subdomain_of(&rrset.owner)
             })
@@ -922,10 +937,9 @@ impl ZoneSnapshot {
     }
 
     fn name_exists(&self, name: &DomainName, qclass: u16) -> bool {
-        let owner = name.canonical_key();
-        self.rrsets.values().any(|rrset| {
-            rrset.owner.canonical_key() == owner && (qclass == 255 || rrset.class == qclass)
-        })
+        self.name_classes
+            .get(&name.canonical_key())
+            .is_some_and(|classes| classes_match(classes, qclass))
     }
 
     fn is_empty_non_terminal(&self, name: &DomainName, qclass: u16) -> bool {
@@ -933,9 +947,9 @@ impl ZoneSnapshot {
             return false;
         }
 
-        self.rrsets.values().any(|rrset| {
-            (qclass == 255 || rrset.class == qclass) && rrset.owner.is_equal_or_subdomain_of(name)
-        })
+        self.empty_non_terminal_classes
+            .get(&name.canonical_key())
+            .is_some_and(|classes| classes_match(classes, qclass))
     }
 
     fn soa_rrset(&self, qclass: u16) -> Option<&Rrset> {
@@ -951,6 +965,68 @@ fn soa_timers_from_rrsets(
 ) -> Option<SoaTimers> {
     let soa = rrsets.get(&RrsetKey::new(origin, RecordType::Soa as u16, 1))?;
     soa.rdatas.first().and_then(|rdata| soa_timers(rdata))
+}
+
+struct ZoneSnapshotIndexes {
+    name_classes: HashMap<String, HashSet<u16>>,
+    empty_non_terminal_classes: HashMap<String, HashSet<u16>>,
+    delegation_rrsets: Vec<RrsetKey>,
+    dname_rrsets: Vec<RrsetKey>,
+}
+
+impl ZoneSnapshotIndexes {
+    fn build(origin: &DomainName, rrsets: &HashMap<RrsetKey, Rrset>) -> Self {
+        let mut indexes = Self {
+            name_classes: HashMap::new(),
+            empty_non_terminal_classes: HashMap::new(),
+            delegation_rrsets: Vec::new(),
+            dname_rrsets: Vec::new(),
+        };
+
+        for (key, rrset) in rrsets {
+            indexes
+                .name_classes
+                .entry(key.owner.clone())
+                .or_default()
+                .insert(rrset.class);
+            indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class);
+
+            if rrset.rr_type == RecordType::Ns as u16 && rrset.owner != *origin {
+                indexes.delegation_rrsets.push(key.clone());
+            } else if rrset.rr_type == RecordType::Dname as u16 {
+                indexes.dname_rrsets.push(key.clone());
+            }
+        }
+
+        indexes
+    }
+
+    fn index_empty_non_terminals(&mut self, origin: &DomainName, owner: &DomainName, class: u16) {
+        let mut parent = owner.parent();
+        while let Some(name) = parent {
+            if !name.is_equal_or_subdomain_of(origin) {
+                break;
+            }
+
+            self.empty_non_terminal_classes
+                .entry(name.canonical_key())
+                .or_default()
+                .insert(class);
+
+            if name == *origin {
+                break;
+            }
+            parent = name.parent();
+        }
+    }
+}
+
+fn classes_match(classes: &HashSet<u16>, qclass: u16) -> bool {
+    qclass == 255 || classes.contains(&qclass)
+}
+
+fn qclass_matches(class: u16, qclass: u16) -> bool {
+    qclass == 255 || class == qclass
 }
 
 fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
