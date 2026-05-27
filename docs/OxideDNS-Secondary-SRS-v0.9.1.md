@@ -19,7 +19,7 @@
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
-| Related documents | PID v0.1 (May 2026); Architecture Document; Test Plan; Operator Deployment Guide (per ODS-NFR-MAINT-009) |
+| Related documents | Historical PID v0.1 planning input (May 2026, not stored in this repository); Architecture Document; Test Plan; Operator Deployment Guide (per ODS-NFR-MAINT-009) |
 
 ### Revision History
 
@@ -93,7 +93,7 @@
    - 7.1 Verification Methods
    - 7.2 Interoperability Matrix
    - 7.3 RFC Compliance Assessment
-   - 7.4 Acceptance Criteria for PID Milestones
+   - 7.4 Acceptance Criteria for Formal Milestones
    - 7.5 Verification Evidence and Traceability
    - 7.6 Test Plan Boundary
    - 7.7 Audit Cycle Closure *(new in v0.7)*
@@ -109,26 +109,26 @@
 
 ## 1.1 Purpose
 
-This Software Requirements Specification (SRS) defines the functional and non-functional requirements of OxideDNS-Secondary, a secondary-only authoritative DNS server written in Rust. It expands the RFC compliance target established in the Project Initiation Document (PID) into concrete, traceable, testable requirements suitable for implementation, review, and independent verification.
+This Software Requirements Specification (SRS) defines the functional and non-functional requirements of OxideDNS-Secondary, a secondary-only authoritative DNS server written in Rust. It records the project's RFC compliance target as concrete, traceable, testable requirements suitable for implementation, review, and independent verification.
 
 This document is the normative reference for externally observable behaviour, explicit scope exclusions, and the criteria against which correctness will be judged. Internal design choices, data structures, concurrency models, and implementation evidence belong in the Architecture Document, Test Plan, verification ledger, or release notes unless they are necessary to define externally observable behaviour.
 
-## 1.2 Relationship to the Project Initiation Document
+## 1.2 Relationship to Upstream Planning Inputs
 
-The PID (v0.1, May 2026) establishes the business case, scope boundaries, stakeholders, and high-level RFC compliance target. This SRS is subordinate to the PID. Where the two documents appear to conflict, the PID prevails for matters of scope and stakeholder assignment; this SRS prevails for technical and behavioural requirements. Any change to PID scope shall trigger a review of affected requirements herein.
+The PID (v0.1, May 2026) is a historical upstream planning input for the business case, scope boundaries, stakeholders, and high-level RFC compliance target. It is not stored in this repository. For this repository, the checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities. If a future PID revision is introduced into the project record, the SRS and companion documents must be reviewed and updated in the same change set where any scope, stakeholder, or success-criteria change is adopted.
 
 Specifically:
 
-- PID §3 (Scope) constrains the boundaries within which requirements may be defined.
-- PID Appendix A (RFC Compliance Target) is the source from which the functional requirements in §4 are derived; Appendix A of this SRS provides clause-level traceability back to that list.
-- PID §6 (Success Criteria) provides the acceptance thresholds against which the verification strategy in §7 is calibrated.
+- Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the Engineering MVP companion documents.
+- The RFC compliance target is reproduced and maintained through Appendix A and the companion traceability matrix.
+- Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps and release-evidence gaps tracked in `docs/mvp-gap-register.md` and `docs/verification-ledger.md`.
 
 ## 1.3 Intended Audience
 
-This SRS is written for the project participants identified in PID §4 and, following open-source release, for external contributors:
+This SRS is written for the current project participants and, following open-source release, for external contributors:
 
 - **DT** (Project Manager, Architect, Lead Developer) shall implement against these requirements.
-- **DTK** (Sponsor, Reviewer) shall verify that the implementation satisfies these requirements and that the requirements themselves remain consistent with the PID and the underlying RFCs.
+- **DTK** (Sponsor, Reviewer) shall verify that the implementation satisfies these requirements and that the requirements themselves remain consistent with the companion documents and the underlying RFCs.
 - **SzI** (Alpha Tester) and the DNS operations team (MVP testers) shall construct verification procedures from these requirements.
 - Future external contributors shall use this document to understand the intended behaviour of the software and the boundaries of its scope.
 
@@ -190,7 +190,7 @@ Each requirement carries a status of **Draft**, **Approved**, **Deprecated**, or
 
 ### 1.4.6 Cross-References
 
-References to RFCs follow the form *RFC NNNN §S.S* where a specific clause is cited. References to requirements within this document follow the form of the identifier itself (`ODS-CAT-AREA-NNN`). References to PID sections follow the form *PID §N.N*. References to sections of this document follow the form *§N.N*.
+References to RFCs follow the form *RFC NNNN §S.S* where a specific clause is cited. References to requirements within this document follow the form of the identifier itself (`ODS-CAT-AREA-NNN`). Historical references to PID sections follow the form *PID §N.N* and are provenance labels only unless the requirement text restates the operative scope in this SRS. References to sections of this document follow the form *§N.N*.
 
 ## 1.5 Definitions, Acronyms, and Abbreviations
 
@@ -213,7 +213,7 @@ The following terms appear normatively throughout this document. A complete glos
 | SOA | Start of Authority record. |
 | Zone | A contiguous portion of the DNS namespace administered as a unit. |
 | Zone refresh | The process by which a secondary updates its in-memory zone data from a primary. |
-| PID | Project Initiation Document, v0.1, May 2026. |
+| PID | Historical upstream Project Initiation Document, v0.1, May 2026, not stored in this repository. |
 | SRS | This document. |
 | ODS | OxideDNS-Secondary requirement namespace. |
 
@@ -221,7 +221,7 @@ The following terms appear normatively throughout this document. A complete glos
 
 ### 1.6.1 Project Documents
 
-- **PID** — *OxideDNS-Secondary Project Initiation Document*, v0.1, May 2026.
+- **Historical PID planning input** — *OxideDNS-Secondary Project Initiation Document*, v0.1, May 2026. This planning input is not stored in this repository; operative requirements and evidence authority live in this SRS and the companion documents listed below.
 - **Architecture Document** — `docs/architecture.md`, the current
   Architecture and Release Governance companion document. It records
   implementation decisions, module ownership, unsafe-boundary posture, and
@@ -240,7 +240,7 @@ The following terms appear normatively throughout this document. A complete glos
 
 ### 1.6.3 Normative RFC References
 
-The set of RFCs constituting the compliance target for the software is listed in PID Appendix A and reproduced with clause-level traceability in Appendix A of this document. Individual RFCs are cited inline in the requirement sections from which they derive.
+The set of RFCs constituting the compliance target for the software is recorded in Appendix A of this document and the companion traceability matrix. Individual RFCs are cited inline in the requirement sections from which they derive.
 
 ### 1.6.4 Informative References
 
@@ -312,11 +312,11 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 
 ## 2.5 Design and Implementation Constraints
 
-The following constraints are inherited from the PID and are binding. They are restated here for the reader's convenience and formalised as architectural invariants with identifiers in §3.
+The following constraints originate in upstream planning and are binding because they are restated here. They are formalised as architectural invariants with identifiers in §3.
 
-**Implementation language.** Rust (PID §2.3). Rationale: memory safety without garbage collection, suitable for a network-facing server processing untrusted input at high query rates.
+**Implementation language.** Rust. Rationale: memory safety without garbage collection, suitable for a network-facing server processing untrusted input at high query rates.
 
-**Secondary-only.** No primary-role functionality, no dynamic update path, no recursive resolution (PID §3.1, §3.2). Enforced at the requirement level in §3 and §4.18.
+**Secondary-only.** No primary-role functionality, no dynamic update path, no recursive resolution. Enforced at the requirement level in §3 and §4.18.
 
 **Memory residency.** Zone data resides entirely in process memory; the query path performs no disk I/O.
 
@@ -324,13 +324,13 @@ The following constraints are inherited from the PID and are binding. They are r
 
 **Static release artifact.** The published Linux release artifact targets `x86_64-unknown-linux-musl` and is verified as a statically linked binary with no runtime shared-library dependencies. Non-release developer builds may use the host toolchain's normal dynamic-linking conventions and are not the portability baseline.
 
-**Container image size.** The published container image does not exceed 20 megabytes uncompressed (PID §6.1).
+**Container image size.** The published container image does not exceed 20 megabytes uncompressed.
 
-**Code size.** The implementation targets a total source size in the range of 5,000 to 15,000 lines of Rust (PID §2.2). This is an aspirational ceiling motivating aggressive scoping; any feature that would push the codebase beyond this range requires explicit justification recorded in the Architecture Document.
+**Code size.** The implementation targets a total source size in the range of 5,000 to 15,000 lines of Rust. This is an aspirational ceiling motivating aggressive scoping; any feature that would push the codebase beyond this range requires explicit justification recorded in the Architecture Document.
 
-**Cryptographic dependencies.** Cryptographic primitives — HMAC, hash functions, TLS — are not implemented from scratch (PID §7.1). The server relies on well-maintained Rust cryptography crates. Specific crate choices are recorded in the Architecture Document.
+**Cryptographic dependencies.** Cryptographic primitives — HMAC, hash functions, TLS — are not implemented from scratch. The server relies on well-maintained Rust cryptography crates. Specific crate choices are recorded in the Architecture Document.
 
-**Licensing.** Source code is published under MIT OR Apache-2.0 dual license (PID §5.2). All dependencies must carry compatible licenses; copyleft dependencies are excluded.
+**Licensing.** Source code is published under MIT OR Apache-2.0 dual license. All dependencies must carry compatible licenses; copyleft dependencies are excluded.
 
 ## 2.6 Assumptions and Dependencies
 
@@ -368,7 +368,7 @@ In v0.1 the section was assembled at draft maturity. In v0.6, following the §3 
 
 *Statement.* The server MUST acquire zone data only through zone transfer protocols (AXFR per RFC 5936 or IXFR per RFC 1995) initiated by itself toward operator-configured primaries. The server MUST NOT accept zone data, zone modifications, or any change to the in-memory zone store of any authoritatively-served zone (per §3.2 and §4.15) through any other channel.
 
-*Rationale.* The secondary-only scope is the defining design constraint of this project (PID §2.2). The security, simplicity, and auditability claims of the project derive from the absence of any write path other than authenticated zone transfer from a trusted primary.
+*Rationale.* The secondary-only scope is the defining design constraint of this project. The security, simplicity, and auditability claims of the project derive from the absence of any write path other than authenticated zone transfer from a trusted primary.
 
 *Implications.* There is no DNS UPDATE (RFC 2136) handler: UPDATE messages are received on the DNS query interface (per ODS-FR-NOTIFY/QRY listening) but are rejected with RCODE NOTIMP per ODS-FR-CORE-005 and ODS-NEG-001; no UPDATE-message processing logic exists in the server. There is no zone-file editing interface, no administrative interface for modifying records, and no acceptance of out-of-band zone data injection. The complementary prohibitions are enumerated as negative requirements in §4.18.
 
@@ -1117,7 +1117,7 @@ The area code **IXFR** is allocated.
 
 ### Transport and query construction
 
-**ODS-FR-IXFR-001.** The server MUST initiate IXFR queries exclusively over TCP. IXFR queries over UDP MUST NOT be issued. While RFC 1995 §2 permits UDP IXFR transport, modern deployments overwhelmingly use TCP because the diff stream commonly exceeds a single UDP message; supporting only TCP simplifies the implementation surface in accordance with the project's minimal-codebase target (PID §2.2) without operational loss.
+**ODS-FR-IXFR-001.** The server MUST initiate IXFR queries exclusively over TCP. IXFR queries over UDP MUST NOT be issued. While RFC 1995 §2 permits UDP IXFR transport, modern deployments overwhelmingly use TCP because the diff stream commonly exceeds a single UDP message; supporting only TCP simplifies the implementation surface in accordance with the project's minimal-codebase target without operational loss.
 *Source.* RFC 1995 §2 (TCP permitted as alternative transport); project simplification decision per the §1.4.5 decision record dated 24 May 2026.
 *Note.* Inbound IXFR queries are not in scope (ODS-NEG-005 prohibits outbound transfer serving); this requirement applies only to outbound IXFR queries originated by this server toward configured primaries.
 *Verification.* Connection-layer inspection during IXFR initiation; verify TCP-only behaviour. Code review confirming no UDP IXFR code path exists.
@@ -1540,7 +1540,7 @@ This subsection specifies the server's implementation of Extension Mechanisms fo
 
 The interaction between EDNS0 UDP payload negotiation and TCP fallback is governed jointly by this subsection and §4.12; the response truncation behaviour (TC bit setting and message construction under size constraints) is specified in §4.12, while the determination of the applicable UDP size ceiling is specified here.
 
-EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in scope per PID Appendix A. The EDNS Expire exclusion is limited to the EDNS option-code mechanism of RFC 7314; it does not remove the ordinary SOA REFRESH/RETRY/EXPIRE, AXFR/IXFR, and NOTIFY behaviours specified in §4.6, §4.7, §4.8, and §4.16. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
+EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in current SRS scope. The EDNS Expire exclusion is limited to the EDNS option-code mechanism of RFC 7314; it does not remove the ordinary SOA REFRESH/RETRY/EXPIRE, AXFR/IXFR, and NOTIFY behaviours specified in §4.6, §4.7, §4.8, and §4.16. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
 
 The area code **EDNS** is allocated.
 
@@ -1720,7 +1720,7 @@ The truncated response MUST be emitted with the TC bit set, and the client is ex
 
 This subsection specifies the server's behaviour with respect to DNSSEC, restricted to the serve-only role. The server transfers DNSSEC records from the primary and serves them faithfully; it does not sign, does not generate denial-of-existence proofs, does not validate signatures, and does not manage key material. The primary is the sole source of all signed data.
 
-The governing standards within this scope are RFC 4033 (introduction), RFC 4034 (DNSSEC resource records), RFC 4035 (protocol modifications), RFC 5155 (NSEC3), RFC 6840 (clarifications), and RFC 6944 (algorithm requirements). The corresponding primary-side standards — DNSKEY generation, signing, NSEC/NSEC3 chain construction, RFC 5011 key rollover — are explicitly excluded per PID §3.2 and ODS-INV-001.
+The governing standards within this scope are RFC 4033 (introduction), RFC 4034 (DNSSEC resource records), RFC 4035 (protocol modifications), RFC 5155 (NSEC3), RFC 6840 (clarifications), and RFC 6944 (algorithm requirements). The corresponding primary-side standards — DNSKEY generation, signing, NSEC/NSEC3 chain construction, RFC 5011 key rollover — are explicitly excluded per ODS-INV-001 and Appendix C.
 
 CDS (type 59) and CDNSKEY (type 60) records, where present in a transferred zone, are handled under the unknown-RR semantics of §4.4 — their wire format is preserved and they are served on direct query, but no type-aware processing is required. They are not enumerated as known DNSSEC types below.
 
@@ -1737,7 +1737,7 @@ The area code **DNSSEC** is allocated.
 - NSEC3PARAM (type 51), RFC 5155 §4.
 
 Type-aware handling MUST include the ability to identify, for each RRSIG record, the type covered by that signature via the RRSIG RDATA's "type covered" field, to permit matching of RRSIGs to the RRsets they cover during response construction.
-*Source.* RFC 4034 §2–§5; RFC 5155 §3, §4; PID Appendix A.
+*Source.* RFC 4034 §2–§5; RFC 5155 §3, §4; Appendix A.
 *Verification.* Wire-format conformance tests for each record type; round-trip tests confirming opaque-equivalent preservation of RDATA.
 
 ### DO bit inspection
@@ -1802,7 +1802,7 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 ### Prohibited operations
 
 **ODS-FR-DNSSEC-013.** The server MUST NOT generate RRSIG records, MUST NOT generate NSEC or NSEC3 records, MUST NOT generate or maintain DNSKEY records or DNSSEC key material of any kind, MUST NOT perform DNSSEC signature verification or validation, and MUST NOT participate in any DNSSEC key rollover protocol (including RFC 5011). All DNSSEC records served by this server are received via zone transfer from primaries.
-*Source.* ODS-INV-001; PID §3.2.
+*Source.* ODS-INV-001; Appendix C.2.
 *Note.* This requirement is the DNSSEC-specific restatement of the architectural invariant. It is cross-referenced from §4.18 (Negative Requirements) for the explicit catalogue of prohibitions.
 *Verification.* Static analysis of the codebase; no code path producing DNSSEC records exists outside the zone-transfer ingestion layer.
 
@@ -1857,7 +1857,7 @@ The area code **RR** is allocated.
 | HTTPS | 65 | RFC 9460 §2.2 | Prohibited (TargetName) |
 | URI | 256 | RFC 7553 §4.5 | N/A |
 
-*Source.* PID Appendix A; the specifying RFCs above; RFC 3597 §4 for the compression-policy distinction between pre-RFC-3597 types (permitted) and later types (prohibited); RFC 6604 (clarifying SRV non-compressibility).
+*Source.* Appendix A; the specifying RFCs above; RFC 3597 §4 for the compression-policy distinction between pre-RFC-3597 types (permitted) and later types (prohibited); RFC 6604 (clarifying SRV non-compressibility).
 *Note.* The "Prohibited" entries derive from RFC 3597 §4's restriction that DNS name compression applies only to RR types whose RDATA structure was defined prior to RFC 3597, plus type-specific clarifications.
 *Verification.* Wire-format conformance tests per type; compression-handling tests for the permitted/prohibited boundary.
 
@@ -2061,7 +2061,7 @@ The state machine MUST also enforce a configurable maximum effective interval fo
 
 This subsection specifies Response Rate Limiting (RRL), the mechanism by which the server constrains its utility as an amplification vector for reflection attacks. RRL accounts the rate of responses produced for each accounting key (typically a source-IP prefix and a response category), and applies a configurable action — silent drop or truncation-marker response — when the rate exceeds a configured threshold.
 
-RRL is not the subject of an IETF standard-track RFC. Similar response-rate-limiting mechanisms are documented by BIND 9, Knot DNS, and NSD, but their defaults and accounting models differ. This subsection therefore defines the OxideDNS project model explicitly: a process-wide, UDP-query-response limiter with configurable source-prefix aggregation, response-category buckets, slip behavior, key-count cap, allowlist, logs, and metrics. PID Appendix A lists RRL as a required feature without RFC citation, on the basis of its operational maturity.
+RRL is not the subject of an IETF standard-track RFC. Similar response-rate-limiting mechanisms are documented by BIND 9, Knot DNS, and NSD, but their defaults and accounting models differ. This subsection therefore defines the OxideDNS project model explicitly: a process-wide, UDP-query-response limiter with configurable source-prefix aggregation, response-category buckets, slip behavior, key-count cap, allowlist, logs, and metrics. RRL is a project-required operational feature without RFC citation, on the basis of its operational maturity.
 
 RRL is one of three complementary anti-amplification mechanisms in this server: the ANY-query minimisation policy of §4.2 (ODS-FR-QRY-005, ODS-FR-QRY-006) reduces the per-response amplification factor for ANY queries specifically; TCP fallback via TC=1 (§4.12) requires reflected clients to establish a TCP handshake to receive substantial data; and RRL itself bounds the rate at which the server contributes to any reflection campaign.
 
@@ -2130,7 +2130,7 @@ The truncated response provides an escape path for legitimate clients (which can
 ### Configuration scope and state
 
 **ODS-FR-RRL-009.** RRL configuration in this version of the server is process-wide; the rate limits and slip value apply uniformly across all zones served. Per-zone or per-view RRL configuration is not supported.
-*Source.* Implementation simplicity per PID §2.2 (minimal codebase target).
+*Source.* Implementation simplicity per the minimal codebase target.
 *Note.* Per-zone RRL is a frequently requested capability and may be added in a future version. The decision to defer it here reflects the project's minimal-codebase target, not a position on its desirability. Operators requiring per-zone RRL today should use a server with that capability.
 *Verification.* Configuration tests confirming global application.
 
@@ -2163,7 +2163,7 @@ Exposure of these counters is per §5.6 and §6.4.
 
 This subsection consolidates the prohibition requirements — those phrased as "MUST NOT" — that enforce the architectural invariants of §3 (chiefly ODS-INV-001) and the scope boundaries of §2. The prohibitions catalogued here are largely the negative restatement of constraints already established positively elsewhere in the SRS; their consolidation into a single audit-reviewable section is the purpose of this subsection.
 
-Each prohibition cross-references the positive requirement, architectural invariant, or PID scope clause that it enforces. New normative content is not introduced; the prohibitions are presented compactly with statement, enforcement reference, and verification approach. Detailed rationale is in the enforced clause cited.
+Each prohibition cross-references the positive requirement, architectural invariant, or scope clause that it enforces. New normative content is not introduced; the prohibitions are presented compactly with statement, enforcement reference, and verification approach. Detailed rationale is in the enforced clause cited.
 
 The category identifier is **NEG**; per §1.4.3, the AREA component is omitted from these identifiers.
 
@@ -2182,29 +2182,29 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 *Verification.* Static analysis confirming the only code paths that write to the in-memory zone store originate in the zone-transfer client; no administrative interface exists.
 
 **ODS-NEG-004.** The server MUST NOT originate NOTIFY messages. NOTIFY origination is a primary-role function; the server's role per §4.8 is exclusively NOTIFY reception.
-*Enforces.* ODS-INV-001; PID §3.2 (out-of-scope).
+*Enforces.* ODS-INV-001; Appendix C.2 (out-of-scope).
 *Verification.* Static analysis confirming no NOTIFY-emission code path exists.
 
 **ODS-NEG-005.** The server MUST NOT serve outbound AXFR or IXFR responses to inbound zone-transfer queries. Queries received with QTYPE = 252 (AXFR) or QTYPE = 251 (IXFR) MUST be rejected with RCODE = 5 (REFUSED).
-*Enforces.* ODS-INV-001; PID §3.2 (the server does not act as a transfer source for downstream secondaries).
+*Enforces.* ODS-INV-001; Appendix C.2 (the server does not act as a transfer source for downstream secondaries).
 *Verification.* Conformance tests with AXFR and IXFR queries received as a server; verify REFUSED response with no transfer attempted.
 
 **ODS-NEG-006.** The server MUST NOT read zone data from presentation-format (master) files per RFC 1035 §5. All zone data is received in wire format via zone transfer.
-*Enforces.* ODS-INV-001; PID §3.2.
+*Enforces.* ODS-INV-001; Appendix C.2.
 *Verification.* Static analysis confirming no presentation-format parser exists.
 
 ### Resolver-role prohibitions
 
 **ODS-NEG-007.** The server MUST NOT perform recursive resolution. The RA bit in responses MUST be 0 unconditionally per ODS-FR-CORE-012. Queries for names outside any served zone MUST be rejected with RCODE = 5 (REFUSED) per ODS-FR-CORE-019.
-*Enforces.* ODS-INV-001; ODS-INV-007; PID §3.2.
+*Enforces.* ODS-INV-001; ODS-INV-007; Appendix C.2.
 *Verification.* Conformance tests with queries for names outside served zones; verify REFUSED and RA = 0.
 
 **ODS-NEG-008.** The server MUST NOT forward DNS queries to any other server. Every response is determined exclusively from the server's in-memory zone store.
-*Enforces.* ODS-INV-001; ODS-INV-007; PID §3.2.
+*Enforces.* ODS-INV-001; ODS-INV-007; Appendix C.2.
 *Verification.* Static analysis confirming no query-forwarding code path exists; network-layer tests confirming no outbound queries are generated in response to inbound queries.
 
 **ODS-NEG-009.** The server MUST NOT perform DNSSEC signature validation on inbound or outbound messages. The AD (Authentic Data) bit in responses MUST be 0 unconditionally per ODS-FR-DNSSEC-010, regardless of whether the queried zone is signed.
-*Enforces.* ODS-INV-001 (the server does not act as a validator); PID §3.2.
+*Enforces.* ODS-INV-001 (the server does not act as a validator); Appendix C.2.
 *Verification.* Static analysis confirming no signature-validation code path exists outside any explicitly-required TSIG verification under §4.9.
 
 ### Lifecycle and operational prohibitions
@@ -2228,7 +2228,7 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 *Verification.* Conformance tests with HMAC-MD5-signed messages; verify BADALG response.
 
 **ODS-NEG-014.** The server MUST NOT implement the TKEY mechanism (RFC 2930) for dynamic key establishment. Queries with QTYPE = 249 (TKEY) MUST be rejected with RCODE = 1 (FORMERR) per ODS-FR-QRY-009.
-*Enforces.* PID §3.2; static-configuration invariant for TSIG keys per ODS-FR-TSIG-005.
+*Enforces.* Appendix C.2; static-configuration invariant for TSIG keys per ODS-FR-TSIG-005.
 *Verification.* Conformance tests with TKEY queries.
 
 **ODS-NEG-015.** The server MUST NOT use the synthesised HINFO response style described in RFC 8482 §4.2 for QTYPE = ANY queries.
@@ -2240,7 +2240,7 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 *Verification.* Tests with TLS-failing primaries under XoT configuration; verify no cleartext retry.
 
 **ODS-NEG-017.** The server MUST NOT accept inbound TLS connections for XoT (server-side XoT, including NOTIFY-over-TLS receipt). XoT in this server is scoped to outbound zone-transfer connections only, per the scope statement of §4.10.
-*Enforces.* §4.10 scope; PID §3.2.
+*Enforces.* §4.10 scope; Appendix C.2.
 *Verification.* Network-layer tests confirming no TLS listener is bound; inbound TLS connection attempts are refused at the TCP layer.
 
 **ODS-NEG-018.** The server MUST NOT issue IXFR queries over UDP. All outbound IXFR queries MUST use TCP per ODS-FR-IXFR-001. While RFC 1995 §2 permits UDP IXFR transport, this server does not implement that variant.
@@ -2302,7 +2302,7 @@ The "strict" policy raises the effective resistance to spoofing further (no usef
 ### Configuration
 
 **ODS-FR-COOKIE-008.** DNS Cookies MUST be enabled by default with the "lenient" policy. The configuration MUST permit the operator to disable cookies entirely or to switch to "strict" policy per §6.2. The cookie secret regeneration interval (default: once per process lifetime, i.e., the secret persists until process restart) MAY be configurable for operators who want periodic rotation within a long-running process.
-*Source.* Operational defaults; PID Appendix A.
+*Source.* Operational defaults; Appendix A.
 *Note.* RFC 7873 §5.2.3 permits a server receiving a Client-Cookie-only query to discard the request, send BADCOOKIE, or process the request and return a Server Cookie. OxideDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie while still issuing Server Cookies to clients that request them. Operators that need a stricter UDP anti-spoofing posture can opt into BADCOOKIE enforcement.
 *Verification.* Configuration round-trip tests across the three modes; behavioural tests confirming each mode's response composition.
 
@@ -2465,7 +2465,7 @@ This section specifies properties of the system beyond its functional behaviour:
 
 Each subsection allocates an area code per the scheme of §1.4.3 (ODS-NFR-<AREA>-NNN). The standard requirement template applies, presented more compactly than the functional sections; the per-subsection identifier range follows.
 
-The targets below are formal project acceptance targets for the OxideDNS reference verification profile. They are not a statement that the current Engineering MVP has already met every numerical value, nor that local smoke or loopback benchmarks demonstrate equivalence to NSD, Knot DNS, BIND, or any other authoritative server. Where the PID did not specify a target explicitly, proposed values consistent with the project capacity goal are recorded; these are flagged in Appendix C.5 for review.
+The targets below are formal project acceptance targets for the OxideDNS reference verification profile. They are not a statement that the current Engineering MVP has already met every numerical value, nor that local smoke or loopback benchmarks demonstrate equivalence to NSD, Knot DNS, BIND, or any other authoritative server. Proposed values consistent with the project capacity goal are recorded; entries that still need project confirmation are flagged in Appendix C.5 for review.
 
 **Reference Profile.** All quantitative performance and resource targets in this section are stated with respect to the **Reference Hardware Profile** and the **Reference Query Mix** specified in Appendix E. Verification of performance NFRs is performed on hardware matching the Reference Hardware Profile, against the Reference Query Mix; deviations from the Profile during verification (e.g., different CPU, different NIC) must be recorded and may be cause for the verification result to be qualified rather than treated as conformance evidence. Where defaults are stated in non-functional requirements, every such default is operator-configurable per §6.2 unless explicitly stated otherwise; the configuration parameter name is identified in each requirement.
 
@@ -2593,7 +2593,7 @@ The area code **SEC** is allocated.
 *Verification.* Runtime network-layer and filesystem inspection confirming bound ports and any Unix sockets match configuration.
 
 **ODS-NFR-SEC-006.** Third-party Rust crates depended on by the server MUST be from well-maintained sources, subjected to security review at adoption time, and tracked against ongoing security advisories. The dependency set MUST be minimised consistent with functional requirements. Specific crate choices, with security justification, are recorded in the Architecture Document. Continuous monitoring MUST include an advisory/license/source gate such as `cargo deny check` or `cargo audit` plus equivalent license/source checks. In the current private-repository Engineering MVP profile this gate is `scripts/check.sh`; formal SRS release acceptance requires retained CI or release-gate logs showing the dependency gate on the accepted commit, with failures on High/Critical unmitigated advisories and on policy-disallowed licenses or sources.
-*Source.* PID §7.1; standard supply-chain security practice.
+*Source.* Project cryptographic-dependency policy; standard supply-chain security practice.
 *Verification.* Dependency-gate execution observed in local continuous logs, CI logs, or release-gate evidence; review of advisories at each release.
 
 **ODS-NFR-SEC-007.** The project MUST maintain a documented vulnerability disclosure policy specifying:
@@ -2654,11 +2654,11 @@ Names failing any of these checks MUST be rejected with an error-level log entry
 The area code **MAINT** is allocated.
 
 **ODS-NFR-MAINT-001.** The total source-line count of first-party Rust code SHOULD remain within the range 5,000 to 15,000 lines, excluding tests, dependencies, and generated code. The release process MUST measure and record the actual line count in the release notes for each release. Where the count exceeds 15,000 lines, the release notes MUST include a `Rationale for exceeding LOC target` section explaining the necessary increase, the features that drove it, and the maintainability-protection measures (modularisation, documentation, test coverage) compensating for it.
-*Source.* PID §2.2.
+*Source.* Project maintainability target.
 *Verification.* Source-line measurement at release time using `tokei` or equivalent; release notes inspection.
 
 **ODS-NFR-MAINT-002.** The codebase MUST be organised into between 8 and 20 clearly-named, single-purpose modules at the top level of the crate hierarchy. Each major functional area of §4 MUST be mappable to one or more identifiable modules. The mapping is recorded in the Architecture Document.
-*Source.* Maintainability and auditability per PID design principle.
+*Source.* Maintainability and auditability design principle.
 *Verification.* Code review against the documented module mapping at release time.
 
 **ODS-NFR-MAINT-003.** Every `unsafe` block in first-party Rust code MUST carry a comment stating the reason `unsafe` is necessary and the invariants on which its soundness depends, per ODS-INV-006.
@@ -2716,7 +2716,7 @@ The Guide MUST be updated at each release to reflect introduced features and cha
 The area code **PORT** is allocated.
 
 **ODS-NFR-PORT-001.** The server MUST build and run on current LTS releases of major Linux distributions: Ubuntu LTS, Debian stable, Red Hat Enterprise Linux / Rocky Linux / AlmaLinux current major version, and Alpine current release. No distribution-specific configuration MUST be required.
-*Source.* PID §2.4; operational requirement.
+*Source.* Operational requirement.
 *Verification.* Per-distribution smoke tests in CI or retained release-gate
 automation evidence.
 
@@ -2726,7 +2726,7 @@ automation evidence.
 release-gate automation evidence.
 
 **ODS-NFR-PORT-003.** The server MUST be runnable in OCI-compatible container runtimes (Docker, Podman, containerd, CRI-O). The published container image MUST be runnable in Kubernetes without privileged mode, without host networking, and without escalated capabilities beyond `CAP_NET_BIND_SERVICE` (where required per ODS-NFR-SEC-004).
-*Source.* PID §2.4.
+*Source.* Operational requirement.
 *Verification.* Container deployment tests in representative runtimes.
 
 **ODS-NFR-PORT-004.** The server MUST support both IPv4 and IPv6 for all network operations: client query service, zone-transfer initiation toward primaries, NOTIFY reception, XoT.
@@ -2824,7 +2824,7 @@ Catalog zones and their member zones MUST also appear in the ordinary zone-state
 The area code **RES** is allocated.
 
 **ODS-NFR-RES-001.** The published container image MUST NOT exceed 20 megabytes uncompressed.
-*Source.* PID §6.1.
+*Source.* Project release artifact size target.
 *Verification.* Image size measurement at release time.
 
 **ODS-NFR-RES-002.** Memory consumption per zone SHOULD scale approximately linearly with the number of records in the zone, with a target per-record overhead (including indices and metadata) of less than 500 bytes.
@@ -2868,7 +2868,7 @@ The category identifier is **IF**; each subsection allocates its own area code p
 The area code **NET** is allocated.
 
 **ODS-IF-NET-001.** The server MUST bind UDP and TCP listening sockets at startup for DNS query service. Bind addresses MUST be configurable per §6.2. The default bind addresses MUST be 0.0.0.0 (IPv4 wildcard) and `::` (IPv6 wildcard), and the default port MUST be 53.
-*Source.* PID §2.4; RFC 1035 §4.2.
+*Source.* Operational requirement; RFC 1035 §4.2.
 *Verification.* Network-layer inspection after startup confirming bound sockets match configuration.
 
 **ODS-IF-NET-002.** The server MUST support binding to multiple specific addresses simultaneously, including arbitrary combinations of IPv4 and IPv6 addresses. Independent UDP and TCP listening sockets MUST be created per (address, transport) tuple as required by the operating system.
@@ -3302,7 +3302,7 @@ This requirement is MAY rather than MUST because the example-configuration conte
 
 # 7. Verification Strategy
 
-This section specifies how the requirements of §3 through §6 are verified. It does *not* enumerate concrete test cases — that is the function of the Test Plan, a sibling document per §1.6.1. Rather, this section specifies the methods by which verification is performed, the scope of interoperability testing, the structure of RFC-compliance assessment, the acceptance criteria mapping requirements to PID milestones, and the boundary between the SRS and the Test Plan.
+This section specifies how the requirements of §3 through §6 are verified. It does *not* enumerate concrete test cases — that is the function of the Test Plan, a sibling document per §1.6.1. Rather, this section specifies the methods by which verification is performed, the scope of interoperability testing, the structure of RFC-compliance assessment, the acceptance criteria mapping requirements to formal milestones, and the boundary between the SRS and the Test Plan.
 
 The requirement category for this section is **ODS-VER-NNN** for verification requirements; the AREA component is omitted, following the pattern of ODS-INV-NNN and ODS-NEG-NNN. The category is registered in §1.4.3 and Appendix D.5.1.
 
@@ -3336,14 +3336,14 @@ The following methods are used, individually or in combination, to verify the re
 
 **Security audit.** Periodic third-party review of the codebase, dependency set, and operational posture by security specialists external to the project team. Recommended at major release boundaries and following any ODS-NFR-SEC-007 disclosure. Findings are tracked under the vulnerability disclosure policy of ODS-NFR-SEC-007; remediation actions are recorded in release notes.
 
-**External operator acceptance.** Independent deployment and verification by operators outside the project team. Used during PID Phase 4 (MVP testing) and as ongoing post-release validation per ODS-VER-008; constitutes the highest-confidence form of operational verification because it exercises the deployment guide, the configuration interface, and the operational interfaces under conditions the project team did not design.
+**External operator acceptance.** Independent deployment and verification by operators outside the project team. Used during formal SRS MVP release testing and as ongoing post-release validation per ODS-VER-008; constitutes the highest-confidence form of operational verification because it exercises the deployment guide, the configuration interface, and the operational interfaces under conditions the project team did not design.
 
 **ODS-VER-001.** Every requirement in §3 through §6 carries a *Verification* field naming the method or methods by which it is verified. These named methods MUST be drawn exclusively from the catalogue enumerated in §7.1 above (Inspection, Static analysis, Unit test, Property-based test, Integration test, Conformance test, Differential test, Interoperability test, Fuzz test, Performance test, Soak test, Operational test, Security audit, External operator acceptance). Where a requirement's *Verification* field uses informal phrasing (e.g., "code review", "endpoint inspection"), the phrasing MUST be mappable to one of the named methods; ambiguous mappings are an SRS defect requiring revision. The catalogue is the single source of truth for verification method nomenclature; ad-hoc method names introduced in §3-§6 *Verification* fields MUST NOT be used.
 *Source.* SRS internal consistency; foundation for the Test Plan's method-by-method test harness organisation.
 *Verification.* Self-referential at the SRS level (an SRS internal consistency check performed at each release as part of the SRS review process); automated verification at the Test Plan level through the traceability matrix, verification ledger, and active check scripts that confirm every requirement family has a declared method and evidence owner. Hosted CI may run those checks when enabled, but the requirement is coverage by retained verification artifacts, not a claim that current private-repository CI already verifies every individual requirement.
 
 **ODS-VER-002.** Verification evidence — test outputs, benchmark results, code-review records, fuzz-test summaries, interop test logs, security audit reports — MUST be captured by the active verification and release-evidence system for each release. In the private-repository Engineering MVP profile this is local `scripts/check.sh` plus the bounded evidence snapshot and release handoff scripts; before formal SRS release acceptance it MUST be hosted CI or an equivalent retained release-gate automation record for the accepted commit. Evidence retention period MUST be at least the longer of: (a) two years after the release; (b) the lifetime of the major version of which the release is part.
-*Source.* Audit and reproducibility; PID §7.
+*Source.* Audit and reproducibility.
 *Verification.* Release-evidence review at release time, including CI logs or equivalent retained release-gate automation logs; sample-based retrieval of evidence from past releases.
 
 **ODS-VER-010.** Each release MUST be preceded by execution of the verification suite per ODS-VER-001 against the release candidate. Results MUST be captured in the release notes including, at minimum:
@@ -3379,7 +3379,7 @@ For each (server, primary) pair, the test matrix MUST cover:
 - TSIG-authenticated transfers per §4.9 with at least the HMAC-SHA256 algorithm;
 - XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT. The tested primary version and the XoT capability decision MUST be recorded per ODS-VER-013; a primary is exempt from the XoT row only when the retained version evidence shows that the tested version lacks server-side XoT support or the relevant package build disables it. Current release planning MUST NOT treat BIND 9 or Knot DNS XoT as optional when the selected test versions expose XoT configuration, and SHOULD include NSD XoT evidence when the selected NSD version exposes TLS-protected `provide-xfr`/`request-xfr` configuration.
 
-*Source.* PID §6; operational requirement for production interoperability; RFC 9103; BIND 9, Knot DNS, and NSD operator documentation for XoT-capable test-version selection. *XoT-against-BIND-9 coverage added in v0.9; NSD XoT exemption wording corrected in v0.9.1 documentation alignment.*
+*Source.* Operational requirement for production interoperability; RFC 9103; BIND 9, Knot DNS, and NSD operator documentation for XoT-capable test-version selection. *XoT-against-BIND-9 coverage added in v0.9; NSD XoT exemption wording corrected in v0.9.1 documentation alignment.*
 *Verification.* Interop test pipeline execution per the matrix.
 
 **ODS-VER-004.** The interoperability matrix MUST exercise zones of operationally representative complexity:
@@ -3404,11 +3404,11 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 
 ## 7.3 RFC Compliance Assessment
 
-**ODS-VER-005.** For each RFC listed in PID Appendix A, the project MUST maintain a clause-level traceability mapping from each requirement-bearing RFC clause to one or more requirements in §3 through §6. The current project mapping is maintained in the Appendix A companion traceability document referenced from this SRS. Compliance with an RFC is asserted only when all in-scope requirement-bearing clauses of that RFC are mapped to verifying SRS requirements, and all those SRS requirements have been verified per ODS-VER-001.
-*Source.* PID §2.3 (RFC compliance target).
+**ODS-VER-005.** For each RFC listed in Appendix A and the companion traceability matrix, the project MUST maintain a clause-level traceability mapping from each requirement-bearing RFC clause to one or more requirements in §3 through §6. The current project mapping is maintained in the Appendix A companion traceability document referenced from this SRS. Compliance with an RFC is asserted only when all in-scope requirement-bearing clauses of that RFC are mapped to verifying SRS requirements, and all those SRS requirements have been verified per ODS-VER-001.
+*Source.* Project RFC compliance target recorded in Appendix A.
 *Verification.* Traceability matrix review at release time.
 
-**ODS-VER-006.** Where an RFC referenced by PID Appendix A contains normative clauses that fall outside this server's scope — for example, primary-side requirements within an RFC that also covers secondary-side behaviour, or resolver-side requirements within an RFC primarily about authoritative service — the traceability matrix MUST mark those clauses as out-of-scope with a brief rationale referencing ODS-INV-001 (secondary-only) or PID §3.2. The RFC is then assessed for compliance limited to the in-scope clauses, and the compliance claim is documented accordingly (for example, "Compliant with RFC X, secondary-side clauses only; primary-side clauses out of scope per ODS-INV-001").
+**ODS-VER-006.** Where an RFC referenced by Appendix A contains normative clauses that fall outside this server's scope — for example, primary-side requirements within an RFC that also covers secondary-side behaviour, or resolver-side requirements within an RFC primarily about authoritative service — the traceability matrix MUST mark those clauses as out-of-scope with a brief rationale referencing ODS-INV-001 (secondary-only) or Appendix C. The RFC is then assessed for compliance limited to the in-scope clauses, and the compliance claim is documented accordingly (for example, "Compliant with RFC X, secondary-side clauses only; primary-side clauses out of scope per ODS-INV-001").
 *Source.* Accurate scoping of compliance claims.
 *Verification.* Traceability matrix review.
 
@@ -3423,9 +3423,9 @@ The same structured list MUST be reproduced — verbatim or via single-source sy
 *Source.* Operator-facing transparency; resolution of v0.6 audit finding about RFC compliance assertion publication.
 *Verification.* Release-notes inspection confirming structured-list presence and content; cross-check against Operator Deployment Guide synchronisation.
 
-## 7.4 Acceptance Criteria for PID Milestones
+## 7.4 Acceptance Criteria for Formal Milestones
 
-The PID establishes Alpha and MVP milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These formal gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's Engineering MVP may therefore include implemented post-Alpha slices while still tracking the full ODS-VER-008 release-acceptance evidence separately.
+This SRS establishes Alpha and formal SRS MVP milestones. The acceptance criteria for each are stated below in terms of SRS requirement coverage. These formal gates define minimum coverage for a named milestone; they do not prohibit an implementation from delivering and testing later-scope features earlier. The repository's Engineering MVP may therefore include implemented post-Alpha slices while still tracking the full ODS-VER-008 release-acceptance evidence separately.
 
 **ODS-VER-007 — Alpha Milestone.** The Alpha milestone is achieved when the following are demonstrably satisfied:
 
@@ -3438,7 +3438,7 @@ The PID establishes Alpha and MVP milestones. The acceptance criteria for each a
 - Zone Provisioning (§4.20): ODS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements ODS-FR-PROV-005 through ODS-FR-PROV-014 and the catalog-related security NFRs ODS-NFR-SEC-010 through ODS-NFR-SEC-015 are not required for Alpha but remain in scope for the formal SRS MVP release gate. ODS-NFR-SEC-008 (TSIG environment-variable loading) and ODS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
 
 Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XoT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extension ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal SRS MVP release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
-*Source.* PID §6.
+*Source.* Formal Alpha acceptance target recorded in this SRS.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of ODS-VER-011 (Gate methods).
 
 **ODS-VER-008 — MVP Milestone.** This requirement defines the formal SRS MVP release gate. It is separate from the repository's bounded Engineering MVP profile used for local implementation readiness. The formal MVP milestone is achieved when the following are demonstrably satisfied:
@@ -3455,7 +3455,7 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 - Documentation complete: this SRS, the Architecture Document, the Test Plan, and the Operator Deployment Guide (per ODS-NFR-MAINT-009);
 - External operator acceptance per §7.1 by at least one production-representative operator.
 
-*Source.* PID §6.
+*Source.* Formal SRS MVP release-acceptance target recorded in this SRS.
 *Verification.* Acceptance review at the formal SRS MVP release gate.
 
 ## 7.5 Verification Evidence and Traceability
@@ -3521,8 +3521,8 @@ The requirement identifier and category framework remains stable for traceabilit
 
 Appendix A defines the required bidirectional mapping between RFCs (and other normative references) and the requirements of this SRS. The live repository mapping is maintained in the companion Appendix A traceability artifact. Its purposes are:
 
-- to demonstrate, for each RFC in the project's compliance target (PID Appendix A), that all in-scope normative clauses are realised by one or more SRS requirements;
-- to identify, for each RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or PID scope clause that excludes them;
+- to demonstrate, for each RFC in the project's compliance target recorded in Appendix A and the companion traceability matrix, that all in-scope normative clauses are realised by one or more SRS requirements;
+- to identify, for each RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or Appendix C scope clause that excludes them;
 - to provide, for each SRS requirement, the source RFC(s) and clause(s) from which it derives;
 - to define how verification status is tracked per requirement, supporting the milestone acceptance criteria of ODS-VER-007 and ODS-VER-008.
 
@@ -3539,7 +3539,7 @@ Requirement identifiers in this Appendix are immutable per ODS-§1.4.4. A requir
 Each RFC entry in A.3 is categorised by scope:
 
 - **Full.** All normative clauses of the RFC are in scope and mapped to implementing requirements.
-- **Partial (secondary-side).** The RFC's secondary-server-side clauses are in scope and mapped; primary-side, resolver-side, or validator-side clauses are out of scope per ODS-INV-001 or PID §3.2, and are catalogued in A.5.
+- **Partial (secondary-side).** The RFC's secondary-server-side clauses are in scope and mapped; primary-side, resolver-side, or validator-side clauses are out of scope per ODS-INV-001 or Appendix C, and are catalogued in A.5.
 - **Partial (selected clauses).** Specific clauses are in scope (for example, only the wire-format definition of a particular RR type); the remainder are out of scope, catalogued in A.5.
 - **Informative.** The RFC is cited for guidance or background rather than for normative requirements. No traceability mapping is required.
 
@@ -3761,7 +3761,7 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 *Out-of-scope clauses.* Validator-side clarifications — ODS-INV-001.
 
 **RFC 6944 — Applicability Statement: DNS Security (DNSSEC) DNSKEY Algorithm Implementation Status** (Rose, 2013).
-*Scope.* Informative (algorithm guidance; superseded by RFC 8624 for current recommendations, but cited per PID).
+*Scope.* Informative (algorithm guidance; superseded by RFC 8624 for current recommendations, but retained as historical planning context).
 *Implementing sections.* §4.13 (DNSSEC).
 *Key clauses.* Algorithm opacity for serve-only → DNSSEC-012.
 
@@ -3852,7 +3852,7 @@ This section illustrates fine-grained mapping for two representative RFCs. The f
 
 ## A.5 Out-of-Scope Clauses Register
 
-This section catalogues, by RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or PID scope clause that excludes them. The register supports accurate partial-compliance assertions per ODS-VER-006.
+This section catalogues, by RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or Appendix C scope clause that excludes them. The register supports accurate partial-compliance assertions per ODS-VER-006.
 
 **RFC 1034.** Resolver-side aspects (§5 in part) — ODS-INV-001. Master file format (§6.1) — ODS-NEG-006. Primary-role aspects of zone management (§4.3.5, various) — ODS-INV-001.
 
@@ -3876,7 +3876,7 @@ This section catalogues, by RFC, those clauses that fall outside this server's s
 
 **RFC 9103.** NOTIFY-over-TLS reception (§6.4) — ODS-NEG-017. Opportunistic Privacy Profile (§9.2) — ODS-NEG-016.
 
-**RFC 7858.** DNS-over-TLS for client queries (full RFC scope except ALPN identifier) — out of project scope per PID §3.2.
+**RFC 7858.** DNS-over-TLS for client queries (full RFC scope except ALPN identifier) — outside current SRS scope per Appendix C.3.3.
 
 ## A.6 Verification Status Tracking
 
@@ -4241,7 +4241,7 @@ These items conflict with the secondary-only architectural stance of ODS-INV-001
 
 *Description.* Acting as a primary (master) DNS server: authoring zone content, signing records, generating denial-of-existence chains, managing DNSSEC key material, originating NOTIFY messages to downstream secondaries.
 
-*Rationale.* The project's identity is secondary-only per PID §2.2. The entire architectural argument — minimal codebase, reduced attack surface, no write path — derives from this scoping.
+*Rationale.* The project's identity is secondary-only. The entire architectural argument — minimal codebase, reduced attack surface, no write path — derives from this scoping.
 
 *Enforcement.* ODS-INV-001; ODS-NEG-002 (no DNSSEC signing); ODS-NEG-003 (no non-transfer modification); ODS-NEG-004 (no NOTIFY origination); ODS-NEG-006 (no master file reading).
 
@@ -4327,7 +4327,7 @@ These items conflict with the secondary-only architectural stance of ODS-INV-001
 
 ## C.3 Current-Scope Exclusions
 
-These items could be added in a future version without violating any architectural invariant. They are excluded from the current version's scope for reasons of minimal-codebase focus, PID-defined feature set, or operational simplicity. Future versions of the SRS may revisit any of these.
+These items could be added in a future version without violating any architectural invariant. They are excluded from the current version's scope for reasons of minimal-codebase focus, the current SRS feature boundary, or operational simplicity. Future versions of the SRS may revisit any of these.
 
 *Numbering note.* This catalogue retained its v0.1 numbering for stability. As of v0.3, the entry previously at C.3.1 (DNS Cookies, RFC 7873) has been brought into MVP scope and is specified at §4.19; its former slot is preserved as an explicit recorded transition for traceability rather than renumbered.
 
@@ -4339,7 +4339,7 @@ These items could be added in a future version without violating any architectur
 
 *Description.* The EDNS option by which a recursive resolver advertises the client's network prefix, enabling location-tailored responses from the authoritative server.
 
-*Rationale for exclusion.* Out of PID scope. ECS is primarily relevant to operators serving geographically distributed content (CDN-style deployments); for a baseline secondary, it is an optional enhancement.
+*Rationale for exclusion.* Outside current SRS scope. ECS is primarily relevant to operators serving geographically distributed content (CDN-style deployments); for a baseline secondary, it is an optional enhancement.
 
 *Enforcement.* Not implemented.
 
@@ -4347,7 +4347,7 @@ These items could be added in a future version without violating any architectur
 
 *Description.* Serving ordinary DNS query traffic over TLS on TCP port 853.
 
-*Rationale for exclusion.* DoT is primarily a resolver-client privacy mechanism; authoritative-to-resolver use of DoT is uncommon. Out of PID scope.
+*Rationale for exclusion.* DoT is primarily a resolver-client privacy mechanism; authoritative-to-resolver use of DoT is uncommon. It is outside current SRS scope.
 
 *Note.* The §4.10 XoT support covers TLS for zone transfer, which is a different operational context (server-to-server, not server-to-client).
 
@@ -4357,7 +4357,7 @@ These items could be added in a future version without violating any architectur
 
 *Description.* Serving DNS queries over HTTPS.
 
-*Rationale for exclusion.* As DoT, primarily a resolver-client concern. Out of PID scope. Would require an HTTPS server stack, materially expanding codebase.
+*Rationale for exclusion.* As DoT, primarily a resolver-client concern. It is outside current SRS scope and would require an HTTPS server stack, materially expanding codebase.
 
 *Enforcement.* Not implemented.
 
@@ -4365,7 +4365,7 @@ These items could be added in a future version without violating any architectur
 
 *Description.* DNS over QUIC transport.
 
-*Rationale for exclusion.* Emerging transport; not in PID scope. Adoption is uneven and the operational benefit for authoritative service is unclear.
+*Rationale for exclusion.* Emerging transport; outside current SRS scope. Adoption is uneven and the operational benefit for authoritative service is unclear.
 
 *Enforcement.* Not implemented.
 
@@ -4407,7 +4407,7 @@ The entry is preserved in this register, with this updated status, per the ident
 
 *Description.* An experimental EDNS option for zone maintenance queries (typically SOA, AXFR, and IXFR) that lets a primary or intermediate secondary convey remaining expire-timer information to a secondary. RFC 7314 is intended to preserve SOA EXPIRE semantics across indirect secondary-to-secondary transfer graphs; it is not a replacement for ordinary SOA refresh polling, NOTIFY, AXFR, or IXFR.
 
-*Rationale for exclusion.* Minor operational optimisation for indirect transfer topologies; out of PID scope.
+*Rationale for exclusion.* Minor operational optimisation for indirect transfer topologies; outside current SRS scope.
 
 *Enforcement.* Not implemented.
 
@@ -4874,7 +4874,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **Original ID.** TSIG RDATA field (RFC 8945 §4.2). Used to reconstruct the original message ID for MAC verification when the message has transited a NAT or similar intermediary.
 
-**PID.** Project Initiation Document (this project, v0.1, May 2026).
+**PID.** Historical upstream Project Initiation Document (this project, v0.1, May 2026), not stored in this repository. Current operative requirements and evidence authority are this SRS and its companion documents.
 
 **PKIX.** Public Key Infrastructure using X.509 (RFC 5280). The certificate-authentication framework used for XoT trust validation.
 

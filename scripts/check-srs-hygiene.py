@@ -68,6 +68,13 @@ FORBIDDEN_TEXT = {
     "oxidedns_secondary_catalog_member_removals_total": "SRS must align with implemented catalog membership metric",
     "oxidedns_secondary_catalog_members_rejected_total": "SRS must align with implemented catalog membership metric",
     "oxidedns_secondary_catalog_state": "SRS must align with implemented catalog membership metric",
+    "This SRS is subordinate to the PID": "unavailable historical PID must not control the checked-in SRS",
+    "PID Appendix A": "RFC compliance target must be self-contained in the checked-in SRS and traceability matrix",
+    "Acceptance Criteria for PID Milestones": "formal milestone criteria must not depend on an unavailable PID document",
+    "PID prevails": "unavailable historical PID must not control the checked-in SRS",
+    "PID Phase 4": "formal release acceptance must be described in SRS terms",
+    "out of PID scope": "scope exclusions must be stated in current SRS terms",
+    "not in PID scope": "scope exclusions must be stated in current SRS terms",
 }
 
 REQUIRED_TEXT = [
@@ -119,6 +126,11 @@ REQUIRED_TEXT = [
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
+    "It is not stored in this repository.",
+    "the checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities",
+    "The RFC compliance target is reproduced and maintained through Appendix A and the companion traceability matrix.",
+    "## 7.4 Acceptance Criteria for Formal Milestones",
+    "For each RFC listed in Appendix A and the companion traceability matrix",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
