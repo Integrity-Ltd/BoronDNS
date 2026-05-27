@@ -116,6 +116,7 @@ REQUIRED_TEXT_BY_PATH = {
         "What is the formal benchmark environment?",
         "How was the external review handled?",
         "Where are project decisions recorded?",
+        "implementation plan stays at milestone level",
     ],
     "docs/rr-type-catalogue.md": [
         "# RR Type Catalogue Implementation Notes",
@@ -136,6 +137,10 @@ REQUIRED_TEXT_BY_PATH = {
 }
 
 FORBIDDEN_TEXT_BY_PATH = {
+    "docs/README.md": [
+        "Current implementation and evidence status is recorded in\n`implementation-plan.md`",
+        "Engineering MVP and SRS acceptance implementation\n  plan",
+    ],
     "docs/implementation-plan.md": [
         "30-day soak test completed without anomaly",
         "signed release artifacts produced",

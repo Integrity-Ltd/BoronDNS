@@ -97,8 +97,9 @@ and slowly diverging.
   post-Alpha features.
 - `engineering-mvp-readiness.md`: local Engineering MVP readiness review entry
   point and stop-condition checklist.
-- `implementation-plan.md`: Engineering MVP and SRS acceptance implementation
-  plan.
+- `implementation-plan.md`: milestone boundary and implementation direction,
+  without duplicating the detailed feature inventory or release-acceptance
+  checklist.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence
   gaps.
 - `evidence-command-catalog.md`: command inventory consumed by release evidence
@@ -144,7 +145,7 @@ The planning and evidence documents are companion working artifacts. They remain
 subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
 wording differs.
 
-Current implementation and evidence status is recorded in
-`implementation-plan.md`, `mvp-gap-register.md`, and the traceability matrices.
-The v0.9.1 SRS cleanup corrected response DO-bit handling to RFC 6840 query-bit
-copy semantics, and current unit/runtime evidence now follows that rule.
+Current implementation and evidence status is recorded in the gap register,
+verification ledger, implemented-feature scope, and traceability matrices. The
+implementation plan stays at milestone level so those owner documents do not
+compete with each other.
