@@ -193,7 +193,7 @@ pending-decision list is SRS Appendix C.5.
 
 ## Current Status
 
-Slice 1 has a tested UDP query/response foundation:
+DNS wire core and UDP query handling are implemented:
 
 - malformed datagrams and response packets are discarded or rejected as specified;
 - unsupported opcodes return NOTIMP;
@@ -233,9 +233,10 @@ Slice 1 has a tested UDP query/response foundation:
 - response serialization preserves all other RDATA opaquely, including
   unknown-type RDATA with pointer-looking octets.
 
-Slice 2 has an in-memory zone snapshot model with atomic publication through the shared `ZoneStore`.
+The in-memory zone snapshot model publishes complete zone versions atomically
+through the shared `ZoneStore`.
 
-Slice 5 has implemented AXFR foundations and current IXFR refresh/fallback work:
+AXFR acquisition and IXFR refresh/fallback are implemented:
 
 - AXFR query construction is implemented only for TCP framing;
 - runtime AXFR query IDs are drawn from the operating system CSPRNG and sample the full 16-bit QID space;
@@ -249,7 +250,7 @@ Slice 5 has implemented AXFR foundations and current IXFR refresh/fallback work:
 - initial LOADING-zone transfers are bounded by `[limits].max_concurrent_transfers`, defaulting to 4;
 - failed initial transfers leave the zone in LOADING, so authoritative queries for that zone return SERVFAIL.
 
-Slice 6 has a preliminary AXFR-backed zone state machine:
+The AXFR/IXFR-backed zone state machine is implemented for the Engineering MVP profile:
 
 - successful initial and refresh transfers schedule the next refresh from the transferred SOA REFRESH field, subject to configurable minimum and maximum effective intervals;
 - failed refresh transfers schedule retry from the transferred SOA RETRY field where available;
@@ -267,7 +268,7 @@ Slice 6 has a preliminary AXFR-backed zone state machine:
 - primaries that return FORMERR or NOTIMP to IXFR are placed in a per-zone IXFR-disabled cooldown, configured by `[limits].ixfr_disabled_cooldown_secs` and defaulting to 3600 seconds, during which refresh attempts use AXFR for that primary.
 - `scripts/interop-ixfr-notimp-fallback.sh` covers the external process path for initial AXFR, IXFR NOTIMP fallback to AXFR, and the next refresh using AXFR while IXFR cooldown is active; it can retain fake-primary, config, query, metrics, summary, and OxideDNS log artifacts with `OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR`.
 
-Slice 4 has implemented TCP query transport foundations:
+TCP query transport is implemented:
 
 - TCP listeners bind from static configuration;
 - DNS-over-TCP messages use the two-octet length prefix;
@@ -285,7 +286,7 @@ Slice 4 has implemented TCP query transport foundations:
 - runtime shutdown tests cover the draining health state while an initial transfer is blocked, and confirm the runtime exits after the transfer releases.
 - process-level CLI smoke tests cover successful `oxidedns serve` shutdown on SIGINT and SIGTERM.
 
-Slice 6 has initial NOTIFY intake foundations:
+NOTIFY intake and refresh signalling are implemented:
 
 - NOTIFY response messages are discarded when QR=1 like other inbound responses;
 - NOTIFY requests require QDCOUNT=1 and QTYPE=SOA, otherwise they receive FORMERR;
@@ -298,7 +299,7 @@ Slice 6 has initial NOTIFY intake foundations:
 - non-duplicate accepted NOTIFY signals are queued for the transfer worker; if the embedded SOA serial is newer than the active zone serial, or no comparable serial is available, the worker attempts AXFR against configured primaries and publishes the first successful snapshot.
 - `scripts/interop-notify-negative.sh` retains running-service evidence for NOTIFY on the DNS interface, covering non-SOA FORMERR, unknown-zone REFUSED, accepted refresh signalling and deduplication metrics over UDP and TCP NOTIFY, unauthorized-source discard and warning log, required-TSIG BADKEY response and warning log, valid signed NOTIFY with signed NOERROR response, tampered signed NOTIFY with BADSIG, and repeated unauthorized/TSIG-failure log-rate suppression summary.
 
-Slice 7 has TSIG HMAC-SHA foundations:
+TSIG HMAC-SHA support is implemented:
 
 - TSIG keys are parsed from static configuration with absolute DNS key names, supported algorithm validation, inline or file-referenced base64 secret decoding, duplicate-key rejection, file-readability and non-world-readable file-mode validation for `secret_file`, and zone-to-key reference validation;
 - HMAC-MD5 TSIG keys are rejected during configuration validation;
@@ -350,7 +351,7 @@ claim of signing, validation, key management, or rollover behavior:
 - inbound TSIG verification accepts RFC 8945/RFC 4635 legal truncated MACs down to half the algorithm output length, rejects below-minimum or overlong MACs with BADTRUNC classification, and outbound TSIG signing continues to emit full-length MACs.
 - authorized NOTIFY messages missing required TSIG, or with BADKEY, BADSIG, BADALG, or BADTRUNC verification failures, receive NOTAUTH responses carrying zero-MAC TSIG error records; BADTIME failures receive signed NOTAUTH TSIG error records with server-time other data.
 
-Slice 8 has health endpoint and SRS interface foundations:
+Health endpoints, metrics, logging, and process interfaces are implemented:
 
 - optional `[server].health` remains a compatibility health bind override; `[health].bind_address`/`bind_port` take precedence for the SRS explicit health bind, and `[interfaces].mgmt` activates health/metrics listeners at `[health].default_port` when no explicit override is configured;
 - `[interfaces].dns` overrides legacy DNS listener lists and is used for both UDP and TCP DNS sockets, accepts both legacy socket-address strings and `{ address, name }` pairs so a future XDP backend can identify the intended NIC by name while the current socket backend ignores that name, DNS sockets also receive NOTIFY messages from authorized primary addresses, `[interfaces].transfer` binds same-family outbound SOA poll, AXFR, IXFR, and XoT TCP sockets while preserving ephemeral source-port selection with port `0`, configuration validation rejects obsolete `interfaces.xot`, and `interfaces.notify` is rejected as a fourth interface role under the three-interface MVP target;

@@ -13,9 +13,9 @@ proof, and signed release artifacts remain tracked as MVP gaps in
 
 ## Module Organisation
 
-The current first-party Rust source is organised into 13 release-reviewed
+The current first-party Rust source is organised into 14 release-reviewed
 modules at the crate/file boundary. This satisfies the `ODS-NFR-MAINT-002`
-module-count target shape for the current MVP scaffold; `crates/oxidedns-server/src/lib.rs`
+module-count target shape for the current implementation; `crates/oxidedns-server/src/lib.rs`
 remains the broadest module and is the primary future refactor candidate if
 runtime growth continues.
 

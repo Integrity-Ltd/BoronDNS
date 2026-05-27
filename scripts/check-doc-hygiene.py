@@ -24,6 +24,8 @@ BANNED_PHRASES = [
     "All C.5 entries remain active release-review risks",
     "first-pass Engineering MVP",
     "first-pass family matrix",
+    "preliminary AXFR-backed",
+    "current MVP scaffold",
     "RFC 8914 EDE planned for v2",
     "`BTreeMap`-backed zone store",
     "Architecture Document will choose the initial implementation",
