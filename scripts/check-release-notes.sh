@@ -70,6 +70,7 @@ for rfc_field in \
     "Partially Compliant" \
     "Not Compliant" \
     "Informative Only" \
+    "docs/rfc-compliance-assertions.md" \
     "docs/operator-deployment-guide.md#rfc-compliance-assertions"; do
     require_text "$rfc_field"
 done

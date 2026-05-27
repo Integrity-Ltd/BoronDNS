@@ -75,11 +75,12 @@ Allowed compliance status values are `Fully Compliant`, `Partially Compliant`,
 `Not Compliant`, and `Informative Only`. Copy or generate the structured list
 from `docs/rfc-compliance-assertions.md`, update evidence pointers to this
 release's retained evidence snapshot, and keep the primary documentation sync
-pointer aligned with the Operator Deployment Guide.
+pointer aligned with the canonical register and Operator Deployment Guide
+summary.
 
 | RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution milestone | SRS revision | Evidence pointer | Primary documentation sync |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | docs/operator-deployment-guide.md#rfc-compliance-assertions |
+| TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | docs/rfc-compliance-assertions.md; docs/operator-deployment-guide.md#rfc-compliance-assertions |
 
 ## Interface Changes
 

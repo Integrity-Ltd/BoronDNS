@@ -210,6 +210,10 @@ REQUIRED_TEXT_BY_PATH = {
         "If code removes one of these slices, update this document",
         "nearby behavior that is not claimed by the slice",
     ],
+    "docs/release-notes-template.md": [
+        "pointer aligned with the canonical register and Operator Deployment Guide summary",
+        "docs/rfc-compliance-assertions.md; docs/operator-deployment-guide.md#rfc-compliance-assertions",
+    ],
 }
 
 FORBIDDEN_TEXT_BY_PATH = {
