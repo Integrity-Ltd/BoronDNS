@@ -222,8 +222,17 @@ The following terms appear normatively throughout this document. A complete glos
 ### 1.6.1 Project Documents
 
 - **PID** — *OxideDNS-Secondary Project Initiation Document*, v0.1, May 2026.
-- **Architecture Document** — *OxideDNS-Secondary Architecture Design* (to be produced in PID Phase 2; informed by this SRS).
-- **Test Plan** — *OxideDNS-Secondary Test Plan* (to be produced alongside this SRS; verification procedures derive from §7).
+- **Architecture Document** — `docs/architecture.md`, the current
+  Architecture and Release Governance companion document. It records
+  implementation decisions, module ownership, unsafe-boundary posture, and
+  release-governance evidence boundaries that this SRS deliberately keeps out
+  of normative requirement text.
+- **Test Plan** — `docs/test-plan.md`, the current verification companion
+  document. It maps the verification vocabulary and cadence of §7 to concrete
+  local checks, handoff scripts, evidence formats, and release/operations
+  obligations.
+- **Operator Deployment Guide** — `docs/operator-deployment-guide.md`, the
+  current operator-facing guide required by ODS-NFR-MAINT-009.
 
 ### 1.6.2 Standards Governing This Document
 

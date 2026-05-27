@@ -35,6 +35,8 @@ BANNED_PHRASES = [
     "RFC 8914 EDE planned for v2",
     "`BTreeMap`-backed zone store",
     "Architecture Document will choose the initial implementation",
+    "to be produced in PID Phase 2",
+    "to be produced alongside this SRS",
     "v0.1–v0.2 design phase",
 ]
 
