@@ -19,6 +19,11 @@ FEATURES = {
             "crates/oxidedns-core/src/axfr.rs",
             "crates/oxidedns-server/src/lib.rs",
         ],
+        "evidence_paths": [
+            "scripts/interop-bind-ixfr-refresh.sh",
+            "scripts/interop-knot-ixfr-refresh-docker.sh",
+            "scripts/interop-ixfr-notimp-fallback.sh",
+        ],
         "source_needles": [
             "pub enum IxfrResponse",
             "build_ixfr_query",
@@ -30,6 +35,12 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-knot-xot-docker.sh",
+            "scripts/interop-knot-xot-tsig-docker.sh",
+            "scripts/interop-bind-xot-catalog-zone-docker.sh",
+            "scripts/audit-xot-revocation.sh",
         ],
         "source_needles": [
             "connect_xot_stream",
@@ -43,6 +54,13 @@ FEATURES = {
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-core/src/zone.rs",
         ],
+        "evidence_paths": [
+            "scripts/interop-dnssec-serve.sh",
+            "scripts/interop-dnssec-nsec3-serve.sh",
+            "scripts/interop-knot-dnssec-docker.sh",
+            "scripts/audit-dnssec-passive.sh",
+            "docs/dnssec-conformance-matrix.tsv",
+        ],
         "source_needles": [
             "augment_lookup_result_with_dnssec",
             "nsec3_max_iterations",
@@ -55,6 +73,11 @@ FEATURES = {
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
         ],
+        "evidence_paths": [
+            "scripts/interop-rrl-udp.sh",
+            "scripts/rrl-evidence-campaign.sh",
+            "docs/rrl-release-thresholds.md",
+        ],
         "source_needles": [
             "struct RrlLimiter",
             "rrl_truncated_response",
@@ -66,6 +89,9 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-dns-cookie-dig.sh",
         ],
         "source_needles": [
             "EDNS_COOKIE_OPTION",
@@ -80,10 +106,33 @@ FEATURES = {
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
         ],
+        "evidence_paths": [
+            "docs/catalog-zone-mvp-rfc9432.md",
+            "scripts/interop-bind-catalog-zone-docker.sh",
+            "scripts/interop-powerdns-postgres-catalog-tsig-docker.sh",
+            "scripts/interop-bind-xot-catalog-zone-docker.sh",
+        ],
         "source_needles": [
             "parse_catalog_members",
             "catalog_member_added",
             "oxidedns_catalog_member_info",
+        ],
+    },
+    "EDNS response behavior": {
+        "aliases": ["EDNS"],
+        "paths": [
+            "crates/oxidedns-core/src/dns.rs",
+            "crates/oxidedns-core/src/config.rs",
+            "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-edns-behavior.sh",
+        ],
+        "source_needles": [
+            "parse_edns_options",
+            "EDNS_TCP_KEEPALIVE_OPTION",
+            "append_edns_padding_if_it_fits",
+            "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
     },
     "EDE": {
@@ -91,6 +140,11 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-dnssec-serve.sh",
+            "scripts/interop-dnssec-nsec3-serve.sh",
+            "docs/dnssec-conformance-matrix.tsv",
         ],
         "source_needles": [
             "EDNS_EXTENDED_DNS_ERROR_OPTION",
@@ -104,6 +158,9 @@ FEATURES = {
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-chaos-queries.sh",
         ],
         "source_needles": [
             "answer_chaos_query",
@@ -123,6 +180,7 @@ def main() -> int:
     for feature, spec in FEATURES.items():
         aliases = spec["aliases"]
         paths = spec["paths"]
+        evidence_paths = spec["evidence_paths"]
         source = "\n".join(
             (ROOT / relative_path).read_text(encoding="utf-8")
             for relative_path in paths
@@ -144,6 +202,14 @@ def main() -> int:
                 )
             if not (ROOT / relative_path).exists():
                 errors.append(f"missing code path for {feature}: {relative_path}")
+        for relative_path in evidence_paths:
+            if relative_path not in disposition:
+                errors.append(
+                    f"{DISPOSITION_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} evidence for {feature}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(f"missing evidence path for {feature}: {relative_path}")
         for needle in spec["source_needles"]:
             if needle not in source:
                 errors.append(

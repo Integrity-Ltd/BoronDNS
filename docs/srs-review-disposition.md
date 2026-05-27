@@ -31,16 +31,17 @@ post-Alpha features below, so the documentation cleanup keeps them in
 Engineering MVP scope and records remaining formal-acceptance evidence
 separately.
 
-| Feature family | Current code ownership | Documentation posture |
-| --- | --- | --- |
-| IXFR and AXFR fallback | `crates/oxidedns-core/src/axfr.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; release-specific interop evidence remains tracked. |
-| XoT | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; TLS fault matrix and real-primary evidence remain acceptance work. |
-| Passive DNSSEC serving | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/zone.rs` | In Engineering MVP scope; server serves transferred records and does not sign or validate. |
-| RRL | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; release threshold confirmation remains a C.5/open evidence item. |
-| DNS Cookies | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; broader deployment interop remains release evidence. |
-| RFC 9432 catalog zones | `crates/oxidedns-core/src/catalog.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; `max_member_zones` remains an explicit implementation gap. |
-| Bounded EDE diagnostics | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope for `Not Ready` and NSEC3-cap diagnostics only. |
-| Opt-in CHAOS self-identification | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | In Engineering MVP scope; disabled-by-default posture is retained. |
+| Feature family | Current code ownership | Representative evidence ownership | Documentation posture |
+| --- | --- | --- | --- |
+| IXFR and AXFR fallback | `crates/oxidedns-core/src/axfr.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-bind-ixfr-refresh.sh`; `scripts/interop-knot-ixfr-refresh-docker.sh`; `scripts/interop-ixfr-notimp-fallback.sh` | In Engineering MVP scope; release-specific interop evidence remains tracked. |
+| XoT | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-knot-xot-docker.sh`; `scripts/interop-knot-xot-tsig-docker.sh`; `scripts/interop-bind-xot-catalog-zone-docker.sh`; `scripts/audit-xot-revocation.sh` | In Engineering MVP scope; TLS fault matrix and real-primary evidence remain acceptance work. |
+| Passive DNSSEC serving | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/zone.rs` | `scripts/interop-dnssec-serve.sh`; `scripts/interop-dnssec-nsec3-serve.sh`; `scripts/interop-knot-dnssec-docker.sh`; `scripts/audit-dnssec-passive.sh`; `docs/dnssec-conformance-matrix.tsv` | In Engineering MVP scope; server serves transferred records and does not sign or validate. |
+| RRL | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-rrl-udp.sh`; `scripts/rrl-evidence-campaign.sh`; `docs/rrl-release-thresholds.md` | In Engineering MVP scope; release threshold confirmation remains a C.5/open evidence item. |
+| DNS Cookies | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-dns-cookie-dig.sh` | In Engineering MVP scope; broader deployment interop remains release evidence. |
+| RFC 9432 catalog zones | `crates/oxidedns-core/src/catalog.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `docs/catalog-zone-mvp-rfc9432.md`; `scripts/interop-bind-catalog-zone-docker.sh`; `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh`; `scripts/interop-bind-xot-catalog-zone-docker.sh` | In Engineering MVP scope; `max_member_zones` remains an explicit implementation gap. |
+| Broad EDNS response behavior | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-edns-behavior.sh` | In Engineering MVP scope for OPT parsing, BADVERS, payload ceilings, DO-copy semantics, TCP keepalive, NSID, padding, unknown-option ignore, and non-EDNS truncation behavior. |
+| Bounded EDE diagnostics | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-dnssec-serve.sh`; `scripts/interop-dnssec-nsec3-serve.sh`; `docs/dnssec-conformance-matrix.tsv` | In Engineering MVP scope for `Not Ready` and NSEC3-cap diagnostics only. |
+| Opt-in CHAOS self-identification | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-chaos-queries.sh` | In Engineering MVP scope; disabled-by-default posture is retained. |
 
 The review's long-run verification and benchmark objections are handled by
 boundary, not deletion: setup/runbooks may remain, but completed long fuzz,
@@ -111,6 +112,7 @@ but current code and evidence make them part of the Engineering MVP posture:
 - RRL.
 - DNS Cookies.
 - RFC 9432 catalog zones.
+- Broad EDNS response behavior.
 - Bounded EDE diagnostics.
 - Opt-in CHAOS CH/TXT self-identification queries.
 

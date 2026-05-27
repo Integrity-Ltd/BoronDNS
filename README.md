@@ -13,9 +13,9 @@ release-acceptance build.
 
 The implemented Engineering MVP is wider than a minimal static-zone secondary
 server. Current code includes IXFR, XoT, passive DNSSEC serving, RRL, DNS
-Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
-self-identification. Those features remain in scope, with release-acceptance
-evidence gaps tracked separately.
+Cookies, RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE
+diagnostics, and opt-in CHAOS self-identification. Those features remain in
+scope, with release-acceptance evidence gaps tracked separately.
 
 ## Start Here
 

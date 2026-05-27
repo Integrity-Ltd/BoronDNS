@@ -17,10 +17,10 @@ The documentation set intentionally separates three things:
 
 Implemented protocol families must not be removed from Engineering MVP scope
 only because they exceed a minimal static-zone secondary-server cut. IXFR, XoT,
-passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, bounded EDE
-diagnostics, and opt-in CHAOS self-identification all have current code and test
-ownership; remaining work for those features is tracked as evidence or explicit
-implementation gaps.
+passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, broad EDNS
+response behavior, bounded EDE diagnostics, and opt-in CHAOS self-identification
+all have current code and test ownership; remaining work for those features is
+tracked as evidence or explicit implementation gaps.
 
 ## Current Requirements and Design
 
