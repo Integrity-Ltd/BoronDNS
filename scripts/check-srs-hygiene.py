@@ -10,6 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
+REFERENCE_PROFILE = ROOT / "docs" / "reference-verification-profile.md"
 
 FORBIDDEN_TEXT = {
     "RDS denotes": "old rename namespace artifact",
@@ -146,7 +147,10 @@ REQUIRED_TEXT = [
     "formal project acceptance targets for the OxideDNS reference verification profile",
     "not formal conformance evidence for the quantitative NFR targets",
     "Project reference-hardware throughput target; formal acceptance evidence required before asserting conformance.",
-    "Conformance to the §5 numerical targets is asserted only against this Profile after the Appendix E.4 recordkeeping artifacts are retained.",
+    "`docs/reference-verification-profile.md`",
+    "docs/reference-verification-profile.md#reference-hardware-profile",
+    "docs/reference-verification-profile.md#reference-query-mix",
+    "docs/reference-verification-profile.md#verification-recordkeeping",
     "The v0.7 audit pass is historical evidence, not a prohibition on later corrective review.",
     "The requirement identifier and category framework remains stable for traceability",
     "Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope",
@@ -157,7 +161,6 @@ REQUIRED_TEXT = [
     "deferred to formal SRS MVP",
     "formal SRS MVP release",
     "Formal SRS MVP interface-scope decision",
-    "for formal SRS MVP verification",
     "oxidedns_catalog_member_info{catalog_zone=\"<catalog-apex>\",zone=\"<member-apex>\",managed=\"<true|false>\"} 1",
     "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
     "ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics)",
@@ -182,6 +185,7 @@ SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b"
 
 def main() -> int:
     text = SRS.read_text(encoding="utf-8")
+    reference_profile = REFERENCE_PROFILE.read_text(encoding="utf-8")
     errors: list[str] = []
 
     for needle, reason in FORBIDDEN_TEXT.items():
@@ -191,6 +195,21 @@ def main() -> int:
     for needle in REQUIRED_TEXT:
         if needle not in text:
             errors.append(f"missing required SRS hygiene text: {needle!r}")
+
+    for needle in [
+        "# OxideDNS Reference Verification Profile",
+        "## Reference Hardware Profile",
+        "## Reference Query Mix",
+        "## Verification Recordkeeping",
+        "Dual Intel Xeon Gold 6230R",
+        "100,000 records",
+        "formal SRS MVP conformance",
+        "not use XDP",
+    ]:
+        if needle not in reference_profile:
+            errors.append(
+                f"missing reference verification profile text: {needle!r}"
+            )
 
     suffixed_ids = sorted(set(SUFFIXED_ID_RE.findall(text)))
     if suffixed_ids:

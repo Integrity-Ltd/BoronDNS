@@ -5086,101 +5086,53 @@ Adding a new area code requires editing this registry in the same SRS revision a
 
 ---
 
-# Appendix E — Reference Hardware Profile and Reference Query Mix
+# Appendix E — Reference Verification Profile
 
 ## E.1 Purpose
 
-Appendix E specifies the reference environment against which the quantitative non-functional requirements of §5 (the ODS-NFR-PERF-* and ODS-NFR-RES-* targets) are stated and verified. Without a concrete reference, performance numbers are unfalsifiable: "50,000 queries per second per core" on a 2008 server is a very different commitment from the same number on a 2026 server. The reference profile fixes the verification environment so that conformance claims are objective.
+Appendix E names the reference environment against which the quantitative
+non-functional requirements in §5 are stated and verified. It exists so the SRS
+performance and resource targets are falsifiable rather than free-floating
+claims.
 
-The Profile reflects a deliberate choice: it is more powerful than strictly necessary for the secondary's expected production workload, but it is selected as the project's standard verification platform. Production deployments on weaker hardware are supported and operationally common; their performance will depend on CPU, memory, NIC, kernel, container, and traffic-mix details. Conformance to the §5 numerical targets is asserted only against this Profile after the Appendix E.4 recordkeeping artifacts are retained.
+The detailed profile is maintained in the companion document
+`docs/reference-verification-profile.md`. That document owns the hardware
+profile, query mix, named benchmark variants, and recordkeeping checklist used
+by formal SRS MVP release-acceptance runs.
 
 ## E.2 Reference Hardware Profile
 
-### E.2.1 Compute
+The reference hardware profile is defined by
+`docs/reference-verification-profile.md#reference-hardware-profile`.
 
-- **CPU:** Dual Intel Xeon Gold 6230R processors. Each socket: 26 physical cores / 52 hardware threads, base clock 2.10 GHz, max turbo 4.00 GHz, AVX-512 capable, 35.75 MB L3 cache. Total: 52 physical cores / 104 hardware threads. Released Q1 2020 (Cascade Lake Refresh); widely available in enterprise hardware as of 2026.
-- **Memory:** 192 GiB DDR4-2933 ECC, populated to use all six memory channels per socket (typical: 12 × 16 GiB DIMMs).
-- **NUMA topology:** Two NUMA nodes (one per socket); the container is started with NUMA affinity to a single socket for performance verification, leaving the other socket for the host operating system and the management interface. This produces a verification configuration of 26 cores / 96 GiB RAM available to the container, which is the value used in the per-core targets of §5.1.
-
-### E.2.2 Network
-
-- **DNS query interface:** Dedicated to the secondary's DNS query traffic per ODS-IF-NET-005, attached directly to the container as an SR-IOV Virtual Function or via NIC passthrough. Recommended NICs for verification: Intel E810 (`ice` driver) or Mellanox ConnectX-5 / ConnectX-6 (`mlx5` driver), at 25 Gbit/s line rate. Native XDP driver-mode support is a requirement of the hardware so that the post-MVP optimisation of Appendix C.6.1 can be verified on the same Profile without hardware change; for formal SRS MVP verification (which does not use XDP), driver-mode support is not exercised but the NIC choice is unchanged for continuity.
-- **Management interface:** Dedicated to operator access, monitoring scraping, and (where the operator's network architecture so requires) zone-transfer traffic per ODS-IF-NET-005. Connected to the host operating system, not to the container directly. Speed is not critical; 1 Gbit/s suffices.
-- **Zone-transfer interface (optional, if configured per ODS-IF-NET-005):** Where the operator separates XoT traffic onto its own physical interface, a separate NIC port. For verification purposes the management interface carries this traffic.
-
-### E.2.3 Operating environment
-
-- **Host operating system:** Ubuntu 24.04 LTS or Red Hat Enterprise Linux 9 (or compatible: Rocky Linux 9, AlmaLinux 9). Linux kernel 6.x LTS series.
-- **Container runtime:** containerd 1.7+ with the runc OCI runtime. (Equivalent runtimes — Podman, CRI-O — are supported per ODS-NFR-PORT-003 but the verification environment uses containerd.)
-- **Container resource allocation:** the container is granted exclusive access to the cores of one NUMA node (26 physical cores), with `cpuset` and `cpus` limits configured to prevent CPU sharing with host processes during measurement. The dedicated DNS query NIC is attached to the container via SR-IOV VF; the management interface is attached to the host.
-- **Kernel tuning:** `net.core.rmem_max`, `net.core.wmem_max`, `net.core.netdev_max_backlog`, and similar UDP/TCP socket parameters tuned per the Operator Deployment Guide (ODS-NFR-MAINT-009). These are operational tunings, not server configuration; their values are recorded with each verification run.
-- **Clock source:** the host clock is synchronised via PTP (Precision Time Protocol) where the verification environment supports it, or NTP otherwise. Clock skew at the measurement node is recorded with each run and SHOULD be below 100 milliseconds for repeatable ODS-NFR-REL-007 verification.
-
-### E.2.4 Storage
-
-The secondary makes no use of persistent storage per ODS-INV-004. Local disk on the host is used for:
-- container image storage (the OCI image, ≤ 20 MB per ODS-NFR-RES-001);
-- host OS and container runtime;
-- log aggregation downstream of the container's stdout/stderr (ODS-IF-LOG-001).
-
-Verification runs use NVMe SSD for the host; SATA or other slower storage does not affect server performance (no I/O on the query path per ODS-INV-002) but does affect log throughput if logs are persisted locally.
+All SRS references to "hardware matching the Reference Hardware Profile of
+Appendix E.2" mean the release profile defined there, including any recorded
+release-specific deviations.
 
 ## E.3 Reference Query Mix
 
-### E.3.1 Reference zone
+The reference query mix is defined by
+`docs/reference-verification-profile.md#reference-query-mix`.
 
-A synthetic test zone is used for performance verification. It has the following characteristics:
-
-- **Zone size:** 100,000 records (RR count), structured as:
-  - 50,000 A records (50%)
-  - 25,000 AAAA records (25%)
-  - 10,000 MX records (10%)
-  - 5,000 NS records (5%, scattered at sub-zone delegation points)
-  - 5,000 TXT records (5%)
-  - 5,000 SRV records (5%)
-- **Name structure:** Owner names follow a realistic distribution: a mix of two-, three-, and four-label names under a single zone apex, with occasional deeper names for delegation testing. The zone contains both regular owner names and wildcard owner names (approximately 100 wildcards distributed across the zone).
-- **DNSSEC variant:** A signed variant of the same zone (using NSEC) is maintained for DNSSEC-augmented verification per ODS-NFR-PERF-008. The signed variant uses Ed25519 (algorithm 15) or RSA-SHA-256 (algorithm 8) at the project's verification convenience.
-
-### E.3.2 Query distribution
-
-The query distribution applied to the reference zone is Zipfian, reflecting the empirically observed distribution of authoritative DNS traffic:
-
-- **QNAME distribution:** Approximately 80% of queries target the top 5% of owner names; the remaining 20% are distributed across the long tail. The exact Zipf parameter is recorded with each verification run.
-- **QTYPE distribution:** A weighted mix:
-  - 60% A
-  - 25% AAAA
-  - 5% MX
-  - 5% NS
-  - 5% other (TXT, SRV in proportion to their presence in the zone)
-- **Source IP distribution:** Queries are issued from at least 100,000 distinct simulated source IP addresses (across IPv4 /24 and IPv6 /56 prefixes), to exercise the RRL accounting layer (ODS-FR-RRL-002, ODS-FR-RRL-010) realistically; no single source generates more than 0.01% of total query volume.
-- **EDNS state:** All queries carry an OPT RR with class field 1232 (the default UDP payload size of ODS-FR-EDNS-006) and DO = 0 unless the verification scenario specifically targets DNSSEC augmentation (per ODS-NFR-PERF-008).
-- **Cookie state:** For ODS-FR-COOKIE-related verification, the appropriate cookies are carried; for baseline PERF-001 verification (no cookies in scope), queries carry no Cookie option.
-
-### E.3.3 Variants
-
-The Reference Query Mix supports the following named variants, invoked by specific NFR verifications:
-
-- **Baseline (PERF-001, PERF-002, PERF-003):** Default mix as above; UDP transport; no TSIG; DO=0.
-- **TCP-pipelined (PERF-006):** Same QNAME/QTYPE distribution but delivered over TCP with 32 in-flight queries per connection; 1,000 distinct source connections.
-- **TSIG-load (PERF-007):** TSIG-signed NOTIFY messages delivered at controlled rate; the NOTIFY processing path is exercised including the cryptographic verification.
-- **DNSSEC-augmented (PERF-008):** Default mix against the signed zone variant; queries carry DO = 1.
-- **Cookie-enabled (ODS-FR-COOKIE-related verification):** Default mix with cookies attached; baseline (no cookie), Client-Cookie-only, valid-server-cookie, and invalid-server-cookie sub-variants.
+All SRS references to "the Reference Query Mix of Appendix E.3" mean that
+profile's baseline mix or one of its named variants, as selected by the
+requirement being verified.
 
 ## E.4 Verification recordkeeping
 
-Each NFR verification run MUST record:
-- the exact hardware configuration (CPU model and count, RAM, NIC model and driver version, container runtime version);
-- the exact software stack version (server binary version per ODS-NFR-OBS-006, kernel version, Linux distribution version, container runtime version);
-- the benchmark tool used and its version (`dnsperf`, `kxdpgun`, or equivalent);
-- the Reference Query Mix variant used (baseline, TCP-pipelined, TSIG-load, etc.);
-- the measured values for the relevant NFR target;
-- any deviations from the Reference Profile and an assessment of their impact on the measurement.
-
-The Test Plan (a sibling document per §1.6.1) specifies the concrete test harness implementations.
+Formal performance and resource conformance claims require retained artifacts
+matching `docs/reference-verification-profile.md#verification-recordkeeping`.
+Local smoke and large-catalog benchmark results are engineering evidence only
+unless a release run executes the reference profile and retains the required
+recordkeeping artifacts.
 
 ## E.5 Profile evolution
 
-The Reference Hardware Profile may be revised over time as commodity hardware evolves. Each revision of the Profile MUST be approved as part of an SRS revision; the NFR targets MAY be revised in the same SRS revision to track the Profile's new capacity, with the new targets stated against the new Profile. Historical SRS versions retain their original Profile references for traceability of past verification claims.
+The Reference Hardware Profile may be revised over time as commodity hardware
+evolves. Each revision of the Profile MUST be approved as part of an SRS
+revision; the NFR targets MAY be revised in the same SRS revision to track the
+Profile's new capacity. Historical SRS versions retain their original Profile
+references for traceability of past verification claims.
 
 ---
 

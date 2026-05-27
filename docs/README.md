@@ -39,6 +39,7 @@ and slowly diverging.
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
+| What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
 
 ## Current Requirements and Design
@@ -63,6 +64,8 @@ and slowly diverging.
 - `manual-bind-interop.md`: manual BIND interop smoke procedure.
 - `dns-client-benchmark.md`: bounded local client benchmark and large-catalog
   benchmark guide.
+- `reference-verification-profile.md`: formal release benchmark hardware,
+  query-mix, and artifact-retention profile referenced by SRS Appendix E.
 - `oxide-gun.md`: OxideGun load-generator and XDP lab notes.
 - `catalog-zone-mvp-rfc9432.md`: RFC 9432 catalog-zone implementation notes and
   MVP/E2E test shape.

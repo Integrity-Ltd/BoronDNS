@@ -80,6 +80,7 @@ REQUIRED_TEXT_BY_PATH = {
         "What requirement ranges map to evidence?",
         "How is the implementation structured?",
         "How does an operator run it?",
+        "What is the formal benchmark environment?",
         "How was the external review handled?",
     ],
     "docs/implementation-plan.md": [
