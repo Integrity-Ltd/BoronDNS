@@ -93,7 +93,7 @@ REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
     "Per-zone RRL, distributed/shared RRL state across processes",
     "Durable client authentication, TSIG replacement",
     "automatic discovery without catalog configuration",
-    "EDNS Refresh, DNS Stateful Operations",
+    "EDNS EXPIRE (RFC 7314), DNS Stateful Operations",
     "Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only",
     "Automatic host disclosure, arbitrary CHAOS namespaces",
 ]

@@ -94,6 +94,8 @@ BANNED_PHRASES = [
     "## Release Scaffolding",
     "The planned pieces are:",
     "future work and should cover",
+    "EDNS Refresh",
+    "EDNS Expire",
 ]
 
 SOURCE_BANNED_PHRASES = [

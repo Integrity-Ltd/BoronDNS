@@ -123,6 +123,8 @@ FORBIDDEN_TEXT = {
     "already-adopted OxideDNS": "import-process wording belongs in review disposition, not the current SRS",
     "**Document Version:** v0.9.1 (Draft 9, point release 1)": "current SRS front matter should not look like an imported draft artifact",
     "**Status:** Draft — CHAOS class self-identification addition, OxideDNS namespace alignment": "current SRS front matter should state its active baseline and acceptance boundary",
+    "EDNS Expire": "RFC 7314 title casing is EDNS EXPIRE; avoid loose Refresh/Expire terminology",
+    "EDNS Refresh": "RFC 7314 title casing is EDNS EXPIRE; avoid loose Refresh/Expire terminology",
     "Implementation-alignment requirements update": "current SRS revision notes should state product changes, not import-process labels",
     "implementation alignment": "current SRS revision notes should state product changes, not import-process labels",
     "documentation alignment": "current SRS revision notes should state product changes, not import-process labels",

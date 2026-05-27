@@ -1545,7 +1545,7 @@ This subsection specifies the server's implementation of Extension Mechanisms fo
 
 The interaction between EDNS0 UDP payload negotiation and TCP fallback is governed jointly by this subsection and §4.12; the response truncation behaviour (TC bit setting and message construction under size constraints) is specified in §4.12, while the determination of the applicable UDP size ceiling is specified here.
 
-EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in current SRS scope. The EDNS Expire exclusion is limited to the EDNS option-code mechanism of RFC 7314; it does not remove the ordinary SOA REFRESH/RETRY/EXPIRE, AXFR/IXFR, and NOTIFY behaviours specified in §4.6, §4.7, §4.8, and §4.16. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
+EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS EXPIRE (RFC 7314) are not in current SRS scope. The EDNS EXPIRE exclusion is limited to the EDNS option-code mechanism of RFC 7314; it does not remove the ordinary SOA REFRESH/RETRY/EXPIRE, AXFR/IXFR, and NOTIFY behaviours specified in §4.6, §4.7, §4.8, and §4.16. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
 
 The area code **EDNS** is allocated.
 
@@ -3863,7 +3863,7 @@ register referenced by C.5.
 
 The entry is preserved in this register, with this updated status, per the identifier-stability discipline of §1.4.4 — readers of earlier revisions following a reference to C.3.9 reach a current statement of where the topic now lives.
 
-### C.3.10 EDNS Expire (RFC 7314)
+### C.3.10 EDNS EXPIRE (RFC 7314)
 
 *Description.* An experimental EDNS option for zone maintenance queries (typically SOA, AXFR, and IXFR) that lets a primary or intermediate secondary convey remaining expire-timer information to a secondary. RFC 7314 is intended to preserve SOA EXPIRE semantics across indirect secondary-to-secondary transfer graphs; it is not a replacement for ordinary SOA refresh polling, NOTIFY, AXFR, or IXFR.
 
@@ -3924,7 +3924,7 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 | 2845 | TSIG (original; HMAC-MD5) | Superseded by RFC 8945; HMAC-MD5 prohibited | C.3.11 |
 | 2930 | TKEY | Current-scope exclusion | C.3.12 |
 | 5011 | Trust anchor rollover | Foundational exclusion (primary-role) | C.2.1 |
-| 7314 | EDNS Expire | Current-scope exclusion | C.3.10 |
+| 7314 | EDNS EXPIRE | Current-scope exclusion | C.3.10 |
 | 7858 | DNS-over-TLS (client queries) | Current-scope exclusion | C.3.3 |
 | 7871 | EDNS Client Subnet | Current-scope exclusion | C.3.2 |
 | 8484 | DNS-over-HTTPS | Current-scope exclusion | C.3.4 |
