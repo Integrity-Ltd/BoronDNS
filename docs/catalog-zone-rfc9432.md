@@ -42,10 +42,13 @@ Outside this Engineering MVP catalog slice:
   set for the configured catalog.
 - Persistent catalog or member-zone state across process restarts.
 - Primary-side catalog generation.
-- Completed formal SRS evidence for every semantic member-name exclusion in
-  `ODS-NFR-SEC-015`; the current Engineering MVP evidence covers structural
-  member PTR parsing, duplicate members, self-catalog members, and member-count
-  caps, with the remaining semantic exclusions tracked in the gap register.
+- Completed formal SRS evidence for the `ODS-NFR-SEC-015`
+  per-offending-member semantic rejection profile. Current Engineering MVP
+  evidence covers structural member PTR parsing, duplicate members,
+  self-catalog member detection as whole-candidate catalog rejection, and
+  member-count caps. Per-member diagnostics for self-catalog members plus
+  subordinate-to-catalog, root-zone, reserved-zone, and wildcard-label
+  exclusions remain tracked in the gap register.
 
 ## Configuration
 

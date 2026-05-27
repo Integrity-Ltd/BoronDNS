@@ -127,9 +127,16 @@ REQUIRED_TEXT_BY_PATH = {
         "NSEC3-cap metric independence",
         "decouple the metric from EDE emission",
         "retain both off/minimal-mode evidence",
+        "self-catalog member detection as whole-candidate catalog rejection",
+        "ODS-NFR-SEC-015` per-offending-member semantic rejection profile",
         "Rows marked",
         "not an Engineering MVP blocker unless promoted to a requirement",
         "documentation ownership map",
+    ],
+    "docs/catalog-zone-rfc9432.md": [
+        "self-catalog member detection as whole-candidate catalog rejection",
+        "`ODS-NFR-SEC-015` per-offending-member semantic rejection profile",
+        "Per-member diagnostics for self-catalog members plus",
     ],
     "docs/README.md": [
         "## Document Ownership Rules",
