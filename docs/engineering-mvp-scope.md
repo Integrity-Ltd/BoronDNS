@@ -45,5 +45,6 @@ long-running activities or generate long-running handoff evidence listed above.
 
 `scripts/engineering-mvp-evidence.sh` is the bounded local evidence snapshot for
 the Engineering MVP profile. By default it runs only the narrow local evidence
-commands listed in the gap register, applies a per-command timeout, and records
-broader release/operations commands as deferred rather than executing them.
+commands listed in `docs/evidence-command-catalog.md`, applies a per-command
+timeout, and records broader release/operations commands as deferred rather
+than executing them.

@@ -684,8 +684,8 @@ release/operations template sets for the later delegated runs. Set
 and retain its `campaign-summary.tsv`,
 set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
 campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
-interop commands listed in the gap register as part of the snapshot. The RRL
-campaign uses `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
+interop commands listed in `docs/evidence-command-catalog.md` as part of the
+snapshot. The RRL campaign uses `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
 `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
 duration mode.
 

@@ -48,6 +48,13 @@ boundary, not deletion: setup/runbooks may remain, but completed long fuzz,
 reference-hardware benchmark, soak, signed-release, and external-operator
 evidence are not Engineering MVP deliverables.
 
+This scope-trim boundary is code-checked by
+`scripts/check-srs-review-disposition.py`, which requires each retained
+post-Alpha feature family to cite current source paths, retained evidence
+paths, and implementation-specific source markers. If a feature is removed from
+code, the review disposition and Engineering MVP scope must change in the same
+patch.
+
 Support tooling follows the same boundary. The installer, release archive
 scripts, Docker image archive workflow, large-zone benchmark harnesses, and
 OxideGun load generator are repository tooling for deployment or evidence

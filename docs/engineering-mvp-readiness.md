@@ -12,6 +12,8 @@ ready, while keeping full SRS `ODS-VER-008` acceptance separate.
 - `docs/engineering-mvp-scope.md` remains the milestone boundary.
 - `docs/mvp-gap-register.md` separates current Engineering MVP evidence from
   broader SRS acceptance gaps.
+- `docs/evidence-command-catalog.md` owns the command inventory consumed by
+  evidence snapshot tooling.
 - `docs/verification-ledger.md` records SRS/Alpha/release acceptance state
   without making deferred long evidence an Engineering MVP blocker.
 - `docs/implementation-plan.md` reflects the current implementation posture.
@@ -28,8 +30,9 @@ scripts/engineering-mvp-evidence.sh
 ```
 
 The evidence snapshot runner captures only the narrow local command set listed
-in `docs/mvp-gap-register.md`. It uses per-command timeouts and records broader
-release/operations commands in `deferred-not-run.txt` instead of executing them.
+in `docs/evidence-command-catalog.md`. It uses per-command timeouts and records
+broader release/operations commands in `deferred-not-run.txt` instead of
+executing them.
 
 ## Explicit Non-Goals
 

@@ -9,6 +9,7 @@ REQUIRED_FILES = [
     "scripts/engineering-mvp-evidence.sh",
     "docs/engineering-mvp-scope.md",
     "docs/mvp-gap-register.md",
+    "docs/evidence-command-catalog.md",
     "docs/verification-ledger.md",
     "docs/implementation-plan.md",
     "docs/operator-deployment-guide.md",
@@ -24,6 +25,7 @@ REQUIRED_PHRASES = [
     "deferred-not-run.txt",
     "Do not call the Engineering MVP ready",
     "docs/mvp-gap-register.md",
+    "docs/evidence-command-catalog.md",
     "remaining SRS acceptance gaps",
 ]
 
