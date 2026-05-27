@@ -4497,11 +4497,11 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Include directives in configuration | §6.2, ODS-IF-CONF-001 | NOT supported | **Resolved (v0.5): excluded; ODS-IF-CONF-001** |
 | External secret store integration | §6.2, ODS-IF-CONF-004 | NOT supported (file-path projection only) | **Resolved (v0.5): excluded; ODS-IF-CONF-004** |
 | Interface-name binding (`eth0`-style) | §6.2, ODS-IF-CONF-003 | NOT supported (IP addresses only) | **Resolved (v0.5): excluded; ODS-IF-CONF-003** |
-| `health.default_port` (default 8080) | §6.4, ODS-IF-HEALTH-001 | Confirm | Pending |
-| `health.metrics_rate_limit_per_minute` (default 60) | §6.4, ODS-IF-HEALTH-006 | Confirm | Pending |
-| `logging.max_entry_length_bytes` (default 16384) | §6.3, ODS-IF-LOG-007 | Confirm | Pending |
-| Configuration warning catalogue contents | §6.2, ODS-IF-CONF-008 | Confirm enumerated patterns | Pending |
-| `EX_CONFIG_INVALID = 2` and `EX_CONFIG = 78` choice | §6.6, ODS-IF-PROC-001 | Confirm | Pending |
+| `health.default_port` (default 8080) | §6.4, ODS-IF-HEALTH-001 | Confirm | **Resolved (v0.9.1 code alignment): implemented default is 8080 in `HealthConfig` and documented in the Operator Deployment Guide** |
+| `health.metrics_rate_limit_per_minute` (default 60) | §6.4, ODS-IF-HEALTH-006 | Confirm | **Resolved (v0.9.1 code alignment): implemented default is 60 per minute in `HealthConfig` and documented in the Operator Deployment Guide** |
+| `logging.max_entry_length_bytes` (default 16384) | §6.3, ODS-IF-LOG-007 | Confirm | **Resolved (v0.9.1 code alignment): implemented default is 16384 bytes in `LoggingConfig` and documented in the Operator Deployment Guide** |
+| Configuration warning catalogue contents | §6.2, ODS-IF-CONF-008 | Confirm enumerated patterns | **Resolved (v0.9.1 code alignment): current warning catalogue is implemented and documented in the Operator Deployment Guide; future additions require documentation sync** |
+| `EX_CONFIG_INVALID = 2` and `EX_CONFIG = 78` choice | §6.6, ODS-IF-PROC-001 | Confirm | **Resolved (v0.9.1 code alignment): exit-code convention retained as specified and covered by CLI/runtime tests** |
 | Multi-delta IXFR atomicity model (N transitions vs 1) | §3.3, ODS-INV-003 | N atomic transitions permitted | **Resolved (v0.6): N transitions permitted; ODS-INV-003** |
 | /tmp / tmpfs requirement during runtime | §3.4, ODS-INV-004 | Server runnable without writable /tmp | **Resolved (v0.6): specified; ODS-INV-004** |
 | Configuration sources additive (file + env) | §3.5, ODS-INV-005 | Both, env precedence | **Resolved (v0.6): specified; ODS-INV-005** |
@@ -4539,35 +4539,35 @@ The following items were specifically flagged during SRS drafting for explicit t
 | `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | Pending |
 | PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | Pending |
 | External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | Pending |
-| Strict default for ANY-query mode ("minimal") | §4.2 | Confirm | Pending |
+| Strict default for ANY-query mode ("minimal") | §4.2 | Confirm | **Resolved (v0.9.1 code alignment): `QuerySettings` defaults to minimal ANY responses per ODS-FR-QRY-006** |
 | Minimal-ANY deterministic selection algorithm | §4.2, ODS-FR-QRY-005 | Specify (CNAME-first, then lowest-type) | **Resolved (v0.3): specified in ODS-FR-QRY-005** |
-| 4 concurrent transfer sessions (default) | §4.6 | Confirm | Pending |
-| 60-second initial-load retry default | §4.16 | Confirm | Pending |
-| 1232-octet max UDP response default | §4.11 | Confirm | Pending |
-| 1024 concurrent TCP connections (default) | §4.12 | Confirm | Pending |
-| 64 in-flight queries per TCP connection (default) | §4.12, ODS-FR-TCP-011 | Confirm | Pending |
-| 4 GiB max ingestion per AXFR/IXFR session (default) | §4.6, §4.7, ODS-FR-AXFR-024 | Confirm | Pending |
-| 86400-second max effective REFRESH (default) | §4.16, ODS-FR-ZSM-011 | Confirm | Pending |
-| 3600-second LOADING warning threshold (default) | §4.16, ODS-FR-ZSM-013 | Confirm | Pending |
-| 30-second SIGTERM grace period (default) | §5.2, ODS-NFR-REL-001 | Confirm | Pending |
+| 4 concurrent transfer sessions (default) | §4.6 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_concurrent_transfers` defaults to 4** |
+| 60-second initial-load retry default | §4.16 | Confirm | **Resolved (v0.9.1 code alignment): `limits.zsm_initial_retry_secs` defaults to 60** |
+| 1232-octet max UDP response default | §4.11 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_udp_payload` defaults to 1232** |
+| 1024 concurrent TCP connections (default) | §4.12 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_tcp_connections` defaults to 1024** |
+| 64 in-flight queries per TCP connection (default) | §4.12, ODS-FR-TCP-011 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_tcp_inflight_queries_per_connection` defaults to 64** |
+| 4 GiB max ingestion per AXFR/IXFR session (default) | §4.6, §4.7, ODS-FR-AXFR-024 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_transfer_ingest_bytes` defaults to 4 GiB** |
+| 86400-second max effective REFRESH (default) | §4.16, ODS-FR-ZSM-011 | Confirm | **Resolved (v0.9.1 code alignment): `limits.zsm_max_interval_secs` defaults to 86400** |
+| 3600-second LOADING warning threshold (default) | §4.16, ODS-FR-ZSM-013 | Confirm | **Resolved (v0.9.1 code alignment): `limits.zsm_loading_warning_threshold_secs` defaults to 3600** |
+| 30-second SIGTERM grace period (default) | §5.2, ODS-NFR-REL-001 | Confirm | **Resolved (v0.9.1 code alignment): `limits.graceful_shutdown_secs` defaults to 30** |
 | 10% memory growth threshold over 30 days (default) | §5.2, ODS-NFR-REL-003 | Confirm | Pending |
 | 5000 ms per-query processing timeout (default) | §5.2, ODS-NFR-REL-006 | Confirm | Pending |
-| 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | Pending |
+| 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | **Resolved (v0.9.1 code alignment): TSIG fudge defaults to 300 seconds; DNS Cookie past/future timestamp tolerances default to 3600/300 seconds** |
 | 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | Pending |
 | 70%/85% test coverage minimum (defaults) | §5.4, ODS-NFR-MAINT-007 | Confirm | Pending |
 | Sigstore/Cosign vs detached OpenPGP for release signing | §5.4, ODS-NFR-MAINT-008 | Confirm preferred mechanism | **Resolved (v0.9.1 doc alignment): Sigstore/Cosign preferred; detached OpenPGP allowed as fallback; recorded in the Architecture Document and Security Policy** |
 | 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | Pending |
 | 1% idle CPU bound for 1000 zones (default) | §5.7, ODS-NFR-RES-006 | Confirm | Pending |
-| Latency histogram bucket boundaries (defaults) | §5.6, ODS-NFR-OBS-007 | Confirm | Pending |
+| Latency histogram bucket boundaries (defaults) | §5.6, ODS-NFR-OBS-007 | Confirm | **Resolved (v0.9.1 code alignment): default buckets are implemented in `MetricsConfig` and configurable via `[metrics].latency_histogram_buckets`** |
 | Multi-primary randomised initial selection | §4.6, ODS-FR-AXFR-016 | Confirm | Pending |
-| Slip = 2 (RRL default) | §4.17 | Confirm | Pending |
-| Three-state zone lifecycle model (LOADING/ACTIVE/EXPIRED) | §4.15 | Confirm | Pending |
-| DNS Cookies default policy ("lenient") | §4.19, ODS-FR-COOKIE-008 | Confirm | Pending |
-| NSID default empty (no NSID configured) | ODS-FR-EDNS-017 | Confirm | Pending |
-| Logging format default JSON vs logfmt | §5.6, §6.3 | Confirm JSON | Pending |
-| TOML configuration format | §6.2 | Confirm | Pending |
-| Combined `/metrics` + health endpoint host vs separate | §6.4 | Confirm combined host (paths split) | Pending |
-| Verification category VER prefix (extends §1.4.3) | §7 | Confirm | Pending |
+| Slip = 2 (RRL default) | §4.17 | Confirm | **Resolved (v0.9.1 code alignment): `rrl.slip` defaults to 2; release threshold evidence still tracks operational review separately** |
+| Three-state zone lifecycle model (LOADING/ACTIVE/EXPIRED) | §4.15 | Confirm | **Resolved (v0.9.1 code alignment): zone state machine and readiness/metrics use LOADING, ACTIVE, and EXPIRED** |
+| DNS Cookies default policy ("lenient") | §4.19, ODS-FR-COOKIE-008 | Confirm | **Resolved (v0.9.1 code alignment): `cookie.policy` defaults to `lenient`** |
+| NSID default empty (no NSID configured) | ODS-FR-EDNS-017 | Confirm | **Resolved (v0.9.1 code alignment): `[server].nsid` defaults to the empty string and suppresses NSID responses** |
+| Logging format default JSON vs logfmt | §5.6, §6.3 | Confirm JSON | **Resolved (v0.9.1 code alignment): `[server].log_format` defaults to JSON; logfmt remains optional** |
+| TOML configuration format | §6.2 | Confirm | **Resolved (v0.9.1 code alignment): configuration file format is TOML and the example config is TOML** |
+| Combined `/metrics` + health endpoint host vs separate | §6.4 | Confirm combined host (paths split) | **Resolved (v0.9.1 code alignment): management listener exposes `/livez`, `/readyz`, `/healthz`, and `/metrics` as separate paths on the same management host** |
+| Verification category VER prefix (extends §1.4.3) | §7 | Confirm | **Resolved (v0.9.1 doc alignment): VER is registered in §1.4.3 and Appendix D.5.1 and checked by the identifier-registry audit** |
 | SLO publication as informative content in Operator Deployment Guide | ODS-NFR-MAINT-009 | Add SLO section to Deployment Guide | **Resolved (v0.9.1 doc alignment): informative SLO section added to the Operator Deployment Guide** |
 
 The Decision column is to be populated as the project's review process reaches each item. **Resolved** entries are recorded for audit trail; their decisions are normative within the SRS revision in which they were resolved.
