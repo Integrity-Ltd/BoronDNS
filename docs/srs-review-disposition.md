@@ -89,7 +89,8 @@ Primary source links:
 No protocol-code divergence from the review is intentionally being carried as
 current Engineering MVP scope. Remaining items in the gap register are
 release-evidence or explicitly deferred implementation items, such as the
-catalog member-zone resource cap.
+catalog member-zone resource cap and TSIG secret loading from environment
+variables.
 
 ## Implemented Features Kept In Scope
 
