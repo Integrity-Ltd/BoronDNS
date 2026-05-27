@@ -20,7 +20,7 @@ EXPECTED_COLUMNS = [
     "Compliance status",
     "Scope qualifier",
     "Unresolved compliance gaps",
-    "Target resolution release",
+    "Target resolution milestone",
     "SRS revision",
     "Evidence pointer",
 ]
@@ -117,8 +117,8 @@ def main() -> int:
             raise SystemExit(f"{rfc} is not tied to SRS v0.9.1")
         if not row["Evidence pointer"]:
             raise SystemExit(f"{rfc} ({feature}) lacks an evidence pointer")
-        if row["Target resolution release"] not in {"MVP", "N/A"}:
-            raise SystemExit(f"{rfc} ({feature}) has an unexpected target release")
+        if row["Target resolution milestone"] not in {"Formal SRS MVP", "N/A"}:
+            raise SystemExit(f"{rfc} ({feature}) has an unexpected target milestone")
 
     for rfc, snippets in REQUIRED_EVIDENCE_SNIPPETS.items():
         evidence = by_rfc[rfc]["Evidence pointer"]

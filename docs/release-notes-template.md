@@ -76,7 +76,7 @@ Allowed compliance status values are `Fully Compliant`, `Partially Compliant`,
 retained evidence snapshot, and keep the primary documentation sync pointer
 aligned with the Operator Deployment Guide.
 
-| RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution release | SRS revision | Evidence pointer | Primary documentation sync |
+| RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution milestone | SRS revision | Evidence pointer | Primary documentation sync |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD | TBD | TBD | TBD | TBD | docs/operator-deployment-guide.md#rfc-compliance-assertions |
 

@@ -8,7 +8,7 @@ for `ODS-NFR-MAINT-002`, the release-signing choice for
 `ODS-NFR-MAINT-008`, source-level functional requirement references for
 `ODS-NFR-MAINT-004`, and verification responsibility allocation for
 `ODS-VER-015`. Broader architecture content, completed reproducible-build
-proof, and signed release artifacts remain tracked as MVP gaps in
+proof, and signed release artifacts remain tracked as formal SRS acceptance gaps in
 `docs/mvp-gap-register.md`.
 
 ## Module Organisation
@@ -214,7 +214,7 @@ as follows:
 | Periodic methods | CI scheduler or manual release engineer |
 | Gate methods | Release engineer |
 | Release verification review | Architecture Owner |
-| External operator acceptance | External operator named in MVP release notes |
+| External operator acceptance | External operator named in formal SRS MVP release notes |
 | Security audit | Third-party security specialist procured for the release scope |
 
 For v0.1 through MVP, the Architecture Owner role is held by DT. The release

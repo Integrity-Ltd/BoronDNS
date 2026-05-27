@@ -62,7 +62,7 @@ for rfc_field in \
     "Compliance status" \
     "Scope qualifier" \
     "Unresolved compliance gaps" \
-    "Target resolution release" \
+    "Target resolution milestone" \
     "SRS revision" \
     "Evidence pointer" \
     "Primary documentation sync" \

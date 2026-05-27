@@ -125,8 +125,8 @@ EOF
 cat >"$evidence_dir/reproducible-build-runbook.md" <<EOF
 # OxideDNS Reproducible Build Runbook
 
-This is the local MVP setup artifact for ODS-NFR-MAINT-005. It does not claim
-that two independent bit-identical builds have already happened.
+This is the Engineering MVP setup artifact for ODS-NFR-MAINT-005. It does not
+claim that two independent bit-identical builds have already happened.
 
 ## Fixed Inputs
 

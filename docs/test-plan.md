@@ -43,14 +43,14 @@ until their corresponding retained runs exist.
 | Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
 | Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
 | Dependency security audit | Continuous | `cargo deny check` | `docs/verification-ledger.md` dependency audit row |
-| Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; local MVP setup records `campaign-summary.tsv`, later release/operations execution retains the full campaign artifacts | retained fuzz campaign summary, logs, and artifacts |
-| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the local MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
+| Long-cadence Fuzz test | Periodic | `scripts/fuzz-campaign.sh --duration 86400` per parser target; Engineering MVP setup records `campaign-summary.tsv`, later release/operations execution retains the full campaign artifacts | retained fuzz campaign summary, logs, and artifacts |
+| Performance test | Periodic and Gate | `scripts/perf-smoke.sh` and `scripts/capture-resource-evidence.sh` for current smoke evidence; `scripts/capture-benchmark-handoff.sh` creates the Engineering MVP setup/report path for later Reference Hardware/Profile execution; `scripts/check-perf-regression.py` checks rolling-history comparisons | retained performance/resource logs, benchmark handoff or completed benchmark report, and regression baseline |
 | Differential test | Periodic | Monthly comparison against current stable BIND 9, NSD, and Knot DNS primary releases; current interop scripts provide the starting harness | retained interop outputs |
 | Interoperability test | Gate | BIND, NSD, and Knot scripts listed in `docs/evidence-command-catalog.md`, with current gaps tracked in `docs/mvp-gap-register.md`; human-operated BIND smoke run documented in `docs/manual-bind-interop.md`; primary versions retained by `scripts/interop-version-evidence.sh` and `scripts/evidence-artifacts.sh` | `ODS-VER-003`, `ODS-VER-004`, `ODS-VER-013` |
-| Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the local MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
+| Soak test | Periodic and Gate | `scripts/capture-soak-handoff.sh` creates the Engineering MVP setup/report path; later release/operations execution runs the 30-day production-representative soak with weekly snapshot reports | soak handoff and completed soak report artifacts |
 | Operational test | Gate | Operator Deployment Guide execution, release evidence snapshot review, `scripts/capture-info-verbosity-handoff.sh` setup or completed profile, `scripts/capture-interface-compatibility-evidence.sh` baseline or completed release diff, deployment/rollback exercise, external operator acceptance | release notes, interface compatibility evidence, info verbosity profile, and operator acceptance records |
 | Security audit | Gate | Third-party or independent review at major release boundaries and after vulnerability-disclosure events | release notes and security audit report |
-| External operator acceptance | Gate | Production-representative external deployment and signed scope statement for formal SRS MVP release acceptance | MVP release notes |
+| External operator acceptance | Gate | Production-representative external deployment and signed scope statement for formal SRS MVP release acceptance | formal SRS MVP release notes |
 
 ## Continuous Execution
 
@@ -77,7 +77,7 @@ verification entry point.
 
 Manual real-primary smoke evidence is intentionally outside `scripts/check.sh`
 because it depends on Docker or host BIND availability. For developer/operator
-confidence after a local MVP build, run `scripts/interop-bind-axfr-docker.sh`
+confidence after an Engineering MVP build, run `scripts/interop-bind-axfr-docker.sh`
 and retain artifacts with `OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR`, as described
 in `docs/manual-bind-interop.md`. For RFC 9432 catalog-zone confidence, run
 `scripts/interop-bind-catalog-zone-docker.sh` and retain artifacts with
@@ -100,11 +100,11 @@ Periodic evidence is not yet fully automated. Until scheduled CI is added, the
 release engineer records each periodic run manually in the release evidence
 snapshot and release notes.
 
-| Periodic evidence | Required cadence | Current command or artifact | MVP gap |
+| Periodic evidence | Required cadence | Current command or artifact | Open acceptance work |
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
 | Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off scaffold; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
-| Reproducible-build comparison | Gate before MVP/public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off scaffold; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
+| Reproducible-build comparison | Gate before formal SRS MVP or public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off scaffold; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
 | Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off scaffold | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
@@ -128,15 +128,16 @@ present.
 creates the release attachment map, scheduled CI/manual-run plan, signing
 runbook, release-note fill plan, external-operator acceptance scaffold, and
 release-readiness checklist for later SRS acceptance execution. A generated
-handoff directory proves the local MVP governance setup exists; it does not
+handoff directory proves the Engineering MVP governance setup exists; it does not
 prove that release acceptance or external-operator sign-off has been completed.
 
 `scripts/capture-info-verbosity-handoff.sh` is intentionally a setup artifact.
 It creates the runbook, report template, log-volume/structured-field/metrics
 TSV schemas, requirement traceability map, release-note snippet, and operator
 sign-off scaffold for later production-depth profiling of `info` verbosity
-under release traffic. A generated handoff directory proves the local MVP setup
-exists; it does not prove that production-depth profiling has been executed.
+under release traffic. A generated handoff directory proves the Engineering MVP
+setup exists; it does not prove that production-depth profiling has been
+executed.
 
 `scripts/capture-interface-compatibility-evidence.sh` records the current
 interface baseline and policy for ODS-NFR-MAINT-006. When a previous accepted
@@ -148,22 +149,22 @@ as a completed compatibility-diff review.
 creates the benchmark runbook, report template, performance/resource TSV
 schemas, requirement traceability map, rolling-baseline history template, and
 operator sign-off scaffold for later Reference Hardware/Profile execution. A
-generated handoff directory proves the local MVP setup exists; it does not
-prove that production benchmarks have been executed.
+generated handoff directory proves the Engineering MVP setup exists; it does
+not prove that production benchmarks have been executed.
 
 `scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
 the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
 traceability map, and operator sign-off scaffold for the later ODS-NFR-REL-003
-30-day soak. A generated handoff directory proves the local MVP setup exists; it
-does not prove that the long-running soak has been executed.
+30-day soak. A generated handoff directory proves the Engineering MVP setup
+exists; it does not prove that the long-running soak has been executed.
 
 `scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
 artifact. It creates fixed build inputs, a runbook, artifact-manifest and
 comparison TSV schemas, requirement traceability, release-note snippet, and
 release-engineer sign-off scaffold for the later independent bit-identical build
-comparison. A generated handoff directory proves the local MVP setup exists; it
-does not prove ODS-NFR-MAINT-005 until completed manifests from two independent
-builders match.
+comparison. A generated handoff directory proves the Engineering MVP setup
+exists; it does not prove ODS-NFR-MAINT-005 until completed manifests from two
+independent builders match.
 
 When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`

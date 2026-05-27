@@ -165,7 +165,7 @@ not claim unqualified ODS-NFR-REL-003 evidence.
 
 ## Requirement Mapping
 
-Use \`requirements-traceability.tsv\` as the local MVP handoff map. The completed
+Use \`requirements-traceability.tsv\` as the Engineering MVP handoff map. The completed
 release evidence must attach this report and the filled TSV/summary artifacts to
 the release snapshot and publish their paths in the release notes.
 

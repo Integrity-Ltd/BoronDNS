@@ -74,7 +74,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory records the local MVP setup artifact for ODS-NFR-MAINT-006.
+This directory records the Engineering MVP setup artifact for ODS-NFR-MAINT-006.
 Without a previous accepted release baseline, it establishes the current
 baseline and policy shape. When \`OXIDEDNS_PREVIOUS_INTERFACE_BASELINE\` is set, the
 checker compares the current baseline against that file and blocks removals

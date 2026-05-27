@@ -88,7 +88,7 @@ EOF
 cat >"$evidence_dir/scheduled-ci-plan.md" <<'EOF'
 # OxideDNS Scheduled CI and Manual Release Run Plan
 
-This is the local MVP handoff for ODS-VER-011. It is not proof that hosted CI or
+This is the Engineering MVP handoff for ODS-VER-011. It is not proof that hosted CI or
 scheduled jobs have run.
 
 ## Continuous
@@ -130,7 +130,7 @@ EOF
 cat >"$evidence_dir/signing-runbook.md" <<'EOF'
 # OxideDNS Release Signing Runbook
 
-This is the local MVP handoff for ODS-NFR-MAINT-008. It does not sign artifacts.
+This is the Engineering MVP handoff for ODS-NFR-MAINT-008. It does not sign artifacts.
 
 ## Preferred Sigstore/Cosign Path
 
