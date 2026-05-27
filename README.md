@@ -12,10 +12,9 @@ secondary server with clear operating boundaries. It is not yet a final SRS
 release-acceptance build.
 
 The implemented Engineering MVP is wider than a minimal static-zone secondary
-server. Current code includes IXFR, XoT, passive DNSSEC serving, RRL, DNS
-Cookies, RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE
-diagnostics, and opt-in CHAOS self-identification. Those features remain in
-scope, with release-acceptance evidence gaps tracked separately.
+server. Retained feature slices stay in scope exactly as bounded in
+[Implemented feature scope](docs/implemented-feature-scope.md), with
+release-acceptance evidence gaps tracked separately.
 
 ## Start Here
 

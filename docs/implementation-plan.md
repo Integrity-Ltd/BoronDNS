@@ -48,9 +48,7 @@ Engineering MVP scope includes:
 - authorized NOTIFY-triggered refresh;
 - TSIG HMAC-SHA transfer and query handling;
 - the retained post-Alpha slices owned by
-  `docs/implemented-feature-scope.md`: IXFR, XoT, passive DNSSEC serving, RRL,
-  DNS Cookies, RFC 9432 catalog zones, broad EDNS behavior, bounded EDE
-  diagnostics, and opt-in CHAOS queries;
+  `docs/implemented-feature-scope.md`;
 - SRS v0.9.1 architectural invariants INV-001 through INV-009, including
   authoritative-only response composition, single-process operation, and no
   runtime code loading;

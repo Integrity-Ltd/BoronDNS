@@ -16,10 +16,9 @@ The documentation set intentionally separates three things:
   operator acceptance.
 
 Implemented protocol families must not be removed from Engineering MVP scope
-only because they exceed a minimal static-zone secondary-server cut. IXFR, XoT,
-passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, broad EDNS
-response behavior, bounded EDE diagnostics, and opt-in CHAOS self-identification
-all have current code and test ownership; remaining work for those features is
+only because they exceed a minimal static-zone secondary-server cut. The exact
+retained slices, code owners, and nearby non-claims live in
+`docs/implemented-feature-scope.md`; remaining work for those features is
 tracked as release evidence or, when one exists, an explicit implementation
 gap.
 
@@ -76,8 +75,9 @@ and slowly diverging.
 - `engineering-mvp-scope.md`: local Engineering MVP boundary, including the
   exclusion of completed long-running evidence from this milestone and the
   implemented post-Alpha protocol slices that remain in scope.
-- `implemented-feature-scope.md`: code-aligned retained slices for IXFR, XoT,
-  passive DNSSEC serving, RRL, DNS Cookies, catalog zones, EDNS/EDE, and CHAOS.
+- `implemented-feature-scope.md`: code-aligned retained slices, current source
+  ownership, evidence ownership, and nearby non-claims for implemented
+  post-Alpha features.
 - `engineering-mvp-readiness.md`: local Engineering MVP readiness review entry
   point and stop-condition checklist.
 - `implementation-plan.md`: Engineering MVP and SRS acceptance implementation

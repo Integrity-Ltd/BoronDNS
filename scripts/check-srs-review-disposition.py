@@ -18,14 +18,11 @@ DOCS_README_PATH = ROOT / "docs" / "README.md"
 GAP_REGISTER_PATH = ROOT / "docs" / "mvp-gap-register.md"
 VERIFICATION_LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
 
-SCOPE_DOCUMENTS = [
-    SRS_CURRENT_PATH,
-    DISPOSITION_PATH,
+SCOPE_POINTER_DOCUMENTS = [
     MVP_SCOPE_PATH,
     IMPLEMENTATION_PLAN_PATH,
     README_PATH,
     DOCS_README_PATH,
-    FEATURE_SCOPE_PATH,
     GAP_REGISTER_PATH,
     VERIFICATION_LEDGER_PATH,
 ]
@@ -296,9 +293,9 @@ def main() -> int:
     errors: list[str] = []
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
     feature_scope = FEATURE_SCOPE_PATH.read_text(encoding="utf-8")
-    scope_document_texts = {
+    scope_pointer_texts = {
         path: normalize_whitespace(path.read_text(encoding="utf-8"))
-        for path in SCOPE_DOCUMENTS
+        for path in SCOPE_POINTER_DOCUMENTS
     }
 
     for finding in REQUIRED_REVIEW_DISPOSITIONS:
@@ -325,6 +322,12 @@ def main() -> int:
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits review-suggested "
                 f"defer item {item!r}"
             )
+    for scope_path, scope_text in scope_pointer_texts.items():
+        if "docs/implemented-feature-scope.md" not in scope_text:
+            errors.append(
+                f"{scope_path.relative_to(ROOT)} does not point to the "
+                "implemented feature-scope source of truth"
+            )
 
     for feature, spec in FEATURES.items():
         aliases = spec["aliases"]
@@ -340,12 +343,6 @@ def main() -> int:
             errors.append(f"{DISPOSITION_PATH.relative_to(ROOT)} omits {feature!r}")
         if not any(alias in feature_scope for alias in aliases):
             errors.append(f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits {feature!r}")
-        for scope_path, scope_text in scope_document_texts.items():
-            if not any(alias in scope_text for alias in aliases):
-                errors.append(
-                    f"{scope_path.relative_to(ROOT)} omits implemented "
-                    f"post-Alpha feature {feature!r}"
-                )
         for relative_path in paths:
             if relative_path not in feature_scope:
                 errors.append(
