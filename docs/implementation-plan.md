@@ -56,8 +56,8 @@ Engineering MVP scope includes:
 - passive DNSSEC serving of transferred DNSSEC RRsets and denial proofs, without
   signing, validation, key management, or RFC 5011 behavior;
 - RRL and DNS Cookies as implemented UDP abuse-resistance mechanisms;
-- RFC 9432 catalog zones, including live member add/remove and catalog
-  observability;
+- RFC 9432 catalog zones, including live member add/remove, catalog
+  observability, and configured member-zone caps;
 - opt-in CHAOS CH/TXT self-identification queries with conservative REFUSED
   defaults;
 - SRS v0.9.1 architectural invariants INV-001 through INV-009, including

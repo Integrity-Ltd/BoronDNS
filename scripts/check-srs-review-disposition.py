@@ -192,6 +192,8 @@ FEATURES = {
         ],
         "source_needles": [
             "parse_catalog_members",
+            "max_member_zones",
+            "catalog_member_limit_exceeded",
             "catalog_member_added",
             "oxidedns_catalog_member_info",
         ],
