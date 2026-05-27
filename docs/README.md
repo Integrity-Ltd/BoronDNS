@@ -41,6 +41,7 @@ and slowly diverging.
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
 | What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
+| Which extra implemented features are retained? | `implemented-feature-scope.md` | Keep the exact retained slice and nearby non-claims here; summarize or link elsewhere. |
 
 ## Current Requirements and Design
 
@@ -75,6 +76,8 @@ and slowly diverging.
 - `engineering-mvp-scope.md`: local Engineering MVP boundary, including the
   exclusion of completed long-running evidence from this milestone and the
   implemented post-Alpha protocol slices that remain in scope.
+- `implemented-feature-scope.md`: code-aligned retained slices for IXFR, XoT,
+  passive DNSSEC serving, RRL, DNS Cookies, catalog zones, EDNS/EDE, and CHAOS.
 - `engineering-mvp-readiness.md`: local Engineering MVP readiness review entry
   point and stop-condition checklist.
 - `implementation-plan.md`: Engineering MVP and SRS acceptance implementation
@@ -96,7 +99,7 @@ and slowly diverging.
   notes.
 - `srs-review-disposition.md`: disposition register for the external SRS review,
   including accepted protocol fixes, rejected scope-trim suggestions, and the
-  current code-alignment boundary for retained post-Alpha features.
+  current rationale for retained post-Alpha features.
 
 ## Release Scaffolding
 

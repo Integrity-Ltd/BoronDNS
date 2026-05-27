@@ -47,19 +47,10 @@ Engineering MVP scope includes:
   permits it and AXFR fallback retained;
 - authorized NOTIFY-triggered refresh;
 - TSIG HMAC-SHA transfer and query handling;
-- EDNS behavior including payload limits, NSID, TCP keepalive, padding, and
-  response DO-bit copy semantics;
-- bounded EDE diagnostics for implemented cases, including not-ready responses
-  and NSEC3-iteration-cap proof omission;
-- XoT transfer transport, including TSIG-over-XoT and focused TLS failure
-  coverage;
-- passive DNSSEC serving of transferred DNSSEC RRsets and denial proofs, without
-  signing, validation, key management, or RFC 5011 behavior;
-- RRL and DNS Cookies as implemented UDP abuse-resistance mechanisms;
-- RFC 9432 catalog zones, including live member add/remove, catalog
-  observability, and configured member-zone caps;
-- opt-in CHAOS CH/TXT self-identification queries with conservative REFUSED
-  defaults;
+- the retained post-Alpha slices owned by
+  `docs/implemented-feature-scope.md`: IXFR, XoT, passive DNSSEC serving, RRL,
+  DNS Cookies, RFC 9432 catalog zones, broad EDNS behavior, bounded EDE
+  diagnostics, and opt-in CHAOS queries;
 - SRS v0.9.1 architectural invariants INV-001 through INV-009, including
   authoritative-only response composition, single-process operation, and no
   runtime code loading;

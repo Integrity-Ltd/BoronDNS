@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
+FEATURE_SCOPE_PATH = ROOT / "docs" / "implemented-feature-scope.md"
 SRS_CURRENT_PATH = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
@@ -24,6 +25,7 @@ SCOPE_DOCUMENTS = [
     IMPLEMENTATION_PLAN_PATH,
     README_PATH,
     DOCS_README_PATH,
+    FEATURE_SCOPE_PATH,
     GAP_REGISTER_PATH,
     VERIFICATION_LEDGER_PATH,
 ]
@@ -53,15 +55,16 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "MVP Trim Reconciliation",
     "not as a deletion list for already-implemented code",
     "mirrors the review's \"defer these\" list item by item",
-    "Current Implementation Slice",
-    "code-alignment lock for the review's MVP-trim advice",
-    "Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend.",
-    "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material.",
+    "`docs/implemented-feature-scope.md`",
     "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
     "implementation-specific source and test markers",
 ]
 
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
+    "## Retained Slices",
+    "Not claimed by this slice",
+    "Current source ownership",
+    "Representative evidence ownership",
     "fall back to AXFR when IXFR is unavailable or unsuitable",
     "Client-query DoT, DoH, DoQ, inbound XoT listeners",
     "copies the query DO bit into the response OPT",
@@ -292,6 +295,7 @@ FEATURES = {
 def main() -> int:
     errors: list[str] = []
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
+    feature_scope = FEATURE_SCOPE_PATH.read_text(encoding="utf-8")
     scope_document_texts = {
         path: normalize_whitespace(path.read_text(encoding="utf-8"))
         for path in SCOPE_DOCUMENTS
@@ -310,9 +314,9 @@ def main() -> int:
                 f"boundary term {term!r}"
             )
     for term in REQUIRED_CODE_ALIGNMENT_BOUNDARIES:
-        if term not in disposition:
+        if term not in feature_scope:
             errors.append(
-                f"{DISPOSITION_PATH.relative_to(ROOT)} omits code-alignment "
+                f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits code-alignment "
                 f"boundary term {term!r}"
             )
     for item in REVIEW_SUGGESTED_DEFER_ITEMS:
@@ -334,6 +338,8 @@ def main() -> int:
         )
         if not any(alias in disposition for alias in aliases):
             errors.append(f"{DISPOSITION_PATH.relative_to(ROOT)} omits {feature!r}")
+        if not any(alias in feature_scope for alias in aliases):
+            errors.append(f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits {feature!r}")
         for scope_path, scope_text in scope_document_texts.items():
             if not any(alias in scope_text for alias in aliases):
                 errors.append(
@@ -341,17 +347,17 @@ def main() -> int:
                     f"post-Alpha feature {feature!r}"
                 )
         for relative_path in paths:
-            if relative_path not in disposition:
+            if relative_path not in feature_scope:
                 errors.append(
-                    f"{DISPOSITION_PATH.relative_to(ROOT)} does not cite "
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
                     f"{relative_path} for {feature}"
                 )
             if not (ROOT / relative_path).exists():
                 errors.append(f"missing code path for {feature}: {relative_path}")
         for relative_path in evidence_paths:
-            if relative_path not in disposition:
+            if relative_path not in feature_scope:
                 errors.append(
-                    f"{DISPOSITION_PATH.relative_to(ROOT)} does not cite "
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
                     f"{relative_path} evidence for {feature}"
                 )
             if not (ROOT / relative_path).exists():

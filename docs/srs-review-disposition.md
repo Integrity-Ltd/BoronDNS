@@ -75,14 +75,16 @@ feature has completed every formal ODS-VER-008 release-acceptance evidence item.
 | CVE governance | Retained as documentation/process scope, not protocol-code scope. | `SECURITY.md` and SRS policy text record vulnerability handling and CVE coordination; release-specific audit and exception evidence remains release acceptance. |
 | External operator acceptance | Deferred from Engineering MVP execution. | Operator guide and installer artifacts can be reviewed now, but external operator sign-off remains a formal release gate. |
 
-This scope-trim boundary is code-checked by
-`scripts/check-srs-review-disposition.py`, which requires each retained
+The exact retained implementation slices are owned by
+`docs/implemented-feature-scope.md`. This scope-trim boundary is code-checked
+by `scripts/check-srs-review-disposition.py`, which requires each retained
 post-Alpha feature family to cite current source paths, retained evidence
-paths, and implementation-specific source and test markers. The same check also
-requires the reader-facing README, documentation index, Engineering MVP scope,
-implementation plan, gap register, and verification ledger to continue naming
-those families as implemented Engineering MVP scope. If a feature is removed
-from code, the scope documents must change in the same patch.
+paths, and implementation-specific source and test markers in that owning
+document. The same check also requires the reader-facing README, documentation
+index, Engineering MVP scope, implementation plan, gap register, and
+verification ledger to continue naming those families as implemented
+Engineering MVP scope. If a feature is removed from code, the scope documents
+must change in the same patch.
 
 The main SRS hygiene regressions from this review are also checked by
 `scripts/check-srs-hygiene.py`: old namespace artifacts, suffixed requirement
@@ -97,25 +99,6 @@ capture. They do not expand the secondary-server protocol requirements unless a
 current SRS, architecture, or gap-register row explicitly says so. OxideGun's
 AF_XDP backend is test-tool scope only; OxideDNS server XDP/eBPF remains a
 deferred unsafe-boundary track.
-
-## Current Implementation Slice
-
-This table is the code-alignment lock for the review's MVP-trim advice. It is
-deliberately narrower than the SRS feature names: the retained slice names what
-the current server code actually owns, while the final column names nearby
-features that must not be implied by the retention decision.
-
-| Feature family | Retained implementation slice | Not claimed by this slice |
-| --- | --- | --- |
-| IXFR and AXFR fallback | The transfer client can build an IXFR query from the held SOA, parse valid IXFR responses, apply accepted deltas, and fall back to AXFR when IXFR is unavailable or unsuitable. | Primary-server behavior, dynamic UPDATE, UDP IXFR, or serving IXFR to downstream secondaries. |
-| XoT | Outbound zone-transfer transport uses rustls with configured trust anchors, SNI, ALPN `dot`, optional client certificates, and TSIG-over-XoT where configured. | Client-query DoT, DoH, DoQ, inbound XoT listeners, NOTIFY-over-TLS listeners, or cleartext fallback after TLS failure. |
-| Passive DNSSEC serving | The answer path serves transferred DNSSEC RRsets and selected transferred denial proofs when DO=1, copies the query DO bit into the response OPT, and can omit high-iteration NSEC3 proofs with bounded EDE diagnostics. | Signing, validation, key management, RFC 5011 rollover, generated DNSSEC records, or synthesized denial-proof material. |
-| RRL | UDP responses are classified through process-local source-prefix buckets with configured thresholds, allowlists, slip/drop behavior, summary logging, and metrics. | Per-zone RRL, distributed/shared RRL state across processes, or an RFC-standard RRL profile. |
-| DNS Cookies | EDNS COOKIE parsing, server-cookie emission, and server-cookie verification are implemented for UDP source-address confirmation, with lenient or strict BADCOOKIE policy. | Durable client authentication, TSIG replacement, replay-proof identity, or mandatory cookies for all deployments. |
-| RFC 9432 catalog zones | Configured catalog zones are transferred, parsed, reconciled into member-zone transfer plans subject to the configured member cap, hidden from external service by default, and observed through live add/remove logs plus `oxidedns_catalog_member_info`. | A management API, automatic discovery without catalog configuration, or catalog member metadata beyond the implemented RFC 9432 owner-name and PTR target handling. |
-| EDNS response behavior | The query path owns OPT parsing and response emission for BADVERS, advertised UDP ceilings, DO-bit copy semantics, NSID, TCP keepalive, padding, unknown-option ignore, and non-EDNS truncation behavior. | EDNS Refresh, DNS Stateful Operations, recursive EDNS behavior, or transport protocols outside DNS over UDP/TCP. |
-| Bounded EDE diagnostics | Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only, behind the configured EDE mode. | A full EDE catalogue, resolver-policy explanations, stale-answer diagnostics, filtering diagnostics, or recursive validation errors. |
-| Opt-in CHAOS self-identification | CH/TXT `version.bind.`, `version.server.`, `hostname.bind.`, and `id.server.` responses are disabled by default and require explicit configured values or NSID fallback where applicable. | Automatic host disclosure, arbitrary CHAOS namespaces, non-TXT CHAOS support, or IN-class behavior changes. |
 
 ## Primary Sources Checked
 
