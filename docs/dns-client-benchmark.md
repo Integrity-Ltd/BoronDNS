@@ -146,18 +146,20 @@ Interpretation:
   acceptance campaign still requires the release benchmark handoff and operator
   sign-off artifacts.
 
-## 0.1.2 Engineering Tuning Goal
+## Engineering Tuning Boundary
 
-The 0.1.2 performance slice is intentionally bounded to measured Rust and build
-profile work:
+This benchmark guide owns local measurement and tuning evidence only. It does
+not promote future packet-I/O, packed-store, or response-cache work into current
+OxideDNS server scope.
 
 - keep the authoritative in-memory design and avoid eBPF/XDP/NSD-style packet
-  cache work for this release;
+  cache work until `docs/future-optimization-tracks.md` re-entry conditions are
+  met;
 - keep `ZoneStore` snapshot publication through `Arc<ZoneSnapshot>` rather than
   introducing DashMap or ArcSwap until contention evidence justifies it;
 - keep the large-catalog benchmark as the primary local data-layout harness;
-- tune the release build with ThinLTO, a single codegen unit, stripped symbols,
-  and abort-on-panic release semantics;
+- keep release-build tuning history in `CHANGELOG.md`; use this guide for the
+  commands and artifacts that reproduce or challenge a tuning decision;
 - retain a profiling build profile with line tables and symbols for perf/flame
   graph runs;
 - prefer compact indexes and data-layout changes that preserve current query

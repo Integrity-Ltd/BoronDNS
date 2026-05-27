@@ -82,6 +82,8 @@ BANNED_PHRASES = [
     "query.processing_timeout_ms",
     "oxidedns_dnssec_nsec3_cap_exceeded_total",
     "per-zone warning/metric",
+    "0.1.2 Engineering Tuning Goal",
+    "The 0.1.2 performance slice",
 ]
 
 SOURCE_BANNED_PHRASES = [
@@ -125,6 +127,12 @@ REQUIRED_TEXT_BY_PATH = {
         "CAA, HIP, and SPF type 99",
         "Adding CAA, SSHFP, ZONEMD, CDS, CDNSKEY, or another type",
         "scripts/interop-bind-packet-torture-docker.sh",
+    ],
+    "docs/dns-client-benchmark.md": [
+        "## Engineering Tuning Boundary",
+        "This benchmark guide owns local measurement and tuning evidence only.",
+        "keep release-build tuning history in `CHANGELOG.md`",
+        "docs/future-optimization-tracks.md",
     ],
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",
