@@ -2109,8 +2109,8 @@ The area code **RRL** is allocated.
 
 The truncated response provides an escape path for legitimate clients (which can switch to TCP per §4.12 to receive the full response) while substantially reducing the amplification utility of the server to a spoofed-source attacker.
 *Source.* OxideDNS project slip policy. RFC 1035 §4.1.1 defines the TC bit; RFC 6891 §6.1.1 requires an OPT response when the request carried OPT, which is why the truncated response retains the request's parsed question and OPT RR when applicable.
-*Note.* The "on average exactly one of N" is implemented as a per-(accounting-key) counter that increments on each rate-limited response and emits the truncated variant when the counter modulo N equals zero, then resets. Over many rate-limited responses for a key, this yields the 1/N truncation ratio. The earlier wording "of every N consecutive" suggested a stricter sliding-window semantics that is not implementable under the token-bucket model and not necessary for the RRL design goal.
-*Verification.* Tests under sustained rate-limit pressure on a single accounting key; verify the empirical drop-to-truncate ratio approaches (N−1):1 as the sample size grows, and verify the counter resets correctly across long-running tests.
+*Note.* The "on average exactly one of N" is implemented as a per-(accounting-key) counter that increments on each rate-limited response and emits the truncated variant when the counter modulo N equals zero. The counter is retained with the accounting key until that key is evicted or the process restarts. Over many rate-limited responses for a key, this yields the 1/N truncation ratio. The earlier wording "of every N consecutive" suggested a stricter sliding-window semantics that is not implementable under the token-bucket model and not necessary for the RRL design goal.
+*Verification.* Tests under sustained rate-limit pressure on a single accounting key; verify the empirical drop-to-truncate ratio approaches (N−1):1 as the sample size grows, and verify the counter-retention behavior across repeated rate-limited bursts for the same key.
 
 ### Exemptions
 
@@ -2125,6 +2125,10 @@ The truncated response provides an escape path for legitimate clients (which can
 **ODS-FR-RRL-008.** Responses to queries authenticated via TSIG (per §4.9) MUST NOT be subject to RRL.
 *Source.* Operational practice; TSIG-authenticated queries are presumed legitimate, and the cryptographic cost of TSIG processing itself serves as a rate limit on attacker capabilities.
 *Verification.* Tests with TSIG-authenticated queries under high rate.
+
+DNS Cookie valid Server Cookie exemption is specified under ODS-FR-COOKIE-009.
+It is not a separate RRL requirement because the exemption is conditional on the
+COOKIE processing profile, but RRL implementation and evidence MUST preserve it.
 
 ### Configuration scope and state
 

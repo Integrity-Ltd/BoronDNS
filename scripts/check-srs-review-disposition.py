@@ -266,6 +266,7 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
     ],
     "RRL beyond a simple first version": [
         "Retained in Engineering MVP as the implemented process-wide UDP response limiter",
+        "TSIG and valid-cookie exemptions",
         "per-zone RRL remains out of current scope",
     ],
     "Extended DNS Errors": [
@@ -330,6 +331,7 @@ REVIEW_DEFER_CODE_BACKING = {
     ],
     "RRL beyond a simple first version": [
         "| RRL |",
+        "TSIG and valid-cookie exemptions",
         "Per-zone RRL, distributed/shared RRL state across processes",
     ],
     "Extended DNS Errors": [
