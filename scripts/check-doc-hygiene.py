@@ -69,6 +69,7 @@ BANNED_PHRASES = [
     "Alpha subset; MVP full",
     "Alpha base; MVP expanded catalogue",
     "MVP acceptance work",
+    "MVP\n  acceptance still needs",
     "v0.9/v0.9.1",
     "../gpt-pro-review.md",
     "DNS wire core and UDP query handling are implemented:",

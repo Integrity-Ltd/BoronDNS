@@ -25,7 +25,7 @@ Supported Engineering MVP deployment forms:
 - OCI-compatible container managed by Docker, Podman, containerd, Kubernetes,
   or equivalent runtimes.
 - VM image deployments that run the same native process under an image-managed
-  Linux guest. The repository does not yet ship a VM image artifact; MVP
+  Linux guest. The repository does not yet ship a VM image artifact; formal SRS
   acceptance still needs release evidence for any published VM image profile.
 
 Operational network requirements:
