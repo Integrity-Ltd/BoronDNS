@@ -25,6 +25,7 @@ FORBIDDEN_TEXT = {
     "seqlock": "concrete publication mechanism belongs in architecture",
     "response DO bit should be set": "wrong RFC 6840 response-DO wording",
     "response contains DNSSEC augmentation": "wrong RFC 6840 response-DO wording",
+    "excluding RFC 8482 minimal-ANY": "minimal-ANY is implemented current scope",
 }
 
 REQUIRED_TEXT = [
