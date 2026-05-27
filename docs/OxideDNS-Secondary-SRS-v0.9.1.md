@@ -4463,11 +4463,11 @@ The following items were specifically flagged during SRS drafting for explicit t
 |---|---|---|---|
 | DNS Cookies (RFC 7873) | §4.5, §4.11 | Bring into scope | **Resolved (v0.3): in MVP scope, §4.19** |
 | EDNS Extended DNS Errors (RFC 8914) | §4.11, §4.13, C.3.15 | Add minimal authoritative diagnostics | **Resolved (v0.9 implementation alignment): bounded profile added; ODS-FR-EDNS-018, ODS-IF-CONF-017** |
-| NOTIFY-over-TLS reception | §4.10 | Remain out of scope (current) | Pending |
-| Per-zone RRL configuration | §4.17 | Remain out of scope (current) | Pending |
-| mTLS for XoT as MUST | §4.10 | Remain MAY | Pending |
-| CAA / ZONEMD / CDS / CDNSKEY as known types | §4.14, B.4 | Remain handled as unknown via §4.4 | Pending |
-| DANE TLSA validation for XoT certs | §4.10 | Out of scope (PKIX only) | Pending |
+| NOTIFY-over-TLS reception | §4.10 | Remain out of scope (current) | **Resolved (v0.9.1 spec alignment): out of scope; ODS-NEG-017 prohibits inbound XoT/NOTIFY-over-TLS listeners** |
+| Per-zone RRL configuration | §4.17 | Remain out of scope (current) | **Resolved (v0.9.1 spec alignment): out of current scope; §4.17 keeps RRL process-wide for the current version** |
+| mTLS for XoT as MUST | §4.10 | Remain MAY | **Resolved (v0.9.1 spec alignment): remains MAY-level per ODS-FR-XOT-007** |
+| CAA / ZONEMD / CDS / CDNSKEY as known types | §4.14, B.4 | Remain handled as unknown via §4.4 | **Resolved (v0.9.1 spec alignment): remain outside the type-aware catalogue and are handled under unknown-RR semantics** |
+| DANE TLSA validation for XoT certs | §4.10 | Out of scope (PKIX only) | **Resolved (v0.9.1 spec alignment): DANE validation remains out of scope; TLSA is served as data only** |
 | XoT TLS revocation posture (no CRL/OCSP request; OCSP stapling honoured) | §4.10, ODS-FR-XOT-012 | Confirm posture | **Resolved (v0.3): confirmed; ODS-FR-XOT-012** |
 | UDP IXFR support | §4.7, ODS-FR-IXFR-001 | Remove (TCP only) | **Resolved (v0.3): UDP IXFR removed; ODS-NEG-018** |
 | Non-root execution as MUST | §5.3 | Strengthen to MUST | **Resolved (v0.4): elevated to MUST; ODS-NFR-SEC-004** |
