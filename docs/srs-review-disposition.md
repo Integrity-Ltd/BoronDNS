@@ -111,6 +111,7 @@ deferred unsafe-boundary track.
 | XoT interop target selection | RFC 9103; BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS no longer hard-codes a permanent NSD XoT exemption or release-year support claim. ODS-VER-003 requires a current-version capability decision for each primary, with XoT evidence required where the tested version exposes XoT. |
 | RRL posture | BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS treats RRL as operational practice rather than an RFC standard, and records the OxideDNS thresholds as project defaults instead of BIND/Knot/NSD defaults. |
 | Performance target posture | Current code and benchmark harnesses | SRS treats §5 quantitative values as formal reference-hardware acceptance targets. Engineering MVP smoke and large-catalog benchmark artifacts guide tuning but do not by themselves prove conformance or equivalence to NSD, Knot DNS, BIND, or another server. |
+| Deferred optimization ownership | Current SRS Appendix C.6; Architecture Document; `docs/future-optimization-tracks.md`; unsafe-boundary registries | Future XDP/eBPF, packed-zone-store, and response-cache design constraints are no longer expanded in the SRS body. Appendix C.6 records scope and re-entry pointers, while the companion document owns detailed adapter and benchmark constraints. |
 
 Primary source links:
 

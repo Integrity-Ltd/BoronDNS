@@ -4504,8 +4504,8 @@ This section records future OxideDNS server optimisation tracks that remain
 outside the current Engineering MVP runtime. They are retained so the current
 architecture does not foreclose later packet-I/O, zone-store, or response-cache
 work, but they are not hidden Engineering MVP requirements. Current
-implementation status and unsafe-boundary ownership are maintained by the
-Architecture Document,
+implementation status and unsafe-boundary ownership are maintained by
+`docs/future-optimization-tracks.md`, the Architecture Document,
 `docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
 Capitalized requirement keywords in this C.6 section are conditional promotion
 constraints: they apply only if a later SRS revision brings the named track into
@@ -4515,91 +4515,39 @@ requirements.
 
 ### C.6.1 XDP/eBPF Kernel-Bypass on the DNS Query Interface
 
-*Description.* Future deployment of an XDP (eXpress Data Path) program on the
-OxideDNS server DNS query interface. A future implementation may use a
-kernel-side classifier for simple DNS/UDP responses and an AF_XDP userspace path
-for packets requiring full application processing, but the current OxideDNS
-server runtime uses Tokio UDP/TCP sockets and has no XDP/eBPF or AF_XDP packet
-backend.
+*Status.* Out of current OxideDNS server scope. The current server runtime uses
+ordinary Tokio UDP/TCP sockets and has no XDP/eBPF or AF_XDP packet backend.
+The `oxide-gun` AF_XDP backend is test-tool scope only.
 
-*Scope boundary.* The current `oxide-gun` crate has an explicit AF_XDP backend
-for load-generation on Linux lab hosts. That code is test-tool scope only and
-does not satisfy or activate this OxideDNS server optimisation track.
-
-*Rationale for deferral.* XDP/eBPF and AF_XDP require deployment-specific
-kernel, NIC, queue, capability, attach/detach, and fallback handling. The
-current Engineering MVP deployment model is a general Linux/POSIX process or
-container profile using ordinary kernel sockets. Bringing XDP/eBPF into the
-server would require a separate privileged deployment profile and targeted
-adapter safety evidence.
-
-*Entry condition for re-evaluation.* Benchmarks of the current implementation
-show that the Tokio socket path, rather than zone lookup or response assembly,
-prevents the server from meeting the relevant performance target, or a
-deployment profile with dedicated XDP-capable network hardware becomes a
-standard target.
-
-*Architectural constraints on any future implementation.*
-- The DNS query socket layer MUST be encapsulated behind a documented packet-I/O boundary so that an XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
-- The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the current Engineering MVP runtime.
-- When ODS-IF-NET-006 is re-evaluated for the XDP variant, packet-size and path-MTU behaviour that is currently delegated to the kernel socket path MUST be covered by explicit implementation and tests for the bypass path.
-- Runtime loading of operator-supplied eBPF programs remains prohibited by ODS-INV-009. Any future kernel-side program MUST be built as a versioned project artifact and attached only through the audited adapter path.
-- First-party `unsafe` and unsafe-prone dependencies for this backend MUST remain confined to the registry-listed packet-I/O adapter boundary and MUST carry `/// # Safety` / `// SAFETY:` rationale and backend fault evidence before production enablement.
-
-*Note.* The concrete eBPF userspace library choice, such as Aya versus a
-libbpf-based crate, is not fixed by this SRS revision. It must be selected and
-reviewed when this feature is brought into scope.
+*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
+the socket path blocks a relevant performance target, or when a dedicated
+XDP-capable deployment profile becomes a standard target. Detailed adapter,
+unsafe-boundary, and no-runtime-loading constraints are owned by
+`docs/future-optimization-tracks.md`.
 
 ### C.6.2 Optimised Packed-Binary In-Memory Zone Store
 
-*Description.* Replacing the current Engineering MVP zone store with a
-packed-binary region layout modelled on NSD-style memory locality. In this
-model, all RRs for a zone may be serialised in DNS wire format into a contiguous
-memory arena built at transfer-ingestion time; the lookup index would store
-integer offsets into the arena rather than pointers to heap-allocated objects.
-Zone replacement on refresh would remain atomic by publishing a complete arena
-plus index snapshot.
+*Status.* Out of current scope. The current Engineering MVP zone store remains
+the memory-resident snapshot model described by the Architecture Document and
+must continue satisfying ODS-INV-003 atomic publication.
 
-*Rationale for deferral.* The current implementation uses a simple
-memory-resident snapshot store that publishes complete zone versions. This is
-easy to inspect, has direct functional coverage, and is already benchmarked
-before any packed-store work is justified. The packed-binary layout is a
-performance and memory-locality optimisation whose benefit must be demonstrated
-against measured bottlenecks.
-
-*Entry condition for re-evaluation.* Engineering MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
-
-*Architectural constraints on any future implementation.*
-- The zone store MUST be accessed through a documented storage boundary so the packed-binary implementation can substitute without changes to the query-processing or zone-transfer layers.
-- The AXFR ingestion path MUST be clearly separated from the query-serving path; ingestion builds a new store instance which is atomically published, never modified in place.
-- The current implementation MUST record per-record memory overhead in benchmarking output so that the entry condition above can be evaluated against measured data.
-
-*Note.* An additional optimisation within this item is pre-computing NSEC/NSEC3 denial-of-existence responses at ingestion time rather than generating them at query time. This is independent of the arena layout and may be profitably evaluated separately.
+*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
+zone-store cache locality or per-record memory overhead is a limiting factor
+against ODS-NFR-RES-002 or the applicable performance targets. Detailed storage
+boundary, ingestion/query separation, and lookup-equivalence constraints are
+owned by `docs/future-optimization-tracks.md`.
 
 ### C.6.3 Pre-Baked Response Cache for Hot Query Patterns
 
-*Description.* A future in-process cache of serialised authoritative DNS
-response packets (wire format, ready to send) keyed on the fields that affect
-response composition, at minimum `(QNAME, QTYPE, DO-bit)`. On a cache hit, the
-server would copy the pre-built packet, patch the QID field, and send it,
-bypassing zone-store lookup and response assembly. Cache sizing and admission
-policy would be driven by measured query distribution rather than fixed in this
-SRS revision. Cache invalidation on zone refresh must purge all entries
-belonging to the refreshed zone.
+*Status.* Out of current scope. The current Engineering MVP serves from the
+in-memory zone store and assembles responses on demand.
 
-*Rationale for deferral.* The current Engineering MVP already serves zones
-entirely from memory (§4.15). The marginal benefit of a response cache over the
-current in-memory zone store and response path is measurable only after
-benchmarking identifies response assembly as a bottleneck. The cache introduces
-complexity (invalidation logic, DO-bit interaction, DNSSEC TTL decay) that is
-unjustified before measured evidence of need.
-
-*Entry condition for re-evaluation.* Engineering MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
-
-*Conditional architectural constraints on any future implementation.*
-- The response-assembly path MUST be cleanly separated from the send path, so that a cached pre-built buffer can be substituted for the assembled buffer transparently.
-- DNSSEC-signed responses cached in this layer MUST be subject to TTL decay: the cache MUST NOT serve a pre-built response whose minimum RRSIG expiration minus current time is less than a configurable floor (suggested: 60 seconds). Alternatively, the cache may be restricted to unsigned responses only in the initial implementation.
-- The cache MUST be keyed on the DO-bit value (DO=0 and DO=1 responses differ in the presence of DNSSEC records) and MUST treat them as separate entries.
+*Re-entry pointer.* Promote only when Engineering MVP benchmarking shows that
+response assembly, such as name compression, RR serialization, or EDNS OPT
+construction, accounts for a significant fraction of per-query CPU time at
+target load. Detailed keying, TTL decay, DNSSEC validity, invalidation, and
+differential-test constraints are owned by
+`docs/future-optimization-tracks.md`.
 
 # Appendix D — Glossary
 

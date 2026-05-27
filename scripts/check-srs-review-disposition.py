@@ -356,6 +356,7 @@ SUPPORT_TOOLING = {
         ],
         "evidence_paths": [
             "docs/dns-client-benchmark.md",
+            "docs/future-optimization-tracks.md",
             "scripts/capture-benchmark-handoff.sh",
             "scripts/check-perf-regression.py",
         ],

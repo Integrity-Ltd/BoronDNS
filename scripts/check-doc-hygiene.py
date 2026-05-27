@@ -103,6 +103,7 @@ REQUIRED_TEXT_BY_PATH = {
         "What evidence exists by requirement family?",
         "What requirement ranges map to evidence?",
         "How is the implementation structured?",
+        "Where are deferred optimization tracks detailed?",
         "How does an operator run it?",
         "What is the formal benchmark environment?",
         "How was the external review handled?",

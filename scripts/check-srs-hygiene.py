@@ -11,6 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 REFERENCE_PROFILE = ROOT / "docs" / "reference-verification-profile.md"
+FUTURE_OPTIMIZATION_TRACKS = ROOT / "docs" / "future-optimization-tracks.md"
 
 FORBIDDEN_TEXT = {
     "RDS denotes": "old rename namespace artifact",
@@ -184,7 +185,6 @@ REQUIRED_TEXT = [
     "This endpoint is supported in the formal SRS MVP.",
     "new formal SRS MVP scope §4.19 DNS Cookies",
     "explicit rejection of a fourth active NOTIFY interface role for the formal SRS MVP",
-    "ignored in the current Engineering MVP runtime",
     "Engineering MVP benchmarking shows",
     "deferred to formal SRS MVP",
     "formal SRS MVP release",
@@ -214,6 +214,9 @@ SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b"
 def main() -> int:
     text = SRS.read_text(encoding="utf-8")
     reference_profile = REFERENCE_PROFILE.read_text(encoding="utf-8")
+    future_optimization_tracks = FUTURE_OPTIMIZATION_TRACKS.read_text(
+        encoding="utf-8"
+    )
     errors: list[str] = []
 
     for needle, reason in FORBIDDEN_TEXT.items():
@@ -237,6 +240,19 @@ def main() -> int:
         if needle not in reference_profile:
             errors.append(
                 f"missing reference verification profile text: {needle!r}"
+            )
+
+    for needle in [
+        "not hidden Engineering MVP requirements",
+        "test-tool scope only",
+        "Entry condition for re-evaluation: Engineering MVP benchmarking shows",
+        "First-party unsafe code and unsafe-prone dependencies must remain confined",
+        "Keep the zone store behind a documented lookup/publish boundary",
+        "Key cached responses on the DO-bit value",
+    ]:
+        if needle not in future_optimization_tracks:
+            errors.append(
+                f"missing future optimization track text: {needle!r}"
             )
 
     suffixed_ids = sorted(set(SUFFIXED_ID_RE.findall(text)))
