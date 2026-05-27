@@ -599,9 +599,13 @@ SUPPORT_TOOLING = {
             "x86_64-unknown-linux-musl",
             "tar.xz",
             "sha256",
+            "static_link_confirmed",
+            "OXIDEDNS_PACKAGE_ALLOW_DYNAMIC",
             "OXIDEDNS_DOCKER_ALPINE_VERSION",
         ],
         "evidence_needles": [
+            "fails if static linking cannot be confirmed",
+            "not the published portability baseline",
             "docker load",
             "x86_64-unknown-linux-musl-docker-image.tar.xz",
         ],
