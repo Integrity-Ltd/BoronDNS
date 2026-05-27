@@ -133,6 +133,11 @@ REQUIRED_TEXT_BY_PATH = {
         "How was the external review handled?",
         "Where are project decisions recorded?",
         "implementation plan stays at milestone level",
+        "## Documentation Growth Control",
+        "Before adding a new document or repeating status text",
+        "Avoid copying requirement text,",
+        "evidence status, command inventories",
+        "When a review finding exposes drift, edit the owner first",
     ],
     "docs/rr-type-catalogue.md": [
         "# RR Type Catalogue Implementation Notes",

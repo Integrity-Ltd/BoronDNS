@@ -149,3 +149,25 @@ Current implementation and evidence status is recorded in the gap register,
 verification ledger, implemented-feature scope, and traceability matrices. The
 implementation plan stays at milestone level so those owner documents do not
 compete with each other.
+
+## Documentation Growth Control
+
+Before adding a new document or repeating status text in an existing document,
+choose the owning document from the table above. If no owner fits, add the owner
+row here in the same patch as the new document. Avoid copying requirement text,
+evidence status, command inventories, or feature-scope tables into multiple
+documents; link to the owner and keep only the local context needed by the
+reader.
+
+The current large documents are intentionally split by role:
+
+- the SRS owns normative requirements and identifier stability;
+- Appendix A owns detailed requirement-range traceability outside the SRS body;
+- the verification ledger owns coarse evidence state;
+- the gap register owns the short active queue;
+- implemented-feature scope owns code-backed retained feature boundaries;
+- the operator and DevOps guides own executable deployment instructions.
+
+When a review finding exposes drift, edit the owner first, then update any short
+summaries that point to it. A summary that needs more than a short paragraph is a
+sign that the detail belongs in the owner document instead.
