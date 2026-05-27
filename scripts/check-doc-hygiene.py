@@ -31,6 +31,7 @@ BANNED_PHRASES = [
     "The first slice groups",
     "Architecture and Release Governance Scaffold",
     "release-governance scaffold",
+    "within the ODS-NFR-MAINT-001 target",
     "RFC 8914 EDE planned for v2",
     "`BTreeMap`-backed zone store",
     "Architecture Document will choose the initial implementation",
