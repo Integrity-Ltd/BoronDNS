@@ -400,6 +400,7 @@ FEATURES = {
     "XoT": {
         "aliases": ["XoT"],
         "paths": [
+            "Cargo.toml",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
         ],
@@ -413,6 +414,7 @@ FEATURES = {
         "source_needles": [
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
+            'features = ["ring", "tls12"]',
             "refresh_xot_uses_configured_client_certificate",
         ],
         "test_needles": [
@@ -460,10 +462,12 @@ FEATURES = {
             "struct RrlLimiter",
             "rrl_truncated_response",
             "oxidedns_rrl_responses_dropped_total",
+            "cookie_validated",
         ],
         "test_needles": [
             "rrl_response_categories_follow_srs_buckets",
             "udp_rrl_slips_and_drops_limited_query_responses",
+            "udp_valid_dns_cookie_bypasses_rrl_accounting",
         ],
     },
     "DNS Cookies": {
@@ -507,6 +511,8 @@ FEATURES = {
         "source_needles": [
             "parse_catalog_members",
             "max_member_zones",
+            "insert_loading_hidden",
+            "is_catalog",
             "catalog_member_limit_exceeded",
             "catalog_member_added",
             "oxidedns_catalog_member_info",
@@ -529,13 +535,21 @@ FEATURES = {
         "srs_needles": ["ODS-FR-EDNS-001", "ODS-FR-EDNS-017"],
         "source_needles": [
             "parse_edns_options",
+            "EDNS_NSID_OPTION",
             "EDNS_TCP_KEEPALIVE_OPTION",
             "append_edns_padding_if_it_fits",
+            "metadata.udp_ceiling(options)",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
         "test_needles": [
+            "edns_nsid_request_returns_configured_identifier",
             "tcp_edns_keepalive_request_gets_timeout_response",
+            "udp_edns_keepalive_request_is_ignored",
+            "configured_edns_padding_aligns_response_to_block_size",
+            "configured_udp_edns_padding_is_omitted_when_it_would_exceed_ceiling",
+            "malformed_edns_options_get_formerr",
             "unsupported_edns_version_gets_badvers_opt_response",
+            "non_edns_udp_response_over_512_octets_is_truncated_without_opt",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
     },
@@ -575,10 +589,15 @@ FEATURES = {
         "source_needles": [
             "answer_chaos_query",
             "version.bind.",
+            "version.server.",
+            "hostname.bind.",
+            "id.server.",
             "oxidedns_chaos_queries_total",
         ],
         "test_needles": [
             "chaos_version_txt_defaults_to_refused",
+            "chaos_hostname_txt_uses_config_then_printable_nsid_fallback",
+            "chaos_unsupported_names_and_non_txt_types_are_refused",
             "chaos_query_observation_classifies_supported_cases",
         ],
     },
