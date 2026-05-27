@@ -2,10 +2,10 @@
 
 This plan tracks the path from the current Rust project to a working
 secondary-authoritative DNS server while preserving traceability to the current
-OxideDNS SRS v0.9/v0.9.1.
+OxideDNS SRS v0.9.1.
 
-The project MVP in this repository is not the same work item as executing SRS
-acceptance locally. Engineering MVP must not require completed long-running
+The Engineering MVP in this repository is not the same work item as executing
+SRS acceptance locally. Engineering MVP must not require completed long-running
 evidence: long fuzz campaigns, Reference Hardware/Profile benchmarks, 30-day
 soak, production-depth logging profiles, external operator acceptance,
 independent reproducible-build comparison, and signed release artifacts are
@@ -93,7 +93,7 @@ The later ODS-VER-008 acceptance execution target remains:
 - dependency security audit clean;
 - vulnerability disclosure policy published;
 - DNS Cookies, IXFR, full TSIG, XoT, DNSSEC serving, RRL, catalog zones, EDE,
-  CHAOS, expanded RR catalogue, and the v0.9/v0.9.1 interface/NFR additions
+  CHAOS, expanded RR catalogue, and the current v0.9.1 interface/NFR additions
   verified with release-grade retained evidence;
 - test coverage targets met;
 - signed release artifacts produced;

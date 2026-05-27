@@ -38,6 +38,9 @@ BANNED_PHRASES = [
     "to be produced in PID Phase 2",
     "to be produced alongside this SRS",
     "v0.1–v0.2 design phase",
+    "local project MVP",
+    "project MVP in this repository",
+    "v0.9/v0.9.1",
 ]
 
 SOURCE_BANNED_PHRASES = [

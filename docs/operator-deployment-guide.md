@@ -615,7 +615,7 @@ external operator acceptance can review them.
 
 This section is the informative SLO publication required by the current
 Appendix C.5 decision list for `ODS-NFR-MAINT-009`. It is an operator starting
-point, not a full SRS acceptance claim. The local project MVP sets up the
+point, not a full SRS acceptance claim. Engineering MVP sets up the
 evidence commands and handoff path; release acceptance still depends on later
 performance, reliability, soak, and external-operator evidence execution listed
 in the gap register.
@@ -981,7 +981,7 @@ current operator-relevant limitations are:
   required before ODS-VER-008 acceptance.
 - Full performance target runs, 30-day soak execution, and 24-hour fuzz
   campaigns per parser target are later SRS acceptance execution items; the
-  local project MVP only needs their setup, artifact formats, and handoff path.
+  Engineering MVP only needs their setup, artifact formats, and handoff path.
 - Container image size and static-binary release packaging are covered by the
   tag-push release workflow through the installer archive, static binary,
   Alpine Docker image archive, and SHA256 sidecars. Registry publication remains

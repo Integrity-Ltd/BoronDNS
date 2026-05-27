@@ -120,7 +120,7 @@ Use `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
 
 Gate review must not treat skipped interop, fuzz, performance, soak, security
 audit, or external-operator steps as passing evidence for final SRS acceptance.
-For the local project MVP, long-running steps may be marked as delegated when
+For Engineering MVP, long-running steps may be marked as delegated when
 the runnable harness, artifact format, and release/operations handoff are
 present.
 
