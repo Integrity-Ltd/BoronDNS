@@ -348,7 +348,7 @@ fn missing_tsig_secret_file_exits_with_ioerr() {
 }
 
 #[test]
-fn dump_config_includes_rds_environment_overrides() {
+fn dump_config_includes_ods_environment_overrides() {
     let config = write_config(
         "dump-env",
         r#"
@@ -399,7 +399,7 @@ fn dump_config_includes_rds_environment_overrides() {
 }
 
 #[test]
-fn invalid_rds_environment_override_exits_with_config_invalid() {
+fn invalid_ods_environment_override_exits_with_config_invalid() {
     let config = write_config(
         "invalid-env",
         r#"
@@ -430,7 +430,7 @@ fn invalid_rds_environment_override_exits_with_config_invalid() {
 }
 
 #[test]
-fn unrecognized_rds_environment_override_warns_without_failing() {
+fn unrecognized_ods_environment_override_warns_without_failing() {
     let config = write_config(
         "unknown-env",
         r#"

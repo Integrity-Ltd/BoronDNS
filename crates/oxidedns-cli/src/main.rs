@@ -424,7 +424,7 @@ where
             }
             _ if name.starts_with("ODS_") => {
                 warnings.push(ConfigWarning {
-                    code: "unrecognised_rds_environment_variable",
+                    code: "unrecognised_ods_environment_variable",
                     parameter: name,
                     message: "unrecognised ODS_* environment variable ignored".to_owned(),
                 });
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn rds_environment_overrides_supported_scalar_config() {
+    fn ods_environment_overrides_supported_scalar_config() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1387,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_rds_environment_override_reports_config_error() {
+    fn invalid_ods_environment_override_reports_config_error() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1418,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn unrecognised_rds_environment_override_reports_warning() {
+    fn unrecognised_ods_environment_override_reports_warning() {
         let mut config = ServerConfig::from_toml_str(
             r#"
                 [server]
@@ -1452,7 +1452,7 @@ mod tests {
 
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, "unrecognised_rds_environment_variable");
+        assert_eq!(warnings[0].code, "unrecognised_ods_environment_variable");
         assert_eq!(
             warnings[0].parameter,
             "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
