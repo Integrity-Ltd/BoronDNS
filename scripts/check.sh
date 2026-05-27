@@ -19,6 +19,7 @@ python3 -m py_compile scripts/check-zsm-engineering-mvp-matrix.py
 python3 -m py_compile scripts/check-functional-requirement-references.py
 python3 -m py_compile scripts/check-rfc-compliance-assertions.py
 python3 -m py_compile scripts/check-srs-identifier-registry.py
+python3 -m py_compile scripts/check-doc-hygiene.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
@@ -32,6 +33,7 @@ python3 scripts/check-zsm-engineering-mvp-matrix.py
 python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-rfc-compliance-assertions.py
 python3 scripts/check-srs-identifier-registry.py
+python3 scripts/check-doc-hygiene.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py

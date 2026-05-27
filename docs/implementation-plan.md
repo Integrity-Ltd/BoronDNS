@@ -1,8 +1,8 @@
 # OxideDNS Implementation Plan
 
 This plan tracks the path from the current Rust project to a working
-secondary-authoritative DNS server while preserving traceability to Tibor's SRS
-v0.9/v0.9.1.
+secondary-authoritative DNS server while preserving traceability to the current
+OxideDNS SRS v0.9/v0.9.1.
 
 The project MVP in this repository is not the same work item as executing SRS
 acceptance locally. Engineering MVP must not require completed long-running
@@ -27,7 +27,7 @@ The detailed Engineering MVP boundary is recorded in
 ## Engineering MVP Target
 
 The near-term implementation target is the current Engineering MVP, not a
-minimal Alpha trim. GPT-style review feedback that recommends deferring
+minimal Alpha trim. External review feedback that recommends deferring
 implemented protocol features is treated as prioritization advice only; the
 project keeps implemented, tested slices in scope and separates them from later
 release-acceptance evidence.
