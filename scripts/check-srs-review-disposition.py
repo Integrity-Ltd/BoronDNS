@@ -53,9 +53,23 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "MVP Trim Reconciliation",
     "not as a deletion list for already-implemented code",
     "mirrors the review's \"defer these\" list item by item",
+    "Current Implementation Slice",
+    "code-alignment lock for the review's MVP-trim advice",
     "Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend.",
     "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material.",
     "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
+]
+
+REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
+    "fall back to AXFR when IXFR is unavailable or unsuitable",
+    "Client-query DoT, DoH, DoQ, inbound XoT listeners",
+    "copies the query DO bit into the response OPT",
+    "Per-zone RRL, distributed/shared RRL state across processes",
+    "Durable client authentication, TSIG replacement",
+    "automatic discovery without catalog configuration",
+    "EDNS Refresh, DNS Stateful Operations",
+    "Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only",
+    "Automatic host disclosure, arbitrary CHAOS namespaces",
 ]
 
 REVIEW_SUGGESTED_DEFER_ITEMS = [
@@ -253,6 +267,12 @@ def main() -> int:
         if term not in disposition:
             errors.append(
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits scope-trim "
+                f"boundary term {term!r}"
+            )
+    for term in REQUIRED_CODE_ALIGNMENT_BOUNDARIES:
+        if term not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits code-alignment "
                 f"boundary term {term!r}"
             )
     for item in REVIEW_SUGGESTED_DEFER_ITEMS:
