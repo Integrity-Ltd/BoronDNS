@@ -53,6 +53,7 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "Health and metrics requirement mixed endpoint contract detail into one requirement",
     "SRS claimed v0.7 structural finality",
     "Catalog metrics catalogue exceeded implemented observability surface",
+    "XoT TLS-version wording over-counted TLS 1.2",
 ]
 
 REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
@@ -247,6 +248,7 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
     "XoT": [
         "Retained in Engineering MVP as outbound zone-transfer transport only",
         "Client-query DoT and NOTIFY-over-TLS listeners remain out of scope",
+        "Formal RFC 9103 XoT conformance still requires TLS 1.3-or-later evidence",
     ],
     "DNS Cookies": [
         "Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism",
@@ -310,6 +312,7 @@ REVIEW_DEFER_CODE_BACKING = {
     "XoT": [
         "| XoT |",
         "Client-query DoT, DoH, DoQ, inbound XoT listeners",
+        "formal RFC 9103 TLS 1.3-only conformance",
     ],
     "DNS Cookies": [
         "| DNS Cookies |",
@@ -716,6 +719,18 @@ def main() -> int:
                     f"review-deferred item {item!r} to implemented feature "
                     f"scope term {term!r}"
                 )
+    for term in [
+        "Current Intentional Code Alignment Gaps",
+        "XoT TLS version compatibility",
+        "rustls defaults with the Cargo `tls12` feature enabled",
+        "Formal RFC 9103 evidence must either enforce TLS 1.3-or-later",
+        "explicitly separated compatibility-mode evidence",
+    ]:
+        if term not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits intentional "
+                f"code-alignment gap term {term!r}"
+            )
     for scope_path, scope_text in scope_pointer_texts.items():
         if "docs/implemented-feature-scope.md" not in scope_text:
             errors.append(
