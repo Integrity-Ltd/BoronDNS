@@ -4555,7 +4555,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | Pending |
 | 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | Pending |
 | 70%/85% test coverage minimum (defaults) | §5.4, ODS-NFR-MAINT-007 | Confirm | Pending |
-| Sigstore/Cosign vs detached OpenPGP for release signing | §5.4, ODS-NFR-MAINT-008 | Confirm preferred mechanism | Pending |
+| Sigstore/Cosign vs detached OpenPGP for release signing | §5.4, ODS-NFR-MAINT-008 | Confirm preferred mechanism | **Resolved (v0.9.1 doc alignment): Sigstore/Cosign preferred; detached OpenPGP allowed as fallback; recorded in the Architecture Document and Security Policy** |
 | 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | Pending |
 | 1% idle CPU bound for 1000 zones (default) | §5.7, ODS-NFR-RES-006 | Confirm | Pending |
 | Latency histogram bucket boundaries (defaults) | §5.6, ODS-NFR-OBS-007 | Confirm | Pending |
@@ -4568,7 +4568,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | TOML configuration format | §6.2 | Confirm | Pending |
 | Combined `/metrics` + health endpoint host vs separate | §6.4 | Confirm combined host (paths split) | Pending |
 | Verification category VER prefix (extends §1.4.3) | §7 | Confirm | Pending |
-| SLO publication as informative content in Operator Deployment Guide | ODS-NFR-MAINT-009 | Add SLO section to Deployment Guide | Pending |
+| SLO publication as informative content in Operator Deployment Guide | ODS-NFR-MAINT-009 | Add SLO section to Deployment Guide | **Resolved (v0.9.1 doc alignment): informative SLO section added to the Operator Deployment Guide** |
 
 The Decision column is to be populated as the project's review process reaches each item. **Resolved** entries are recorded for audit trail; their decisions are normative within the SRS revision in which they were resolved.
 
