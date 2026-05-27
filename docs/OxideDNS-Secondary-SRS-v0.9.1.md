@@ -2822,7 +2822,14 @@ The area code **RES** is allocated.
 
 **ODS-NFR-RES-002.** Memory consumption per zone SHOULD scale approximately linearly with the number of records in the zone, with a target per-record overhead (including indices and metadata) of less than 500 bytes.
 *Source.* Operational requirement; informed by typical secondary deployment sizing.
-*Note.* For the current straightforward in-memory implementation (e.g., `BTreeMap`-backed zone store, the implementation choice recorded in the Architecture Document), the 500-byte target is aspirational and may not be met; verification at the formal SRS MVP release gate is performed against the actual measured value, with the value recorded in release notes. The post-MVP packed-binary zone store of Appendix C.6.2, once introduced, is expected to meet or substantially exceed this target. Operators sizing memory for large zone-count deployments should consult the actual per-release figure.
+*Note.* For the current straightforward in-memory implementation (the
+`HashMap`-indexed `Arc<ZoneSnapshot>` store recorded in the Architecture
+Document), the 500-byte target is aspirational and may not be met; verification
+at the formal SRS MVP release gate is performed against the actual measured
+value, with the value recorded in release notes. The post-MVP packed-binary
+zone store of Appendix C.6.2, once introduced, is expected to meet or
+substantially exceed this target. Operators sizing memory for large zone-count
+deployments should consult the actual per-release figure.
 *Verification.* Memory profiling with zones of varying record counts on the Reference Hardware Profile.
 
 **ODS-NFR-RES-003.** The server MUST support concurrent service of at least 10,000 zones with a combined record count up to 10 million records on a host with 16 GiB of available memory.
@@ -3403,7 +3410,7 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 - the RFC number and title;
 - the compliance status: **Fully Compliant**, **Partially Compliant** (with scope qualifier), **Not Compliant** (with rationale), or **Informative Only** (the RFC is referenced for guidance, not for normative compliance);
 - the scope qualifier where applicable (e.g., "secondary-side clauses only", "wire-format aspects only", "selected clauses: §N.M, §P.Q");
-- any unresolved compliance gaps with target resolution release (e.g., "RFC 8914 EDE planned for v2");
+- any unresolved compliance gaps with target resolution release (for example, a future-scope transport RFC or an explicitly deferred primary-side clause);
 - the SRS revision against which the assertion is made (the SRS version current at the release).
 
 The same structured list MUST be reproduced — verbatim or via single-source synchronisation — in the project's primary documentation (the Operator Deployment Guide per ODS-NFR-MAINT-009 at minimum; optionally also the repository README) so that potential operators can assess the project's compliance posture without parsing release notes.
@@ -4216,7 +4223,7 @@ Three kinds of entry are distinguished:
 
 - **Foundational exclusions (C.2).** Items whose inclusion would violate an architectural invariant of §3 (typically ODS-INV-001, the secondary-only invariant). These cannot be brought into scope without redefining the project's identity.
 - **Current-scope exclusions (C.3).** Items deliberately left out of the current version's scope for reasons of complexity, codebase size, or focus, but which could be added in a future version without architectural-invariant violation.
-- **Post-MVP / v2 scope items (C.6).** Architectural enhancements that have been actively considered during the v0.1–v0.2 design phase, confirmed as out-of-MVP scope by project decision, and recorded here with full context and re-entry conditions so that the MVP Architecture Document can be written to remain compatible with them.
+- **Post-MVP / v2 scope items (C.6).** Future OxideDNS server optimisation tracks recorded with re-entry conditions and current-architecture constraints. These tracks are outside the current Engineering MVP runtime unless a later SRS revision and unsafe-boundary update explicitly bring them into scope.
 
 Section C.5 also catalogues items specifically flagged during SRS drafting for project decision — exclusions where the choice merits explicit confirmation rather than implicit endorsement.
 
