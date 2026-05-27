@@ -430,14 +430,14 @@ if positive_do["rcode"] != 0 or positive_do["tc"]:
 if positive_do["answer_types"] != [A, RRSIG]:
     raise AssertionError(f"positive DO did not include A plus covering RRSIG: {positive_do}")
 if not positive_do["opt_ttls"] or positive_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"positive DO response did not set response DO bit: {positive_do}")
+    raise AssertionError(f"positive DO response did not copy query DO bit: {positive_do}")
 assert_ad_cd_clear("positive DO", positive_do)
 
 positive_non_do = exchange(0xD002, "www.alpha.test.", A, payload=4096, do=False)
 if positive_non_do["answer_types"] != [A]:
     raise AssertionError(f"non-DO response included DNSSEC augmentation: {positive_non_do}")
 if positive_non_do["opt_ttls"] and positive_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"non-DO response set response DO bit: {positive_non_do}")
+    raise AssertionError(f"non-DO response failed to copy cleared query DO bit: {positive_non_do}")
 assert_ad_cd_clear("positive non-DO", positive_non_do)
 
 nxdomain_do = exchange(0xD003, "missing.www.alpha.test.", A, payload=4096, do=True)
@@ -446,21 +446,21 @@ if nxdomain_do["rcode"] != 3:
 if SOA not in nxdomain_do["authority_types"] or NSEC not in nxdomain_do["authority_types"] or RRSIG not in nxdomain_do["authority_types"]:
     raise AssertionError(f"NXDOMAIN DO lacked SOA/NSEC/RRSIG proof material: {nxdomain_do}")
 if not nxdomain_do["opt_ttls"] or nxdomain_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"NXDOMAIN DO response did not set response DO bit: {nxdomain_do}")
+    raise AssertionError(f"NXDOMAIN DO response did not copy query DO bit: {nxdomain_do}")
 assert_ad_cd_clear("NXDOMAIN DO", nxdomain_do)
 
 nxdomain_non_do = exchange(0xD00E, "missing.www.alpha.test.", A, payload=4096, do=False)
 if nxdomain_non_do["rcode"] != 3 or nxdomain_non_do["answer_types"] or nxdomain_non_do["authority_types"] != [SOA]:
     raise AssertionError(f"NXDOMAIN non-DO response did not suppress DNSSEC augmentation: {nxdomain_non_do}")
 if nxdomain_non_do["opt_ttls"] and nxdomain_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"NXDOMAIN non-DO response set response DO bit: {nxdomain_non_do}")
+    raise AssertionError(f"NXDOMAIN non-DO response failed to copy cleared query DO bit: {nxdomain_non_do}")
 assert_ad_cd_clear("NXDOMAIN non-DO", nxdomain_non_do)
 
 nodata_non_do = exchange(0xD00F, "alpha.test.", A, payload=4096, do=False)
 if nodata_non_do["rcode"] != 0 or nodata_non_do["answer_types"] or nodata_non_do["authority_types"] != [SOA]:
     raise AssertionError(f"NODATA non-DO response did not suppress DNSSEC augmentation: {nodata_non_do}")
 if nodata_non_do["opt_ttls"] and nodata_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"NODATA non-DO response set response DO bit: {nodata_non_do}")
+    raise AssertionError(f"NODATA non-DO response failed to copy cleared query DO bit: {nodata_non_do}")
 assert_ad_cd_clear("NODATA non-DO", nodata_non_do)
 
 wildcard_do = exchange(0xD012, "wild.alpha.test.", A, payload=4096, do=True)
@@ -469,7 +469,7 @@ if wildcard_do["rcode"] != 0 or wildcard_do["tc"] or wildcard_do["answer_types"]
 if wildcard_do["authority_types"] != [NSEC, RRSIG]:
     raise AssertionError(f"wildcard DO response lacked NSEC/RRSIG exact-name absence proof: {wildcard_do}")
 if not wildcard_do["opt_ttls"] or wildcard_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"wildcard DO response did not set response DO bit: {wildcard_do}")
+    raise AssertionError(f"wildcard DO response did not copy query DO bit: {wildcard_do}")
 assert_ad_cd_clear("wildcard DO", wildcard_do)
 
 wildcard_non_do = exchange(0xD013, "wild.alpha.test.", A, payload=4096, do=False)
@@ -478,7 +478,7 @@ if wildcard_non_do["rcode"] != 0 or wildcard_non_do["tc"] or wildcard_non_do["an
 if wildcard_non_do["authority_types"]:
     raise AssertionError(f"wildcard non-DO response did not suppress DNSSEC proof material: {wildcard_non_do}")
 if wildcard_non_do["opt_ttls"] and wildcard_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"wildcard non-DO response set response DO bit: {wildcard_non_do}")
+    raise AssertionError(f"wildcard non-DO response failed to copy cleared query DO bit: {wildcard_non_do}")
 assert_ad_cd_clear("wildcard non-DO", wildcard_non_do)
 
 dnskey = exchange(0xD004, "alpha.test.", DNSKEY, payload=4096, do=False)
@@ -490,21 +490,21 @@ rrsig_non_do = exchange(0xD00B, "sig.alpha.test.", RRSIG, payload=4096, do=False
 if rrsig_non_do["rcode"] != 0 or rrsig_non_do["tc"] or rrsig_non_do["answer_types"] != [RRSIG]:
     raise AssertionError(f"direct non-DO RRSIG query did not serve only transferred RRSIG records: {rrsig_non_do}")
 if rrsig_non_do["opt_ttls"] and rrsig_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"direct non-DO RRSIG query set response DO bit: {rrsig_non_do}")
+    raise AssertionError(f"direct non-DO RRSIG query failed to copy cleared query DO bit: {rrsig_non_do}")
 assert_ad_cd_clear("direct non-DO RRSIG", rrsig_non_do)
 
 nsec_non_do = exchange(0xD00C, "www.alpha.test.", NSEC, payload=4096, do=False)
 if nsec_non_do["rcode"] != 0 or nsec_non_do["answer_types"] != [NSEC]:
     raise AssertionError(f"direct non-DO NSEC query did not serve only transferred NSEC records: {nsec_non_do}")
 if nsec_non_do["opt_ttls"] and nsec_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"direct non-DO NSEC query set response DO bit: {nsec_non_do}")
+    raise AssertionError(f"direct non-DO NSEC query failed to copy cleared query DO bit: {nsec_non_do}")
 assert_ad_cd_clear("direct non-DO NSEC", nsec_non_do)
 
 ds_do = exchange(0xD009, "child.alpha.test.", DS, payload=4096, do=True)
 if ds_do["rcode"] != 0 or ds_do["answer_types"] != [DS, RRSIG]:
     raise AssertionError(f"direct DS DO query did not serve transferred DS plus covering RRSIG: {ds_do}")
 if not ds_do["opt_ttls"] or ds_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"direct DS DO response did not set response DO bit: {ds_do}")
+    raise AssertionError(f"direct DS DO response did not copy query DO bit: {ds_do}")
 assert_ad_cd_clear("direct DS DO", ds_do)
 
 signed_child_referral_do = exchange(0xD00A, "www.child.alpha.test.", A, payload=4096, do=True)
@@ -513,7 +513,7 @@ if signed_child_referral_do["rcode"] != 0 or signed_child_referral_do["answer_ty
 if signed_child_referral_do["authority_types"] != [NS, DS, RRSIG, RRSIG]:
     raise AssertionError(f"signed-child referral DO lacked NS/DS/RRSIG authority: {signed_child_referral_do}")
 if not signed_child_referral_do["opt_ttls"] or signed_child_referral_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"signed-child referral DO response did not set response DO bit: {signed_child_referral_do}")
+    raise AssertionError(f"signed-child referral DO response did not copy query DO bit: {signed_child_referral_do}")
 assert_ad_cd_clear("signed-child referral DO", signed_child_referral_do)
 
 signed_child_referral_non_do = exchange(0xD010, "www.child.alpha.test.", A, payload=4096, do=False)
@@ -522,7 +522,7 @@ if signed_child_referral_non_do["rcode"] != 0 or signed_child_referral_non_do["a
 if signed_child_referral_non_do["authority_types"] != [NS]:
     raise AssertionError(f"signed-child referral non-DO did not suppress DNSSEC augmentation: {signed_child_referral_non_do}")
 if signed_child_referral_non_do["opt_ttls"] and signed_child_referral_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"signed-child referral non-DO response set response DO bit: {signed_child_referral_non_do}")
+    raise AssertionError(f"signed-child referral non-DO response failed to copy cleared query DO bit: {signed_child_referral_non_do}")
 assert_ad_cd_clear("signed-child referral non-DO", signed_child_referral_non_do)
 
 unsigned_child_referral_do = exchange(0xD00D, "www.unsigned.alpha.test.", A, payload=4096, do=True)
@@ -533,7 +533,7 @@ if unsigned_child_referral_do["authority_types"] != [NS, NSEC, RRSIG, RRSIG]:
 if DS in unsigned_child_referral_do["authority_types"]:
     raise AssertionError(f"unsigned-child referral DO unexpectedly included DS proof: {unsigned_child_referral_do}")
 if not unsigned_child_referral_do["opt_ttls"] or unsigned_child_referral_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"unsigned-child referral DO response did not set response DO bit: {unsigned_child_referral_do}")
+    raise AssertionError(f"unsigned-child referral DO response did not copy query DO bit: {unsigned_child_referral_do}")
 assert_ad_cd_clear("unsigned-child referral DO", unsigned_child_referral_do)
 
 unsigned_child_referral_non_do = exchange(0xD011, "www.unsigned.alpha.test.", A, payload=4096, do=False)
@@ -542,7 +542,7 @@ if unsigned_child_referral_non_do["rcode"] != 0 or unsigned_child_referral_non_d
 if unsigned_child_referral_non_do["authority_types"] != [NS]:
     raise AssertionError(f"unsigned-child referral non-DO did not suppress DNSSEC augmentation: {unsigned_child_referral_non_do}")
 if unsigned_child_referral_non_do["opt_ttls"] and unsigned_child_referral_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"unsigned-child referral non-DO response set response DO bit: {unsigned_child_referral_non_do}")
+    raise AssertionError(f"unsigned-child referral non-DO response failed to copy cleared query DO bit: {unsigned_child_referral_non_do}")
 assert_ad_cd_clear("unsigned-child referral non-DO", unsigned_child_referral_non_do)
 
 truncated = exchange(0xD005, "www.alpha.test.", A, payload=512, do=True)

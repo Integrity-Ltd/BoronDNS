@@ -99,6 +99,11 @@ SOURCE_BANNED_PHRASES = [
     "unrecognized_rds",
 ]
 
+SCRIPT_BANNED_PHRASES = [
+    "did not set response DO bit",
+    "set response DO bit",
+]
+
 REQUIRED_TEXT_BY_PATH = {
     "README.md": [
         "The implemented Engineering MVP is wider than a minimal static-zone secondary",
@@ -237,6 +242,14 @@ def current_source_paths() -> list[Path]:
     return sorted(paths)
 
 
+def current_script_paths() -> list[Path]:
+    return sorted(
+        path
+        for path in (ROOT / "scripts").glob("*")
+        if path.is_file() and path.name != "check-doc-hygiene.py"
+    )
+
+
 def main() -> int:
     violations: list[str] = []
     for path in current_doc_paths():
@@ -278,6 +291,15 @@ def main() -> int:
                 relative = path.relative_to(ROOT)
                 violations.append(f"{relative}: stale source phrase {phrase!r}")
 
+    for path in current_script_paths():
+        text = path.read_text(encoding="utf-8")
+        for phrase in SCRIPT_BANNED_PHRASES:
+            if phrase in text:
+                relative = path.relative_to(ROOT)
+                violations.append(
+                    f"{relative}: stale evidence-script phrase {phrase!r}"
+                )
+
     if violations:
         for violation in violations:
             print(f"doc_hygiene=failed {violation}", file=sys.stderr)
@@ -285,7 +307,8 @@ def main() -> int:
 
     print(
         "doc_hygiene=passed "
-        f"docs={len(current_doc_paths())} sources={len(current_source_paths())}"
+        f"docs={len(current_doc_paths())} sources={len(current_source_paths())} "
+        f"scripts={len(current_script_paths())}"
     )
     return 0
 

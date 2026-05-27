@@ -436,7 +436,7 @@ if nsec3_do["rcode"] != 0 or nsec3_do["tc"]:
 if nsec3_do["answer_types"] != [NSEC3, RRSIG]:
     raise AssertionError(f"direct NSEC3 DO did not include transferred NSEC3 plus covering RRSIG: {nsec3_do}")
 if not nsec3_do["opt_ttls"] or nsec3_do["opt_ttls"][0] & 0x8000 == 0:
-    raise AssertionError(f"direct NSEC3 DO response did not set response DO bit: {nsec3_do}")
+    raise AssertionError(f"direct NSEC3 DO response did not copy query DO bit: {nsec3_do}")
 if nsec3_do["ad"] or nsec3_do["cd"]:
     raise AssertionError(f"direct NSEC3 DO response set AD/CD unexpectedly: {nsec3_do}")
 
@@ -444,7 +444,7 @@ nsec3_non_do = exchange(0xE302, NSEC3_OWNER, NSEC3, payload=4096, do=False)
 if nsec3_non_do["answer_types"] != [NSEC3]:
     raise AssertionError(f"direct non-DO NSEC3 query did not return only transferred NSEC3: {nsec3_non_do}")
 if nsec3_non_do["opt_ttls"] and nsec3_non_do["opt_ttls"][0] & 0x8000:
-    raise AssertionError(f"direct non-DO NSEC3 query set response DO bit: {nsec3_non_do}")
+    raise AssertionError(f"direct non-DO NSEC3 query failed to copy cleared query DO bit: {nsec3_non_do}")
 
 nsec3param_do = exchange(0xE303, "alpha.test.", NSEC3PARAM, payload=4096, do=True)
 if nsec3param_do["rcode"] != 0 or nsec3param_do["tc"]:

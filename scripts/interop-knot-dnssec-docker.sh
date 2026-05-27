@@ -268,7 +268,7 @@ if positive_do["rcode"] != 0 or positive_do["tc"]:
 if A not in positive_do["answer_types"] or RRSIG not in positive_do["answer_types"]:
     raise AssertionError(f"positive DO did not include A and covering RRSIG: {positive_do}")
 if not has_response_do(positive_do):
-    raise AssertionError(f"positive DO response did not set response DO bit: {positive_do}")
+    raise AssertionError(f"positive DO response did not copy query DO bit: {positive_do}")
 if positive_do["ad"] or positive_do["cd"]:
     raise AssertionError(f"positive DO response set AD/CD unexpectedly: {positive_do}")
 
@@ -286,7 +286,7 @@ if wildcard_do["answer_types"] != [A] or wildcard_do["answer_owners"] != ["wildc
 if NSEC3 not in wildcard_do["authority_types"] or RRSIG not in wildcard_do["authority_types"]:
     raise AssertionError(f"wildcard positive DO lacked NSEC3/RRSIG exact-name absence proof: {wildcard_do}")
 if not has_response_do(wildcard_do):
-    raise AssertionError(f"wildcard positive DO response did not set response DO bit: {wildcard_do}")
+    raise AssertionError(f"wildcard positive DO response did not copy query DO bit: {wildcard_do}")
 
 nxdomain_do = exchange(0xA003, "missing.mail.alpha.test.", A, payload=4096, do=True)
 if nxdomain_do["rcode"] != 3:
@@ -294,7 +294,7 @@ if nxdomain_do["rcode"] != 3:
 if SOA not in nxdomain_do["authority_types"] or NSEC3 not in nxdomain_do["authority_types"] or RRSIG not in nxdomain_do["authority_types"]:
     raise AssertionError(f"NXDOMAIN DO lacked SOA/NSEC3/RRSIG proof material: {nxdomain_do}")
 if not has_response_do(nxdomain_do):
-    raise AssertionError(f"NXDOMAIN DO response did not set response DO bit: {nxdomain_do}")
+    raise AssertionError(f"NXDOMAIN DO response did not copy query DO bit: {nxdomain_do}")
 
 nodata_do = exchange(0xA004, "www.alpha.test.", AAAA, payload=4096, do=True)
 if nodata_do["rcode"] != 0 or nodata_do["answer_types"]:
@@ -310,7 +310,7 @@ if NS not in signed_referral_do["authority_types"] or DS not in signed_referral_
 if NSEC3 in signed_referral_do["authority_types"]:
     raise AssertionError(f"signed-child referral DO unexpectedly used NSEC3 no-DS proof: {signed_referral_do}")
 if not has_response_do(signed_referral_do):
-    raise AssertionError(f"signed-child referral DO response did not set response DO bit: {signed_referral_do}")
+    raise AssertionError(f"signed-child referral DO response did not copy query DO bit: {signed_referral_do}")
 
 unsigned_referral_do = exchange(0xA00A, "www.unsigned-child.alpha.test.", A, payload=4096, do=True)
 if unsigned_referral_do["rcode"] != 0 or unsigned_referral_do["answer_types"]:
@@ -320,7 +320,7 @@ if NS not in unsigned_referral_do["authority_types"] or NSEC3 not in unsigned_re
 if DS in unsigned_referral_do["authority_types"]:
     raise AssertionError(f"unsigned-child referral DO unexpectedly included DS proof: {unsigned_referral_do}")
 if not has_response_do(unsigned_referral_do):
-    raise AssertionError(f"unsigned-child referral DO response did not set response DO bit: {unsigned_referral_do}")
+    raise AssertionError(f"unsigned-child referral DO response did not copy query DO bit: {unsigned_referral_do}")
 
 dnskey = exchange(0xA005, "alpha.test.", DNSKEY, payload=4096, do=False)
 if DNSKEY not in dnskey["answer_types"] or RRSIG in dnskey["answer_types"]:
@@ -330,13 +330,13 @@ nsec3_do = exchange(0xA006, NSEC3_OWNER, NSEC3, payload=4096, do=True)
 if nsec3_do["rcode"] != 0 or NSEC3 not in nsec3_do["answer_types"] or RRSIG not in nsec3_do["answer_types"]:
     raise AssertionError(f"direct NSEC3 DO query did not serve NSEC3 plus covering RRSIG: {nsec3_do}")
 if not has_response_do(nsec3_do):
-    raise AssertionError(f"direct NSEC3 DO response did not set response DO bit: {nsec3_do}")
+    raise AssertionError(f"direct NSEC3 DO response did not copy query DO bit: {nsec3_do}")
 
 nsec3_non_do = exchange(0xA007, NSEC3_OWNER, NSEC3, payload=4096, do=False)
 if nsec3_non_do["answer_types"] != [NSEC3]:
     raise AssertionError(f"direct non-DO NSEC3 query did not suppress covering RRSIG: {nsec3_non_do}")
 if has_response_do(nsec3_non_do):
-    raise AssertionError(f"direct non-DO NSEC3 query set response DO bit: {nsec3_non_do}")
+    raise AssertionError(f"direct non-DO NSEC3 query failed to copy cleared query DO bit: {nsec3_non_do}")
 
 print("Knot signed-primary DNSSEC runtime interop passed")
 PY
