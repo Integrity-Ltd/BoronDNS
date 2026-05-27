@@ -364,6 +364,12 @@ REVIEW_DEFER_CODE_BACKING = {
     ],
 }
 
+PROCESS_ONLY_REVIEW_DEFER_ITEMS = [
+    "30-day soak test",
+    "CVE governance",
+    "External operator acceptance",
+]
+
 FEATURES = {
     "IXFR": {
         "aliases": ["IXFR"],
@@ -733,6 +739,30 @@ def main() -> int:
                     f"review-deferred item {item!r} to implemented feature "
                     f"scope term {term!r}"
                 )
+    covered_review_defer_items = set(REVIEW_DEFER_CODE_BACKING)
+    covered_review_defer_items.update(PROCESS_ONLY_REVIEW_DEFER_ITEMS)
+    missing_review_defer_coverage = (
+        set(REVIEW_SUGGESTED_DEFER_ITEMS) - covered_review_defer_items
+    )
+    unexpected_review_defer_coverage = (
+        covered_review_defer_items - set(REVIEW_SUGGESTED_DEFER_ITEMS)
+    )
+    if missing_review_defer_coverage:
+        errors.append(
+            "review defer items lack code-backed or process-only classification: "
+            + ", ".join(sorted(missing_review_defer_coverage))
+        )
+    if unexpected_review_defer_coverage:
+        errors.append(
+            "review defer classification names unknown review items: "
+            + ", ".join(sorted(unexpected_review_defer_coverage))
+        )
+    for item in PROCESS_ONLY_REVIEW_DEFER_ITEMS:
+        if item not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits process-only "
+                f"review defer item {item!r}"
+            )
     for term in [
         "Current Intentional Code Alignment Gaps",
         "XoT TLS version compatibility",
@@ -893,7 +923,9 @@ def main() -> int:
         "srs_review_disposition_check=passed "
         f"review_baseline={len(REVIEW_BASELINE_SCOPE)} "
         f"features={len(FEATURES)} support_tooling={len(SUPPORT_TOOLING)} "
-        f"review_defer_backing={len(REVIEW_DEFER_CODE_BACKING)}"
+        f"review_defer_items={len(REVIEW_SUGGESTED_DEFER_ITEMS)} "
+        f"code_backed_review_defer_items={len(REVIEW_DEFER_CODE_BACKING)} "
+        f"process_only_review_defer_items={len(PROCESS_ONLY_REVIEW_DEFER_ITEMS)}"
     )
     return 0
 

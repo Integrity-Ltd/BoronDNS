@@ -103,6 +103,12 @@ a current SRS, architecture, or gap-register row explicitly says so. OxideGun's
 AF_XDP backend is test-tool scope only; OxideDNS server XDP/eBPF remains a
 deferred unsafe-boundary track.
 
+Not every review-suggested defer item has a code-backed retained slice.
+`30-day soak test`, `CVE governance`, and `External operator acceptance` are
+process/evidence boundaries only: they remain documented as later
+release/operations work, but they do not correspond to OxideDNS server protocol
+code that should appear in `docs/implemented-feature-scope.md`.
+
 ## Primary Sources Checked
 
 | Topic | Primary source | Current disposition |
