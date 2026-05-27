@@ -88,6 +88,7 @@ FORBIDDEN_TEXT = {
     "TSIG secret loading from environment": "SRS must align ODS-NFR-SEC-008 with inline and file-backed TSIG secrets",
     "TSIG environment-variable loading": "SRS must not claim TSIG secrets load directly from environment variables",
     "environment-variable secret provisioning": "SRS must recommend file-backed external secret projection instead",
+    "query.processing_timeout_ms": "SRS must not specify the removed per-query processing timeout configuration parameter",
 }
 
 REQUIRED_TEXT = [
@@ -143,6 +144,7 @@ REQUIRED_TEXT = [
     "Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model.",
     "Aligns ODS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model",
     "Production operator documentation (per ODS-NFR-MAINT-009) MUST recommend file-backed secret provisioning",
+    "OxideDNS does not define a separate per-query CPU-processing timeout parameter.",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
     "It is not stored in this repository.",

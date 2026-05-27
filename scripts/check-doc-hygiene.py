@@ -50,6 +50,7 @@ BANNED_PHRASES = [
     "TSIG secret loading from environment",
     "TSIG environment-variable loading",
     "environment-variable secret provisioning",
+    "query.processing_timeout_ms",
 ]
 
 SOURCE_BANNED_PHRASES = [
@@ -63,8 +64,8 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/mvp-gap-register.md": [
         "kind of blocker",
         "Non-normative quality candidate",
-        "Implementation-or-SRS decision",
         "Formal release evidence target",
+        "Rows marked",
         "not an Engineering MVP blocker unless promoted to a requirement",
         "documentation ownership map",
     ],
