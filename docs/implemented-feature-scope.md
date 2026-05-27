@@ -25,6 +25,11 @@ source paths, evidence paths, implementation markers, and representative test
 markers. If code removes one of these slices, update this document, the review
 disposition, the Engineering MVP scope, and the gap register in the same patch.
 
+This document is intentionally code-owned. External review suggestions to trim
+scope are reconciled in `docs/srs-review-disposition.md`, but this file remains
+the authority on whether a slice is actually implemented, what exact behavior it
+claims, and what adjacent behavior it does not claim.
+
 ## Retained Slices
 
 | Feature family | Retained implementation slice | Not claimed by this slice | Current source ownership | Representative evidence ownership |

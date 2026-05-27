@@ -103,6 +103,69 @@ REVIEW_SUGGESTED_DEFER_ITEMS = [
     "External operator acceptance",
 ]
 
+REQUIRED_MVP_TRIM_ROW_TERMS = {
+    "Catalog zones": [
+        "Retained in Engineering MVP because RFC 9432 catalog transfer",
+        "release-specific catalog evidence remains tracked outside the SRS body",
+    ],
+    "XoT": [
+        "Retained in Engineering MVP as outbound zone-transfer transport only",
+        "Client-query DoT and NOTIFY-over-TLS listeners remain out of scope",
+    ],
+    "DNS Cookies": [
+        "Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism",
+        "not described as TSIG-equivalent authentication",
+    ],
+    "RRL beyond a simple first version": [
+        "Retained in Engineering MVP as the implemented process-wide UDP response limiter",
+        "per-zone RRL remains out of current scope",
+    ],
+    "Extended DNS Errors": [
+        "Retained only as the bounded implemented profile",
+        "Current EDE output is limited to `Not Ready` and `Unsupported NSEC3 Iterations`",
+    ],
+    "CHAOS `version.bind` / `id.server`": [
+        "Retained as disabled-by-default, opt-in diagnostics",
+        "operators must configure exposed values intentionally",
+    ],
+    "Full DNSSEC negative proof synthesis": [
+        "Not accepted as the code boundary",
+        "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material",
+    ],
+    "Full Prometheus metric catalogue": [
+        "Partially retained as implemented operational metrics",
+        "Opt-in pipeline timing and response-cache candidate metrics are measurement aids",
+    ],
+    "Packed zone store / pre-baked response cache": [
+        "Deferred",
+        "The response-cache candidate counters only measure whether a future cache might be useful",
+    ],
+    "30-day soak test": [
+        "Deferred from Engineering MVP execution",
+        "completed evidence belongs to later SRS acceptance execution",
+    ],
+    "Full three-primary interop matrix": [
+        "Deferred from Engineering MVP execution",
+        "the formal all-primary ODS-VER-003 matrix remains release acceptance",
+    ],
+    "Exact performance MUSTs": [
+        "Deferred from Engineering MVP execution",
+        "Reference Hardware/Profile conformance remains release acceptance",
+    ],
+    "Release signing": [
+        "Deferred from Engineering MVP execution",
+        "signed artifact evidence is a release gate",
+    ],
+    "CVE governance": [
+        "Retained as documentation/process scope, not protocol-code scope",
+        "release-specific audit and exception evidence remains release acceptance",
+    ],
+    "External operator acceptance": [
+        "Deferred from Engineering MVP execution",
+        "external operator sign-off remains a formal release gate",
+    ],
+}
+
 FEATURES = {
     "IXFR": {
         "aliases": ["IXFR"],
@@ -436,6 +499,14 @@ def main() -> int:
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits review-suggested "
                 f"defer item {item!r}"
             )
+    for item, row_terms in REQUIRED_MVP_TRIM_ROW_TERMS.items():
+        for term in row_terms:
+            if term not in disposition:
+                errors.append(
+                    f"{DISPOSITION_PATH.relative_to(ROOT)} omits required "
+                    f"code-aligned disposition for review defer item {item!r}: "
+                    f"{term!r}"
+                )
     for scope_path, scope_text in scope_pointer_texts.items():
         if "docs/implemented-feature-scope.md" not in scope_text:
             errors.append(
