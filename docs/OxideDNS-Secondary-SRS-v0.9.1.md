@@ -98,7 +98,7 @@
    - 7.6 Test Plan Boundary
    - 7.7 Audit Cycle Closure *(new in v0.7)*
 8. Appendix A — Requirement-to-RFC Traceability Matrix
-9. Appendix B — Resource Record Type Catalogue
+9. Appendix B — Resource Record Type Catalogue Boundary
 10. Appendix C — Out-of-Scope Items and Post-MVP Scope
 11. Appendix D — Glossary
 12. Appendix E — Reference Hardware Profile and Reference Query Mix
@@ -3597,293 +3597,68 @@ For project navigation convenience, the following inverse index is provided. Eac
 | 4.18 Negative Requirements | NEG | (cross-references to enforcing requirements) |
 | 4.19 DNS Cookies | COOKIE | 7873, 9018 |
 
-# Appendix B — Resource Record Type Catalogue
+# Appendix B — Resource Record Type Catalogue Boundary
 
 ## B.1 Purpose
 
-This appendix is the implementer's reference for the resource record types listed in the catalogue of §4.14 (ODS-FR-RR-001). For each known type it provides the RDATA structure summary, the compression policy, owner-name conventions where they exist, and notes on parsing subtleties or cross-references to dependent SRS subsections. The catalogue table reproduced in B.2 below is identical in content to the table in §4.14; per-type expansion follows.
-
-Current code alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`. That companion document records the source paths, short evidence pointers, and out-of-catalogue type boundary. External MVP-trim reviews do not remove a type from the Engineering MVP scope unless the code, SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.
-
-The §4.14 table is the *normative* source — it is part of the normative requirement ODS-FR-RR-001. This appendix is implementation-supporting documentation. Where the two are silently in conflict, §4.14 prevails; the Appendix should be updated to match.
-
-When a new known type is added to the server's type-aware repertoire, both the §4.14 catalogue table and the corresponding entry in this appendix must be updated in the same SRS revision.
-
-### Notation
-
-RDATA structures are described as a sequence of fields separated by `|`. Field types follow this convention:
-
-- **uint8, uint16, uint32** — unsigned integers of the indicated width, network byte order;
-- **domain name** — wire-format DNS name as defined by RFC 1035 §3.1, with compression status per the per-type compression policy;
-- **character-string** — length-octet-prefixed octet sequence, up to 255 octets, per RFC 1035 §3.3;
-- **variable octets** — opaque octet sequence whose length is implied by RDLENGTH minus the size of fixed-position fields.
-
-## B.2 Known RR Types (Catalogue)
-
-The complete normative catalogue, reproduced from §4.14:
-
-| RR Type | Code | Specifying RFC | RDATA Compression Policy |
-|---|---|---|---|
-| A | 1 | RFC 1035 §3.4.1 | N/A |
-| NS | 2 | RFC 1035 §3.3.11 | Permitted (NSDNAME) |
-| CNAME | 5 | RFC 1035 §3.3.1 | Permitted (CNAME field) |
-| SOA | 6 | RFC 1035 §3.3.13 | Permitted (MNAME, RNAME) |
-| PTR | 12 | RFC 1035 §3.3.12 | Permitted (PTRDNAME) |
-| HINFO | 13 | RFC 1035 §3.3.2 | N/A |
-| MX | 15 | RFC 1035 §3.3.9 | Permitted (EXCHANGE) |
-| TXT | 16 | RFC 1035 §3.3.14 | N/A |
-| AAAA | 28 | RFC 3596 §2.1 | N/A |
-| SRV | 33 | RFC 2782 | Prohibited (TARGET) |
-| NAPTR | 35 | RFC 3403 §4 | Prohibited (REPLACEMENT) |
-| DNAME | 39 | RFC 6672 §2 | Prohibited (TARGET) |
-| DS | 43 | RFC 4034 §5 | N/A |
-| RRSIG | 46 | RFC 4034 §3 | Prohibited (Signer's Name) |
-| NSEC | 47 | RFC 4034 §4 | Prohibited (Next Domain Name) |
-| DNSKEY | 48 | RFC 4034 §2 | N/A |
-| NSEC3 | 50 | RFC 5155 §3 | N/A |
-| NSEC3PARAM | 51 | RFC 5155 §4 | N/A |
-| TLSA | 52 | RFC 6698 §2.1 | N/A |
-| SVCB | 64 | RFC 9460 §2.2 | Prohibited (TargetName) |
-| HTTPS | 65 | RFC 9460 §2.2 | Prohibited (TargetName) |
-| URI | 256 | RFC 7553 §4.5 | N/A |
-
-### B.2.1 A — IPv4 Address (code 1)
-
-*RFC.* RFC 1035 §3.4.1.
-*RDATA.* Four-octet IPv4 address (network byte order).
-*Compression.* Not applicable.
-*Validation.* RDLENGTH MUST be exactly 4 octets per ODS-FR-RR-007.
-
-### B.2.2 NS — Name Server (code 2)
-
-*RFC.* RFC 1035 §3.3.11.
-*RDATA.* `NSDNAME` (domain name) — a name server authoritative for the zone whose apex (or whose delegation point) is the owner name.
-*Compression.* Permitted in NSDNAME.
-*Owner-name convention.* Either the zone apex (server's own authoritative servers) or a sub-domain owner name (marking a delegation cut to that child zone).
-*Cross-references.* ODS-FR-RR-003 requires at least one NS at zone apex. NS RRsets in the authority or answer sections trigger glue inclusion per ODS-FR-QRY-017.
-
-### B.2.3 CNAME — Canonical Name (code 5)
-
-*RFC.* RFC 1035 §3.3.1.
-*RDATA.* `CNAME` (domain name) — the canonical name to which the owner name aliases.
-*Compression.* Permitted.
-*Cross-references.* CNAME exclusivity per ODS-FR-RR-005 (no coexistence with other RRsets at the same owner name except DNSSEC RRs). CNAME chain handling per ODS-FR-QRY-010 through ODS-FR-QRY-013.
-
-### B.2.4 SOA — Start of Authority (code 6)
-
-*RFC.* RFC 1035 §3.3.13.
-*RDATA.* `MNAME` (domain name, master server) `|` `RNAME` (domain name, responsible party mailbox, with `@` encoded as the first label boundary) `|` `SERIAL` (uint32) `|` `REFRESH` (uint32 timer field, seconds) `|` `RETRY` (uint32 timer field, seconds) `|` `EXPIRE` (uint32 timer field, seconds) `|` `MINIMUM` (uint32 timer field, seconds).
-*Compression.* Permitted in MNAME and RNAME.
-*Owner-name convention.* MUST be the zone apex per ODS-FR-RR-002. Exactly one SOA per zone.
-*Notes.*
-- SERIAL is compared using RFC 1982 arithmetic per ODS-FR-RR-004.
-- MINIMUM was redefined by RFC 2308 §3 as the maximum TTL for negative-response caching, not the per-RR default TTL it originally was in RFC 1035.
-- REFRESH, RETRY, EXPIRE drive the zone state machine of §4.16.
-
-### B.2.5 PTR — Pointer (code 12)
-
-*RFC.* RFC 1035 §3.3.12.
-*RDATA.* `PTRDNAME` (domain name) — the name the pointer record resolves to (typically a hostname for reverse DNS).
-*Compression.* Permitted.
-*Owner-name convention.* For IPv4 reverse DNS: reversed octets under `in-addr.arpa` (e.g., `1.2.0.192.in-addr.arpa` for the address 192.0.2.1). For IPv6 reverse: reversed nibbles under `ip6.arpa`.
-
-### B.2.6 HINFO — Host Information (code 13)
-
-*RFC.* RFC 1035 §3.3.2.
-*RDATA.* `CPU` (character-string) `|` `OS` (character-string).
-*Compression.* Not applicable.
-*Notes.* HINFO is largely deprecated for operational use due to information-disclosure concerns. The HINFO synthesis pattern of RFC 8482 §4.2 for ANY-query minimisation is explicitly prohibited by ODS-NEG-015; this server's minimal-ANY policy returns a real RRset per ODS-FR-QRY-005.
-
-### B.2.7 MX — Mail Exchange (code 15)
-
-*RFC.* RFC 1035 §3.3.9.
-*RDATA.* `PREFERENCE` (uint16) `|` `EXCHANGE` (domain name) — preference value (lower = preferred) and the mail exchange host name.
-*Compression.* Permitted in EXCHANGE.
-*Cross-references.* Triggers additional-section inclusion of A/AAAA for EXCHANGE per ODS-FR-QRY-018.
-
-### B.2.8 TXT — Text (code 16)
-
-*RFC.* RFC 1035 §3.3.14.
-*RDATA.* One or more length-prefixed character-strings, each up to 255 octets; total RDATA up to 65535 octets.
-*Compression.* Not applicable.
-*Notes.* TXT is the carrier for a wide variety of unstructured key=value content (SPF — though SPF type 99 is obsolete and TXT is now used; DKIM; DMARC; CAA-equivalent text records pre-CAA; ACME challenges; etc.). The server preserves the character-string structure (including individual string boundaries) exactly as received.
-
-### B.2.9 AAAA — IPv6 Address (code 28)
-
-*RFC.* RFC 3596 §2.1.
-*RDATA.* Sixteen-octet IPv6 address (network byte order).
-*Compression.* Not applicable.
-*Validation.* RDLENGTH MUST be exactly 16 octets per ODS-FR-RR-007.
-
-### B.2.10 SRV — Service Location (code 33)
-
-*RFC.* RFC 2782; non-compressibility clarified by RFC 6604.
-*RDATA.* `PRIORITY` (uint16) `|` `WEIGHT` (uint16) `|` `PORT` (uint16) `|` `TARGET` (domain name).
-*Compression.* Prohibited in TARGET.
-*Owner-name convention.* `_service._proto.name` (e.g., `_sip._tcp.example.com`, `_xmpp-client._tcp.example.com`).
-*Cross-references.* Triggers additional-section inclusion of A/AAAA for TARGET per ODS-FR-QRY-018.
-
-### B.2.11 NAPTR — Naming Authority Pointer (code 35)
-
-*RFC.* RFC 3403 §4.
-*RDATA.* `ORDER` (uint16) `|` `PREFERENCE` (uint16) `|` `FLAGS` (character-string) `|` `SERVICES` (character-string) `|` `REGEXP` (character-string) `|` `REPLACEMENT` (domain name).
-*Compression.* Prohibited in REPLACEMENT.
-*Notes.*
-- The REGEXP field may contain octets that would be otherwise restricted in DNS data; the server preserves byte content exactly.
-- REPLACEMENT is meaningful for further DNS resolution only when FLAGS indicate continuation (per RFC 3404); the server includes A/AAAA glue for REPLACEMENT per ODS-FR-QRY-018 where REPLACEMENT names a record in a served zone.
-
-### B.2.12 DNAME — Delegation Name (code 39)
-
-*RFC.* RFC 6672 §2.
-*RDATA.* `TARGET` (domain name) — the redirection target for the DNAME subtree.
-*Compression.* Prohibited in TARGET (per RFC 3597 §4, as a post-RFC-3597 type).
-*Notes.*
-- Triggers CNAME synthesis per ODS-FR-QRY-014, ODS-FR-QRY-015.
-- DNAME cannot coexist with CNAME at the same owner name per ODS-FR-RR-006.
-- Edge cases (DNAME at apex, DNAME above a delegation, synthesised-name length overflow) per RFC 6672 §3.3.
-
-### B.2.13 DS — Delegation Signer (code 43)
-
-*RFC.* RFC 4034 §5.
-*RDATA.* `KEY TAG` (uint16) `|` `ALGORITHM` (uint8) `|` `DIGEST TYPE` (uint8) `|` `DIGEST` (variable octets).
-*Compression.* Not applicable.
-*Owner-name convention.* The owner name is the child zone apex; the DS RRset itself resides in the parent zone (the secondary serves DS as part of the parent zone's data).
-*Cross-references.* Used in DNSSEC referral response composition per ODS-FR-DNSSEC-007.
-
-### B.2.14 RRSIG — Resource Record Signature (code 46)
-
-*RFC.* RFC 4034 §3.
-*RDATA.* `TYPE COVERED` (uint16) `|` `ALGORITHM` (uint8) `|` `LABELS` (uint8) `|` `ORIGINAL TTL` (uint32) `|` `SIGNATURE EXPIRATION` (uint32, seconds since epoch) `|` `SIGNATURE INCEPTION` (uint32, seconds since epoch) `|` `KEY TAG` (uint16) `|` `SIGNER'S NAME` (domain name, canonical/uncompressed) `|` `SIGNATURE` (variable octets, algorithm-specific encoding).
-*Compression.* Prohibited in SIGNER'S NAME (per RFC 4034 §6.2; canonical form).
-*Cross-references.*
-- The TYPE COVERED field identifies which RRset this RRSIG signs; required by §4.13 response composition (per ODS-FR-DNSSEC-001).
-- The server does not generate RRSIG records (ODS-NEG-002).
-
-### B.2.15 NSEC — Next Secure (code 47)
-
-*RFC.* RFC 4034 §4.
-*RDATA.* `NEXT DOMAIN NAME` (domain name, uncompressed per RFC 4034 §6.2) `|` `TYPE BIT MAPS` (variable encoding per RFC 4034 §4.1.2).
-*Compression.* Prohibited in NEXT DOMAIN NAME.
-*Owner-name convention.* The owner name is the existent name in the canonical order; NEXT DOMAIN NAME points to the next existent name. NSEC records collectively form a chain through all existent owner names in the zone.
-*Cross-references.* Used in authenticated negative responses per ODS-FR-DNSSEC-004, ODS-FR-DNSSEC-005, ODS-FR-DNSSEC-006.
-
-### B.2.16 DNSKEY — DNS Public Key (code 48)
-
-*RFC.* RFC 4034 §2.
-*RDATA.* `FLAGS` (uint16; bit 7 = ZONE flag, bit 15 = SEP flag) `|` `PROTOCOL` (uint8, MUST be 3) `|` `ALGORITHM` (uint8) `|` `PUBLIC KEY` (variable octets, algorithm-specific encoding).
-*Compression.* Not applicable.
-*Cross-references.* Per ODS-NEG-002, this server does not generate DNSKEY records or maintain DNSSEC key material.
-
-### B.2.17 NSEC3 — Hashed Authenticated Denial (code 50)
-
-*RFC.* RFC 5155 §3.
-*RDATA.* `HASH ALGORITHM` (uint8) `|` `FLAGS` (uint8) `|` `ITERATIONS` (uint16) `|` `SALT LENGTH` (uint8) `|` `SALT` (variable, length per SALT LENGTH) `|` `HASH LENGTH` (uint8) `|` `NEXT HASHED OWNER NAME` (variable, length per HASH LENGTH) `|` `TYPE BIT MAPS` (per RFC 4034 §4.1.2).
-*Compression.* Not applicable.
-*Owner-name convention.* The owner name is the Base32hex-encoded hash of an existent name, with the zone apex appended (per RFC 5155 §1.3, §7).
-*Cross-references.* Used in authenticated negative responses per ODS-FR-DNSSEC-004, ODS-FR-DNSSEC-005, ODS-FR-DNSSEC-006. Per ODS-NEG-002, this server does not generate NSEC3 records.
-
-### B.2.18 NSEC3PARAM — NSEC3 Parameters (code 51)
-
-*RFC.* RFC 5155 §4.
-*RDATA.* `HASH ALGORITHM` (uint8) `|` `FLAGS` (uint8) `|` `ITERATIONS` (uint16) `|` `SALT LENGTH` (uint8) `|` `SALT` (variable).
-*Compression.* Not applicable.
-*Owner-name convention.* MUST be the zone apex (per RFC 5155).
-*Notes.* Conveys the parameters of the NSEC3 chain used in the zone (resolvers need these to compute matching NSEC3 owner names for negative-response validation).
-
-### B.2.19 TLSA — DANE TLS Authentication (code 52)
-
-*RFC.* RFC 6698 §2.1.
-*RDATA.* `CERT USAGE` (uint8) `|` `SELECTOR` (uint8) `|` `MATCHING TYPE` (uint8) `|` `CERTIFICATE ASSOCIATION DATA` (variable octets).
-*Compression.* Not applicable.
-*Owner-name convention.* `_port._proto.name` (e.g., `_443._tcp.www.example.com`).
-*Notes.* This server serves TLSA records as data; DANE validation semantics are out of scope per ODS-INV-001 (the server is not a validator).
-
-### B.2.20 SVCB — Service Binding (code 64)
-
-*RFC.* RFC 9460 §2.2.
-*RDATA.* `SVCPRIORITY` (uint16) `|` `TARGETNAME` (domain name, uncompressed) `|` `SVCPARAMS` (variable: an ordered list of `SvcParamKey` (uint16) `|` `SvcParamLength` (uint16) `|` `SvcParamValue` (variable, per-key encoding) triples).
-*Compression.* Prohibited in TARGETNAME and in any names appearing within SVCPARAMS.
-*Notes.*
-- `SVCPRIORITY = 0` indicates AliasMode (TARGETNAME is the alias target; SVCPARAMS MUST be empty).
-- `SVCPRIORITY > 0` indicates ServiceMode (TARGETNAME and SVCPARAMS describe a concrete service endpoint).
-- Common SvcParamKeys include `alpn` (1), `no-default-alpn` (2), `port` (3), `ipv4hint` (4), `ech` (5), `ipv6hint` (6).
-*Cross-references.* Triggers additional-section inclusion of A/AAAA for TARGETNAME per ODS-FR-QRY-019.
-
-### B.2.21 HTTPS — HTTPS Service Binding (code 65)
-
-*RFC.* RFC 9460 §2.2.
-*RDATA.* Structurally identical to SVCB.
-*Compression.* As for SVCB.
-*Notes.* HTTPS is the HTTPS-specific instantiation of SVCB. The wire format is identical; behavioural and parsing requirements are identical. Used by clients to discover HTTPS service parameters (ALPN profile, port, IP hints) for a name without requiring an explicit HTTPS connection first.
-
-### B.2.22 URI — Uniform Resource Identifier (code 256)
-
-*RFC.* RFC 7553 §4.5.
-*RDATA.* `PRIORITY` (uint16) `|` `WEIGHT` (uint16) `|` `TARGET` (one or more raw URI octets; the URI itself, not a DNS domain name and not DNS `character-string` wire format).
-*Compression.* Not applicable.
-*Owner-name convention.* `_service._proto.name` (similar to SRV).
-*Notes.* RFC 7553 §4.5 defines the TARGET as all remaining RDATA octets after the two uint16 fields, without the presentation-format quotes and with length greater than zero. The server validates that the target is present and treats the URI octets opaquely — no URI parsing or normalisation.
-
-## B.3 Pseudo-Resource Records
-
-Pseudo-RRs are protocol mechanisms encoded in RR form but never appearing as authoritative zone content. They are not eligible for inclusion in zone transfers; their handling is specified in dedicated subsections.
-
-### B.3.1 OPT — EDNS0 Pseudo-RR (code 41)
-
-*RFC.* RFC 6891.
-*Handling.* Per §4.11 (EDNS).
-*Appearance.* Additional section only, at most one per message, owner name MUST be root, TYPE = 41.
-*RDATA.* Variable; ordered list of EDNS option pairs.
-*Notes.* The TTL field of an OPT RR carries the EDNS extended-RCODE (high 8 bits), VERSION (next 8 bits), DO flag (bit 16), and reserved Z bits. The class field carries the requestor's UDP payload size. See §4.11 for full requirements.
-
-### B.3.2 TSIG — Transaction Signature (code 250)
-
-*RFC.* RFC 8945.
-*Handling.* Per §4.9 (TSIG).
-*Appearance.* Last record of the additional section in TSIG-signed messages.
-*Notes.* The class field is always 255 (ANY); the TTL is always 0. The RDATA carries algorithm name, time signed, fudge, MAC, original ID, error code, and other-data. See §4.9 for full requirements.
-
-### B.3.3 TKEY — Transaction Key (code 249) — prohibited
-
-*RFC.* RFC 2930.
-*Handling.* Prohibited per ODS-NEG-014.
-*Disposition.* Queries with QTYPE = 249 receive RCODE = 1 (FORMERR) per ODS-FR-QRY-009. No TKEY processing code path exists in this server.
-
-## B.4 Out-of-Catalogue Types
-
-The following RR types are not in the type-aware catalogue of §4.14 and are handled under the unknown-type semantics of §4.4 (ODS-FR-URR-001 through ODS-FR-URR-009). They are accepted from primaries, stored bit-for-bit, served on direct query, and propagated faithfully without type-aware interpretation.
-
-| RR Type | Code | RFC | Notes |
-|---|---|---|---|
-| LOC | 29 | RFC 1876 | Geographic location |
-| SSHFP | 44 | RFC 4255 | SSH key fingerprint |
-| IPSECKEY | 45 | RFC 4025 | IPsec key |
-| SPF | 99 | RFC 7208 | Obsolete; superseded by TXT |
-| OPENPGPKEY | 61 | RFC 7929 | OpenPGP public key |
-| CSYNC | 62 | RFC 7477 | Child-to-parent synchronisation signal |
-| ZONEMD | 63 | RFC 8976 | Zone message digest |
-| SMIMEA | 53 | RFC 8162 | S/MIME certificate association |
-| CDS | 59 | RFC 7344 | Child DS (signalled to parent) |
-| CDNSKEY | 60 | RFC 7344 | Child DNSKEY (signalled to parent) |
-| CAA | 257 | RFC 8659 | Certification Authority Authorization |
-| HIP | 55 | RFC 8005 | Host Identity Protocol |
-
-This list is illustrative, not exhaustive. Any RR type code not in §4.14's catalogue and not enumerated as pseudo-RR or reserved is handled under §4.4.
-
-## B.5 Reserved Type Values
-
-Reserved type values 0 and 65535 are rejected per ODS-FR-URR-009 (zone transfers containing such records are aborted) and per ODS-FR-QRY-009 (queries using such values as QTYPE receive FORMERR). The IANA Private Use range (65280–65534 as of the current registry) is accepted and handled under §4.4.
-
-## B.6 Notes on Compression Policy
-
-The per-type compression policy in B.2 derives from two sources:
-
-- **Pre-RFC 3597 type definitions.** RR types whose RDATA structure was defined prior to RFC 3597 (1996-era types: NS, MD, MF, CNAME, SOA, MB, MG, MR, PTR, MINFO, MX, RP, AFSDB, RT, SIG, PX, NXT) may use DNS name compression in their RDATA name fields when emitted.
-- **Post-RFC 3597 type definitions.** RR types defined after RFC 3597 — including SRV, DNAME, RRSIG, NSEC, SVCB, HTTPS, NAPTR (per RFC 3597 §4 and RFC 6604 specifically for SRV) — MUST NOT use DNS name compression in their RDATA name fields.
-
-The rationale, articulated in RFC 3597 §4, is that compression is meaningful only when both sender and receiver share semantic understanding of where names appear in the RDATA. For types unknown to one party, compressed names would be uninterpretable. The simplest stable rule — that types defined after RFC 3597 do not use compression — preserves forward compatibility.
-
-The catalogue table of B.2 records the policy per type. When emitting responses, the server follows the policy per ODS-FR-QRY-023 (general compression policy) and ODS-FR-URR-006 (no compression for unknown types).
+This appendix records the maintenance boundary for the resource-record catalogue
+specified by §4.14 (`ODS-FR-RR-001`). It does not reproduce the §4.14 table or
+the implementation note table; those copies are intentionally avoided so the
+known-type set has one normative owner and one code-alignment owner.
+
+The §4.14 table is the normative source for the known RR type set, each type's
+specifying RFC, and the per-type RDATA compression policy. Current code
+alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`. That
+companion document records the source paths, short evidence pointers, current
+type-aware behavior, and out-of-catalogue type boundary. External MVP-trim
+reviews do not remove a type from the Engineering MVP scope unless the code,
+SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.
+
+## B.2 Maintenance Rules
+
+When the type-aware repertoire changes, the same patch must update:
+
+- §4.14, if the normative known-type set, specifying RFC, or compression policy
+  changes;
+- `docs/rr-type-catalogue.md`, if code ownership, validation behavior,
+  evidence pointers, or intentionally unknown examples change;
+- `docs/appendix-a-traceability-matrix.md`, where the `ODS-FR-RR-*` evidence
+  row needs a different status or evidence pointer;
+- `docs/rfc-compliance-assertions.md`, where the change affects an RFC
+  compliance assertion; and
+- the parser/serving tests or interop scripts that prove the change.
+
+The SRS body owns externally observable requirements. The companion catalogue
+document owns source-path detail and test/evidence pointers. This appendix owns
+only the rule that keeps those documents synchronized.
+
+## B.3 Pseudo, Meta, Reserved, and Private-Use Types
+
+Pseudo-RRs are protocol mechanisms encoded in RR form but never appearing as
+authoritative zone content. OPT handling is specified in §4.11, TSIG handling
+in §4.9, and TKEY is prohibited by `ODS-NEG-014`. Transfer/meta/query types
+that are not valid zone content, including OPT, TKEY, TSIG, IXFR, AXFR, MAILB,
+MAILA, and ANY, are rejected from zone transfers under `ODS-FR-URR-009`.
+
+Reserved type values 0 and 65535 are rejected per `ODS-FR-URR-009` for zone
+transfer content and per `ODS-FR-QRY-009` for query QTYPE handling. Private-use
+type values remain accepted under the unknown-RR semantics of §4.4 unless a
+future SRS revision makes a narrower rule.
+
+Types not listed in §4.14 and not otherwise prohibited are handled under
+§4.4 (`ODS-FR-URR-001` through `ODS-FR-URR-009`): they are accepted from
+primaries, stored bit-for-bit, served on direct query, and not interpreted as
+type-aware RDATA. Current examples and code ownership live in
+`docs/rr-type-catalogue.md`.
+
+## B.4 Compression Policy
+
+The per-type compression policy is part of the §4.14 catalogue. Response
+composition follows `ODS-FR-QRY-023` for known types and `ODS-FR-URR-006` for
+unknown types. The policy is based on RFC 3597 §4's compatibility rule: RDATA
+name compression is not safe for RR types whose RDATA structure may be unknown
+to one endpoint. RFC 6604 supplies the specific SRV clarification used by the
+current catalogue.
 
 # Appendix C — Out-of-Scope Items and Post-MVP Scope
 
