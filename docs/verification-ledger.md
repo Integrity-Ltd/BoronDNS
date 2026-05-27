@@ -2,10 +2,10 @@
 
 This ledger is the lightweight working record for evidence against the SRS
 verification requirements, especially ODS-VER-002 and ODS-VER-009. It is not a
-complete per-requirement traceability matrix yet. The first slice groups related
+complete per-requirement traceability matrix yet. It groups related
 requirements at a high level so Engineering MVP and SRS acceptance progress has
-one maintainable place to accumulate evidence while implementation is still
-moving.
+one maintainable place to accumulate evidence while Appendix A carries the more
+detailed requirement traceability record.
 
 The SRS-defined MVP in ODS-VER-008 is treated here as a full acceptance gate,
 not as the near-term engineering milestone. Rows with target `MVP` refer to

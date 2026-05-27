@@ -28,7 +28,7 @@ tracked as evidence or explicit implementation gaps.
   Specification, updated through the v0.9.1 requirement set.
 - `architecture.md`: current module map, implementation decisions, deferred
   acceleration/storage tracks, unsafe-boundary posture, and release-governance
-  scaffold.
+  posture.
 - `interface-compatibility-policy.md`: semantic-versioned interface compatibility
   policy.
 - `interface-stability-baseline.tsv`: current interface baseline checked by

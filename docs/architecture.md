@@ -1,6 +1,6 @@
-# OxideDNS Architecture and Release Governance Scaffold
+# OxideDNS Architecture and Release Governance
 
-Status: working architecture document, not final formal SRS MVP acceptance evidence.
+Status: current architecture document, not final formal SRS MVP acceptance evidence.
 
 This document records architecture and governance decisions that the SRS expects
 to be retained before formal SRS MVP acceptance. It currently covers module organisation
