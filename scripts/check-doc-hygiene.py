@@ -134,6 +134,11 @@ REQUIRED_TEXT_BY_PATH = {
         "does not duplicate the acceptance",
         "may require additional retained evidence without narrowing the",
     ],
+    "docs/engineering-mvp-scope.md": [
+        "The retained post-Alpha slices are code-backed scope, not planning notes.",
+        "source paths, implementation markers, representative test markers, evidence",
+        "implemented-feature scope, review disposition, gap register, and this boundary",
+    ],
 }
 
 FORBIDDEN_TEXT_BY_PATH = {

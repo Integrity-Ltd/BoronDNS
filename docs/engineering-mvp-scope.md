@@ -19,6 +19,13 @@ The Engineering MVP is the current local target for OxideDNS. It is not the SRS
   MVP scope merely because they exceed a minimal static-zone secondary-server
   trim.
 
+The retained post-Alpha slices are code-backed scope, not planning notes.
+`scripts/check-srs-review-disposition.py` verifies those slices against current
+source paths, implementation markers, representative test markers, evidence
+paths, and SRS owner identifiers. If a retained slice is removed from code, the
+implemented-feature scope, review disposition, gap register, and this boundary
+must change in the same patch.
+
 ## Out Of Scope
 
 The Engineering MVP must not require completed long-running evidence. The
