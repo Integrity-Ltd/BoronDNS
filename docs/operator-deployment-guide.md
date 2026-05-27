@@ -955,43 +955,19 @@ Current operator-facing posture:
 The gap register is the live source for remaining acceptance gaps. The
 current operator-relevant limitations are:
 
-- The implementation is now aligned to SRS v0.9.1. Some protocol
-  areas have partial evidence rather than full release traceability.
-- SRS v0.9.1 Alpha adds NSID, configuration warning/dump/validate modes,
-  canonical log fields, sysexits-style CLI behavior, and process `--version` /
-  `--help` / `--example-config` requirements. The CLI now has local evidence
-  for the core configuration/usage exit-code paths, listen-socket bind
-  failures, XoT TLS-file read failures, OS-startup mapping, version/help output
-  shape, and generated example-config validation; retained release artifacts
-  and rarer runtime sysexits coverage are still
-  pending.
-- DNS Cookies are implemented for the Engineering MVP RFC 9018 version-1
-  profile: learning, validation, disabled/lenient/strict policy, strict
-  BADCOOKIE responses, valid-cookie RRL exemption, startup/rotation/BADCOOKIE
-  logs, and bounded global and per-source-prefix cookie counters.
-  `scripts/interop-dns-cookie-dig.sh` verifies BIND `dig +cookie` client
-  behavior; broader deployment interop artifacts remain open before formal SRS
-  acceptance.
+- Current `main` is aligned to the SRS v0.9.1 requirement set, but formal SRS
+  acceptance still requires release-specific evidence and sign-off. The current
+  evidence state is intentionally centralized in `docs/mvp-gap-register.md`,
+  `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`
+  rather than repeated in this operator runbook.
+- Implemented Engineering MVP features that are broader than a minimal
+  static-zone secondary server include IXFR, XoT, passive DNSSEC serving, RRL,
+  DNS Cookies, catalog zones, EDNS behavior, EDE diagnostics, and CHAOS queries.
+  Their remaining gaps are release-evidence or explicit implementation gaps
+  recorded in the documents above.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
-  evidence artifacts; external operator deployment evidence is still required
-  before ODS-VER-008 acceptance.
-- Full release-specific per-requirement evidence against the SRS is still
-  pending; checked traceability scaffolding exists in Appendix A, the
-  verification ledger, and the gap register.
-- IXFR has BIND true incremental interop and fallback coverage, but broader
-  real-primary IXFR behavior matrix evidence remains pending.
-- XoT has in-process TLS success, fault, structured logging, and revocation
-  posture audit coverage plus a Knot XoT script; additional real-primary
-  evidence remains pending. OxideDNS currently establishes a fresh XoT session per
-  transfer and makes no SRS release claim for optional connection reuse.
-- DNSSEC serving has unit, fake-primary runtime, Knot signed-primary runtime
-  coverage for NSEC and NSEC3 paths, and a passive audit covering the
-  secondary-only no-signing/no-validation/no-key-management posture; release
-  traceability remains pending.
-- RRL has runtime behavior, metrics coverage, and a documented current
-  threshold baseline; longer-running retained campaign evidence remains
-  pending, and the SRS Appendix C.5 slip confirmation is still an open release
-  note item.
+  evidence artifacts, and external operator deployment evidence is still
+  required before ODS-VER-008 acceptance.
 - Full performance target runs, 30-day soak execution, and 24-hour fuzz
   campaigns per parser target are later SRS acceptance execution items; the
   local project MVP only needs their setup, artifact formats, and handoff path.
