@@ -72,10 +72,10 @@ formal SRS MVP acceptance is claimed.
 ## RFC Compliance Assertions
 
 Allowed compliance status values are `Fully Compliant`, `Partially Compliant`,
-`Not Compliant`, and `Informative Only`. Copy the structured list from
-`docs/rfc-compliance-assertions.md`, update evidence pointers to this release's
-retained evidence snapshot, and keep the primary documentation sync pointer
-aligned with the Operator Deployment Guide.
+`Not Compliant`, and `Informative Only`. Copy or generate the structured list
+from `docs/rfc-compliance-assertions.md`, update evidence pointers to this
+release's retained evidence snapshot, and keep the primary documentation sync
+pointer aligned with the Operator Deployment Guide.
 
 | RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution milestone | SRS revision | Evidence pointer | Primary documentation sync |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

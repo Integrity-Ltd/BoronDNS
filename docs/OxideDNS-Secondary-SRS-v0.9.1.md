@@ -120,7 +120,7 @@ The PID (v0.1, May 2026) is a historical upstream planning input for the busines
 Specifically:
 
 - Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the Engineering MVP companion documents.
-- The RFC compliance target is reproduced and maintained through Appendix A and the companion traceability matrix.
+- The RFC compliance target is defined and maintained through Appendix A, the companion traceability matrix, and the canonical RFC compliance assertion register.
 - Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps, if any, and release-evidence gaps tracked in `docs/mvp-gap-register.md` and `docs/verification-ledger.md`.
 
 ## 1.3 Intended Audience
@@ -3385,16 +3385,16 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 *Source.* Accurate scoping of compliance claims.
 *Verification.* Traceability matrix review.
 
-**ODS-VER-014.** RFC compliance assertions per ODS-VER-005 and ODS-VER-006 MUST be published in the project's release notes for each release as a structured list. Each entry MUST identify:
+**ODS-VER-014.** RFC compliance assertions per ODS-VER-005 and ODS-VER-006 MUST be maintained in a canonical structured primary-documentation register and published in the project's release notes for each release. Each entry MUST identify:
 - the RFC number and title;
 - the compliance status: **Fully Compliant**, **Partially Compliant** (with scope qualifier), **Not Compliant** (with rationale), or **Informative Only** (the RFC is referenced for guidance, not for normative compliance);
 - the scope qualifier where applicable (e.g., "secondary-side clauses only", "wire-format aspects only", "selected clauses: §N.M, §P.Q");
 - any unresolved compliance gaps with a `Target resolution milestone` value (for example, a future-scope transport RFC or an explicitly deferred primary-side clause);
 - the SRS revision against which the assertion is made (the SRS version current at the release).
 
-The same structured list MUST be reproduced — verbatim or via single-source synchronisation — in the project's primary documentation (the Operator Deployment Guide per ODS-NFR-MAINT-009 at minimum; optionally also the repository README) so that potential operators can assess the project's compliance posture without parsing release notes.
+The canonical register is `docs/rfc-compliance-assertions.md` for this repository. The Operator Deployment Guide per ODS-NFR-MAINT-009 MUST link to that register and summarize the current operator-facing posture so potential operators can assess the project's compliance posture without parsing release notes. Release notes MUST copy or generate the structured list from the canonical register, update evidence pointers and gap dispositions for the released artifact, and retain a primary-documentation sync pointer. Primary documentation MUST NOT maintain a second hand-copied RFC compliance table.
 *Source.* Operator-facing transparency; resolution of v0.6 audit finding about RFC compliance assertion publication.
-*Verification.* Release-notes inspection confirming structured-list presence and content; cross-check against Operator Deployment Guide synchronisation.
+*Verification.* Release-notes inspection confirming structured-list presence and content; cross-check that the canonical register and Operator Deployment Guide pointer are synchronized.
 
 ## 7.4 Acceptance Criteria for Formal Milestones
 
@@ -3496,11 +3496,12 @@ Appendix A defines the required bidirectional mapping between RFCs and SRS
 requirements. It is the SRS-level traceability contract, not the live status
 spreadsheet and not a place for unchecked standards research notes.
 
-The RFC compliance target is reproduced and maintained through Appendix A and
-the companion traceability matrix. For each RFC listed in Appendix A and the
-companion traceability matrix, release acceptance requires in-scope clauses to
-map to SRS requirements and to retained evidence per ODS-VER-001, ODS-VER-005,
-ODS-VER-006, and ODS-VER-014.
+The RFC compliance target is defined and maintained through Appendix A, the
+companion traceability matrix, and the canonical RFC compliance assertion
+register. For each RFC listed in Appendix A and the companion traceability
+matrix, release acceptance requires in-scope clauses to map to SRS requirements
+and to retained evidence per ODS-VER-001, ODS-VER-005, ODS-VER-006, and
+ODS-VER-014.
 
 The detailed operating rules are split into companion artifacts:
 

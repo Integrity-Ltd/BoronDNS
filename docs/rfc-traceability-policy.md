@@ -68,9 +68,12 @@ Structured status tables must use these columns:
 - **Target resolution milestone**
 - **Notes**
 
-For ODS-VER-014, `docs/rfc-compliance-assertions.md` is the current structured
-source. Release notes must copy that shape and replace current-main gaps with
-release-specific evidence pointers and dispositions.
+For ODS-VER-014, `docs/rfc-compliance-assertions.md` is the current canonical
+structured primary-documentation register. Operator-facing guides should link
+to that register and summarize the current posture rather than maintaining a
+second copy of the table. Release notes must copy or generate that shape and
+replace current-main gaps with release-specific evidence pointers and
+dispositions.
 
 ## Current Feature Guardrail
 

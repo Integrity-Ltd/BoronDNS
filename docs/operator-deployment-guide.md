@@ -741,10 +741,11 @@ configuration rollback followed by zone reacquisition from the primary.
 
 The canonical structured RFC compliance assertion list for the current
 Engineering MVP posture is maintained in `docs/rfc-compliance-assertions.md`.
-This guide treats that file as the single-source synchronized Operator
-Deployment Guide section required by SRS v0.9.1 `ODS-VER-014`; release notes must
-copy that structured list, update evidence pointers to the release snapshot,
-and retain this primary-documentation sync pointer.
+This guide links to that file and summarizes the operator-facing posture for
+SRS v0.9.1 `ODS-VER-014`; it intentionally does not duplicate the table.
+Release notes must copy or generate the structured list from the canonical
+register, update evidence pointers to the release snapshot, and retain this
+primary-documentation sync pointer.
 
 Current operator-facing posture:
 
