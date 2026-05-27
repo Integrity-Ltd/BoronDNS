@@ -176,6 +176,7 @@ FORBIDDEN_TEXT = {
     "milestone (Alpha, MVP, post-MVP)": "bare MVP milestone wording must distinguish formal SRS MVP from Engineering MVP",
     "prior to MVP release": "bare MVP release wording must distinguish formal SRS MVP from Engineering MVP",
     "deferred to MVP": "bare MVP deferred-target wording must distinguish formal SRS MVP from Engineering MVP",
+    "as it is in MVP": "bare MVP milestone wording must distinguish formal SRS MVP from Engineering MVP",
     "at MVP)": "bare MVP deferred-target wording must distinguish formal SRS MVP from Engineering MVP",
     "for MVP verification": "bare MVP verification wording must distinguish formal SRS MVP from Engineering MVP",
 }
@@ -231,6 +232,7 @@ REQUIRED_TEXT = [
     "not portable across restarts, anycast instances, or load-balanced replicas",
     "not the complete formal RFC 9018 shared Server Cookie secret configurability posture",
     "This interval is not a shared anycast rollover mechanism",
+    "That rationale does not remove the ODS-FR-COOKIE-004 formal acceptance gap for configured shared Server Secret material",
     "OxideDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie",
     "DNS Cookies add useful UDP off-path spoofing resistance with modest operational complexity",
     "XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT",
