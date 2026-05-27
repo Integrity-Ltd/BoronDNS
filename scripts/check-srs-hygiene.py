@@ -208,6 +208,8 @@ REQUIRED_TEXT = [
     "including binary inspection for runtime shared-library dependencies",
     "The active verification automation for the current project stage MUST enact the Continuous classification",
     "Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled",
+    "Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per ODS-NFR-SEC-002, scheduled at least weekly during release acceptance)",
+    "periodic weekly/monthly cadences are release-acceptance-cycle obligations rather than standing private-repo calendar commitments",
     "the requirement is coverage by retained verification artifacts, not a claim that current private-repository CI already verifies every individual requirement",
     "MUST be captured by the active verification and release-evidence system for each release",
     "hosted CI or an equivalent retained release-gate automation record for the accepted commit",
