@@ -1,7 +1,7 @@
 # SRS Review Disposition
 
-Status: working review register for an external SRS critique kept outside this
-repository.
+Status: non-normative review disposition register for an external SRS critique
+kept outside this repository.
 
 This document records how the project handles review findings against the
 current code and documentation. It is intentionally non-normative: the SRS,

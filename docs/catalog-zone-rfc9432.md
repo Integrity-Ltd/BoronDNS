@@ -79,10 +79,10 @@ be used where catalog confidentiality is also required; TSIG authenticates the
 transfer but does not encrypt the catalog contents.
 
 For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
-startup validation for missing `tsig_key` references. Earlier SRS drafts used
-the illustrative name `zones.require_tsig`; the implemented schema keeps this
-as process-wide transfer policy under `[transfer]` because TOML reserves
-`[[zones]]` for the zone array itself.
+startup validation for missing `tsig_key` references. The unsupported
+illustrative name `zones.require_tsig` is intentionally not part of the schema;
+the implemented schema keeps this as process-wide transfer policy under
+`[transfer]` because TOML reserves `[[zones]]` for the zone array itself.
 
 Configuration remains static for the catalog zone definitions themselves.
 Changing the set of configured catalogs, their primaries, TSIG references, or

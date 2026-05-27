@@ -2,9 +2,10 @@
 
 This Test Plan is the sibling document required by SRS v0.9.1 section 7.6. It
 records the current verification harnesses, their SRS method classifications,
-and their execution cadence. It is intentionally a living plan: individual test
-case inventories will become more granular as Appendix A expands from
-family-level traceability to per-requirement traceability.
+and their execution cadence. It is intentionally a living plan: the test
+inventory stays at evidence-command and requirement-family level until release
+acceptance requires per-requirement rows. Appendix A, the verification ledger,
+and release evidence snapshots own that expansion.
 
 ## Scope
 
