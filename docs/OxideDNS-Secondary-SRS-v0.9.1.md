@@ -4784,7 +4784,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **DNSSEC.** DNS Security Extensions (RFC 4033, RFC 4034, RFC 4035, RFC 5155, others). The cryptographic authentication mechanism for DNS data. This server serves DNSSEC records as data; it does not sign or validate.
 
-**DO bit.** DNSSEC OK bit (RFC 3225, RFC 6891). Set by clients to indicate willingness to receive DNSSEC records. Carried in the OPT RR's TTL field.
+**DO bit.** DNSSEC OK bit (RFC 3225, RFC 6891). Set by clients to indicate willingness to receive DNSSEC records. Carried in the OPT RR's TTL field. Per RFC 6840 §5.6, a response OPT copies the query DO bit; the bit is not recomputed from whether DNSSEC records are included.
 
 **DoH.** DNS-over-HTTPS (RFC 8484). Not implemented; see Appendix C.3.4.
 
@@ -4916,9 +4916,9 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **RRL.** Response Rate Limiting. The mitigation against DNS amplification attacks specified in §4.17.
 
-**RRset.** Resource Record Set (RFC 2181 §5). The set of RRs sharing owner name, class, and type.
+**RRset.** Resource Record Set (RFC 2181 §5). The set of RRs sharing owner name, class, and type, except where a later DNSSEC rule creates a type-specific exception such as RRSIG handling in RFC 4035 §2.2.
 
-**RRSIG.** Resource Record Signature record (type 46, RFC 4034 §3). DNSSEC signature over an RRset.
+**RRSIG.** Resource Record Signature record (type 46, RFC 4034 §3). DNSSEC signature over an RRset. RRSIG records do not form ordinary RRsets; they are selected by Type Covered under RFC 4035 §2.2 and §3.1.
 
 **RSA.** Rivest-Shamir-Adleman public-key cryptosystem. One of the DNSSEC and TLS algorithm families.
 
