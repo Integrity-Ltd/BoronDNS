@@ -1227,7 +1227,7 @@ The server MUST apply the deletions and additions of each difference sequence in
 - multi-primary failover: ODS-FR-AXFR-016.
 
 *Source.* RFC 1995; this SRS §4.6.
-*Note.* The traceability matrix in Appendix A records the duplication so that future edits to §4.6 surface IXFR impact for review.
+*Note.* The companion traceability matrix records the duplication so that future edits to §4.6 surface IXFR impact for review.
 *Verification.* Per the verification of each referenced AXFR requirement.
 
 **ODS-FR-IXFR-019.** IXFR sessions MUST be subject to the same configurable maximum cumulative ingestion size cap specified in ODS-FR-AXFR-024 (default 4 gibibytes). The limit applies to the total cumulative octets of IXFR response data received within a single session, including both Mode 1 (incremental) and Mode 2 (full-zone fallback) responses.
@@ -3391,7 +3391,7 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 
 ## 7.3 RFC Compliance Assessment
 
-**ODS-VER-005.** For each RFC listed in PID Appendix A, the project MUST maintain a clause-level traceability mapping (recorded in Appendix A of this SRS) from each requirement-bearing RFC clause to one or more requirements in §3 through §6. Compliance with an RFC is asserted only when all in-scope requirement-bearing clauses of that RFC are mapped to verifying SRS requirements, and all those SRS requirements have been verified per ODS-VER-001.
+**ODS-VER-005.** For each RFC listed in PID Appendix A, the project MUST maintain a clause-level traceability mapping from each requirement-bearing RFC clause to one or more requirements in §3 through §6. The current project mapping is maintained in the Appendix A companion traceability document referenced from this SRS. Compliance with an RFC is asserted only when all in-scope requirement-bearing clauses of that RFC are mapped to verifying SRS requirements, and all those SRS requirements have been verified per ODS-VER-001.
 *Source.* PID §2.3 (RFC compliance target).
 *Verification.* Traceability matrix review at release time.
 
@@ -3447,9 +3447,9 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 
 ## 7.5 Verification Evidence and Traceability
 
-**ODS-VER-009.** The traceability matrix in Appendix A MUST record, for each requirement in §3 through §6, the verification status: **Not Verified**, **Verified** (with date and reference to the evidence), or **Deferred** (with target milestone). The matrix is the canonical record of verification progress.
+**ODS-VER-009.** The project traceability matrix MUST record, for each requirement in §3 through §6, the verification status: **Not Verified**, **Verified** (with date and reference to the evidence), or **Deferred** (with target milestone). The companion traceability matrix and verification ledger are the canonical records of verification progress for the current repository state; Appendix A in this SRS defines the required structure and mapping rules.
 
-The traceability matrix MUST be updated synchronously with each release: at the moment a release artifact is produced, the matrix MUST reflect the verification status of every requirement against that release. Inter-release matrix updates are permitted and encouraged when verification results become available between releases (e.g., when a previously Deferred requirement is verified mid-cycle); the matrix is the canonical source of current verification status at any given time, not solely a release-time artefact. The matrix MAY be maintained as a separate machine-readable file (CSV, JSON, or database) alongside the SRS in the project repository, in which case the file is the canonical authority and the Appendix A rendering is a documentation snapshot.
+The traceability matrix MUST be updated synchronously with each release: at the moment a release artifact is produced, the matrix MUST reflect the verification status of every requirement against that release. Inter-release matrix updates are permitted and encouraged when verification results become available between releases (e.g., when a previously Deferred requirement is verified mid-cycle); the matrix is the canonical source of current verification status at any given time, not solely a release-time artefact. The matrix MAY be maintained as a separate Markdown, CSV, JSON, or database artifact alongside the SRS in the project repository, in which case that artifact is the canonical authority and any Appendix A rendering inside the SRS is a documentation snapshot.
 *Source.* Audit and project tracking; resolution of v0.6 audit finding about matrix update cadence.
 *Verification.* Matrix review at each release; spot-check of inter-release updates against verification evidence per ODS-VER-002.
 
@@ -3506,14 +3506,14 @@ The SRS body is considered structurally stable from v0.7 onward; subsequent revi
 
 ## A.1 Purpose
 
-Appendix A is the canonical bidirectional mapping between RFCs (and other normative references) and the requirements of this SRS. Its purposes are:
+Appendix A defines the required bidirectional mapping between RFCs (and other normative references) and the requirements of this SRS. The live repository mapping is maintained in the companion Appendix A traceability artifact. Its purposes are:
 
 - to demonstrate, for each RFC in the project's compliance target (PID Appendix A), that all in-scope normative clauses are realised by one or more SRS requirements;
 - to identify, for each RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or PID scope clause that excludes them;
 - to provide, for each SRS requirement, the source RFC(s) and clause(s) from which it derives;
-- to track verification status per requirement, supporting the milestone acceptance criteria of ODS-VER-007 and ODS-VER-008.
+- to define how verification status is tracked per requirement, supporting the milestone acceptance criteria of ODS-VER-007 and ODS-VER-008.
 
-Appendix A is intended to be maintained as a living document throughout the project's lifetime. The current version, drafted alongside the SRS body, provides the structural foundation and a coarse-grained RFC-to-requirement mapping. Clause-level refinement is iterative work conducted during the implementation and review phases.
+Appendix A is intentionally split between this SRS and the companion traceability artifact. This SRS records the normative conventions, scope categories, and representative clause mappings; the companion artifact records the checked current coverage and evidence state. Clause-level refinement is conducted in that companion artifact and reviewed against this SRS during release preparation.
 
 ## A.2 Conventions
 
@@ -3539,7 +3539,7 @@ Each requirement carries a verification status per ODS-VER-009:
 - **Deferred** — verification is deferred to a specific milestone (typically the formal SRS MVP release gate per ODS-VER-008).
 - **Not Applicable** — the requirement has been Deprecated or replaced; the row is retained for identifier stability.
 
-Status tracking is maintained per A.6.
+Status tracking is maintained per A.6 and in the companion traceability and verification-ledger documents.
 
 ### A.2.4 Mapping granularity
 
@@ -3548,7 +3548,7 @@ Two granularities of mapping are supported:
 - **Coarse-grained.** RFC → SRS subsection (for example, RFC 5936 → §4.6). Sufficient for project-level compliance assertion when the SRS subsection covers the RFC fully.
 - **Fine-grained.** RFC clause → SRS requirement identifier (for example, RFC 5936 §2.2.1 → ODS-FR-AXFR-005, ODS-FR-AXFR-007). Required for partial-scope RFCs and for clause-level audit.
 
-The coarse-grained mapping is provided comprehensively in A.3 below. Fine-grained mapping is illustrated for representative RFCs in A.4 and is to be completed iteratively during implementation review.
+The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is illustrated for representative RFCs in A.4 and is refined in the companion traceability artifact during implementation and release review.
 
 ## A.3 RFC Compliance Index
 
