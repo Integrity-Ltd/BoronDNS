@@ -261,13 +261,19 @@ fn load_config(path: &Path) -> anyhow::Result<LoadedConfig> {
 fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
     let mut config =
         ServerConfig::from_path(path).with_context(|| format!("loading {}", path.display()))?;
-    let mut warnings =
+    let override_report =
         apply_environment_overrides(&mut config).context("applying environment overrides")?;
-    config
-        .validate()
-        .context("validating effective configuration")?;
+    if let Err(error) = config.validate() {
+        let mut context = "validating effective configuration".to_owned();
+        if !override_report.applied.is_empty() {
+            context.push_str(" after environment overrides: ");
+            context.push_str(&override_report.applied.join(", "));
+        }
+        return Err(error).context(context);
+    }
     oxidedns_server::validate_runtime_config(&config)
         .context("validating runtime configuration")?;
+    let mut warnings = override_report.warnings;
     warnings.extend(config.configuration_warnings());
     warnings.extend(
         oxidedns_server::runtime_config_warnings(&config)
@@ -341,18 +347,25 @@ fn json_string(value: &str) -> String {
 
 fn apply_environment_overrides(
     config: &mut ServerConfig,
-) -> Result<Vec<ConfigWarning>, ConfigError> {
+) -> Result<EnvironmentOverrideReport, ConfigError> {
     apply_environment_overrides_from(config, std::env::vars_os())
+}
+
+#[derive(Debug, Default)]
+struct EnvironmentOverrideReport {
+    warnings: Vec<ConfigWarning>,
+    applied: Vec<String>,
 }
 
 fn apply_environment_overrides_from<I>(
     config: &mut ServerConfig,
     vars: I,
-) -> Result<Vec<ConfigWarning>, ConfigError>
+) -> Result<EnvironmentOverrideReport, ConfigError>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
     let mut warnings = Vec::new();
+    let mut applied = Vec::new();
     for (name, value) in vars {
         let Ok(name) = name.into_string() else {
             continue;
@@ -361,66 +374,87 @@ where
             "ODS_SERVER_HEALTH" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.health = Some(parse_env_value(&name, &value)?);
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_SERVER_LOG_LEVEL" => {
-                config.server.log_level = env_value_to_string(&name, value)?;
+                let value = env_value_to_string(&name, value)?;
+                config.server.log_level = value.clone();
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_SERVER_LOG_FORMAT" => {
                 let value = env_value_to_string(&name, value)?;
                 config.server.log_format = parse_log_format(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_SERVER_NSID" => {
-                config.server.nsid = env_value_to_string(&name, value)?;
+                let value = env_value_to_string(&name, value)?;
+                config.server.nsid = value.clone();
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE" => {
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_per_minute = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_HEALTH_METRICS_RATE_LIMIT_IDLE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.health.metrics_rate_limit_idle_seconds = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.logging.max_entry_length_bytes = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_TSIG_FUDGE_SECONDS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.tsig.fudge_seconds = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_TRANSFER_REQUIRE_TSIG" => {
                 let value = env_value_to_string(&name, value)?;
                 config.transfer.require_tsig = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_TRANSFER_ACCEPT_OUT_OF_ZONE_GLUE" => {
                 let value = env_value_to_string(&name, value)?;
                 config.transfer.accept_out_of_zone_glue = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_EDNS_EXTENDED_DNS_ERRORS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.edns.extended_dns_errors = parse_extended_dns_errors(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_CHAOS_VERSION" => {
-                config.chaos.version = env_value_to_string(&name, value)?;
+                let value = env_value_to_string(&name, value)?;
+                config.chaos.version = value.clone();
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_CHAOS_HOSTNAME" => {
-                config.chaos.hostname = env_value_to_string(&name, value)?;
+                let value = env_value_to_string(&name, value)?;
+                config.chaos.hostname = value.clone();
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_DNSSEC_NSEC3_MAX_ITERATIONS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.dnssec.nsec3_max_iterations = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.max_transfer_ingest_bytes = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_LIMITS_ZSM_MAX_INTERVAL_SECS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.zsm_max_interval_secs = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             "ODS_LIMITS_ZSM_LOADING_WARNING_THRESHOLD_SECS" => {
                 let value = env_value_to_string(&name, value)?;
                 config.limits.zsm_loading_warning_threshold_secs = parse_env_value(&name, &value)?;
+                record_applied_override(&mut applied, &name, &value);
             }
             _ if name.starts_with("ODS_") => {
                 warnings.push(ConfigWarning {
@@ -432,7 +466,11 @@ where
             _ => {}
         }
     }
-    Ok(warnings)
+    Ok(EnvironmentOverrideReport { warnings, applied })
+}
+
+fn record_applied_override(applied: &mut Vec<String>, name: &str, value: &str) {
+    applied.push(format!("{name}={value}"));
 }
 
 fn emit_config_warnings_to_stderr(warnings: &[ConfigWarning]) {
@@ -1333,7 +1371,7 @@ mod tests {
         )
         .expect("valid config");
 
-        let warnings = apply_environment_overrides_from(
+        let report = apply_environment_overrides_from(
             &mut config,
             [
                 ("ODS_SERVER_HEALTH", "127.0.0.1:8081"),
@@ -1358,7 +1396,7 @@ mod tests {
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
         )
         .expect("env overrides");
-        assert!(warnings.is_empty());
+        assert!(report.warnings.is_empty());
         config.validate().expect("effective config is valid");
 
         assert_eq!(
@@ -1431,7 +1469,7 @@ mod tests {
         )
         .expect("valid config");
 
-        let warnings = apply_environment_overrides_from(
+        let report = apply_environment_overrides_from(
             &mut config,
             [
                 (
@@ -1451,13 +1489,18 @@ mod tests {
         .expect("env overrides");
 
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, "unrecognised_ods_environment_variable");
+        assert_eq!(report.warnings.len(), 1);
         assert_eq!(
-            warnings[0].parameter,
+            report.warnings[0].code,
+            "unrecognised_ods_environment_variable"
+        );
+        assert_eq!(
+            report.warnings[0].parameter,
             "ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUT"
         );
-        assert!(config_warning_line(&warnings[0]).contains("category=configuration_warning"));
+        assert!(
+            config_warning_line(&report.warnings[0]).contains("category=configuration_warning")
+        );
     }
 
     #[test]

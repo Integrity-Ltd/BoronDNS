@@ -430,6 +430,39 @@ fn invalid_ods_environment_override_exits_with_config_invalid() {
 }
 
 #[test]
+fn ods_environment_override_revalidation_rejects_cross_field_violation() {
+    let config = write_config(
+        "invalid-env-cross-field",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .env("ODS_TRANSFER_REQUIRE_TSIG", "true")
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        stderr.contains("ODS_TRANSFER_REQUIRE_TSIG"),
+        "stderr={stderr}"
+    );
+    assert!(stderr.contains("requires tsig_key"), "stderr={stderr}");
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn unrecognized_ods_environment_override_warns_without_failing() {
     let config = write_config(
         "unknown-env",
