@@ -102,6 +102,7 @@ REQUIRED_TEXT_BY_PATH = {
         "What is still open?",
         "What evidence exists by requirement family?",
         "What requirement ranges map to evidence?",
+        "How are RFC traceability rules maintained?",
         "How is the implementation structured?",
         "Where are deferred optimization tracks detailed?",
         "What is the health and metrics HTTP contract?",

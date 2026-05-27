@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 REFERENCE_PROFILE = ROOT / "docs" / "reference-verification-profile.md"
 FUTURE_OPTIMIZATION_TRACKS = ROOT / "docs" / "future-optimization-tracks.md"
+RFC_TRACEABILITY_POLICY = ROOT / "docs" / "rfc-traceability-policy.md"
 
 FORBIDDEN_TEXT = {
     "RDS denotes": "old rename namespace artifact",
@@ -208,6 +209,15 @@ REQUIRED_TEXT = [
     "For each RFC listed in Appendix A and the companion traceability matrix",
 ]
 
+REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [
+    "# RFC Traceability Policy",
+    "The purpose of this split is to keep the SRS from becoming an unchecked",
+    "Scope Categories",
+    "Target resolution milestone",
+    "Current Feature Guardrail",
+    "RFC 9432 catalog zones",
+]
+
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
 
 
@@ -217,6 +227,7 @@ def main() -> int:
     future_optimization_tracks = FUTURE_OPTIMIZATION_TRACKS.read_text(
         encoding="utf-8"
     )
+    rfc_traceability_policy = RFC_TRACEABILITY_POLICY.read_text(encoding="utf-8")
     errors: list[str] = []
 
     for needle, reason in FORBIDDEN_TEXT.items():
@@ -226,6 +237,12 @@ def main() -> int:
     for needle in REQUIRED_TEXT:
         if needle not in text:
             errors.append(f"missing required SRS hygiene text: {needle!r}")
+
+    for needle in REQUIRED_RFC_TRACEABILITY_POLICY_TEXT:
+        if needle not in rfc_traceability_policy:
+            errors.append(
+                f"missing required RFC traceability policy text: {needle!r}"
+            )
 
     for needle in [
         "# OxideDNS Reference Verification Profile",

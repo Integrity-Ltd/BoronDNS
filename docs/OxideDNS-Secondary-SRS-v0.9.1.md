@@ -3490,394 +3490,88 @@ The requirement identifier and category framework remains stable for traceabilit
 
 ## A.1 Purpose
 
-Appendix A defines the required bidirectional mapping between RFCs (and other normative references) and the requirements of this SRS. The live repository mapping is maintained in the companion Appendix A traceability artifact. Its purposes are:
+Appendix A defines the required bidirectional mapping between RFCs and SRS
+requirements. It is the SRS-level traceability contract, not the live status
+spreadsheet and not a place for unchecked standards research notes.
 
-- to demonstrate, for each RFC in the project's compliance target recorded in Appendix A and the companion traceability matrix, that all in-scope normative clauses are realised by one or more SRS requirements;
-- to identify, for each RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or Appendix C scope clause that excludes them;
-- to provide, for each SRS requirement, the source RFC(s) and clause(s) from which it derives;
-- to define how verification status is tracked per requirement, supporting the milestone acceptance criteria of ODS-VER-007 and ODS-VER-008.
+The RFC compliance target is reproduced and maintained through Appendix A and
+the companion traceability matrix. For each RFC listed in Appendix A and the
+companion traceability matrix, release acceptance requires in-scope clauses to
+map to SRS requirements and to retained evidence per ODS-VER-001, ODS-VER-005,
+ODS-VER-006, and ODS-VER-014.
 
-Appendix A is intentionally split between this SRS and the companion traceability artifact. This SRS records the normative conventions, scope categories, and representative clause mappings; the companion artifact records the checked current coverage and evidence state. Clause-level refinement is conducted in that companion artifact and reviewed against this SRS during release preparation.
+The detailed operating rules are split into companion artifacts:
+
+- `docs/rfc-traceability-policy.md` owns scope categories, mapping rules,
+  verification status vocabulary, and out-of-scope clause handling.
+- `docs/rfc-compliance-assertions.md` owns the current structured RFC compliance
+  assertion register for ODS-VER-014.
+- `docs/appendix-a-traceability-matrix.md` owns the checked requirement-range
+  evidence mapping.
+- `docs/verification-ledger.md` owns coarse evidence state by requirement
+  family.
 
 ## A.2 Conventions
 
-### A.2.1 Identifier stability
-
-Requirement identifiers in this Appendix are immutable per ODS-§1.4.4. A requirement marked **Deprecated** in §3 through §6 remains in the Appendix tables with a pointer to its replacement; rows are never removed.
-
-### A.2.2 Scope categorisation
-
-Each RFC entry in A.3 is categorised by scope:
-
-- **Full.** All normative clauses of the RFC are in scope and mapped to implementing requirements.
-- **Partial (secondary-side).** The RFC's secondary-server-side clauses are in scope and mapped; primary-side, resolver-side, or validator-side clauses are out of scope per ODS-INV-001 or Appendix C, and are catalogued in A.5.
-- **Partial (selected clauses).** Specific clauses are in scope (for example, only the wire-format definition of a particular RR type); the remainder are out of scope, catalogued in A.5.
-- **Informative.** The RFC is cited for guidance or background rather than for normative requirements. No traceability mapping is required.
-
-### A.2.3 Verification status
-
-Each requirement carries a verification status per ODS-VER-009:
-
-- **Not Verified** — verification has not yet been performed.
-- **Verified** — verification has been performed; the date and evidence reference are recorded.
-- **Deferred** — verification is deferred to a specific milestone (typically the formal SRS MVP release gate per ODS-VER-008).
-- **Not Applicable** — the requirement has been Deprecated or replaced; the row is retained for identifier stability.
-
-Status tracking is maintained per A.6 and in the companion traceability and verification-ledger documents.
-
-### A.2.4 Mapping granularity
-
-Two granularities of mapping are supported:
-
-- **Coarse-grained.** RFC → SRS subsection (for example, RFC 5936 → §4.6). Sufficient for project-level compliance assertion when the SRS subsection covers the RFC fully.
-- **Fine-grained.** RFC clause → SRS requirement identifier (for example, RFC 5936 §2.2.1 → ODS-FR-AXFR-005, ODS-FR-AXFR-007). Required for partial-scope RFCs and for clause-level audit.
-
-The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is illustrated for representative RFCs in A.4 and is refined in the companion traceability artifact during implementation and release review.
-
-## A.3 RFC Compliance Index
-
-### A.3.1 Core DNS protocol
-
-**RFC 1034 — Domain Names: Concepts and Facilities** (Mockapetris, 1987).
-*Scope.* Partial (secondary/server-side).
-*Implementing sections.* §3 (architectural invariants), §4.1 (CORE), §4.2 (QRY), §4.3 (NRESP), §4.6 (AXFR), §4.15 (ZONE), §4.16 (ZSM).
-*Key clauses.* §3.1 (name hierarchy) → CORE-007, CORE-009; §3.6.2 (CNAME) → QRY-010..013, NRESP-004..006; §3.7 (recursion) → QRY-001, NEG-007; §4.2 (zone concepts) → AXFR-012, AXFR-013, ZONE-001; §4.3.2 (response construction) → CORE-019..025; §4.3.5 (zone refresh timing) → ZSM-001..012; §6.2 (response semantics) → CORE-011..014.
-*Out-of-scope clauses.* §5 (resolver-side) — ODS-INV-001; §6.1 (master files) — ODS-NEG-006; primary-role aspects of §4.3.5 — ODS-INV-001.
-
-**RFC 1035 — Domain Names: Implementation and Specification** (Mockapetris, 1987).
-*Scope.* Partial (secondary/server-side).
-*Implementing sections.* §4.1 (CORE), §4.2 (QRY), §4.3 (NRESP), §4.4 (URR), §4.11 (EDNS), §4.12 (TCP), §4.14 (RR).
-*Key clauses.* §2.3 (name encoding) → CORE-007, CORE-008, CORE-009; §3.2 (RR class) → CORE-016..018; §3.3 (RR type wire formats) → RR-001 + catalogue; §3.3.13 (SOA) → RR-002, RR-004, NRESP-001; §4.1 (message format) → CORE-001..015; §4.1.4 (compression) → CORE-008, QRY-023, URR-006; §4.2.1 (TC bit, UDP) → TCP-008, EDNS-006; §4.2.2 (TCP framing) → TCP-001; §6.2.4–6.2.5 (referrals, glue) → CORE-025, QRY-017.
-*Out-of-scope clauses.* §5 (master file format) — ODS-NEG-006; §7 (resolver implementation) — ODS-INV-001; §4.3 (zone transfer original specification) — superseded by RFC 5936 for AXFR and RFC 1995 for IXFR; primary-role aspects throughout — ODS-INV-001.
-
-**RFC 2181 — Clarifications to the DNS Specification** (Elz & Bush, 1997).
-*Scope.* Partial (secondary/server-side).
-*Implementing sections.* §4.1 (CORE), §4.3 (NRESP), §4.12 (TCP), §4.14 (RR).
-*Key clauses.* §5 (RRset semantics) → CORE-026, CORE-027, except for the RRSIG-specific RFC 4035 §2.2 carve-out; §5.2 (TTL uniformity) → CORE-027; §6.1 (SOA at apex) → RR-002; §7 (NODATA) → CORE-022; §9 (response size, truncation) → TCP-008; §10.1 (CNAME exclusivity) → RR-005; §11 (name format) → CORE-028.
-*Out-of-scope clauses.* §6.2 (zone publication, primary-side) — ODS-INV-001.
-
-**RFC 4343 — Domain Name System (DNS) Case Insensitivity Clarification** (Eastlake, 2006).
-*Scope.* Full.
-*Implementing sections.* §4.1 (CORE), §4.4 (URR), §4.14 (RR).
-*Key clauses.* §2 (octet-level handling) → CORE-028, URR-008; §3 (case-insensitive comparison) → CORE-009, CORE-010.
-
-**RFC 4592 — The Role of Wildcards in the Domain Name System** (Lewis, 2006).
-*Scope.* Full (secondary-server-side aspects).
-*Implementing sections.* §4.1 (CORE), §4.2 (QRY), §4.3 (NRESP), §4.13 (DNSSEC), §4.15 (ZONE).
-*Key clauses.* §2.2.2 (empty non-terminal handling) → QRY-016, NRESP-003; §2.2.3 (occlusion) → QRY-016, AXFR-014; §3 (synthesis rules) → CORE-024; §3.4 (DNSSEC interaction) → DNSSEC-006.
-
-### A.3.2 Zone transfer and notification
-
-**RFC 5936 — DNS Zone Transfer Protocol (AXFR)** (Lewis & Hoenes, 2010).
-*Scope.* Full (client-side; this server is exclusively an AXFR client).
-*Implementing sections.* §4.6 (AXFR), §4.10 (XOT for transfer encryption).
-*Key clauses.* §2.1.1 (TCP transport) → AXFR-001; §2.1.2 (query construction) → AXFR-002; §2.2 (response structure, message reassembly) → AXFR-004..008; §2.2.1 (header bit non-significance) → AXFR-006; §2.2.4 (out-of-zone, glue, occluded data) → AXFR-012..014; §3.1 (error handling) → AXFR-019, AXFR-020; §4.1 (TCP persistence) → AXFR-003; §2.2.5 (TSIG signing) → AXFR-017, AXFR-018, TSIG-010, TSIG-011.
-*Out-of-scope clauses.* AXFR server-side requirements throughout — ODS-NEG-005.
-
-**RFC 1995 — Incremental Zone Transfer in DNS** (Ohta, 1996).
-*Scope.* Full (client-side).
-*Implementing sections.* §4.7 (IXFR).
-*Key clauses.* §2 (UDP/TCP transport) → IXFR-001, IXFR-002; §3 (response modes, AXFR fallback) → IXFR-004, IXFR-011, IXFR-014; §4 (incremental encoding) → IXFR-005..010, IXFR-013.
-*Out-of-scope clauses.* IXFR server-side requirements — ODS-NEG-005.
-
-**RFC 1996 — A Mechanism for Prompt Notification of Zone Changes (DNS NOTIFY)** (Vixie, 1996).
-*Scope.* Partial (receiver-side; this server is exclusively a NOTIFY receiver).
-*Implementing sections.* §4.8 (NOTIFY), §4.16 (ZSM for refresh triggering).
-*Key clauses.* §3.1 (transport) → NOTIFY-001; §3.6 (retransmission semantics) → NOTIFY-009; §3.7 (embedded SOA) → NOTIFY-008, ZSM-007; §3.10 (zone authorisation) → NOTIFY-003, NOTIFY-004; §4.4 (refresh triggering) → NOTIFY-007, ZSM-003; §4.7, §4.8 (response construction) → NOTIFY-006.
-*Out-of-scope clauses.* NOTIFY origination (§3.x originator semantics) — ODS-NEG-004.
-
-**RFC 8945 — Secret Key Transaction Authentication for DNS (TSIG)** (Dupont, Morris, Vixie, Eastlake, Gudmundsson, Wellington, 2020).
-*Scope.* Full.
-*Implementing sections.* §4.9 (TSIG), §4.6 (AXFR signing), §4.7 (IXFR signing), §4.8 (NOTIFY signing).
-*Key clauses.* §4 (TSIG RR format) → TSIG-007, TSIG-008; §5.2 (TSIG on requests/responses) → TSIG-013; §5.2.1 (UDP size limits) → TSIG-016; §5.2.2.1 (truncation) → TSIG-014; §5.3 (signing process) → TSIG-012; §5.3.1 (multi-message TSIG) → TSIG-010, TSIG-011, AXFR-018, IXFR-015; §5.4 (verification process) → TSIG-008..011; §6 (algorithms, HMAC-MD5 deprecation) → TSIG-001, TSIG-004, NEG-013.
-
-**RFC 4635 — HMAC SHA TSIG Algorithm Identifiers** (Eastlake, 2006).
-*Scope.* Full.
-*Implementing sections.* §4.9 (TSIG).
-*Key clauses.* §3 (algorithm identifiers) → TSIG-001..003; §3.1 (truncation lengths) → TSIG-014.
-
-**RFC 9103 — DNS Zone Transfer over TLS** (Toorop, Dickinson, Sahib, Aras, Mankin, 2022).
-*Scope.* Partial (client-side; this server is XoT client only per §4.10 scope statement).
-*Implementing sections.* §4.10 (XoT).
-*Key clauses.* §6 (port, ALPN) → XOT-003, XOT-004; §6.5 (connection persistence) → XOT-009; §7.1 (TLS versions) → XOT-001; §7.4 (ALPN) → XOT-004; §9.1 (Strict Profile, authentication) → XOT-005, XOT-006; §9.2 (Opportunistic Profile) → ODS-NEG-016 (prohibited); §9.3 (combined with TSIG) → XOT-008; §9.4 (mTLS) → XOT-007.
-*Out-of-scope clauses.* §6.4 (NOTIFY over TLS, receiver side) — ODS-NEG-017; XoT server-side requirements throughout — ODS-NEG-005 implicitly via secondary-only role.
-
-### A.3.3 Negative response and resilience
-
-**RFC 2308 — Negative Caching of DNS Queries (DNS NCACHE)** (Andrews, 1998).
-*Scope.* Partial (authoritative server-side aspects).
-*Implementing sections.* §4.3 (NRESP), §4.1 (CORE-022, CORE-023).
-*Key clauses.* §2.1 (NXDOMAIN response composition) → CORE-023, NRESP-001; §2.2 (NODATA response composition) → CORE-022, NRESP-001; §3 (negative response TTL) → NRESP-001, NRESP-002; §4–§5 (SOA TTL semantics) → NRESP-001; §6 (authoritative-side semantics) → NRESP-001..006.
-*Out-of-scope clauses.* §7 (resolver caching) — ODS-INV-001.
-
-**RFC 5452 — Measures for Making DNS More Resilient against Forged Answers** (Hubert & van Mook, 2009).
-*Scope.* Full (insofar as the server originates queries; primarily resolver-oriented).
-*Implementing sections.* §4.5 (SPOOF).
-*Key clauses.* §3 (response matching) → SPOOF-003..006; §6 (validation rules) → SPOOF-003..006; §9.1 (QID entropy) → SPOOF-001; §9.2 (source port entropy) → SPOOF-002.
-
-**RFC 8020 — NXDOMAIN: There Really Is Nothing Underneath** (Bortzmeyer & Huque, 2016).
-*Scope.* Full.
-*Implementing sections.* §4.3 (NRESP).
-*Key clauses.* §2 (NXDOMAIN cut semantics) → NRESP-003.
-
-**RFC 8482 — Providing Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY** (Abley, Gudmundsson, Majkowski, Hunt, 2018).
-*Scope.* Full.
-*Implementing sections.* §4.2 (QRY).
-*Key clauses.* §4.1 (subset response) → QRY-005; §4.2 (HINFO synthesis, prohibited) → QRY-007, NEG-015.
-
-### A.3.4 Transport
-
-**RFC 6891 — Extension Mechanisms for DNS (EDNS(0))** (Damas, Graff, Vixie, 2013).
-*Scope.* Full (insofar as authoritative-server-side; obsoletes RFC 2671).
-*Implementing sections.* §4.11 (EDNS), §4.12 (TCP for truncation interaction), §4.13 (DNSSEC for DO bit).
-*Key clauses.* §6.1.1 (OPT RR placement and multiplicity) → EDNS-002, EDNS-003; §6.1.2 (RDATA option encoding) → EDNS-001; §6.1.3 (extended RCODE, VERSION) → EDNS-004, EDNS-010; §6.1.4 (Z bits other than DO) → EDNS-008; §6.2.3 (UDP payload size handling) → EDNS-005; §6.2.5 (response size) → EDNS-006; §7 (response OPT semantics) → EDNS-007, EDNS-008. DO-bit reply copying is specified by RFC 6840 §5.6 and mapped below.
-
-**RFC 7766 — DNS Transport over TCP — Implementation Requirements** (Dickinson, Dickinson, Bellis, Mankin, Wessels, 2016).
-*Scope.* Full.
-*Implementing sections.* §4.12 (TCP), §4.6 (AXFR transport), §4.7 (IXFR transport).
-*Key clauses.* §6.2 (pipelining, out-of-order responses) → TCP-007; §6.2.1 (connection persistence) → TCP-002; §6.2.3 (idle timeout) → TCP-003; §8 (message framing) → TCP-001, TCP-009, AXFR-003; §10 (resource limits) → TCP-005.
-
-**RFC 7828 — The edns-tcp-keepalive EDNS0 Option** (Wouters, Abley, Dickinson, Bellis, 2016).
-*Scope.* Full.
-*Implementing sections.* §4.11 (EDNS), §4.12 (TCP).
-*Key clauses.* §3 (option encoding, server response) → EDNS-011, EDNS-012; §3.4 (UDP behaviour) → EDNS-011.
-
-**RFC 7830 — The EDNS(0) Padding Option** (Mayrhofer, 2016).
-*Scope.* Full (recognition required; emission optional).
-*Implementing sections.* §4.11 (EDNS).
-*Key clauses.* §3 (option encoding and use) → EDNS-013.
-
-### A.3.5 Resource Record types
-
-**RFC 1982 — Serial Number Arithmetic** (Elz & Bush, 1996).
-*Scope.* Full.
-*Implementing sections.* §4.7 (IXFR), §4.14 (RR), §4.16 (ZSM).
-*Key clauses.* §3.2 (comparison arithmetic) → RR-004, IXFR-006, ZSM-006.
-
-**RFC 2782 — A DNS RR for specifying the location of services (DNS SRV)** (Gulbrandsen, Vixie, Esibov, 2000).
-*Scope.* Full (RR format and compression policy).
-*Implementing sections.* §4.14 (RR), §4.2 (QRY for additional section).
-*Key clauses.* RR wire format → RR-001 + catalogue; §2.7 (non-compressibility, with RFC 6604 clarification) → QRY-023, RR catalogue.
-
-**RFC 3403 — Dynamic Delegation Discovery System (DDDS) Part Three: The DNS Database (NAPTR)** (Mealling, 2002).
-*Scope.* Partial (RR format only).
-*Implementing sections.* §4.14 (RR), §4.2 (QRY).
-*Key clauses.* §4 (NAPTR RR format) → RR-001 + catalogue.
-*Out-of-scope clauses.* DDDS algorithm — beyond DNS-server scope.
-
-**RFC 3596 — DNS Extensions to Support IP Version 6 (AAAA)** (Thomson, Huitema, Ksinant, Souissi, 2003).
-*Scope.* Full.
-*Implementing sections.* §4.14 (RR).
-*Key clauses.* §2 (AAAA wire format) → RR-001 + catalogue, RR-007.
-
-**RFC 3597 — Handling of Unknown DNS Resource Record (RR) Types** (Gustafsson, 2003).
-*Scope.* Full.
-*Implementing sections.* §4.4 (URR), §4.14 (RR for compression policy).
-*Key clauses.* §3 (parsing, storage, serving) → URR-001..005; §4 (compression prohibition) → URR-006, URR-007, QRY-023; §6 (comparison) → URR-008.
-*Out-of-scope clauses.* §5 (master file representation) — ODS-NEG-006.
-
-**RFC 6604 — xNAME RCODE and Status Bits Clarification** (Eastlake, 2012). Note: cited specifically for clarifications on SRV non-compressibility.
-*Scope.* Informative for SRV compression interpretation.
-*Implementing sections.* §4.14 (RR catalogue compression policy).
-
-**RFC 6672 — DNAME Redirection in the DNS** (Rose & Wijngaards, 2012).
-*Scope.* Full (secondary-side aspects).
-*Implementing sections.* §4.2 (QRY), §4.14 (RR).
-*Key clauses.* §2 (DNAME RR format) → RR-001 + catalogue; §2.4 (CNAME coexistence prohibition) → RR-006; §3 (DNAME-to-CNAME synthesis) → QRY-014, QRY-015; §3.2, §3.3 (synthesis semantics, edge cases) → QRY-014.
-
-**RFC 6698 — The DNS-Based Authentication of Named Entities (DANE) Transport Layer Security (TLS) Protocol: TLSA** (Hoffman & Schlyter, 2012).
-*Scope.* Partial (TLSA RR format only).
-*Implementing sections.* §4.14 (RR).
-*Key clauses.* §2.1 (TLSA wire format) → RR-001 + catalogue.
-*Out-of-scope clauses.* DANE validation semantics — ODS-INV-001 (server is not a validator).
-
-**RFC 7553 — The Uniform Resource Identifier (URI) DNS Resource Record** (Faltstrom & Kolkman, 2015).
-*Scope.* Full.
-*Implementing sections.* §4.14 (RR).
-*Key clauses.* §4.5 (URI wire format) → RR-001 + catalogue.
-
-**RFC 9460 — Service Binding and Parameter Specification via the DNS (SVCB and HTTPS Resource Records)** (Schwartz, Bishop, Nygren, 2023).
-*Scope.* Full (RR format and additional-section composition).
-*Implementing sections.* §4.14 (RR), §4.2 (QRY).
-*Key clauses.* §2.2 (RR format) → RR-001 + catalogue; §5 (additional section processing) → QRY-019.
-
-### A.3.6 DNSSEC
-
-**RFC 4033 — DNS Security Introduction and Requirements** (Arends, Austein, Larson, Massey, Rose, 2005).
-*Scope.* Informative (architecture and overview).
-*Implementing sections.* §4.13 (DNSSEC), as context.
-
-**RFC 4034 — Resource Records for the DNS Security Extensions** (Arends et al., 2005).
-*Scope.* Full (serve-only).
-*Implementing sections.* §4.13 (DNSSEC), §4.14 (RR).
-*Key clauses.* §2 (DNSKEY) → DNSSEC-001, RR catalogue; §3 (RRSIG format, Type Covered, and Original TTL fields) → DNSSEC-001, DNSSEC-003, CORE-026, CORE-027; §4 (NSEC) → DNSSEC-001, DNSSEC-004, DNSSEC-005; §5 (DS) → DNSSEC-001, DNSSEC-007; §6.2 (canonical form) → RR catalogue (RRSIG, NSEC).
-*Out-of-scope clauses.* Signing aspects (primary-side) — ODS-NEG-002.
-
-**RFC 4035 — Protocol Modifications for the DNS Security Extensions** (Arends et al., 2005).
-*Scope.* Partial (serve-only, no validation).
-*Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* §2.2 (RRSIG records do not form ordinary RRsets and do not follow normal RRset TTL rules) → CORE-026, CORE-027; §3.1 (response composition with DNSSEC RRs) → DNSSEC-003..007; §3.1.3 (negative response proofs) → DNSSEC-004, DNSSEC-005; §3.1.3.4 (wildcard proofs) → DNSSEC-006; §3.1.4 (referral proofs) → DNSSEC-007; §3.1.6 (AD and CD bits in authoritative responses) → DNSSEC-010, DNSSEC-011; §3.2.1 (recursive DO handling; useful for the DO = 0 stripping rule) → DNSSEC-002, DNSSEC-008.
-*Out-of-scope clauses.* §4 (resolver-side validation) — ODS-INV-001.
-
-**RFC 5155 — DNS Security (DNSSEC) Hashed Authenticated Denial of Existence (NSEC3)** (Laurie, Sisson, Arends, Blacka, 2008).
-*Scope.* Partial (serve-only, no generation).
-*Implementing sections.* §4.13 (DNSSEC), §4.14 (RR).
-*Key clauses.* §3 (NSEC3 RR format) → DNSSEC-001, RR catalogue; §4 (NSEC3PARAM RR format) → DNSSEC-001, RR catalogue; §7.2.2 (NXDOMAIN proofs) → DNSSEC-004; §7.2.3, §7.2.4 (NODATA proofs) → DNSSEC-005; §7.2.5 (wildcard proofs) → DNSSEC-006; §7.2.7 (referral proofs) → DNSSEC-007.
-*Out-of-scope clauses.* §7.1 (chain generation, primary-side) — ODS-NEG-002.
-
-**RFC 6840 — Clarifications and Implementation Notes for DNS Security (DNSSEC)** (Weiler & Blacka, 2013).
-*Scope.* Partial (serve-only clarifications).
-*Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* §5.6 (DO bit copying in replies) → DNSSEC-009 and EDNS-009; §5.8 (AD bit in validating-resolver replies, used here to justify conservative AD = 0 posture) → DNSSEC-010. Authoritative CD clearing is mapped to RFC 4035 §3.1.6 above; RFC 6840 §5.9 concerns validating resolvers' upstream queries and is not a requirement source for this authoritative-only server.
-*Out-of-scope clauses.* Validator-side clarifications — ODS-INV-001.
-
-**RFC 6944 — Applicability Statement: DNS Security (DNSSEC) DNSKEY Algorithm Implementation Status** (Rose, 2013).
-*Scope.* Informative (algorithm guidance; superseded by RFC 8624 for current recommendations, but retained as historical planning context).
-*Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* Algorithm opacity for serve-only → DNSSEC-012.
-
-### A.3.7 IANA and operational
-
-**RFC 6895 — Domain Name System (DNS) IANA Considerations** (Eastlake, 2013).
-*Scope.* Informative (registry maintenance).
-*Implementing sections.* Cited in §4.1, §4.2, §4.4 for OPCODE, RCODE, RR TYPE, EDNS option registry references.
-
-**RFC 8906 — A Common Operational Problem in DNS Servers: Failure To Communicate** (Andrews & Huque, 2020).
-*Scope.* Informative (operational guidance for testing).
-*Implementing sections.* Informative input to response-behavior and test-design requirements in §4.1, §4.2, §4.11, and §7.3; not a source for logging or metrics requirements.
-
-### A.3.8 TLS standards underlying XoT
-
-**RFC 5246 — The Transport Layer Security (TLS) Protocol Version 1.2** (Dierks & Rescorla, 2008).
-*Scope.* Required-to-implement per XOT-001.
-*Implementing sections.* §4.10 (XoT).
-
-**RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3** (Rescorla, 2018).
-*Scope.* Recommended per XOT-001.
-*Implementing sections.* §4.10 (XoT).
-
-**RFC 9325 — Recommendations for Secure Use of Transport Layer Security (TLS) and Datagram Transport Layer Security (DTLS)** (Sheffer, Saint-Andre, Fossati, 2022) — BCP 195.
-*Scope.* Full (cipher suite and TLS-usage profile).
-*Implementing sections.* §4.10 (XoT).
-*Key clauses.* AEAD cipher requirements → XOT-002; prohibited cipher categories → XOT-002.
-
-**RFC 6066 — Transport Layer Security (TLS) Extensions: Extension Definitions** (Eastlake, 2011).
-*Scope.* Partial (SNI extension required for XoT).
-*Implementing sections.* §4.10 (XoT).
-*Key clauses.* SNI extension → XOT-005.
-
-**RFC 5280 — Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile** (Cooper et al., 2008).
-*Scope.* Full (PKIX validation for XoT).
-*Implementing sections.* §4.10 (XoT).
-*Key clauses.* Path validation algorithm → XOT-005.
-
-**RFC 7858 — Specification for DNS over Transport Layer Security (TLS)** (Hu, Zhu, Heidemann, Mankin, Wessels, Hoffman, 2016).
-*Scope.* Partial (ALPN identifier "dot" only; this server does not implement DoT for queries).
-*Implementing sections.* §4.10 (XoT).
-*Key clauses.* ALPN identifier → XOT-004.
-
-## A.4 Sample Fine-Grained Clause Mapping
-
-This section illustrates fine-grained mapping for two representative RFCs. The full clause-level mapping for all RFCs is iterative work conducted during implementation review; these samples establish the format.
-
-### A.4.1 RFC 5936 — fine-grained mapping (AXFR client)
-
-| RFC Clause | Topic | Implementing Requirement(s) | Status |
-|---|---|---|---|
-| §2.1.1 | TCP transport mandate | ODS-FR-AXFR-001 | Draft |
-| §2.1.2 | Query construction | ODS-FR-AXFR-002 | Draft |
-| §2.2 | Multi-message response reassembly | ODS-FR-AXFR-004 | Draft |
-| §2.2 | Terminal SOA detection | ODS-FR-AXFR-008, ODS-FR-AXFR-009 | Draft |
-| §2.2.1 | QID and OPCODE validation | ODS-FR-AXFR-005 | Draft |
-| §2.2.1 | Header flag bit non-significance | ODS-FR-AXFR-006 | Draft |
-| §2.2.1 | First record SOA validation | ODS-FR-AXFR-007 | Draft |
-| §2.2.1 | Class consistency | ODS-FR-AXFR-011 | Draft |
-| §2.2.4 | Glue records | ODS-FR-AXFR-013 | Draft |
-| §2.2.4 | Occluded data handling | ODS-FR-AXFR-014 | Draft |
-| §2.2.5 | TSIG signing of multi-message | ODS-FR-AXFR-017, ODS-FR-AXFR-018 | Draft |
-| §3.1 | Error handling | ODS-FR-AXFR-019, ODS-FR-AXFR-020 | Draft |
-| §3.1 | No middle SOA | ODS-FR-AXFR-010 | Draft |
-| §3.4 | Compression scope within message | ODS-FR-AXFR-015 | Draft |
-| §4.1 | TCP connection management | ODS-FR-AXFR-003 | Draft |
-| §5 | Error RCODE handling | ODS-FR-AXFR-020 | Draft |
-
-### A.4.2 RFC 8945 — fine-grained mapping (TSIG)
-
-| RFC Clause | Topic | Implementing Requirement(s) | Status |
-|---|---|---|---|
-| §3 | Key configuration | ODS-FR-TSIG-005 | Draft |
-| §4 | TSIG RR wire format | ODS-FR-TSIG-007, ODS-FR-TSIG-008 | Draft |
-| §4.2 | Original ID handling | ODS-FR-TSIG-008(d) | Draft |
-| §4.3 | Error codes | ODS-FR-TSIG-013 | Draft |
-| §5.2 | TSIG on requests/responses | ODS-FR-TSIG-008, ODS-FR-TSIG-012 | Draft |
-| §5.2.1 | UDP truncation of signed responses | ODS-FR-TSIG-016 | Draft |
-| §5.2.2 | TSIG error response semantics | ODS-FR-TSIG-013 | Draft |
-| §5.2.2.1 | MAC truncation rules | ODS-FR-TSIG-014 | Draft |
-| §5.3 | Signing algorithm | ODS-FR-TSIG-012 | Draft |
-| §5.3.1 | Multi-message TSIG envelope | ODS-FR-TSIG-010, ODS-FR-TSIG-011 | Draft |
-| §5.4 | Verification algorithm | ODS-FR-TSIG-008 | Draft |
-| §5.4.1 | BADTIME / fudge handling | ODS-FR-TSIG-008(c) | Draft |
-| §6 | Algorithm requirements | ODS-FR-TSIG-001, ODS-FR-TSIG-002, ODS-FR-TSIG-003 | Draft |
-| §6 | HMAC-MD5 prohibition | ODS-FR-TSIG-004, ODS-NEG-013 | Draft |
-| §10.5 | Truncation discouragement | ODS-FR-TSIG-015 | Draft |
-
-## A.5 Out-of-Scope Clauses Register
-
-This section catalogues, by RFC, those clauses that fall outside this server's scope, with reference to the architectural invariant or Appendix C scope clause that excludes them. The register supports accurate partial-compliance assertions per ODS-VER-006.
-
-**RFC 1034.** Resolver-side aspects (§5 in part) — ODS-INV-001. Master file format (§6.1) — ODS-NEG-006. Primary-role aspects of zone management (§4.3.5, various) — ODS-INV-001.
-
-**RFC 1035.** Master file format (§5) — ODS-NEG-006. Resolver implementation (§7) — ODS-INV-001. Original zone transfer specification (§4.3) — superseded by RFC 5936 / RFC 1995.
-
-**RFC 2181.** Primary-side zone publication concerns (§6.2 in part) — ODS-INV-001.
-
-**RFC 2308.** Resolver caching semantics (§7) — ODS-INV-001.
-
-**RFC 4035.** Resolver-side validation (§4) — ODS-INV-001. Signing semantics (cross-cutting with RFC 4034) — ODS-NEG-002.
-
-**RFC 5155.** Chain generation (§7.1) — ODS-NEG-002.
-
-**RFC 5936.** AXFR server-side requirements — ODS-NEG-005 (no outbound AXFR serving).
-
-**RFC 1995.** IXFR server-side requirements — ODS-NEG-005.
-
-**RFC 1996.** NOTIFY origination (originator semantics) — ODS-NEG-004.
-
-**RFC 6698 (TLSA).** DANE validation semantics — ODS-INV-001 (server is not a validator).
-
-**RFC 9103.** NOTIFY-over-TLS reception (§6.4) — ODS-NEG-017. Opportunistic Privacy Profile (§9.2) — ODS-NEG-016.
-
-**RFC 7858.** DNS-over-TLS for client queries (full RFC scope except ALPN identifier) — outside current SRS scope per Appendix C.3.3.
-
-## A.6 Verification Status Tracking
-
-Verification status is tracked per requirement per ODS-VER-009. The expected mechanism for production maintenance of status is a structured table (spreadsheet, database, or version-controlled CSV) alongside the SRS source, rather than inline in the SRS document. The following columns are required:
-
-- **Requirement ID** — the immutable identifier from §3 through §6 (or A.4 fine-grained sub-mappings).
-- **Verification Method** — one or more methods from §7.1, mirroring the requirement's *Verification* field.
-- **Status** — Not Verified / Verified / Deferred / Not Applicable per A.2.3.
-- **Verification Date** — date of most recent verification activity yielding the current status.
-- **Evidence Reference** — pointer to the CI build, test report, code review record, or external operator report substantiating the status.
-- **Deferred Target** — for status Deferred, the milestone (Alpha, formal SRS MVP, post-MVP) at which verification is required.
-- **Notes** — free-text annotations.
-
-The SRS deliberately does not embed live status rows. Earlier draft examples
-became misleading as IXFR, DNSSEC serving, XoT, and other post-Alpha protocol
-families gained Engineering MVP evidence before formal SRS release acceptance.
-Current status is maintained in the companion documents:
-
-- `docs/verification-ledger.md` records the coarse evidence state by requirement
-  family.
-- `docs/appendix-a-traceability-matrix.md` records range-level and selected
-  per-requirement evidence mappings.
-- `docs/mvp-gap-register.md` records remaining implementation and
-  release-acceptance gaps.
+Requirement identifiers remain immutable per ODS-§1.4.4. Deprecated or replaced
+requirements remain traceable through the companion artifacts with replacement
+pointers rather than being silently removed.
+
+RFC scope is classified as Full, Partial (secondary-side), Partial (selected
+clauses), or Informative. Partial and Informative classifications MUST identify
+the exclusion reason, such as secondary-only scope, no DNSSEC signing, no
+zone-transfer serving, no resolver behavior, no master-file serving interface,
+or an Appendix C protocol exclusion.
+
+Informative operational RFCs may guide test design where their topic matches
+the requirement. For example, RFC 8906 informs response-behavior testing but is
+not a source for logging or metrics requirements.
+
+Two mapping granularities are allowed:
+
+- **Coarse-grained:** RFC to SRS subsection. This is acceptable for navigation
+  and for RFCs whose scoped clauses are wholly covered by a subsection.
+- **Fine-grained:** RFC clause to SRS requirement ID. This is required for
+  partial-scope claims, security-sensitive claims, and externally reviewed
+  protocol-correctness findings.
+
+## A.3 Verification Status Tracking
+
+Verification status is tracked per requirement per ODS-VER-009. The SRS does
+not embed live status rows. Earlier inline examples became misleading as IXFR,
+DNSSEC serving, XoT, catalog zones, EDNS/EDE, DNS Cookies, RRL, and CHAOS
+support gained Engineering MVP evidence before formal SRS release acceptance.
+
+The live structured status table is maintained in companion artifacts and uses
+these columns:
+
+- **Requirement ID**
+- **Verification Method**
+- **Status**: Not Verified / Verified / Deferred / Not Applicable
+- **Verification Date**
+- **Evidence Reference**
+- **Target resolution milestone**
+- **Notes**
+
+Deferred targets use the project milestone vocabulary: Alpha, formal SRS MVP, post-MVP,
+or a later named release gate.
 
 Population of the live tracking table is the responsibility of the test and
-review team; the SRS records the conventions and column definitions but does
-not include the live tracking content.
+review team. The SRS records the rules, current requirement IDs, and principal
+RFC cross-reference index only.
 
-## A.7 Cross-Reference Index
+## A.4 Companion Artifact Ownership
+
+| Artifact | Ownership |
+| --- | --- |
+| `docs/rfc-traceability-policy.md` | RFC mapping rules, status vocabulary, current-scope guardrails, and out-of-scope clause handling. |
+| `docs/rfc-compliance-assertions.md` | Current structured RFC compliance assertions for ODS-VER-014, including current status and release-evidence gaps. |
+| `docs/appendix-a-traceability-matrix.md` | Requirement-family/range coverage and evidence pointers checked against current SRS requirement IDs. |
+| `docs/verification-ledger.md` | Coarse evidence state by requirement family. |
+| `docs/mvp-gap-register.md` | Remaining implementation and release-acceptance gaps. |
+| `docs/srs-review-disposition.md` | External-review findings, accepted protocol fixes, and rejected scope-trim suggestions. |
+
+## A.5 Cross-Reference Index
 
 For project navigation convenience, the following inverse index is provided. Each entry maps from an SRS subsection to the principal RFC sources for its requirements.
 

@@ -2,9 +2,11 @@
 
 Status: current Engineering MVP compliance posture, synchronized with SRS v0.9.1.
 
-This register is the primary documentation source for ODS-VER-014. Release notes
-must copy this structured list, update the evidence pointers to the release
-snapshot, and replace any current-main gaps with release-specific dispositions.
+This register is the primary documentation source for ODS-VER-014. RFC
+traceability conventions, scope categories, and status vocabulary are maintained
+in `docs/rfc-traceability-policy.md`. Release notes must copy this structured
+list, update the evidence pointers to the release snapshot, and replace any
+current-main gaps with release-specific dispositions.
 Rows marked `Informative Only` are not compliance claims; they record standards
 cited for context or explicitly excluded from the current SRS scope.
 

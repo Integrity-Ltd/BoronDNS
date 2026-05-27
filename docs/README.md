@@ -36,6 +36,7 @@ and slowly diverging.
 | What is still open? | `mvp-gap-register.md` | Keep only short active gaps here; put detailed evidence in the ledger or Appendix A. |
 | What evidence exists by requirement family? | `verification-ledger.md` | Keep coarse status here; put per-requirement/range detail in Appendix A. |
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
+| How are RFC traceability rules maintained? | `rfc-traceability-policy.md` | Keep RFC mapping conventions, status vocabulary, and out-of-scope clause handling here; keep current structured compliance rows in `rfc-compliance-assertions.md`. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | Where are deferred optimization tracks detailed? | `future-optimization-tracks.md` | Keep future XDP, packed-store, and response-cache design constraints here; let SRS Appendix C.6 record the formal scope boundary. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
@@ -105,6 +106,8 @@ and slowly diverging.
   evidence ledger.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `appendix-a-traceability-matrix.md`: working traceability matrix.
+- `rfc-traceability-policy.md`: RFC traceability conventions, status
+  vocabulary, and out-of-scope clause handling policy.
 - `dnssec-conformance-matrix.tsv`: passive DNSSEC conformance matrix.
 - `zsm-engineering-mvp-matrix.tsv`: checked short-evidence matrix for Zone State
   Machine requirements.
