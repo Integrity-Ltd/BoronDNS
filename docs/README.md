@@ -68,7 +68,7 @@ and slowly diverging.
   query-mix, and artifact-retention profile referenced by SRS Appendix E.
 - `oxide-gun.md`: OxideGun load-generator and XDP lab notes.
 - `catalog-zone-mvp-rfc9432.md`: RFC 9432 catalog-zone implementation notes and
-  MVP/E2E test shape.
+  Engineering MVP/E2E test shape.
 
 ## Engineering MVP and Evidence
 

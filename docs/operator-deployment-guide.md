@@ -386,8 +386,9 @@ Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
 NSID diagnostics for anycast or load-balanced deployments. The default is empty,
 which suppresses NSID responses even when clients request the option.
 
-See [Catalog Zone MVP based on RFC 9432](catalog-zone-mvp-rfc9432.md) for the
-catalog-specific behavior, security boundary, and PowerDNS primary pattern.
+See [Catalog Zone Engineering MVP based on RFC 9432](catalog-zone-mvp-rfc9432.md)
+for the catalog-specific behavior, security boundary, and PowerDNS primary
+pattern.
 
 Minimal local test shape:
 

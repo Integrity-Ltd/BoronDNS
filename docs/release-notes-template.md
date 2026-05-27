@@ -136,4 +136,4 @@ CLI, metrics, logs, health endpoints, and network behavior.
 | --- | --- | --- | --- |
 | Architecture Owner | TBD | Release verification result review | TBD |
 | Test/verification owner | TBD | Verification evidence completeness | TBD |
-| External operator, MVP only | TBD | Production-representative acceptance scope | TBD |
+| External operator, formal SRS MVP only | TBD | Production-representative acceptance scope | TBD |

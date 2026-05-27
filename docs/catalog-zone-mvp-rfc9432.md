@@ -16,7 +16,7 @@ deployment profiles.
 
 ## RFC 9432 Scope
 
-Implemented MVP behavior:
+Implemented Engineering MVP behavior:
 
 - Catalog zones are configured explicitly by the operator.
 - Catalog zones are fetched over AXFR/IXFR from configured transfer primaries.
@@ -32,7 +32,7 @@ Implemented MVP behavior:
 - Duplicate member zones or malformed required catalog data cause OxideDNS to
   leave the previous applied catalog membership unchanged.
 
-Out of MVP scope:
+Out of this Engineering MVP catalog slice:
 
 - Per-member custom transfer settings from catalog properties.
 - Catalog migration state beyond replacing the previous in-memory membership

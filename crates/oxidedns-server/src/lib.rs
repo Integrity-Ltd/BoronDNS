@@ -12849,7 +12849,7 @@ mod tests {
         assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn xot_transfer_logs_tls_session_establishment_and_close() {
         let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
         let target = TransferPrimaryConfig {
