@@ -4941,7 +4941,7 @@ Per §1.4.3, requirement identifiers follow the form `ODS-<CATEGORY>-<AREA>-<NNN
 | NEG | Negative (Prohibition) Requirement | Omitted | §4.18 |
 | VER | Verification Requirement | Omitted | §7 |
 
-VER is the only category added beyond the §1.4.3 original enumeration; the next SRS revision should incorporate VER into the §1.4.3 list explicitly.
+The category rows above are the current canonical category registry and mirror the §1.4.3 category enumeration.
 
 ### D.5.2 Area code registry (normative)
 
