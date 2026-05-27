@@ -30,11 +30,15 @@ FORBIDDEN_TEXT = {
     "Reference Query Mix of Appendix E.2": "stale Appendix E reference",
     "Reference Hardware Profile (E.1)": "stale Appendix E heading",
     "Reference Query Mix (E.2)": "stale Appendix E heading",
+    "concrete, atomic, testable requirements": "SRS no longer claims strict atomicity",
+    "decomposed into atomic requirements": "SRS no longer claims strict atomicity",
 }
 
 REQUIRED_TEXT = [
     "Each requirement should express a single, testable assertion.",
     "its verification text must identify the observable sub-cases to be tested.",
+    "concrete, traceable, testable requirements",
+    "where a requirement intentionally groups a coherent operational case",
     "the response OPT RR's TTL field MUST copy the query's DO bit exactly",
     "the response DO bit is not a signal that augmentation records were included",
     "This SRS makes that stronger as a project policy",

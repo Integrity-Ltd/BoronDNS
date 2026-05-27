@@ -109,7 +109,7 @@
 
 ## 1.1 Purpose
 
-This Software Requirements Specification (SRS) defines the functional and non-functional requirements of OxideDNS-Secondary, a secondary-only authoritative DNS server written in Rust. It expands the RFC compliance target established in the Project Initiation Document (PID) into concrete, atomic, testable requirements suitable for implementation, review, and independent verification.
+This Software Requirements Specification (SRS) defines the functional and non-functional requirements of OxideDNS-Secondary, a secondary-only authoritative DNS server written in Rust. It expands the RFC compliance target established in the Project Initiation Document (PID) into concrete, traceable, testable requirements suitable for implementation, review, and independent verification.
 
 This document is the normative reference for externally observable behaviour, explicit scope exclusions, and the criteria against which correctness will be judged. Internal design choices, data structures, concurrency models, and implementation evidence belong in the Architecture Document, Test Plan, verification ledger, or release notes unless they are necessary to define externally observable behaviour.
 
@@ -253,7 +253,7 @@ The five actor classes with which the server interacts are enumerated in §2.3.
 
 ## 2.2 Product Functions
 
-At a behavioural level, OxideDNS-Secondary performs the following functions. Each is decomposed into atomic requirements in §4.
+At a behavioural level, OxideDNS-Secondary performs the following functions. Section 4 decomposes these functions into numbered requirements; where a requirement intentionally groups a coherent operational case, its verification text identifies the observable sub-cases to test.
 
 **Zone acquisition.** Initiates AXFR or IXFR transfers from configured primaries, authenticated by TSIG where configured. Falls back from IXFR to AXFR when the primary cannot satisfy an incremental request. Transfers over TLS (XoT) where configured.
 
