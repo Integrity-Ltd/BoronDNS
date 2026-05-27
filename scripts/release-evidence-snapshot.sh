@@ -98,7 +98,7 @@ traceability matrix, 24-hour fuzzing campaigns, completed soak testing, or
 production benchmark reports. The default \`info-verbosity-handoff/\`,
 \`interface-compatibility/\`, \`benchmark-handoff/\`, \`soak-handoff/\`,
 \`reproducible-build-handoff/\`, and \`release-handoff/\` artifacts are
-release/operations setup scaffolds for later production-depth info-verbosity
+release/operations setup packages for later production-depth info-verbosity
 profile, release-to-release interface diff review, Reference Hardware/Profile
 benchmark, long-duration soak, independent reproducible-build comparison,
 scheduled-CI, signing, release-note, and external-operator execution; they are

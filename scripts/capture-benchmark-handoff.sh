@@ -221,7 +221,7 @@ This directory is the Engineering MVP setup artifact for later
 release/operations execution of Reference Hardware/Profile benchmarks. It does
 not claim that production benchmarks have run. It provides the runbook, report
 template, metric/resource TSV schemas, baseline-history format, requirement
-traceability, release-note snippet, environment values, and sign-off scaffold
+traceability, release-note snippet, environment values, and sign-off template
 needed for later SRS acceptance.
 
 Run configuration:

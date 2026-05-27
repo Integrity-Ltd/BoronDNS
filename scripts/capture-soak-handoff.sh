@@ -186,7 +186,7 @@ Created UTC: $timestamp
 This directory is the Engineering MVP setup artifact for later
 release/operations execution of the long-duration soak. It does not claim that
 the 30-day soak has run. It provides the report template, sample TSV schemas,
-requirement traceability, environment values, and sign-off scaffold needed for
+requirement traceability, environment values, and sign-off template needed for
 the later ODS-VER-008 acceptance run.
 
 Run configuration:

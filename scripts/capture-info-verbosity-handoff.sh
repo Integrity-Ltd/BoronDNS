@@ -195,7 +195,7 @@ This directory is the Engineering MVP setup artifact for later
 release/operations profiling of \`info\` verbosity under production-representative
 traffic. It does not claim that production-depth profiling has run. It provides
 the runbook, report template, sample TSV schemas, requirement traceability,
-release-note snippet, environment values, and sign-off scaffold needed for the
+release-note snippet, environment values, and sign-off template needed for the
 later acceptance profile.
 
 Run configuration:

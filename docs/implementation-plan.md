@@ -181,7 +181,7 @@ implementation plan can remain at milestone level.
 - broaden release-grade real-primary interop and retained evidence for the
   implemented feature families named in `docs/implemented-feature-scope.md`;
 - execute and attach release-specific policy review records, signed-release
-  artifacts, and operator sign-off using the handoff scaffolds;
+  artifacts, and operator sign-off using the release handoff packages;
 - preserve the Appendix C.6 future-optimization boundaries for XDP/eBPF,
   io_uring, packed arena storage, and response caching;
 - keep the long-run performance, fuzz, interop, and soak harnesses ready for

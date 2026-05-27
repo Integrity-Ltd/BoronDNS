@@ -253,7 +253,7 @@ Created UTC: $timestamp
 This directory is the Engineering MVP setup artifact for release-governance
 handoff. It does not claim that release acceptance has completed. It provides
 the attachment map, scheduled CI/manual-run plan, signing runbook,
-release-notes fill plan, external-operator acceptance scaffold, and readiness
+release-notes fill plan, external-operator acceptance template, and readiness
 checklist needed to complete later SRS acceptance evidence.
 
 Release defaults:

@@ -1,6 +1,6 @@
 # OxideDNS Interface Compatibility Policy
 
-Status: Engineering MVP policy scaffold for `ODS-NFR-MAINT-006` and
+Status: Engineering MVP policy for `ODS-NFR-MAINT-006` and
 `ODS-IF-CONF-002`, not completed release-diff evidence.
 
 OxideDNS treats externally observable interfaces as stable under semantic

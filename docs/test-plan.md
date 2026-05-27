@@ -103,9 +103,9 @@ snapshot and release notes.
 | Periodic evidence | Required cadence | Current command or artifact | Open acceptance work |
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
-| Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off scaffold; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
-| Reproducible-build comparison | Gate before formal SRS MVP or public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off scaffold; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
-| Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off scaffold | release/operations owners later fill the report during the 30-day run |
+| Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off template; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
+| Reproducible-build comparison | Gate before formal SRS MVP or public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off template; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
+| Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off template | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
 ## Gate Execution
@@ -126,7 +126,7 @@ present.
 
 `scripts/capture-release-handoff.sh` is intentionally a setup artifact. It
 creates the release attachment map, scheduled CI/manual-run plan, signing
-runbook, release-note fill plan, external-operator acceptance scaffold, and
+runbook, release-note fill plan, external-operator acceptance template, and
 release-readiness checklist for later SRS acceptance execution. A generated
 handoff directory proves the Engineering MVP governance setup exists; it does not
 prove that release acceptance or external-operator sign-off has been completed.
@@ -134,7 +134,7 @@ prove that release acceptance or external-operator sign-off has been completed.
 `scripts/capture-info-verbosity-handoff.sh` is intentionally a setup artifact.
 It creates the runbook, report template, log-volume/structured-field/metrics
 TSV schemas, requirement traceability map, release-note snippet, and operator
-sign-off scaffold for later production-depth profiling of `info` verbosity
+sign-off template for later production-depth profiling of `info` verbosity
 under release traffic. A generated handoff directory proves the Engineering MVP
 setup exists; it does not prove that production-depth profiling has been
 executed.
@@ -148,20 +148,20 @@ as a completed compatibility-diff review.
 `scripts/capture-benchmark-handoff.sh` is intentionally a setup artifact. It
 creates the benchmark runbook, report template, performance/resource TSV
 schemas, requirement traceability map, rolling-baseline history template, and
-operator sign-off scaffold for later Reference Hardware/Profile execution. A
+operator sign-off template for later Reference Hardware/Profile execution. A
 generated handoff directory proves the Engineering MVP setup exists; it does
 not prove that production benchmarks have been executed.
 
 `scripts/capture-soak-handoff.sh` is intentionally a setup artifact. It creates
 the report template, RSS/file-descriptor/metrics/event TSV schemas, requirement
-traceability map, and operator sign-off scaffold for the later ODS-NFR-REL-003
+traceability map, and operator sign-off template for the later ODS-NFR-REL-003
 30-day soak. A generated handoff directory proves the Engineering MVP setup
 exists; it does not prove that the long-running soak has been executed.
 
 `scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
 artifact. It creates fixed build inputs, a runbook, artifact-manifest and
 comparison TSV schemas, requirement traceability, release-note snippet, and
-release-engineer sign-off scaffold for the later independent bit-identical build
+release-engineer sign-off template for the later independent bit-identical build
 comparison. A generated handoff directory proves the Engineering MVP setup
 exists; it does not prove ODS-NFR-MAINT-005 until completed manifests from two
 independent builders match.

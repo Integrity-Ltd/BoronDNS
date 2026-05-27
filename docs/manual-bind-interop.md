@@ -151,7 +151,7 @@ sudo sysctl -w net.ipv4.conf.all.rp_filter=0
 ```
 
 The project currently keeps the short RRL harness in
-`scripts/interop-rrl-udp.sh` and the release-campaign scaffold in
+`scripts/interop-rrl-udp.sh` and the release-campaign handoff in
 `scripts/rrl-evidence-campaign.sh`. A larger Rust source-IP rotating harness is
 future work and should cover IPv4 and IPv6.
 
