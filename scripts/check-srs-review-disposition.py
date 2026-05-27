@@ -800,6 +800,11 @@ def main() -> int:
         "affected responses are not counted",
         "metric counting decoupled from EDE emission",
         "Current metric evidence is narrower than the formal requirement",
+        "Catalog member-name semantic exclusions",
+        "whole-candidate catalog rejection",
+        "`ODS-NFR-SEC-015` per-offending-member semantic rejection profile",
+        "subordinate-to-catalog members, root-zone members, reserved-zone members, or wildcard-label members",
+        "Formal SRS acceptance needs the semantic member-name exclusions and retained tests recorded in the gap register",
     ]:
         if term not in disposition:
             errors.append(
