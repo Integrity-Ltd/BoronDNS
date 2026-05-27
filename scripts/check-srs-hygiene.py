@@ -125,6 +125,8 @@ REQUIRED_TEXT = [
     "*Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.",
     "Under the Reference Query Mix of Appendix E.3, on hardware matching the Reference Hardware Profile of Appendix E.2",
     "The published Linux release artifact targets `x86_64-unknown-linux-musl`",
+    "The current release workflow publishes an Alpine-based image archive",
+    "future distroless or scratch image variants only when binary inspection proves no runtime shared-library dependency",
     "Developer and distribution builds that use another target MAY dynamically link",
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",
     "The active verification automation for the current project stage MUST enact the Continuous classification",

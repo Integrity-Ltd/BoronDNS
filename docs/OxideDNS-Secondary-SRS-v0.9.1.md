@@ -299,7 +299,7 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 **Deployment modes.** Three deployment modes are supported:
 
 - Native process on a Linux host.
-- Container (OCI-compatible image, suitable for distroless or scratch base images, runnable on Kubernetes, Podman, Docker, containerd, and equivalent runtimes).
+- Container (OCI-compatible image, runnable on Kubernetes, Podman, Docker, containerd, and equivalent runtimes). The current release workflow publishes an Alpine-based image archive; the separately verified static musl binary may be used by future distroless or scratch image variants only when binary inspection proves no runtime shared-library dependency.
 - Minimal virtual machine image, Alpine or equivalent base.
 
 **Network.** The server requires bindable access to UDP/53 and TCP/53 (or operator-configured equivalents) for query service; outbound TCP access to configured primaries for zone transfers; inbound UDP and TCP access from primaries for NOTIFY; and, where XoT is configured, outbound TCP access to the primary's configured XoT port (typically TCP/853). IPv4 and IPv6 are supported equivalently; the server does not require both to be present.
