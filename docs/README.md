@@ -59,6 +59,8 @@ tracked as evidence or explicit implementation gaps.
   plan.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence
   gaps.
+- `evidence-command-catalog.md`: command inventory consumed by release evidence
+  snapshot tooling.
 - `verification-ledger.md`: lightweight Engineering MVP and SRS verification
   evidence ledger.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.

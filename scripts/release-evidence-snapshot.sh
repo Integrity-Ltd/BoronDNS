@@ -131,7 +131,7 @@ record_version python3 python3 --version
 {
     printf '# OxideDNS Verification Commands\n\n'
     awk '/^```sh$/ { in_block=1 } in_block { print } /^```$/ && in_block { in_block=0 }' \
-        "$repo_root/docs/mvp-gap-register.md"
+        "$repo_root/docs/evidence-command-catalog.md"
 } >"$snapshot_dir/verification-commands.md"
 
 run_and_capture test-plan-check bash -lc "cd '$repo_root' && scripts/check-test-plan.sh"
@@ -251,13 +251,19 @@ if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
         esac
         name="$(tr -c 'A-Za-z0-9_.-' '-' <<<"$command_line" | sed 's/^-*//; s/-*$//')"
         run_and_capture "interop-$name" bash -lc "cd '$repo_root' && $command_line"
-    done < <(awk '/^```sh$/ { in_block=1; next } /^```$/ && in_block { in_block=0 } in_block { print }' "$repo_root/docs/mvp-gap-register.md")
+    done < <(awk '
+        /^## Broader SRS Acceptance Commands$/ { section=1; next }
+        /^## / && section { section=0 }
+        section && /^```sh$/ { in_block=1; next }
+        section && /^```$/ && in_block { in_block=0; next }
+        section && in_block { print }
+    ' "$repo_root/docs/evidence-command-catalog.md")
 else
     cat >"$snapshot_dir/logs/interop-skipped.log" <<'EOF'
 Interop scripts were not run by default.
 
 Set OXIDEDNS_EVIDENCE_RUN_INTEROP=1 to run the interop commands listed in
-docs/mvp-gap-register.md and capture each command log into this snapshot.
+docs/evidence-command-catalog.md and capture each command log into this snapshot.
 EOF
 fi
 
