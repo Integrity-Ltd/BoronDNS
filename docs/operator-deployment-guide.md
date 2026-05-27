@@ -462,44 +462,13 @@ curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8080/metrics
 ```
 
-Metrics currently include configured and active zone gauges, SRS v0.9.1
-per-zone status series (`oxidedns_secondary_zone_state`,
-`oxidedns_secondary_zone_soa_serial`,
-`oxidedns_secondary_zone_last_refresh_seconds`,
-`oxidedns_secondary_zone_next_refresh_seconds`,
-`oxidedns_secondary_zone_refresh_failures`, and
-`oxidedns_secondary_queries_total{zone="..."}`), catalog membership gauges
-(`oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`),
-transfer counters, query
-counters, global and per-zone RCODE counters
-(`oxidedns_secondary_query_responses_total{rcode="..."}` and
-`oxidedns_secondary_query_responses_total{zone="...",rcode="..."}`),
-truncation counters, CNAME limit/loop counters,
-NOTIFY counters, TSIG verification outcomes for authorized NOTIFY, global and
-per-source-prefix DNS Cookie case/BADCOOKIE counters, RRL counters, the
-`oxidedns_secondary_build_info` gauge, the
-`oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and the
-`oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics, and the
-`oxidedns_secondary_query_duration_seconds` latency histogram. The histogram
-bucket boundaries are configured with `[metrics].latency_histogram_buckets` in
-seconds and default to the SRS v0.9.1 bucket list.
+The metrics catalogue, gzip behavior, and opt-in expensive diagnostic metric
+families are documented in
+[`health-metrics-interface.md`](health-metrics-interface.md#metrics). Keep
+`[metrics].zone_shape_enabled` and `[metrics].pipeline_timing_enabled` disabled
+outside benchmark or diagnostic captures.
 
-The active-zone shape gauges under `oxidedns_zone_shape_*` are disabled by
-default because they walk each active zone snapshot at scrape time. Enable
-`[metrics].zone_shape_enabled = true` only for memory-layout benchmarking or
-short diagnostic captures where RRset/RDATA cardinality and canonical-name key
-interning evidence are needed.
-
-The query-pipeline histograms and response-cache candidate counters are also
-disabled by default. Enable `[metrics].pipeline_timing_enabled = true` only for
-short benchmark captures where parse/compose/send time or future cache
-candidacy is being measured. These metrics do not enable a response cache; the
-current server still assembles authoritative responses from the active in-memory
-zone snapshot on demand.
-
-The `/metrics` endpoint returns gzip-compressed output when the scrape request
-includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
-default. SRS v0.9.1 still requires retained release evidence for build-info label
+SRS v0.9.1 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained
 health response-time evidence, and rate-limit behavior under
 production-representative scrape traffic. Treat those as pending until the gap

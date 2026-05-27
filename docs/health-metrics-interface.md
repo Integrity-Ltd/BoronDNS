@@ -78,19 +78,35 @@ contains an `Accept-Encoding` value that allows `gzip`, the response includes
 `Content-Encoding: gzip` and `Vary: accept-encoding`. A request that sets
 `gzip;q=0` receives uncompressed text.
 
-The metrics endpoint exposes the implemented metric families described in the
-operator guide:
+The metrics endpoint exposes these implemented metric families:
 
 - configured and active zone gauges;
-- ordinary per-zone state, serial, refresh, failure, and query counters;
-- transfer, NOTIFY, TSIG, RRL, DNS Cookie, DNSSEC-cap, CHAOS, truncation, and
-  query-response counters;
-- build information and query-duration histograms;
-- `oxidedns_catalog_member_info` for catalog membership;
-- opt-in zone-shape and query-pipeline/response-cache-candidate metrics.
+- SRS v0.9.1 per-zone status series:
+  `oxidedns_secondary_zone_state`,
+  `oxidedns_secondary_zone_soa_serial`,
+  `oxidedns_secondary_zone_last_refresh_seconds`,
+  `oxidedns_secondary_zone_next_refresh_seconds`,
+  `oxidedns_secondary_zone_refresh_failures`, and
+  `oxidedns_secondary_queries_total{zone="..."}`;
+- catalog membership gauges:
+  `oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`;
+- transfer counters, query counters, truncation counters, CNAME limit/loop
+  counters, global and per-zone RCODE counters, NOTIFY counters, TSIG
+  verification counters for authorized NOTIFY, DNS Cookie counters, RRL
+  counters, the `oxidedns_secondary_build_info` gauge, the
+  `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and
+  the `oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics;
+- `oxidedns_secondary_query_duration_seconds` query latency histogram, with
+  buckets configured by `[metrics].latency_histogram_buckets`;
+- opt-in active-zone shape gauges under `oxidedns_zone_shape_*`;
+- opt-in query-pipeline histograms and response-cache candidate counters.
 
 The opt-in metric families may walk active zone snapshots or collect extra
-pipeline timing. Keep them disabled outside benchmark or diagnostic captures.
+pipeline timing. Keep `[metrics].zone_shape_enabled` and
+`[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
+captures. These metrics do not enable a response cache; the current server
+still assembles authoritative responses from the active in-memory zone snapshot
+on demand.
 
 ## Rate Limiting
 
