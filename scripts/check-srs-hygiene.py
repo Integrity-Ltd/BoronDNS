@@ -82,6 +82,9 @@ FORBIDDEN_TEXT = {
     "PID Phase 4": "formal release acceptance must be described in SRS terms",
     "out of PID scope": "scope exclusions must be stated in current SRS terms",
     "not in PID scope": "scope exclusions must be stated in current SRS terms",
+    "health.livez_timeout_ms": "SRS must not specify the removed liveness timeout configuration parameter",
+    "ODS_HEALTH_LIVEZ_TIMEOUT_MS": "SRS must not document an environment override for a removed configuration parameter",
+    "explicit liveness-probe-timeout": "SRS must treat liveness probe timeout policy as external to OxideDNS configuration",
 }
 
 REQUIRED_TEXT = [
@@ -133,6 +136,8 @@ REQUIRED_TEXT = [
     "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
     "ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics)",
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
+    "OxideDNS does not expose a server-side liveness timeout parameter.",
+    "Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model.",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
     "It is not stored in this repository.",

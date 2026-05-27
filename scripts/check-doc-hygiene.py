@@ -45,6 +45,8 @@ BANNED_PHRASES = [
     "DNS wire core and UDP query handling are implemented:",
     "AXFR acquisition and IXFR refresh/fallback are implemented:",
     "Health endpoints, metrics, logging, and process interfaces are implemented:",
+    "health.livez_timeout_ms",
+    "ODS_HEALTH_LIVEZ_TIMEOUT_MS",
 ]
 
 SOURCE_BANNED_PHRASES = [

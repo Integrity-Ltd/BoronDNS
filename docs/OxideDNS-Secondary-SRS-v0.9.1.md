@@ -2765,7 +2765,7 @@ Label cardinality MUST be bounded: per-source-prefix labels use the same /24 (IP
 
 **ODS-NFR-OBS-004.** The server MUST expose two separate health endpoints per §6.4, following Kubernetes liveness-vs-readiness conventions:
 
-- **`/livez` (liveness probe).** Reports whether the process is running and responsive: returns HTTP 200 with a small JSON or plain-text body whenever the process can answer the probe at all. Returns failure (HTTP 5xx or no response) only if the process is unable to respond within a configurable liveness-probe timeout (parameter `health.livez_timeout_ms`, default 1000 ms). The intent is to support orchestrator restart-on-deadlock semantics; a healthy process answers `/livez` even when zones are still in LOADING state or during graceful shutdown.
+- **`/livez` (liveness probe).** Reports whether the process is running and responsive: returns HTTP 200 with a small JSON or plain-text body whenever the process can answer the probe at all. Returns failure (HTTP 5xx or no response) only if the endpoint task cannot answer before the client, reverse proxy, or orchestrator probe timeout. OxideDNS does not expose a server-side liveness timeout parameter. The intent is to support orchestrator restart-on-deadlock semantics; a healthy process answers `/livez` even when zones are still in LOADING state or during graceful shutdown.
 
 - **`/readyz` (readiness probe).** Reports whether the server should receive traffic, in one of three states:
   - **ready** (HTTP 200): at least one configured explicit or catalog-derived zone is in ACTIVE state (per ODS-FR-ZONE-006), and the process is not draining. When only catalog zones are configured, **ready** requires that initial catalog acquisition has completed and at least one member zone derived from it has reached ACTIVE state per the same criterion.
@@ -2987,14 +2987,14 @@ This mode MUST NOT bind any sockets, MUST NOT contact any primary, MUST NOT init
 - Positive integer counts without a unit suffix where the unit is implicit from category (port numbers, counts of records, counts of zones).
 - Boolean parameters named with a verb form indicating the affirmative (e.g., `rrl.enabled = true`, NOT `rrl.disable = false`).
 
-The complete naming convention, plus the per-parameter type and default value, is part of the schema documentation maintained per ODS-IF-CONF-002. The schema MUST also document the operator-facing parameter name for each NFR-introduced parameter referenced in §5 (e.g., `shutdown.grace_period_seconds`, `tsig.fudge_seconds`, `cookie.timestamp_past_tolerance_seconds`, `health.livez_timeout_ms`, etc.).
+The complete naming convention, plus the per-parameter type and default value, is part of the schema documentation maintained per ODS-IF-CONF-002. The schema MUST also document the operator-facing parameter name for each NFR-introduced parameter referenced in §5 (e.g., `shutdown.grace_period_seconds`, `tsig.fudge_seconds`, `cookie.timestamp_past_tolerance_seconds`, `health.metrics_rate_limit_per_minute`, etc.).
 *Source.* Operational requirement; resolution of v0.4 audit finding about configuration parameter naming consistency.
 *Verification.* Schema documentation review confirming uniform conformance; configuration parsing tests rejecting parameters violating the convention as unknown keys per the schema.
 
 **ODS-IF-CONF-012.** Environment variable names corresponding to configuration parameters per ODS-IF-CONF-006 MUST follow the pattern `ODS_<SECTION>_<KEY>`, with both `<SECTION>` and `<KEY>` uppercased and dots replaced by underscores. Examples:
 - `[tsig] fudge_seconds = 300` becomes `ODS_TSIG_FUDGE_SECONDS=300`.
 - `[shutdown] grace_period_seconds = 30` becomes `ODS_SHUTDOWN_GRACE_PERIOD_SECONDS=30`.
-- `[health] livez_timeout_ms = 1000` becomes `ODS_HEALTH_LIVEZ_TIMEOUT_MS=1000`.
+- `[health] metrics_rate_limit_per_minute = 60` becomes `ODS_HEALTH_METRICS_RATE_LIMIT_PER_MINUTE=60`.
 
 Where a configuration parameter is nested deeper than two levels (per-zone or per-key tables), environment-variable equivalents are NOT supported; such parameters are configured only via the file.
 
@@ -3162,7 +3162,7 @@ This layered default makes the common case ("expose health alongside other opera
 {"status":"alive","version":"<version>","uptime_seconds":12345}
 ```
 
-The `uptime_seconds` field reports elapsed wall-clock time since process start. Returns HTTP failure (5xx) or no response only if the process is unable to respond within the configurable liveness-probe timeout (parameter `health.livez_timeout_ms`, default 1000 ms).
+The `uptime_seconds` field reports elapsed wall-clock time since process start. OxideDNS does not impose a configurable server-side liveness timeout; HTTP failure (5xx) or no response is observed only when the endpoint cannot answer before the client, reverse proxy, or orchestrator timeout.
 
 **`/readyz`** — readiness probe per ODS-NFR-OBS-004. HTTP status 200 with the following body when in the **ready** state (at least one zone in ACTIVE state per ODS-FR-ZONE-006, and not draining):
 
@@ -3203,7 +3203,7 @@ The JSON body field names are part of the externally observable interface stabil
 *Verification.* Load tests with high-frequency metrics scraping concurrent with sustained DNS query load.
 
 **ODS-IF-HEALTH-005.** Response time bounds:
-- The `/livez`, `/readyz`, and `/healthz` endpoints MUST respond within 100 milliseconds under all conditions other than the explicit liveness-probe-timeout case of ODS-IF-HEALTH-002. The probe response time is the elapsed time between TCP-level request receipt and the start of response transmission.
+- The `/livez`, `/readyz`, and `/healthz` endpoints MUST start response transmission within 100 milliseconds when the management endpoint task can be scheduled and is able to answer. The probe response time is the elapsed time between TCP-level request receipt and the start of response transmission. Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model.
 - The `/metrics` endpoint SHOULD respond within 500 milliseconds for deployments serving up to 1,000 zones. For larger deployments, the response time scales approximately linearly with the number of exposed metric series; the upper bound is operationally evaluated rather than normatively specified.
 - The `/metrics` endpoint MUST support response compression: when the client request carries `Accept-Encoding: gzip`, the response MUST be transmitted with `Content-Encoding: gzip`. Gzip compression substantially reduces response size for large-zone-count deployments (10× compression ratio is typical for repetitive metrics text).
 *Source.* Operational requirement; orchestrator probe timeout discipline (Kubernetes default 1-second probe timeout).
@@ -4572,7 +4572,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | 10% memory growth threshold over 30 days (default) | §5.2, ODS-NFR-REL-003 | Confirm | **Resolved (v0.9.1 tool alignment): 10% remains the formal soak threshold and is the default in `scripts/capture-soak-handoff.sh`; actual 30-day soak execution remains ODS-VER-008 release acceptance, not Engineering MVP evidence** |
 | 5000 ms per-query processing timeout (default) | §5.2, ODS-NFR-REL-006 | Confirm | **Pending: no current `query.processing_timeout_ms` config or per-zone timeout-drop metric exists; tracked in the MVP gap register for implementation or SRS revision** |
 | 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | **Resolved (v0.9.1): TSIG fudge default is 300 seconds; DNS Cookie past/future timestamp tolerances default to 3600/300 seconds** |
-| 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | **Pending: no current `health.livez_timeout_ms` config exists; tracked in the MVP gap register for implementation or SRS revision against orchestrator-managed probe timeouts** |
+| 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | **Resolved (v0.9.1 doc alignment): OxideDNS does not define a server-side liveness timeout; clients, reverse proxies, and orchestrators own probe timeout policy** |
 | 70%/85% test coverage minimum (defaults) | §5.4, ODS-NFR-MAINT-007 | Confirm | **Resolved (v0.9.1 tool alignment): thresholds retained; `scripts/capture-coverage-evidence.sh` enforces 70% overall and 85% parser/XoT-file line coverage when release coverage evidence is captured** |
 | Sigstore/Cosign vs detached OpenPGP for release signing | §5.4, ODS-NFR-MAINT-008 | Confirm preferred mechanism | **Resolved (v0.9.1 doc alignment): Sigstore/Cosign preferred; detached OpenPGP allowed as fallback; recorded in the Architecture Document and Security Policy** |
 | 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | **Resolved (v0.9.1 doc alignment): Security Policy records 30-day Critical/High and 90-day Medium/Low remediation targets, with release-specific exceptions recorded as evidence** |
