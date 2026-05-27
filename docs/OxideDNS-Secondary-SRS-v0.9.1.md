@@ -3998,10 +3998,10 @@ differential-test constraints are owned by
 Appendix D consolidates the definitions and abbreviations used throughout this SRS. Its components are:
 
 - A single alphabetical list of terms used in the SRS, with brief definitions covering both acronym expansions and substantive technical terms (D.3);
-- The actor classes from §2.3, reproduced here for reference convenience (D.4);
+- A pointer to the actor classes owned by §2.3, without duplicating those definitions (D.4);
 - The identifier categories of §1.4.3 plus VER added in §7, and the area code registry consolidating all area codes allocated through §4, §5, and §6 (D.5).
 
-The glossary entries in D.3 and D.4 are informative; they aid reader comprehension but do not override the normative content of the SRS. The area code registry in D.5 is normative — it is the canonical list of area codes for the requirement identifier scheme of §1.4.3, and changes to the registry are governed by the identifier-stability rules of §1.4.4.
+The glossary entries in D.3 and the actor-class pointer in D.4 are informative; they aid reader comprehension but do not override the normative content of the SRS. The area code registry in D.5 is normative — it is the canonical list of area codes for the requirement identifier scheme of §1.4.3, and changes to the registry are governed by the identifier-stability rules of §1.4.4.
 
 Where a term's primary definition is provided in a specific RFC, the entry below summarises the meaning as used in this SRS and references the RFC for the authoritative definition.
 
@@ -4286,17 +4286,8 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 ## D.4 Actor Classes
 
-Five classes of actor interact with the server. The full descriptions are in §2.3; reproduced compactly here for reference.
-
-**DNS Client (Resolver, Stub Resolver).** Untrusted entity sending DNS queries expecting authoritative answers. Includes recursive resolvers acting on behalf of end users and direct stub resolvers. The server assumes hostility until proven otherwise.
-
-**Primary DNS Server.** Trusted (via TSIG, where configured) source of zone data. The server transfers zones from configured primaries and accepts NOTIFY from them.
-
-**Operator.** Human administrator responsible for the server's configuration and deployment. Interacts only at process startup (via configuration) and during operation (via signals).
-
-**Orchestrator (Supervisor).** Automated process supervisor: container orchestrator (Kubernetes, Docker), init system (systemd), or anycast routing controller. Starts, stops, and probes the server.
-
-**Observer (Logging and Metrics Consumer).** Downstream system consuming the server's structured log output and metrics endpoint. Unauthenticated; the server emits and is agnostic to what consumes.
+The actor classes and their descriptions are owned by §2.3. This appendix keeps only the cross-reference so actor definitions are not maintained in two places.
+The five actor classes are DNS Clients, Primary DNS Servers, Operators, Orchestrators and Supervisors, and Observers.
 
 ## D.5 Identifier Categories and Area Code Registry
 
