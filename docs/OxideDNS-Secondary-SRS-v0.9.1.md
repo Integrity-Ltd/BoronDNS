@@ -2,9 +2,9 @@
 
 ## OxideDNS-Secondary
 
-**Document Version:** v0.9.1 (Draft 9, point release 1)
+**Document Version:** v0.9.1
 **Date:** 26 May 2026
-**Status:** Draft — CHAOS class self-identification addition, OxideDNS namespace alignment
+**Status:** Current checked-in requirements baseline for Engineering MVP; not formal ODS-VER-008 release-acceptance evidence
 
 ---
 
