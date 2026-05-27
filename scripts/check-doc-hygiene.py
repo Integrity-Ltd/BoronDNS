@@ -41,6 +41,9 @@ BANNED_PHRASES = [
     "local project MVP",
     "project MVP in this repository",
     "v0.9/v0.9.1",
+    "DNS wire core and UDP query handling are implemented:",
+    "AXFR acquisition and IXFR refresh/fallback are implemented:",
+    "Health endpoints, metrics, logging, and process interfaces are implemented:",
 ]
 
 SOURCE_BANNED_PHRASES = [
@@ -69,6 +72,12 @@ REQUIRED_TEXT_BY_PATH = {
         "How is the implementation structured?",
         "How does an operator run it?",
         "How was the external review handled?",
+    ],
+    "docs/implementation-plan.md": [
+        "This plan deliberately stays at feature-slice granularity.",
+        "it is not the canonical inventory of every evidence script",
+        "put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`",
+        "put evidence state by requirement family in `docs/verification-ledger.md`",
     ],
 }
 
