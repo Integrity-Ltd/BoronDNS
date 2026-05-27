@@ -81,6 +81,9 @@ contains an `Accept-Encoding` value that allows `gzip`, the response includes
 The metrics endpoint exposes these implemented metric families:
 
 - configured and active zone gauges;
+- first-party metrics use the `oxidedns_` prefix; selected stable
+  SRS-facing compatibility families retain the `oxidedns_secondary_` prefix
+  where named below;
 - SRS v0.9.1 per-zone status series:
   `oxidedns_secondary_zone_state`,
   `oxidedns_secondary_zone_soa_serial`,
@@ -90,8 +93,13 @@ The metrics endpoint exposes these implemented metric families:
   `oxidedns_secondary_queries_total{zone="..."}`;
 - catalog membership gauges:
   `oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`;
-- transfer counters, query counters, truncation counters, CNAME limit/loop
-  counters, global and per-zone RCODE counters, NOTIFY counters, TSIG
+- transfer counters (`oxidedns_transfer_sessions_started_total`,
+  `oxidedns_transfer_sessions_completed_total`,
+  `oxidedns_transfer_sessions_failed_total`), query counters, truncation
+  counters, CNAME limit/loop counters, global and per-zone RCODE counters
+  (`oxidedns_query_responses_total`,
+  `oxidedns_zone_query_responses_total`,
+  `oxidedns_secondary_query_responses_total`), NOTIFY counters, TSIG
   verification counters for authorized NOTIFY, DNS Cookie counters, RRL
   counters, the `oxidedns_secondary_build_info` gauge, the
   `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and

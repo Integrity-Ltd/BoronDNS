@@ -2751,10 +2751,12 @@ The area code **OBS** is allocated.
 **ODS-NFR-OBS-003.** The server MUST expose its in-memory counters — the query-handling counters of ODS-FR-QRY-024, the RRL counters of ODS-FR-RRL-012, the NOTIFY counters of §4.8, the TSIG counters per §4.9, the transfer-session counters per §4.6 and §4.7, the cookie counters of ODS-FR-COOKIE-011 — via a metrics endpoint per §6.4. The exposition format MUST be compatible with the Prometheus text exposition format 0.0.4 and MUST use `Content-Type: text/plain; version=0.0.4; charset=utf-8`.
 
 Metric names MUST follow Prometheus naming conventions:
-- the project prefix `oxidedns_secondary_` MUST be applied to every metric;
+- the first-party project prefix `oxidedns_` MUST be applied to every metric;
+- stable SRS-facing families MAY retain the narrower `oxidedns_secondary_`
+  prefix where explicitly named in this section or in the interface contract;
 - counter metrics MUST carry the `_total` suffix (e.g., `oxidedns_secondary_queries_total`);
 - explicit unit suffixes MUST be used where applicable: `_seconds` for duration, `_bytes` for size, `_ratio` for unitless ratios;
-- per-zone, per-response-category, per-RCODE, and per-source-prefix dimensions MUST be expressed via Prometheus labels (e.g., `oxidedns_secondary_queries_total{zone="example.com",rcode="NOERROR"}`), not via name multiplication;
+- per-zone, per-response-category, per-RCODE, and per-source-prefix dimensions MUST be expressed via Prometheus labels (e.g., `oxidedns_secondary_queries_total{zone="example.com"}` and `oxidedns_secondary_query_responses_total{zone="example.com",rcode="NOERROR"}`), not via name multiplication;
 - the canonical metric type (Counter, Gauge, Histogram, Summary) MUST be declared via the `# TYPE` directive in the exposition output;
 - the canonical help text MUST be provided via the `# HELP` directive.
 

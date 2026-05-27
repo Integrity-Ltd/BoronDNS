@@ -42,17 +42,25 @@ signal	SIGPIPE	stable	0.1	docs/operator-deployment-guide.md	major	Ignored/dispos
 health	/livez	stable	0.1	docs/operator-deployment-guide.md	major	Liveness endpoint.
 health	/readyz	stable	0.1	docs/operator-deployment-guide.md	major	Readiness endpoint with JSON body.
 health	/healthz	stable	0.1	docs/operator-deployment-guide.md	major	Supported readiness alias with the same behavior status codes and JSON body as /readyz.
-health	/metrics	stable	0.1	docs/operator-deployment-guide.md	major	Prometheus/OpenMetrics-compatible metrics endpoint.
+health	/metrics	stable	0.1	docs/operator-deployment-guide.md	major	Prometheus text exposition 0.0.4 metrics endpoint.
 metric	oxidedns_secondary_zone_state	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and state.
 metric	oxidedns_secondary_zone_soa_serial	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
 metric	oxidedns_secondary_zone_last_refresh_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
 metric	oxidedns_secondary_zone_next_refresh_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
 metric	oxidedns_secondary_zone_refresh_failures	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.
 metric	oxidedns_secondary_queries_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone where applicable.
-metric	oxidedns_secondary_query_rcode_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and rcode where applicable.
-metric	oxidedns_secondary_transfer_sessions_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone type and outcome.
-metric	oxidedns_secondary_notify_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and outcome.
-metric	oxidedns_secondary_cookie_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include cookie case and prefix where applicable.
+metric	oxidedns_query_responses_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include rcode.
+metric	oxidedns_zone_query_responses_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and rcode.
+metric	oxidedns_secondary_query_responses_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include rcode globally and zone plus rcode for per-zone series.
+metric	oxidedns_transfer_sessions_started_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include protocol.
+metric	oxidedns_transfer_sessions_completed_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include protocol.
+metric	oxidedns_transfer_sessions_failed_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include protocol.
+metric	oxidedns_notify_messages_received_total	stable	0.1	docs/operator-deployment-guide.md	major	Process-wide NOTIFY received counter.
+metric	oxidedns_notify_messages_unauthorized_total	stable	0.1	docs/operator-deployment-guide.md	major	Process-wide unauthorized NOTIFY counter.
+metric	oxidedns_notify_refresh_actions_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include action.
+metric	oxidedns_tsig_notify_verifications_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include result.
+metric	oxidedns_dns_cookie_queries_total	stable	0.1	docs/operator-deployment-guide.md	major	Labels include case.
+metric	oxidedns_dns_cookie_badcookie_responses_total	stable	0.1	docs/operator-deployment-guide.md	major	Process-wide BADCOOKIE response counter.
 metric	oxidedns_secondary_configuration_warnings_total	stable	0.1	docs/operator-deployment-guide.md	major	Configuration warning counter.
 metric	oxidedns_secondary_build_info	stable	0.1	docs/operator-deployment-guide.md	major	Labels include version commit rust_version and build_timestamp.
 metric	oxidedns_secondary_query_duration_seconds	stable	0.1	docs/operator-deployment-guide.md	major	Histogram labels include query category.
