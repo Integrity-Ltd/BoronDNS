@@ -1464,10 +1464,10 @@ The area code **XOT** is allocated.
 
 ### TLS configuration
 
-**ODS-FR-XOT-001.** The server MUST implement TLS 1.2 (RFC 5246) for XoT connections, and SHOULD implement TLS 1.3 (RFC 8446). Where both endpoints support TLS 1.3, it MUST be selected in preference to TLS 1.2 during TLS version negotiation.
-*Source.* RFC 9103 §7.1.
-*Note.* TLS 1.3 is the preferred version for new deployments. The TLS 1.2 requirement provides interoperability with primary implementations that have not yet deployed TLS 1.3 but have deployed XoT.
-*Verification.* Handshake tests against test peers offering TLS 1.2 only, TLS 1.3 only, and both.
+**ODS-FR-XOT-001.** The formal RFC 9103 XoT profile MUST use TLS 1.3 (RFC 8446) or later. TLS protocol implementation is delegated to the configured TLS library, but the OxideDNS release profile MUST prove that XoT handshakes for the formal profile do not negotiate TLS 1.2 or older protocol versions. Any TLS 1.2 support retained for interoperability with legacy or experimental primaries MUST be explicitly documented as a compatibility mode and MUST NOT be presented as RFC 9103 XoT conformance.
+*Source.* RFC 9103 §7.2.
+*Note.* Current Engineering MVP builds use the Rust TLS stack with TLS 1.2 enabled for compatibility testing; that is an implemented XoT-adjacent transfer behavior, not a complete formal RFC 9103 compliance claim until the release profile either disables TLS 1.2 for XoT or makes compatibility-mode selection explicit.
+*Verification.* Handshake tests against test peers offering TLS 1.2 only, TLS 1.3 only, and both; the formal profile must reject the TLS 1.2-only peer and negotiate TLS 1.3 or later where available. Compatibility-mode tests, if retained, must be separated from formal RFC 9103 evidence.
 
 **ODS-FR-XOT-002.** TLS cipher-suite selection MUST conform to the current recommendations of BCP 195 (RFC 9325): authenticated encryption with associated data (AEAD) cipher suites only; NULL, anonymous, RC4, 3DES, and export-grade cipher suites MUST NOT be offered or accepted. The specific suite list is determined by the underlying TLS implementation but MUST fall within these constraints.
 *Source.* BCP 195 (RFC 9325).

@@ -616,6 +616,10 @@ XoT:
   TLS version, and cipher suite. Session close includes duration and byte
   counters. Certificate material, private keys, and TLS key material are not
   logged.
+- RFC 9103 XoT conformance requires TLS 1.3 or later. Current Engineering MVP
+  builds use rustls with TLS 1.2 compatibility enabled for interoperability
+  testing; treat any TLS 1.2 XoT handshake as compatibility evidence, not formal
+  RFC 9103 conformance evidence.
 - OxideDNS does not perform real-time XoT certificate revocation checks via CRL or
   OCSP requests. Operators that require stricter revocation handling should use
   short-lived primary certificates and automated trust-anchor rotation.

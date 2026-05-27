@@ -71,6 +71,20 @@ REQUIRED_EVIDENCE_SNIPPETS = {
         "explicitly excluded Experimental EDNS zone-expire signalling",
         "does not claim RFC 7314 compliance",
     ],
+    "RFC 9103": [
+        "TLS 1.3-or-later formal-profile evidence",
+        "TLS 1.2 compatibility",
+        "not an RFC 9103 compliance basis",
+    ],
+    "RFC 5246": [
+        "Informative Only",
+        "compatibility-only XoT transport behavior",
+        "not an RFC 9103 compliance basis",
+    ],
+    "RFC 8446": [
+        "TLS 1.3",
+        "TLS protocol implementation is library-owned",
+    ],
 }
 
 VALID_STATUSES = {
