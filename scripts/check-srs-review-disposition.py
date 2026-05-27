@@ -62,6 +62,7 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
     "## Retained Slices",
     "Not claimed by this slice",
+    "Normative SRS owner",
     "Current source ownership",
     "Representative evidence ownership",
     "fall back to AXFR when IXFR is unavailable or unsuitable",
@@ -178,6 +179,7 @@ FEATURES = {
             "scripts/interop-knot-ixfr-refresh-docker.sh",
             "scripts/interop-ixfr-notimp-fallback.sh",
         ],
+        "srs_needles": ["ODS-FR-IXFR-001", "ODS-FR-AXFR-001"],
         "source_needles": [
             "pub enum IxfrResponse",
             "build_ixfr_query",
@@ -200,6 +202,7 @@ FEATURES = {
             "scripts/interop-bind-xot-catalog-zone-docker.sh",
             "scripts/audit-xot-revocation.sh",
         ],
+        "srs_needles": ["ODS-FR-XOT-001", "ODS-FR-XOT-012"],
         "source_needles": [
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
@@ -223,6 +226,7 @@ FEATURES = {
             "scripts/audit-dnssec-passive.sh",
             "docs/dnssec-conformance-matrix.tsv",
         ],
+        "srs_needles": ["ODS-FR-DNSSEC-001", "ODS-FR-DNSSEC-014"],
         "source_needles": [
             "augment_lookup_result_with_dnssec",
             "nsec3_max_iterations",
@@ -244,6 +248,7 @@ FEATURES = {
             "scripts/rrl-evidence-campaign.sh",
             "docs/rrl-release-thresholds.md",
         ],
+        "srs_needles": ["ODS-FR-RRL-001", "ODS-FR-RRL-012"],
         "source_needles": [
             "struct RrlLimiter",
             "rrl_truncated_response",
@@ -263,6 +268,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-dns-cookie-dig.sh",
         ],
+        "srs_needles": ["ODS-FR-COOKIE-001", "ODS-FR-COOKIE-011"],
         "source_needles": [
             "EDNS_COOKIE_OPTION",
             "compute_dns_server_cookie",
@@ -286,6 +292,11 @@ FEATURES = {
             "scripts/interop-powerdns-postgres-catalog-tsig-docker.sh",
             "scripts/interop-bind-xot-catalog-zone-docker.sh",
         ],
+        "srs_needles": [
+            "ODS-FR-PROV-001",
+            "ODS-IF-CONF-013",
+            "ODS-NFR-OBS-008",
+        ],
         "source_needles": [
             "parse_catalog_members",
             "max_member_zones",
@@ -308,6 +319,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
         ],
+        "srs_needles": ["ODS-FR-EDNS-001", "ODS-FR-EDNS-017"],
         "source_needles": [
             "parse_edns_options",
             "EDNS_TCP_KEEPALIVE_OPTION",
@@ -331,6 +343,7 @@ FEATURES = {
             "scripts/interop-dnssec-nsec3-serve.sh",
             "docs/dnssec-conformance-matrix.tsv",
         ],
+        "srs_needles": ["ODS-FR-EDNS-018", "ODS-IF-CONF-017"],
         "source_needles": [
             "EDNS_EXTENDED_DNS_ERROR_OPTION",
             "EDE_NOT_READY",
@@ -351,6 +364,7 @@ FEATURES = {
         "evidence_paths": [
             "scripts/interop-chaos-queries.sh",
         ],
+        "srs_needles": ["ODS-FR-CHAS-001", "ODS-FR-CHAS-006", "ODS-IF-CONF-018"],
         "source_needles": [
             "answer_chaos_query",
             "version.bind.",
@@ -462,6 +476,7 @@ def main() -> int:
     errors: list[str] = []
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
     feature_scope = FEATURE_SCOPE_PATH.read_text(encoding="utf-8")
+    srs_current = SRS_CURRENT_PATH.read_text(encoding="utf-8")
     normalized_disposition = normalize_whitespace(disposition)
     normalized_feature_scope = normalize_whitespace(feature_scope)
     scope_pointer_texts = {
@@ -544,6 +559,12 @@ def main() -> int:
                 )
             if not (ROOT / relative_path).exists():
                 errors.append(f"missing evidence path for {feature}: {relative_path}")
+        for needle in spec["srs_needles"]:
+            if needle not in srs_current:
+                errors.append(
+                    f"{SRS_CURRENT_PATH.relative_to(ROOT)} lacks SRS owner "
+                    f"needle {needle!r} for retained feature {feature}"
+                )
         for needle in spec["source_needles"]:
             if needle not in source:
                 errors.append(
