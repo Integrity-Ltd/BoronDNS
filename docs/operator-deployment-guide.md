@@ -506,9 +506,12 @@ execution listed in the gap register.
 
 ## Primary Interoperability Scripts
 
-The repository includes primary interoperability scripts used by the bounded
-Engineering MVP profile and by later SRS acceptance evidence collection. Run
-them from the repository root after building the debug binary or allow the
+The repository includes primary interoperability scripts for developer/operator
+confidence and later SRS acceptance evidence collection. They are intentionally
+outside the bounded Engineering MVP evidence profile by default because they
+depend on Docker or host primary-server availability; that profile records them
+as deferred release/operations work instead of executing them. Run these
+scripts from the repository root after building the debug binary or allow the
 scripts to build as needed.
 
 General validation:

@@ -33,6 +33,8 @@ REQUIRED_TEXT = [
     "clock synchronisation",
     "long-LOADING",
     "release-evidence-guide.md",
+    "outside the bounded Engineering MVP evidence profile by default",
+    "deferred release/operations work",
     "privilege",
     "security@integrity.hu",
     "ODS-FR-XOT-012",
@@ -84,6 +86,7 @@ DEBIAN_PROFILE_TEXT = [
 FORBIDDEN_TEXT = [
     "Suggested Engineering MVP SLOs",
     "scripts that double as Engineering MVP and SRS acceptance evidence collection commands",
+    "interoperability scripts used by the bounded Engineering MVP profile",
 ]
 
 
