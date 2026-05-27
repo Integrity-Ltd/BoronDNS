@@ -48,7 +48,7 @@ for heading in \
     require_text "$heading"
 done
 
-for category in ODS-FR ODS-NFR ODS-IF ODS-INV ODS-NEG; do
+for category in ODS-FR ODS-NFR ODS-IF ODS-INV ODS-NEG ODS-VER; do
     require_text "$category"
 done
 

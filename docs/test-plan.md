@@ -191,7 +191,8 @@ regression must not proceed.
 `docs/release-notes-template.md` is the required release-note structure. The
 release-note gate checks that the release notes include:
 
-- per-requirement-category counts for Verified, Deferred, and Failed;
+- per-requirement-category counts for Verified, Deferred, and Failed, including
+  the `ODS-VER` verification-requirement category;
 - new Failed and Deferred results compared to the previous same-major release;
 - retained primary version/configuration artifact paths for interop evidence;
 - failed-requirement project decisions and remediation targets;

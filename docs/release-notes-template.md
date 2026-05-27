@@ -21,6 +21,7 @@ running `scripts/check-release-notes.sh`.
 | ODS-IF | TBD | TBD | TBD |
 | ODS-INV | TBD | TBD | TBD |
 | ODS-NEG | TBD | TBD | TBD |
+| ODS-VER | TBD | TBD | TBD |
 
 ## Regression Delta
 
