@@ -4,12 +4,12 @@ Status: current architecture document, not final formal SRS MVP acceptance evide
 
 This document records architecture and governance decisions that the SRS expects
 to be retained before formal SRS MVP acceptance. It currently covers module organisation
-for `ODS-NFR-MAINT-002`, the release-signing choice for
-`ODS-NFR-MAINT-008`, source-level functional requirement references for
-`ODS-NFR-MAINT-004`, and verification responsibility allocation for
-`ODS-VER-015`. Broader architecture content, completed reproducible-build
-proof, and signed release artifacts remain tracked as formal SRS acceptance gaps in
-`docs/mvp-gap-register.md`.
+and the current over-target line-count rationale for `ODS-NFR-MAINT-001`, the
+release-signing choice for `ODS-NFR-MAINT-008`, source-level functional
+requirement references for `ODS-NFR-MAINT-004`, and verification
+responsibility allocation for `ODS-VER-015`. Broader architecture content,
+completed reproducible-build proof, and signed release artifacts remain tracked
+as formal SRS acceptance gaps in `docs/mvp-gap-register.md`.
 
 ## Module Organisation
 
@@ -110,6 +110,18 @@ prints a release-review warning and can be made build-blocking with
 The measurement includes OxideGun because it is first-party Rust code in this
 workspace. OxideGun remains support-tool scope; it does not expand the
 OxideDNS server runtime or the externally observable DNS protocol requirements.
+
+Current `scripts/audit-maintainability.sh` output reports 19,961 first-party
+production Rust source lines, which is above the 15,000-line `SHOULD` target.
+Current ODS-NFR-MAINT-001 over-target rationale: the count reflects the
+implemented Engineering MVP scope now retained after external review, including
+IXFR with AXFR fallback, XoT, passive DNSSEC serving, RRL, DNS Cookies,
+RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE diagnostics,
+CHAOS diagnostics, installer/Docker release tooling, and the OxideGun support
+tool. These slices are bounded in `docs/implemented-feature-scope.md` and are
+kept because code and tests already own them; the line-count target remains a
+scope-discipline warning rather than a reason to remove implemented protocol
+behavior.
 
 The current primary maintainability risk is not raw production LOC but module
 shape: runtime integration in `crates/oxidedns-server/src/lib.rs` is broad. Future

@@ -126,6 +126,14 @@ if status != "within_target":
         "target; release review needs an architecture/release-note "
         "justification or a refactor plan"
     )
+    required_rationale = "Current ODS-NFR-MAINT-001 over-target rationale"
+    if required_rationale not in architecture:
+        print()
+        print(
+            "error=architecture missing current ODS-NFR-MAINT-001 "
+            "over-target rationale"
+        )
+        raise SystemExit(1)
     if os.environ.get("OXIDEDNS_MAINT_ENFORCE") == "1":
         raise SystemExit(1)
 PY
