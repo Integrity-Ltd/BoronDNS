@@ -4600,8 +4600,9 @@ the associated requirement is revised.
 This section records future OxideDNS server optimisation tracks that remain
 outside the current Engineering MVP runtime. They are retained so the current
 architecture does not foreclose later packet-I/O, zone-store, or response-cache
-work, but they are not hidden MVP requirements. Current implementation status
-and unsafe-boundary ownership are maintained by the Architecture Document,
+work, but they are not hidden Engineering MVP requirements. Current
+implementation status and unsafe-boundary ownership are maintained by the
+Architecture Document,
 `docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
 Capitalized requirement keywords in this C.6 section are conditional promotion
 constraints: they apply only if a later SRS revision brings the named track into

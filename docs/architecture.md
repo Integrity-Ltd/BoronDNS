@@ -54,7 +54,7 @@ implementation code for review locality, but they are not counted toward the
 
 ## Current Implementation Decisions
 
-| Decision area | Current MVP choice | SRS linkage |
+| Decision area | Current Engineering MVP choice | SRS linkage |
 | --- | --- | --- |
 | Zone store | `HashMap`-backed in-memory `ZoneSnapshot` values behind `Arc<RwLock<...>>`; refresh publishes complete snapshots, never partial transfer state. | `ODS-INV-003`, `ODS-FR-ZONE-001..008`, `ODS-NFR-RES-002` |
 | Occluded/out-of-zone transfer data | Transfer validation excludes out-of-zone records; zone lookup excludes occluded non-glue data from authoritative answers. | `ODS-FR-AXFR-012..014`, `ODS-FR-QRY-017` |
@@ -67,9 +67,9 @@ implementation code for review locality, but they are not counted toward the
 | Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
 | Continuous verification posture | `scripts/check.sh` is the current local continuous verification entry point. Hosted CI is intentionally deferred while the repository remains private to avoid spending CI minutes on heavyweight evidence tooling before a public-release gate exists. | `ODS-VER-011`, `ODS-NFR-SEC-006` |
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
-| Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
-| Post-MVP zone-store optimisation | The MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
-| Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit the catalog transfer policy, and do not create an administrative API or primary-serving path. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-mvp-rfc9432.md`, Appendix C.3.9 MVP update |
+| Post-MVP network acceleration | XDP/eBPF and any io_uring transport backend are deferred. The current Engineering MVP uses Tokio kernel sockets; future acceleration must enter through an isolated packet-I/O adapter instead of changing DNS parsing or response-composition code. | Appendix C.6.1, `ODS-INV-006`, `ODS-NFR-SEC-001` |
+| Post-MVP zone-store optimisation | The Engineering MVP zone store is a simple memory-resident `HashMap` snapshot store. NSD-style packed-binary arenas and hot response caches are deferred until benchmark evidence shows the current store or response assembly path is the limiting factor. | Appendix C.6.2, Appendix C.6.3, `ODS-NFR-RES-002` |
+| Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit the catalog transfer policy, and do not create an administrative API or primary-serving path. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-mvp-rfc9432.md`, Appendix C.3.9 catalog-zone scope update |
 
 ## Catalog-Zone Runtime Shape
 
@@ -151,10 +151,10 @@ must carry a local `// SAFETY:` rationale explaining the soundness invariants;
 and release evidence must include static unsafe enumeration plus targeted
 adapter fault tests before the backend can be enabled.
 
-The current MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed arena, or
-hot response-cache backend. Those features are post-MVP optimization tracks,
-not hidden MVP requirements. When one is brought into scope, the implementation
-entry gate is:
+The current Engineering MVP has no XDP/eBPF, AF_XDP, io_uring, NSD-style packed
+arena, or hot response-cache backend. Those features are post-MVP optimization
+tracks, not hidden Engineering MVP requirements. When one is brought into scope,
+the implementation entry gate is:
 
 - a safe trait boundary such as `PacketIo` for network acceleration,
   `ZoneStore` for packed arenas, or an equivalent response-cache adapter;
@@ -177,10 +177,11 @@ forbidden by `ODS-INV-009`. Any future kernel-side program must be built as a
 project artifact, versioned with the server release, and attached only through
 the audited adapter path.
 
-Future XDP/eBPF also needs a separate privileged deployment profile. The MVP
-profile must not require privileges beyond the documented Linux/POSIX baseline;
-an XDP profile would need explicit capability, memlock, attach/detach,
-fallback, and no-XDP-default tests before it can be offered to operators.
+Future XDP/eBPF also needs a separate privileged deployment profile. The
+Engineering MVP profile must not require privileges beyond the documented
+Linux/POSIX baseline; an XDP profile would need explicit capability, memlock,
+attach/detach, fallback, and no-XDP-default tests before it can be offered to
+operators.
 
 The deferred response-cache track means an authoritative-only prebuilt response
 cache. It does not relax the invariant that OxideDNS has no recursive,
@@ -194,14 +195,14 @@ The project's preferred release-signing mechanism is Sigstore/Cosign with
 keyless OIDC signing. Detached OpenPGP signatures are allowed only as a fallback
 for channels where Cosign cannot be used.
 
-No MVP or public release artifact may be treated as accepted unless it is signed
-and has verification instructions in the release notes or artifact manifest.
-Unsigned internal builds must be labelled as unsigned/internal.
+No formal SRS MVP or public release artifact may be treated as accepted unless
+it is signed and has verification instructions in the release notes or artifact
+manifest. Unsigned internal builds must be labelled as unsigned/internal.
 
 Public signing-key material is not committed at this stage because the preferred
-MVP path is keyless Sigstore. If detached OpenPGP signing is used later, the
-public key or fingerprint must be published in `SECURITY.md` or an equivalent
-release security document before the release is accepted.
+formal SRS MVP path is keyless Sigstore. If detached OpenPGP signing is used
+later, the public key or fingerprint must be published in `SECURITY.md` or an
+equivalent release security document before the release is accepted.
 
 ## Verification Responsibility Allocation
 
@@ -217,10 +218,10 @@ as follows:
 | External operator acceptance | External operator named in formal SRS MVP release notes |
 | Security audit | Third-party security specialist procured for the release scope |
 
-For v0.1 through MVP, the Architecture Owner role is held by DT. The release
-engineer role is a project release role and may be held by DT until explicitly
-delegated. A single person may hold multiple roles, but accountability for each
-role remains separate.
+For v0.1 through the formal SRS MVP release gate, the Architecture Owner role is
+held by DT. The release engineer role is a project release role and may be held
+by DT until explicitly delegated. A single person may hold multiple roles, but
+accountability for each role remains separate.
 
 Unfilled, delegated, or rotating roles must be recorded in the release notes.
 Any third-party security audit engagement must be recorded in release evidence
