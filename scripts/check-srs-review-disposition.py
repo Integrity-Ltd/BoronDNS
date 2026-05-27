@@ -775,6 +775,10 @@ def main() -> int:
         "rustls defaults with the Cargo `tls12` feature enabled",
         "Formal RFC 9103 evidence must either enforce TLS 1.3-or-later",
         "explicitly separated compatibility-mode evidence",
+        "NSEC3-cap metric/EDE coupling",
+        "affected responses are not counted",
+        "metric counting decoupled from EDE emission",
+        "Current metric evidence is narrower than the formal requirement",
     ]:
         if term not in disposition:
             errors.append(
