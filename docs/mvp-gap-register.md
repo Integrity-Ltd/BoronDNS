@@ -64,7 +64,8 @@ No open Engineering MVP implementation decisions are currently tracked here.
 ## Pending Project Decision Overlay
 
 `docs/project-decision-register.md` is the canonical project-decision table;
-SRS Appendix C.5 points to that owner and summarizes only the pending subset.
+SRS Appendix C.5 points to that owner and deliberately does not duplicate the
+decision table. This gap register summarizes only the pending subset.
 Rows marked `Resolved` are retained as audit trail, not open risks. Rows whose
 Decision begins `Pending` need release-review attention, but they are not all
 the same kind of blocker: some are non-normative quality candidates, some

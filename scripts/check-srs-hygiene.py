@@ -94,6 +94,9 @@ FORBIDDEN_TEXT = {
     "doc alignment": "current SRS revision notes should state product changes, not import-process labels",
     "spec alignment": "current SRS revision notes should state product changes, not import-process labels",
     "tool alignment": "current SRS revision notes should state product changes, not import-process labels",
+    "| Property-based testing in Alpha scope |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
+    "| Server module decomposition (`server/lib.rs` monolith) |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
+    "| 1% idle CPU bound for 1000 zones |": "pending project-decision rows belong in project-decision-register.md and mvp-gap-register.md, not the SRS",
     "health.livez_timeout_ms": "SRS must not specify the removed liveness timeout configuration parameter",
     "ODS_HEALTH_LIVEZ_TIMEOUT_MS": "SRS must not document an environment override for a removed configuration parameter",
     "explicit liveness-probe-timeout": "SRS must treat liveness probe timeout policy as external to OxideDNS configuration",
@@ -209,6 +212,8 @@ REQUIRED_TEXT = [
     "For each RFC listed in Appendix A and the companion traceability matrix",
     "Current code alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`.",
     "External MVP-trim reviews do not remove a type from the Engineering MVP scope unless the code, SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.",
+    "Appendix C.5 does not duplicate the decision table.",
+    "The current pending subset is summarized in `docs/mvp-gap-register.md`",
 ]
 
 REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [

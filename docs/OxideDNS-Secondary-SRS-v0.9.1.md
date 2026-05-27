@@ -4148,21 +4148,17 @@ The following IETF standards are cited in the SRS or its inputs for context but 
 
 Project decision rows are maintained in `docs/project-decision-register.md` so
 the SRS can stay focused on normative requirements and stable appendix
-material. This appendix records the ownership rule and current pending subset.
+material. This appendix records the ownership rule only. Appendix C.5 does not duplicate the decision table.
 
 Resolved rows in the register are current project decisions for this SRS
 revision. Pending rows remain release-review items until a later SRS revision or
 release decision resolves or explicitly defers them. Release handoff consumes
-the register to produce `appendix-c5-decision-register.tsv` for the
-Appendix C.5 Decision Review section of release notes.
+the register to produce `appendix-c5-decision-register.tsv` for the Appendix
+C.5 Decision Review section of release notes.
 
-Current pending rows:
-
-| Item | Current classification | Handling |
-|---|---|---|
-| Property-based testing in Alpha scope | Non-normative quality-improvement candidate | Tracked in the Test Plan; not an Engineering MVP blocker unless promoted to a requirement. |
-| Server module decomposition (`server/lib.rs` monolith) | Non-normative maintainability candidate | Tracked in the Architecture Document; not an Engineering MVP blocker unless module growth weakens ODS-NFR-MAINT-002 evidence. |
-| 1% idle CPU bound for 1000 zones | Formal Reference Hardware/Profile acceptance target | Requires later release-gate measurement or SRS target revision; local tooling can sample idle CPU but does not by itself prove this bound. |
+The current pending subset is summarized in `docs/mvp-gap-register.md` so
+release-readiness review has a short active queue without making the SRS a
+second project-decision table.
 
 ## C.6 Post-MVP / v2 Scope Items
 
