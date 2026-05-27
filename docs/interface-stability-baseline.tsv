@@ -41,7 +41,7 @@ signal	SIGHUP	stable	0.1	docs/operator-deployment-guide.md	major	Ignored; no rel
 signal	SIGPIPE	stable	0.1	docs/operator-deployment-guide.md	major	Ignored/disposition evidence on Linux.
 health	/livez	stable	0.1	docs/operator-deployment-guide.md	major	Liveness endpoint.
 health	/readyz	stable	0.1	docs/operator-deployment-guide.md	major	Readiness endpoint with JSON body.
-health	/healthz	deprecated	0.1	docs/operator-deployment-guide.md	major	Backward-compatible readiness alias; deprecation governed by ODS-NFR-MAINT-006.
+health	/healthz	stable	0.1	docs/operator-deployment-guide.md	major	Supported readiness alias with the same behavior status codes and JSON body as /readyz.
 health	/metrics	stable	0.1	docs/operator-deployment-guide.md	major	Prometheus/OpenMetrics-compatible metrics endpoint.
 metric	oxidedns_secondary_zone_state	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone and state.
 metric	oxidedns_secondary_zone_soa_serial	stable	0.1	docs/operator-deployment-guide.md	major	Labels include zone.

@@ -44,6 +44,12 @@ REQUIRED_ELEMENTS = {
     ("network-role", "transfer"),
     ("network-role", "mgmt"),
 }
+REQUIRED_STABILITY = {
+    ("health", "/livez"): "stable",
+    ("health", "/readyz"): "stable",
+    ("health", "/healthz"): "stable",
+    ("health", "/metrics"): "stable",
+}
 ALLOWED_STABILITY = {"stable", "deprecated", "additive"}
 ALLOWED_CHANGE_POLICY = {"major", "minor-additive", "patch-compatible"}
 
@@ -105,6 +111,13 @@ def check_current_baseline(path: Path, baseline: dict[tuple[str, str], dict[str,
     missing_elements = REQUIRED_ELEMENTS - set(baseline)
     if missing_elements:
         fail(f"{path} missing required interface elements: {sorted(missing_elements)}")
+    for key, expected_stability in REQUIRED_STABILITY.items():
+        observed = baseline[key]["stability"]
+        if observed != expected_stability:
+            fail(
+                f"{path} requires {key} stability {expected_stability!r}, "
+                f"found {observed!r}"
+            )
     forbidden_elements = {
         ("configuration", "[interfaces].notify"),
         ("configuration", "[interface].notify"),
