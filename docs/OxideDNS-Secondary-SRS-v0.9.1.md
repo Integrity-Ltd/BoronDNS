@@ -656,7 +656,7 @@ Requirements are grouped thematically for readability; the grouping has no norma
 
 **ODS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency.
 *Source.* RFC 2181 §5.2; RFC 4034 §3.
-*Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows RFC 4034 §3: an RRSIG RR has the TTL of the RRset it covers, so RRSIG records at the same owner name may legitimately carry different TTLs when they cover RRsets with different TTLs.
+*Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows the RFC 4035 §2.2 exception: RRSIG records do not form ordinary RRsets, and their TTL values at a common owner name do not follow normal RRset TTL rules. RFC 4034 §3.1.4 supplies the covered-RRset Original TTL field used by validators.
 *Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection; DNSSEC transfer/serving tests with RRSIG records covering RRsets with different TTLs at the same owner name.
 
 ### Name octet handling
@@ -3575,7 +3575,7 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 **RFC 2181 — Clarifications to the DNS Specification** (Elz & Bush, 1997).
 *Scope.* Partial (secondary/server-side).
 *Implementing sections.* §4.1 (CORE), §4.3 (NRESP), §4.12 (TCP), §4.14 (RR).
-*Key clauses.* §5 (RRset semantics) → CORE-026, CORE-027, except for the RRSIG-specific RFC 4034 carve-out; §5.2 (TTL uniformity) → CORE-027; §6.1 (SOA at apex) → RR-002; §7 (NODATA) → CORE-022; §9 (response size, truncation) → TCP-008; §10.1 (CNAME exclusivity) → RR-005; §11 (name format) → CORE-028.
+*Key clauses.* §5 (RRset semantics) → CORE-026, CORE-027, except for the RRSIG-specific RFC 4035 §2.2 carve-out; §5.2 (TTL uniformity) → CORE-027; §6.1 (SOA at apex) → RR-002; §7 (NODATA) → CORE-022; §9 (response size, truncation) → TCP-008; §10.1 (CNAME exclusivity) → RR-005; §11 (name format) → CORE-028.
 *Out-of-scope clauses.* §6.2 (zone publication, primary-side) — ODS-INV-001.
 
 **RFC 4343 — Domain Name System (DNS) Case Insensitivity Clarification** (Eastlake, 2006).
@@ -3732,13 +3732,13 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 **RFC 4034 — Resource Records for the DNS Security Extensions** (Arends et al., 2005).
 *Scope.* Full (serve-only).
 *Implementing sections.* §4.13 (DNSSEC), §4.14 (RR).
-*Key clauses.* §2 (DNSKEY) → DNSSEC-001, RR catalogue; §3 (RRSIG) → DNSSEC-001, DNSSEC-003, CORE-026, CORE-027; §4 (NSEC) → DNSSEC-001, DNSSEC-004, DNSSEC-005; §5 (DS) → DNSSEC-001, DNSSEC-007; §6.2 (canonical form) → RR catalogue (RRSIG, NSEC).
+*Key clauses.* §2 (DNSKEY) → DNSSEC-001, RR catalogue; §3 (RRSIG format, Type Covered, and Original TTL fields) → DNSSEC-001, DNSSEC-003, CORE-026, CORE-027; §4 (NSEC) → DNSSEC-001, DNSSEC-004, DNSSEC-005; §5 (DS) → DNSSEC-001, DNSSEC-007; §6.2 (canonical form) → RR catalogue (RRSIG, NSEC).
 *Out-of-scope clauses.* Signing aspects (primary-side) — ODS-NEG-002.
 
 **RFC 4035 — Protocol Modifications for the DNS Security Extensions** (Arends et al., 2005).
 *Scope.* Partial (serve-only, no validation).
 *Implementing sections.* §4.13 (DNSSEC).
-*Key clauses.* §3.1 (response composition with DNSSEC RRs) → DNSSEC-003..007; §3.1.3 (negative response proofs) → DNSSEC-004, DNSSEC-005; §3.1.3.4 (wildcard proofs) → DNSSEC-006; §3.1.4 (referral proofs) → DNSSEC-007; §3.1.6 (AD and CD bits in authoritative responses) → DNSSEC-010, DNSSEC-011; §3.2.1 (recursive DO handling; useful for the DO = 0 stripping rule) → DNSSEC-002, DNSSEC-008.
+*Key clauses.* §2.2 (RRSIG records do not form ordinary RRsets and do not follow normal RRset TTL rules) → CORE-026, CORE-027; §3.1 (response composition with DNSSEC RRs) → DNSSEC-003..007; §3.1.3 (negative response proofs) → DNSSEC-004, DNSSEC-005; §3.1.3.4 (wildcard proofs) → DNSSEC-006; §3.1.4 (referral proofs) → DNSSEC-007; §3.1.6 (AD and CD bits in authoritative responses) → DNSSEC-010, DNSSEC-011; §3.2.1 (recursive DO handling; useful for the DO = 0 stripping rule) → DNSSEC-002, DNSSEC-008.
 *Out-of-scope clauses.* §4 (resolver-side validation) — ODS-INV-001.
 
 **RFC 5155 — DNS Security (DNSSEC) Hashed Authenticated Denial of Existence (NSEC3)** (Laurie, Sisson, Arends, Blacka, 2008).

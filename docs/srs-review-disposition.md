@@ -77,7 +77,7 @@ deferred unsafe-boundary track.
 | --- | --- | --- |
 | Response DO bit | RFC 6840 section 5.6 | Current SRS and implementation require response OPT DO to copy query DO. Older retained evidence that described augmentation-derived response DO is legacy only. |
 | Authoritative CD/AD posture | RFC 4035 section 3.1.6 plus RFC 6840 section 5.8/5.9 context | SRS treats CD clearing as an authoritative-server policy stronger than the RFC SHOULD, not as resolver behavior. |
-| RRSIG RRset exception | RFC 4034 section 3 and RFC 4035 DNSSEC response handling | SRS has an explicit RRSIG carve-out from normal RRset/TTL rules. |
+| RRSIG RRset exception | RFC 4035 section 2.2, plus RFC 4034 section 3 RRSIG field definitions | SRS has an explicit RRSIG carve-out from normal RRset/TTL rules and maps Type Covered handling to DNSSEC response rules. |
 | NSEC3 iteration cap | RFC 9276 section 2.4 | SRS treats proof omission above the cap as an availability/CPU-protection downgrade with optional diagnostic EDE, not normal authenticated denial. |
 | Catalog zones | RFC 9432 sections 3, 5, and 7 | Catalog zones remain in scope because OxideDNS implements catalog transfer/parsing/reconciliation/observability. The SRS now states observable behavior and keeps implementation shape in architecture docs. |
 

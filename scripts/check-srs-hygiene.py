@@ -36,6 +36,8 @@ REQUIRED_TEXT = [
     "This SRS makes that stronger as a project policy",
     "Except for RRSIG records",
     "RRSIG records are handled by DNSSEC-specific rules",
+    "RFC 4035 §2.2 exception",
+    "RRSIG records do not form ordinary RRsets",
     "The published Linux release artifact targets `x86_64-unknown-linux-musl`",
     "Developer and distribution builds that use another target MAY dynamically link",
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",
