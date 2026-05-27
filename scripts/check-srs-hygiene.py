@@ -26,6 +26,10 @@ FORBIDDEN_TEXT = {
     "response DO bit should be set": "wrong RFC 6840 response-DO wording",
     "response contains DNSSEC augmentation": "wrong RFC 6840 response-DO wording",
     "excluding RFC 8482 minimal-ANY": "minimal-ANY is implemented current scope",
+    "Reference Hardware Profile of Appendix E.1": "stale Appendix E reference",
+    "Reference Query Mix of Appendix E.2": "stale Appendix E reference",
+    "Reference Hardware Profile (E.1)": "stale Appendix E heading",
+    "Reference Query Mix (E.2)": "stale Appendix E heading",
 }
 
 REQUIRED_TEXT = [
@@ -40,6 +44,7 @@ REQUIRED_TEXT = [
     "RRSIG records do not form ordinary RRsets",
     "*Source.* RFC 2181 §5; RFC 4035 §2.2; RFC 4034 §3.",
     "*Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.",
+    "Under the Reference Query Mix of Appendix E.3, on hardware matching the Reference Hardware Profile of Appendix E.2",
     "The published Linux release artifact targets `x86_64-unknown-linux-musl`",
     "Developer and distribution builds that use another target MAY dynamically link",
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",

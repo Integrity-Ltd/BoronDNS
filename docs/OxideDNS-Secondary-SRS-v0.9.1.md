@@ -2466,7 +2466,7 @@ For the repository's Engineering MVP, local smoke and large-catalog benchmark ha
 
 The area code **PERF** is allocated.
 
-**ODS-NFR-PERF-001.** Under the Reference Query Mix of Appendix E.2, on hardware matching the Reference Hardware Profile of Appendix E.1, with the metrics endpoint enabled (per ODS-NFR-OBS-003, default 10-second scrape interval), with logging at info level (per ODS-NFR-OBS-002 default), and with RRL accounting enabled (per ODS-FR-RRL-001 default), the server MUST sustain a query-handling throughput of at least 50,000 UDP queries per second per CPU core dedicated to query handling, where TSIG verification on queries is not exercised and DNSSEC augmentation is not exercised (DO = 0 in all queries).
+**ODS-NFR-PERF-001.** Under the Reference Query Mix of Appendix E.3, on hardware matching the Reference Hardware Profile of Appendix E.2, with the metrics endpoint enabled (per ODS-NFR-OBS-003, default 10-second scrape interval), with logging at info level (per ODS-NFR-OBS-002 default), and with RRL accounting enabled (per ODS-FR-RRL-001 default), the server MUST sustain a query-handling throughput of at least 50,000 UDP queries per second per CPU core dedicated to query handling, where TSIG verification on queries is not exercised and DNSSEC augmentation is not exercised (DO = 0 in all queries).
 *Source.* Operational requirement; comparable to NSD and Knot on equivalent hardware.
 *Note.* "Per CPU core dedicated to query handling" is normalised to the per-core throughput because the implementation's multi-core scaling factor is an architectural choice recorded in the Architecture Document. The Reference Profile specifies a Dual Xeon Gold 6230R (52 physical cores total); the per-core target multiplied by the cores dedicated to query handling yields the aggregate throughput target for the deployment.
 *Verification.* Sustained-load benchmarking using `dnsperf` or `kxdpgun` against the Reference Query Mix on hardware matching the Reference Hardware Profile, with the operational stack (metrics, logging, RRL) enabled per the conditions above. Results are recorded with their exact hardware, kernel version, container runtime, and benchmark-tool versions for reproducibility.
@@ -3321,7 +3321,7 @@ The following methods are used, individually or in combination, to verify the re
 
 **Fuzz test.** Coverage-guided fuzzing using `cargo-fuzz`, AFL++, or equivalent, applied to wire-format parsers and any code path consuming untrusted input. Used for ODS-NFR-SEC-002 and as supporting evidence for parser-related functional requirements. Short-cadence fuzz compile/smoke checks (≤ 1 hour per parser) run through the active continuous gate where enabled; long-cadence runs (≥ 24 hours per parser) are gated to release per ODS-NFR-SEC-002.
 
-**Performance test.** Sustained-load benchmarking, latency-distribution measurement, capacity-scaling tests. Used for §5.1 (PERF) and the capacity-related requirements of §5.7 (RES). Reproducibility requires execution on the Reference Hardware Profile of Appendix E.1 against the Reference Query Mix of Appendix E.3 for normative conformance assertions.
+**Performance test.** Sustained-load benchmarking, latency-distribution measurement, capacity-scaling tests. Used for §5.1 (PERF) and the capacity-related requirements of §5.7 (RES). Reproducibility requires execution on the Reference Hardware Profile of Appendix E.2 against the Reference Query Mix of Appendix E.3 for normative conformance assertions.
 
 **Soak test.** Long-duration runtime tests (days to weeks) under realistic workload, measuring memory consumption, file-descriptor stability, and detection of slow leaks or accumulating state. Used for ODS-NFR-REL-003 and supporting verification for §5.2 (REL).
 
@@ -3352,7 +3352,7 @@ A release with any ODS-FR, ODS-NFR, ODS-IF, ODS-INV, or ODS-NEG requirement mark
 **ODS-VER-011.** Verification methods are classified by execution cadence into three categories:
 - **Continuous** — executed by the active continuous gate for the project stage, with results being build-blocking for accepted changes. During the private-repository Engineering MVP profile this gate is the local `scripts/check.sh` command; before formal SRS release acceptance, hosted CI or an equivalent retained release-gate automation record must cover the accepted commit. Continuous methods comprise: Static analysis, Unit test, Property-based test where present, Integration test, Conformance test, short-cadence Fuzz test (≤ 1 hour per parser), dependency security audit (per ODS-NFR-SEC-006).
 - **Periodic** — executed on a documented schedule independently of commits. Periodic methods comprise: long-cadence Fuzz test (≥ 24 hours per parser per ODS-NFR-SEC-002, scheduled at least weekly), Performance test (weekly performance-regression run per ODS-VER-012), Soak test (continuous, with weekly snapshot reports), Differential test against current primary releases (scheduled at least monthly).
-- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: full Interoperability matrix per ODS-VER-003 against all three primaries; full Performance test on Reference Hardware Profile of Appendix E.1 against Reference Query Mix of Appendix E.3 for all ODS-NFR-PERF requirements; 30-day Soak test on the Reference Hardware Profile for the formal SRS MVP release gate per ODS-NFR-REL-003; Security audit at major release boundaries; External operator acceptance for the formal SRS MVP release gate per ODS-VER-008.
+- **Gate** — executed at release acceptance gates only, the results forming the basis for release approval. Gate methods comprise: full Interoperability matrix per ODS-VER-003 against all three primaries; full Performance test on Reference Hardware Profile of Appendix E.2 against Reference Query Mix of Appendix E.3 for all ODS-NFR-PERF requirements; 30-day Soak test on the Reference Hardware Profile for the formal SRS MVP release gate per ODS-NFR-REL-003; Security audit at major release boundaries; External operator acceptance for the formal SRS MVP release gate per ODS-VER-008.
 
 The classification of each requirement's verification (per its declared method per ODS-VER-001) into Continuous, Periodic, or Gate cadence MUST be recorded in the Test Plan; the Test Plan's CI configuration MUST enact the classification. Inspection and Operational test fall under Gate cadence by default; Static analysis falls under Continuous; the remaining methods may be Continuous, Periodic, or Gate depending on the specific requirement and per-test cost.
 *Source.* Operational requirement; release-engineering discipline; resolution of v0.6 audit finding about CI vs gate verification distinction.
@@ -3438,7 +3438,7 @@ Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (
 
 - All requirements of §3 through §6 to their full normative content;
 - Interoperability per §7.2 with all three primaries (NSD, Knot DNS, BIND 9);
-- All ODS-NFR-PERF performance targets met under benchmarking on the Reference Hardware Profile of Appendix E.1 against the Reference Query Mix of Appendix E.3;
+- All ODS-NFR-PERF performance targets met under benchmarking on the Reference Hardware Profile of Appendix E.2 against the Reference Query Mix of Appendix E.3;
 - A 30-day soak test per ODS-NFR-REL-003 completed without anomaly on the Reference Hardware Profile;
 - Fuzz testing per ODS-NFR-SEC-002 executed for ≥ 24 hours per parser without finding;
 - Dependency security audit per ODS-NFR-SEC-006 clean;
@@ -5082,7 +5082,7 @@ Appendix E specifies the reference environment against which the quantitative no
 
 The Profile reflects a deliberate choice: it is more powerful than strictly necessary for the secondary's expected production workload, but it is selected as the project's standard verification platform. Production deployments on weaker hardware are supported and operationally common; their performance is expected to scale roughly with available CPU and network resources, but conformance to the §5 numerical targets is asserted only against this Profile.
 
-## E.2 Reference Hardware Profile (E.1)
+## E.2 Reference Hardware Profile
 
 ### E.2.1 Compute
 
@@ -5113,7 +5113,7 @@ The secondary makes no use of persistent storage per ODS-INV-004. Local disk on 
 
 Verification runs use NVMe SSD for the host; SATA or other slower storage does not affect server performance (no I/O on the query path per ODS-INV-002) but does affect log throughput if logs are persisted locally.
 
-## E.3 Reference Query Mix (E.2)
+## E.3 Reference Query Mix
 
 ### E.3.1 Reference zone
 
