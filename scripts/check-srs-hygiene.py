@@ -32,6 +32,7 @@ FORBIDDEN_TEXT = {
     "Reference Query Mix (E.2)": "stale Appendix E heading",
     "concrete, atomic, testable requirements": "SRS no longer claims strict atomicity",
     "decomposed into atomic requirements": "SRS no longer claims strict atomicity",
+    "the Test Plan's CI configuration MUST enact the classification": "private Engineering MVP does not claim hosted CI enacts every cadence",
 }
 
 REQUIRED_TEXT = [
@@ -52,6 +53,8 @@ REQUIRED_TEXT = [
     "The published Linux release artifact targets `x86_64-unknown-linux-musl`",
     "Developer and distribution builds that use another target MAY dynamically link",
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",
+    "The active verification automation for the current project stage MUST enact the Continuous classification",
+    "Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")

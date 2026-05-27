@@ -26,6 +26,12 @@ The project uses the SRS v0.9.1 ODS-VER-011 cadence vocabulary exactly:
 - **Periodic**: scheduled checks independent of a specific commit.
 - **Gate**: release-acceptance checks whose results support release approval.
 
+For the private Engineering MVP profile, only the Continuous class is enacted
+as local automation through `scripts/check.sh`. Periodic and Gate rows below are
+documented release/operations obligations with runnable commands, handoff
+artifacts, and evidence formats; they are not treated as completed evidence
+until their corresponding retained runs exist.
+
 ## Method Cadence Map
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
