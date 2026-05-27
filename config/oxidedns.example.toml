@@ -59,6 +59,12 @@ metrics_rate_limit_idle_seconds = 300
 # Prometheus query-latency histogram buckets in seconds. Default:
 # [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
 latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
+# Disabled by default. Enable only for benchmark captures that need pipeline
+# stage timings or response-cache candidacy counters.
+pipeline_timing_enabled = false
+# Disabled by default because scrape-time zone-shape gauges walk active zone
+# snapshots. Enable only for memory-layout diagnostics.
+zone_shape_enabled = false
 
 [query]
 # ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.

@@ -49,6 +49,14 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "Requirements claimed absolute atomicity while grouping many operational cases",
 ]
 
+REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
+    "MVP Trim Reconciliation",
+    "not as a deletion list for already-implemented code",
+    "Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend.",
+    "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material.",
+    "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
+]
+
 FEATURES = {
     "IXFR": {
         "aliases": ["IXFR"],
@@ -221,6 +229,12 @@ def main() -> int:
             errors.append(
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits review finding "
                 f"{finding!r}"
+            )
+    for term in REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS:
+        if term not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits scope-trim "
+                f"boundary term {term!r}"
             )
 
     for feature, spec in FEATURES.items():

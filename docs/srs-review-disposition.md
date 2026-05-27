@@ -48,6 +48,23 @@ boundary, not deletion: setup/runbooks may remain, but completed long fuzz,
 reference-hardware benchmark, soak, signed-release, and external-operator
 evidence are not Engineering MVP deliverables.
 
+## MVP Trim Reconciliation
+
+The review's suggested MVP trim is treated as a starting-point recommendation,
+not as a deletion list for already-implemented code. The current boundary is:
+
+| Review-suggested defer item | Current OxideDNS disposition | Code/doc alignment |
+| --- | --- | --- |
+| Catalog zones | Retained in Engineering MVP because RFC 9432 catalog transfer, parsing, member add/remove, and observability are implemented. | `max_member_zones` remains a named implementation gap in `docs/mvp-gap-register.md`; catalog internals stay out of normative SRS wording. |
+| XoT | Retained in Engineering MVP as outbound zone-transfer transport only. | Client-query DoT and NOTIFY-over-TLS listeners remain out of scope. |
+| DNS Cookies and RRL | Retained in Engineering MVP as implemented UDP abuse-resistance mechanisms. | Release evidence remains broader than local MVP evidence; DNS Cookies are not described as TSIG-equivalent authentication. |
+| Extended DNS Errors | Retained only as the bounded implemented profile. | Current EDE output is limited to `Not Ready` and `Unsupported NSEC3 Iterations`; policy, filtering, validator, stale-cache, and recursive EDE mappings remain out of scope. |
+| CHAOS `version.bind` / `id.server` | Retained as disabled-by-default, opt-in diagnostics. | Unsupported names/types are refused; operators must configure exposed values intentionally. |
+| Full DNSSEC negative proof synthesis | Not accepted as the code boundary. | OxideDNS passively serves transferred DNSSEC RRsets and selected transferred NSEC/NSEC3 denial proofs. It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material. |
+| Full Prometheus metric catalogue | Partially retained as implemented operational metrics. | The implemented metrics are in scope; release-grade retained evidence and production-depth profiling remain acceptance work. Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend. |
+| Packed zone store / pre-baked response cache | Deferred. | Current code uses memory-resident zone snapshots. The response-cache candidate counters only measure whether a future cache might be useful. |
+| 30-day soak, full three-primary matrix, exact performance MUSTs, release signing, external operator acceptance | Deferred from Engineering MVP execution. | Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution. |
+
 This scope-trim boundary is code-checked by
 `scripts/check-srs-review-disposition.py`, which requires each retained
 post-Alpha feature family to cite current source paths, retained evidence

@@ -575,6 +575,13 @@ default because they walk each active zone snapshot at scrape time. Enable
 short diagnostic captures where RRset/RDATA cardinality and canonical-name key
 interning evidence are needed.
 
+The query-pipeline histograms and response-cache candidate counters are also
+disabled by default. Enable `[metrics].pipeline_timing_enabled = true` only for
+short benchmark captures where parse/compose/send time or future cache
+candidacy is being measured. These metrics do not enable a response cache; the
+current server still assembles authoritative responses from the active in-memory
+zone snapshot on demand.
+
 The `/metrics` endpoint returns gzip-compressed output when the scrape request
 includes `Accept-Encoding: gzip`; Prometheus-style uncompressed text remains the
 default. SRS v0.9.1 still requires retained release evidence for build-info label
