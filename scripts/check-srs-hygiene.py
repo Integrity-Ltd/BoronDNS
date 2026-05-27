@@ -86,6 +86,8 @@ FORBIDDEN_TEXT = {
     "Prometheus/OpenMetrics": "current implementation emits Prometheus text exposition 0.0.4, not OpenMetrics",
     "OpenMetrics compatibility": "current implementation emits Prometheus text exposition 0.0.4, not OpenMetrics",
     "used for the metrics endpoint per ODS-NFR-OBS-003": "OpenMetrics is not the current metrics endpoint format",
+    "de-facto operational practice": "avoid unsourced operational-practice claims in normative SRS text",
+    "de-facto probe names": "CHAOS probe names are an explicit OxideDNS compatibility policy",
     "This SRS is subordinate to the PID": "unavailable historical PID must not control the checked-in SRS",
     "PID Appendix A": "RFC compliance target must be self-contained in the checked-in SRS and traceability matrix",
     "Acceptance Criteria for PID Milestones": "formal milestone criteria must not depend on an unavailable PID document",

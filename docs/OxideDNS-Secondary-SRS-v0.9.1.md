@@ -2410,7 +2410,7 @@ The area code **PROV** is allocated.
 
 ## 4.21 CHAOS Class Query Handling
 
-This subsection specifies the server's response policy to queries in the `CHAOS` (CH) class: a class historically allocated for the Chaosnet protocol (RFC 1035 §3.2.4) and commonly used by DNS operational tooling to probe authoritative or recursive servers for self-identifying information. The de-facto probe names in scope here are `version.bind.` and `version.server.` for software-family identity, and `hostname.bind.` and `id.server.` for server-instance identity in anycast or load-balanced deployments.
+This subsection specifies the server's response policy to queries in the `CHAOS` (CH) class: a class historically allocated for the Chaosnet protocol (RFC 1035 §3.2.4) and commonly used by DNS operational tooling to probe authoritative or recursive servers for self-identifying information. The compatibility probe names in scope here are `version.bind.` and `version.server.` for software-family identity, and `hostname.bind.` and `id.server.` for server-instance identity in anycast or load-balanced deployments.
 
 The default policy is conservative: the server discloses nothing unless the operator explicitly configures a response. Where operators opt in, the configured values are operator-chosen strings, not automatically generated build identifiers. The recommended public-facing convention is to disclose software family and topology, for example `"OxideDNS unicast"` or `"OxideDNS anycast"`, while reserving precise build-version information for authenticated or local operational channels such as the `--version` CLI output, image metadata, release manifests, and structured startup logs.
 
@@ -2421,7 +2421,7 @@ The area code **CHAS** is allocated.
 ### Recognised CHAOS TXT names
 
 **ODS-FR-CHAS-001.** The server MUST recognise inbound DNS queries with QCLASS = 3 (CHAOS / CH), QTYPE = 16 (TXT), and QNAME equal to `version.bind.` or `version.server.` (case-insensitive label comparison per RFC 1035 §2.3.3). When `chaos.version` (per ODS-IF-CONF-018) is configured to a non-empty string, the server MUST construct a response with RCODE = 0 (NOERROR), AA = 1, an answer-section RR whose owner name is the queried name, CLASS = CHAOS, TYPE = TXT, TTL = 0, and RDATA consisting of one TXT character-string carrying the configured value. When `chaos.version` is empty or absent, the server MUST respond with RCODE = 5 (REFUSED) and no answer-section RRs.
-*Source.* RFC 1035 §3.2.4; RFC 1035 §3.3.14; de-facto operational practice originating with BIND.
+*Source.* RFC 1035 §3.2.4 defines CLASS = CH; RFC 1035 §3.3.14 defines TXT RDATA. The recognised probe names are an explicit OxideDNS compatibility policy, enabled only when configured.
 *Note.* The configured value is bounded by the 255-octet TXT character-string limit. Operators may choose a precise build string on internal-only deployments, but public-facing deployments SHOULD prefer a soft-identifying value or the default REFUSED behaviour. TTL = 0 is used because these responses are diagnostic and should not be cached for operationally meaningful periods.
 *Verification.* Conformance tests with CH/TXT queries for both QNAMEs, with and without `chaos.version` configured; wire-format inspection of class, type, TTL, TXT framing, AA, and REFUSED default behaviour. *Added in v0.9.1.*
 
@@ -2431,7 +2431,7 @@ The area code **CHAS** is allocated.
 - otherwise, the server MUST respond with RCODE = 5 (REFUSED).
 
 Where a value is selected, the response MUST be constructed as in ODS-FR-CHAS-001: NOERROR, AA = 1, one CHAOS/TXT answer RR with TTL = 0, and a single TXT character-string carrying the selected value.
-*Source.* RFC 5001 §3; de-facto operational practice.
+*Source.* RFC 5001 §2.3 and §3.1 define NSID as opaque, operator-chosen name-server identity data. The `hostname.bind.` and `id.server.` CHAOS/TXT names are an explicit OxideDNS compatibility policy, with printable NSID fallback restricted by project policy.
 *Note.* The NSID fallback avoids duplicating the same node identifier in two configuration locations. The printable-ASCII restriction exists because NSID is opaque octet content and may contain values that are not suitable for TXT presentation; operators using non-printable NSID values can configure `chaos.hostname` explicitly.
 *Verification.* Tests covering explicit `chaos.hostname`, printable NSID fallback, non-printable NSID refusal, and both values absent. *Added in v0.9.1.*
 
