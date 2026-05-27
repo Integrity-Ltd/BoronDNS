@@ -1,7 +1,7 @@
 # SRS Review Disposition
 
-Status: working review register for the external SRS critique stored outside
-the repository as `../gpt-pro-review.md`.
+Status: working review register for an external SRS critique kept outside this
+repository.
 
 This document records how the project handles review findings against the
 current code and documentation. It is intentionally non-normative: the SRS,

@@ -41,6 +41,7 @@ BANNED_PHRASES = [
     "local project MVP",
     "project MVP in this repository",
     "v0.9/v0.9.1",
+    "../gpt-pro-review.md",
     "DNS wire core and UDP query handling are implemented:",
     "AXFR acquisition and IXFR refresh/fallback are implemented:",
     "Health endpoints, metrics, logging, and process interfaces are implemented:",
