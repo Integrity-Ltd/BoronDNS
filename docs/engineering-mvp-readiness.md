@@ -16,7 +16,8 @@ ready, while keeping full SRS `ODS-VER-008` acceptance separate.
   evidence snapshot tooling.
 - `docs/verification-ledger.md` records SRS/Alpha/release acceptance state
   without making deferred long evidence an Engineering MVP blocker.
-- `docs/implementation-plan.md` reflects the current implementation posture.
+- `docs/implementation-plan.md` records milestone direction without owning
+  feature or evidence status.
 - `docs/operator-deployment-guide.md` and `config/oxidedns.example.toml` remain
   valid operator-facing startup material.
 

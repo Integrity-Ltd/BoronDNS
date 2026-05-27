@@ -141,6 +141,12 @@ FORBIDDEN_TEXT_BY_PATH = {
         "Current implementation and evidence status is recorded in\n`implementation-plan.md`",
         "Engineering MVP and SRS acceptance implementation\n  plan",
     ],
+    "docs/appendix-a-traceability-matrix.md": [
+        "docs/implementation-plan.md",
+    ],
+    "docs/verification-ledger.md": [
+        "docs/implementation-plan.md",
+    ],
     "docs/implementation-plan.md": [
         "30-day soak test completed without anomaly",
         "signed release artifacts produced",
