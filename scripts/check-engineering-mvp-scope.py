@@ -180,10 +180,12 @@ def main() -> None:
 
     release_guide = normalized(RELEASE_GUIDE)
     require(
-        "does not run the real-primary interop scripts or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
-        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs interop or perf-smoke",
+        "does not run fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
+        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs fuzz, invariant, interop, or perf-smoke commands",
     )
     for stale_claim in [
+        "parser fuzz compile checks",
+        "invariant audits, portability",
         "performance smoke, and BIND AXFR",
         "TSIG AXFR, and NOTIFY refresh interop logs",
     ]:

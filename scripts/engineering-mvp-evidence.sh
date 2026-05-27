@@ -38,10 +38,14 @@ cat >"$snapshot_dir/README.md" <<EOF
 This snapshot captures the narrow Engineering MVP evidence profile. It is not
 the full SRS ODS-VER-008 acceptance matrix.
 
-The default profile runs only bounded local Engineering MVP evidence commands.
-Long-running evidence, real-primary interop sweeps, release benchmark/soak
-handoffs, signed artifact production, and external acceptance are deferred to
-release/operations profiles and are not executed by this script.
+The default profile runs only bounded local Engineering MVP evidence commands:
+security-policy, CLI, log, signal, health/metrics, malformed-query,
+portability, resource, coverage, unsafe-dependency, interface-compatibility,
+unused-code, and functional-requirement-reference checks. Long-running
+evidence, fuzz build/campaign commands, invariant audits, real-primary interop
+sweeps, release benchmark/soak handoffs, signed artifact production, and
+external acceptance are deferred to release/operations profiles and are not
+executed by this script.
 EOF
 
 git -C "$repo_root" status --short >"$snapshot_dir/git-status.txt"
