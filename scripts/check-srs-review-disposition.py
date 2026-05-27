@@ -65,6 +65,16 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
 ]
 
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
+    "## Review Baseline Alignment",
+    "suggested minimal MVP cut is treated as a floor for code alignment",
+    "not a replacement for the current Engineering MVP",
+    "Review baseline area",
+    "Current code-aligned status",
+    "Static TOML configuration with explicit zones, primaries, and optional TSIG",
+    "UDP/TCP authoritative query serving with EDNS0 and TCP fallback",
+    "AXFR initial load, SOA refresh/retry/expire state machine, NOTIFY, and TSIG-protected transfer/NOTIFY",
+    "Basic RR support, unknown RR pass-through, and passive DNSSEC records as transferred",
+    "Minimal health, readiness, metrics, and structured logs",
     "## Retained Slices",
     "every code-backed slice that exceeds a static AXFR-only secondary-server cut",
     "Not claimed by this slice",
@@ -109,6 +119,122 @@ REVIEW_SUGGESTED_DEFER_ITEMS = [
     "CVE governance",
     "External operator acceptance",
 ]
+
+REVIEW_BASELINE_SCOPE = {
+    "secondary-only authoritative": {
+        "paths": [
+            "crates/oxidedns-core/src/dns.rs",
+            "crates/oxidedns-server/src/lib.rs",
+            "scripts/audit-invariants.sh",
+        ],
+        "evidence_paths": [
+            "scripts/check.sh",
+            "docs/architecture.md",
+            "docs/engineering-mvp-readiness.md",
+        ],
+        "source_needles": [
+            "Opcode::Notify",
+            "ODS-INV-001 secondary-only prohibited runtime surfaces",
+            "ODS-INV-007 authoritative-only response composition",
+        ],
+    },
+    "static toml config and tsig": {
+        "paths": [
+            "crates/oxidedns-core/src/config.rs",
+            "crates/oxidedns-core/src/tsig.rs",
+            "crates/oxidedns-cli/src/main.rs",
+            "config/oxidedns.example.toml",
+        ],
+        "evidence_paths": [
+            "docs/devops-getting-started.md",
+            "docs/operator-deployment-guide.md",
+            "scripts/check.sh",
+        ],
+        "source_needles": [
+            "pub struct ServerConfig",
+            "pub struct ZoneConfig",
+            "pub struct TransferPrimaryConfig",
+            "pub struct TsigKey",
+            "require_tsig",
+        ],
+    },
+    "udp tcp edns": {
+        "paths": [
+            "crates/oxidedns-core/src/dns.rs",
+            "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-edns-behavior.sh",
+            "scripts/interop-tcp-truncation-retry.sh",
+        ],
+        "source_needles": [
+            "async fn serve_udp",
+            "async fn serve_tcp",
+            "parse_edns_options",
+            "build_truncated_response",
+        ],
+    },
+    "axfr zsm notify tsig": {
+        "paths": [
+            "crates/oxidedns-core/src/axfr.rs",
+            "crates/oxidedns-core/src/tsig.rs",
+            "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "scripts/interop-bind-axfr.sh",
+            "scripts/interop-bind-notify-refresh.sh",
+            "scripts/interop-notify-negative.sh",
+            "docs/zsm-engineering-mvp-matrix.tsv",
+        ],
+        "source_needles": [
+            "pub fn build_axfr_query",
+            "parse_axfr_response_with_options",
+            "ZoneRefreshRegistry",
+            "NotifyAuthority",
+            "maybe_sign_transfer_query",
+        ],
+    },
+    "rr unknown dnssec": {
+        "paths": [
+            "crates/oxidedns-core/src/axfr.rs",
+            "crates/oxidedns-core/src/dns.rs",
+            "crates/oxidedns-core/src/zone.rs",
+            "docs/rr-type-catalogue.md",
+        ],
+        "evidence_paths": [
+            "scripts/interop-unknown-rr.sh",
+            "scripts/interop-dnssec-serve.sh",
+            "scripts/interop-dnssec-nsec3-serve.sh",
+            "scripts/interop-bind-packet-torture-docker.sh",
+        ],
+        "source_needles": [
+            "Unknown transfer RDATA",
+            "augment_lookup_result_with_dnssec",
+            "RecordType::Rrsig",
+            "RecordType::Nsec3",
+        ],
+    },
+    "health metrics structured logs": {
+        "paths": [
+            "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-cli/src/main.rs",
+            "docs/health-metrics-interface.md",
+        ],
+        "evidence_paths": [
+            "scripts/capture-health-metrics-evidence.sh",
+            "scripts/check-interface-compatibility.py",
+            "scripts/audit-log-fields.py",
+            "scripts/audit-log-lazy-formatting.py",
+        ],
+        "source_needles": [
+            "async fn livez",
+            "async fn readyz",
+            "async fn metrics",
+            "oxidedns_secondary_build_info",
+            "logfmt",
+        ],
+    },
+}
 
 REQUIRED_MVP_TRIM_ROW_TERMS = {
     "Catalog zones": [
@@ -535,6 +661,42 @@ def main() -> int:
                 "implemented feature-scope source of truth"
             )
 
+    for baseline, spec in REVIEW_BASELINE_SCOPE.items():
+        paths = spec["paths"]
+        evidence_paths = spec["evidence_paths"]
+        source = "\n".join(
+            (ROOT / relative_path).read_text(encoding="utf-8")
+            for relative_path in paths
+            if (ROOT / relative_path).exists()
+        )
+        for relative_path in paths:
+            if relative_path not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} for review baseline {baseline}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(
+                    f"missing review baseline path for {baseline}: {relative_path}"
+                )
+        for relative_path in evidence_paths:
+            if relative_path not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} evidence for review baseline {baseline}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(
+                    f"missing review baseline evidence path for {baseline}: "
+                    f"{relative_path}"
+                )
+        for needle in spec["source_needles"]:
+            if needle not in source:
+                errors.append(
+                    f"source cited for review baseline {baseline} lacks "
+                    f"implementation evidence needle {needle!r}"
+                )
+
     for feature, spec in FEATURES.items():
         aliases = spec["aliases"]
         paths = spec["paths"]
@@ -638,6 +800,7 @@ def main() -> int:
 
     print(
         "srs_review_disposition_check=passed "
+        f"review_baseline={len(REVIEW_BASELINE_SCOPE)} "
         f"features={len(FEATURES)} support_tooling={len(SUPPORT_TOOLING)}"
     )
     return 0
