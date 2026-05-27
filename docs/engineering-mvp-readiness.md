@@ -10,6 +10,8 @@ ready, while keeping full SRS `ODS-VER-008` acceptance separate.
 - `scripts/engineering-mvp-evidence.sh` completes with its default bounded
   local evidence profile.
 - `docs/engineering-mvp-scope.md` remains the milestone boundary.
+- `docs/implemented-feature-scope.md` remains the code-aligned source of truth
+  for retained implemented slices that exceed a minimal static-zone trim.
 - `docs/mvp-gap-register.md` separates current Engineering MVP evidence from
   broader SRS acceptance gaps.
 - `docs/evidence-command-catalog.md` owns the command inventory consumed by

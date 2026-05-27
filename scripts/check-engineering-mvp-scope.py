@@ -20,6 +20,8 @@ HANDOFF_SCRIPTS = [
 REQUIRED_SCOPE_PHRASES = [
     "not the SRS",
     "must not require completed long-running evidence",
+    "Implemented post-Alpha protocol slices listed in",
+    "not removed from Engineering MVP scope merely because they exceed a minimal static-zone secondary-server trim",
     "24-hour fuzz campaigns",
     "30-day soak execution",
     "Reference Hardware/Profile benchmark campaigns",
@@ -127,6 +129,10 @@ def main() -> None:
     require(
         "not full SRS `ODS-VER-008` release acceptance" in readiness,
         f"{READINESS}: missing Engineering MVP readiness SRS-acceptance boundary",
+    )
+    require(
+        "code-aligned source of truth for retained implemented slices" in readiness,
+        f"{READINESS}: missing retained implemented slice readiness boundary",
     )
     require(
         "Do not call the Engineering MVP ready" in readiness,
