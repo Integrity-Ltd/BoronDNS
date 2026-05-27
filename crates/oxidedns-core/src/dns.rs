@@ -2008,6 +2008,7 @@ pub struct LookupResult {
     pub authorities: Vec<ResourceRecord>,
     pub additionals: Vec<ResourceRecord>,
     pub termination: Option<LookupTermination>,
+    pub nsec3_iterations_exceeded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2047,6 +2048,7 @@ impl LookupResult {
             authorities: Vec::new(),
             additionals: Vec::new(),
             termination: Some(termination),
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2061,6 +2063,7 @@ impl LookupResult {
             authorities: Vec::new(),
             additionals,
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2072,6 +2075,7 @@ impl LookupResult {
             authorities,
             additionals,
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2083,6 +2087,7 @@ impl LookupResult {
             authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2094,6 +2099,7 @@ impl LookupResult {
             authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2109,6 +2115,7 @@ impl LookupResult {
             authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 
@@ -2120,6 +2127,7 @@ impl LookupResult {
             authorities: negative_soa_records(soa),
             additionals: Vec::new(),
             termination: None,
+            nsec3_iterations_exceeded: false,
         }
     }
 }
@@ -4090,8 +4098,9 @@ mod tests {
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
     }
 
-    #[test]
-    fn nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled() {
+    fn nsec3_iterations_over_cap_response(
+        extended_dns_errors: ExtendedDnsErrorsMode,
+    ) -> (Vec<u8>, bool) {
         let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
         let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
         let store = ZoneStore::new();
@@ -4129,17 +4138,33 @@ mod tests {
         );
         append_opt(&mut packet, 4096, 0x8000, &[]);
 
-        let response = store_response_with_options(
+        let nsec3_iterations_exceeded = std::cell::Cell::new(false);
+        let action = answer_message_with_notify_hooks_and_query_observer(
             &packet,
             &store,
             AnswerOptions {
                 nsec3_max_iterations: 0,
-                extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+                extended_dns_errors,
                 ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
             },
+            |_, _| true,
+            |_, _, _| {},
+            |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
         );
+        let response = match action {
+            DatagramAction::Discard => panic!("expected response"),
+            DatagramAction::Respond(response) => response,
+        };
+        (response, nsec3_iterations_exceeded.get())
+    }
+
+    #[test]
+    fn nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled() {
+        let (response, nsec3_iterations_exceeded) =
+            nsec3_iterations_over_cap_response(ExtendedDnsErrorsMode::Minimal);
 
         assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert!(nsec3_iterations_exceeded);
         assert_eq!(
             response_authority_types(&response),
             vec![RecordType::Soa as u16]
@@ -4149,6 +4174,21 @@ mod tests {
             response_ede_info_codes(&response),
             vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
         );
+    }
+
+    #[test]
+    fn nsec3_iterations_over_cap_remains_observable_when_ede_is_off() {
+        let (response, nsec3_iterations_exceeded) =
+            nsec3_iterations_over_cap_response(ExtendedDnsErrorsMode::Off);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert!(nsec3_iterations_exceeded);
+        assert_eq!(
+            response_authority_types(&response),
+            vec![RecordType::Soa as u16]
+        );
+        assert_eq!(response_opt_ttl(&response), Some(0x8000));
+        assert!(response_ede_info_codes(&response).is_empty());
     }
 
     #[test]

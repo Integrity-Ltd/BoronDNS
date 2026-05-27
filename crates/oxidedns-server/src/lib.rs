@@ -93,8 +93,6 @@ pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
 pub const BUILD_RUST_VERSION: &str = env!("OXIDEDNS_BUILD_RUST_VERSION");
 pub const BUILD_TIMESTAMP: &str = env!("OXIDEDNS_BUILD_TIMESTAMP");
-const EDNS_EXTENDED_DNS_ERROR_OPTION: u16 = 15;
-const EDE_UNSUPPORTED_NSEC3_ITERATIONS: u16 = 27;
 
 #[cfg(unix)]
 pub use process_signals::install_process_signal_dispositions;
@@ -3146,9 +3144,6 @@ fn record_query_response_metric(
     if let Some(zone_key) = &observation.zone_key {
         metrics.record_zone_query_response_rcode(zone_key, rcode);
     }
-    if response_has_ede_info_code(response, &header, EDE_UNSUPPORTED_NSEC3_ITERATIONS) {
-        metrics.record_nsec3_iterations_exceed_cap();
-    }
     metrics.record_query_latency(
         query_latency_category(observation, response, &header),
         observation.started_at.elapsed(),
@@ -3295,39 +3290,6 @@ fn response_has_dnssec_augmentation(response: &[u8], header: &Header) -> bool {
     ttl & 0x8000 != 0
 }
 
-fn response_has_ede_info_code(response: &[u8], header: &Header, expected_info_code: u16) -> bool {
-    let Some(opt) = response_opt_record(response, header) else {
-        return false;
-    };
-    if opt.len() < 11 {
-        return false;
-    }
-    let rdlength = u16::from_be_bytes([opt[9], opt[10]]) as usize;
-    let end = 11 + rdlength;
-    if opt.len() < end {
-        return false;
-    }
-
-    let mut offset = 11usize;
-    while offset + 4 <= end {
-        let option_code = u16::from_be_bytes([opt[offset], opt[offset + 1]]);
-        let option_len = u16::from_be_bytes([opt[offset + 2], opt[offset + 3]]) as usize;
-        offset += 4;
-        if offset + option_len > end {
-            return false;
-        }
-        if option_code == EDNS_EXTENDED_DNS_ERROR_OPTION && option_len >= 2 {
-            let info_code = u16::from_be_bytes([opt[offset], opt[offset + 1]]);
-            if info_code == expected_info_code {
-                return true;
-            }
-        }
-        offset += option_len;
-    }
-
-    false
-}
-
 fn response_answer_contains_type(response: &[u8], header: &Header, types: &[u16]) -> bool {
     let Some(mut offset) = response_question_end(response, header) else {
         return false;
@@ -3375,6 +3337,9 @@ fn record_query_termination_metric(
         Some(LookupTermination::CnameLoop) => metrics.record_query_cname_loop(),
         Some(LookupTermination::MalformedDname) => {}
         None => {}
+    }
+    if lookup.nsec3_iterations_exceeded {
+        metrics.record_nsec3_iterations_exceed_cap();
     }
 }
 
@@ -8543,9 +8508,8 @@ mod tests {
     use super::{
         CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
         DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS,
-        DnsCookieRuntimeSettings, DnsCookieSecretStore, EDE_UNSUPPORTED_NSEC3_ITERATIONS,
-        EDNS_EXTENDED_DNS_ERROR_OPTION, HealthEndpointState, IxfrCooldownRegistry, LoadingWarning,
-        MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
+        DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
+        LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
         NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage,
         QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation, QueryPipelineStage,
         RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
@@ -11065,39 +11029,17 @@ mod tests {
         let mut badvers = noerror.clone();
         badvers[11] = 1;
         badvers.extend_from_slice(&[0, 0, 41, 4, 208, 1, 0, 0, 0, 0, 0]);
-        let mut nsec3_ede = noerror.clone();
-        nsec3_ede[11] = 1;
-        nsec3_ede.extend_from_slice(&[
-            0,
-            0,
-            41,
-            4,
-            208,
-            0,
-            0,
-            0,
-            0,
-            0,
-            6,
-            0,
-            EDNS_EXTENDED_DNS_ERROR_OPTION as u8,
-            0,
-            2,
-            0,
-            EDE_UNSUPPORTED_NSEC3_ITERATIONS as u8,
-        ]);
 
         record_query_response_metric(&observation, &noerror, &metrics);
         record_query_response_metric(&observation, &nxdomain, &metrics);
         record_query_response_metric(&observation, &truncated, &metrics);
         record_query_response_metric(&observation, &badvers, &metrics);
-        record_query_response_metric(&observation, &nsec3_ede, &metrics);
         record_query_response_metric(&non_query_observation, &truncated, &metrics);
 
         assert_eq!(metrics.snapshot().queries_truncated, 1);
-        assert_eq!(metrics.snapshot().nsec3_iterations_exceed_cap, 1);
+        assert_eq!(metrics.snapshot().nsec3_iterations_exceed_cap, 0);
         let rcodes = metrics.query_rcode_counts();
-        assert_eq!(rcodes.get(&0), Some(&3));
+        assert_eq!(rcodes.get(&0), Some(&2));
         assert_eq!(rcodes.get(&3), Some(&1));
         assert_eq!(rcodes.get(&16), Some(&1));
         assert_eq!(
@@ -11105,7 +11047,7 @@ mod tests {
                 .query_latency_histograms()
                 .get(&QueryLatencyCategory::UdpDirect)
                 .map(QueryLatencyHistogram::count),
-            Some(5)
+            Some(4)
         );
     }
 
@@ -11213,6 +11155,38 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.queries_cname_chain_limit, 1);
         assert_eq!(snapshot.queries_cname_loop, 1);
+    }
+
+    #[test]
+    fn query_metrics_count_nsec3_cap_from_lookup_observation_only() {
+        let metrics = RuntimeMetrics::new();
+        let observation = QueryMetricObservation {
+            is_query: true,
+            transport: Transport::Udp,
+            started_at: std::time::Instant::now(),
+            cookie_validated: false,
+            zone_key: None,
+            parse_duration: None,
+            lookup_duration: None,
+            compose_duration: None,
+        };
+        let non_query_observation = QueryMetricObservation {
+            is_query: false,
+            transport: Transport::Udp,
+            started_at: std::time::Instant::now(),
+            cookie_validated: false,
+            zone_key: None,
+            parse_duration: None,
+            lookup_duration: None,
+            compose_duration: None,
+        };
+        let mut over_cap = oxidedns_core::dns::LookupResult::nxdomain(None);
+        over_cap.nsec3_iterations_exceeded = true;
+
+        record_query_termination_metric(&observation, &over_cap, &metrics);
+        record_query_termination_metric(&non_query_observation, &over_cap, &metrics);
+
+        assert_eq!(metrics.snapshot().nsec3_iterations_exceed_cap, 1);
     }
 
     #[test]

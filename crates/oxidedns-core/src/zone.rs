@@ -320,6 +320,7 @@ impl ZoneSnapshot {
                 answers,
                 authorities,
                 additionals,
+                nsec3_iterations_exceeded: dnssec_state.nsec3_iterations_exceeded,
                 ..lookup
             },
             dnssec_state.dnssec_augmented,
