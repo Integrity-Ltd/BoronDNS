@@ -68,8 +68,8 @@ release-acceptance evidence.
   graceful shutdown;
 - safe-Rust, dependency-audit, parser-fuzz compile, and performance-smoke
   evidence commands retained in the repo;
-- checked short-evidence ZSM coverage for `ODS-FR-ZSM-001..013` plus
-  `ODS-FR-ZSM-006a`, without requiring long-running timing evidence for
+- checked short-evidence ZSM coverage for `ODS-FR-ZSM-001..014`, without
+  requiring long-running timing evidence for
   Engineering MVP;
 - interoperability evidence against at least one real primary for AXFR, TSIG,
   and NOTIFY, with primary version/configuration evidence recorded for each

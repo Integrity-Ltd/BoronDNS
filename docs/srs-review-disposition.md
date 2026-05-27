@@ -70,7 +70,7 @@ Primary source links:
 | Review finding | Disposition | Evidence |
 | --- | --- | --- |
 | ODS/RDS namespace mismatch | Accepted and fixed in current SRS. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; archived v0.1 files are explicitly non-current in `docs/README.md`. |
-| Suffixed IDs such as `ODS-FR-CORE-006a` violate the numeric scheme | Accepted as a cleanup debt, not silently renumbered. Current SRS forbids new suffixed IDs and records the two existing aliases as temporary traceability debt. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/zsm-engineering-mvp-matrix.tsv`; source comments in `crates/`. |
+| Suffixed functional IDs violated the numeric scheme | Accepted and cleaned up. Current SRS uses numeric replacements `ODS-FR-CORE-029` and `ODS-FR-ZSM-014`, while retaining only prose notes that earlier draft snapshots used suffixed labels. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/zsm-engineering-mvp-matrix.tsv`; source comments in `crates/`. |
 | UPDATE rejection cross-reference pointed at `CORE-007` | Accepted and fixed in current SRS. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |
 | Response DO-bit semantics were wrong | Accepted as a protocol bug. Current SRS, implementation, and focused interop scripts now use RFC 6840 query-DO copy semantics. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `crates/oxidedns-core/src/dns.rs`; `scripts/interop-edns-behavior.sh`; `scripts/interop-dnssec-serve.sh`. |
 | CD-bit handling needed authoritative-server context | Accepted and fixed as explicit authoritative policy. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |

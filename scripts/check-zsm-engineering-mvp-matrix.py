@@ -16,9 +16,7 @@ HEADER = [
 ]
 
 REQUIRED_IDS = {
-    *(f"ODS-FR-ZSM-{index:03d}" for index in range(1, 7)),
-    "ODS-FR-ZSM-006a",
-    *(f"ODS-FR-ZSM-{index:03d}" for index in range(7, 14)),
+    *(f"ODS-FR-ZSM-{index:03d}" for index in range(1, 15)),
 }
 VALID_PHASES = {"Engineering-MVP"}
 VALID_STATUSES = {"partial"}

@@ -169,7 +169,7 @@ where:
 - **AREA** is a short uppercase mnemonic, 3 to 6 characters, identifying the protocol concern, non-functional concern, or interface (for example AXFR, TSIG, PERF, NET). Area codes are allocated centrally in Appendix D (Glossary) and shall not be reused for unrelated concerns.
 - **NNN** is a zero-padded three-digit sequence number, unique within the (CATEGORY, AREA) namespace, starting at 001.
 
-The v0.9.1 document still contains legacy suffixed identifiers (`ODS-FR-CORE-006a` and `ODS-FR-ZSM-006a`) that predate this cleanup pass and are retained temporarily to avoid breaking traceability against existing tests and code references. No new suffixed identifiers shall be allocated. A future non-behavioural traceability cleanup shall migrate those legacy identifiers to numeric identifiers and keep alias notes for historical references.
+Earlier draft snapshots used two suffixed functional identifiers while the v0.9.1 text was being normalised. The current SRS allocates numeric replacements instead: `ODS-FR-CORE-029` for error-response question echoing and `ODS-FR-ZSM-014` for SOA poll wire construction. No suffixed requirement identifiers shall be allocated.
 
 Examples:
 
@@ -557,9 +557,9 @@ Requirements are grouped thematically for readability; the grouping has no norma
 *Source.* RFC 1035 §4.1.2; current operational practice (no multi-question query semantics are defined).
 *Verification.* Conformance tests.
 
-**ODS-FR-CORE-006a.** In any error response (FORMERR, NOTIMP, REFUSED, SERVFAIL), the server SHOULD echo the question section as received if it was successfully parsed, with QDCOUNT = 1 in the response header. Where the question section could not be parsed (parse failure before the question section was successfully extracted — for example, oversized labels per ODS-FR-CORE-007, compression-loop in QNAME per ODS-FR-CORE-008, or QDCOUNT > 1), the server MUST emit the response with QDCOUNT = 0 and no records in the question section.
+**ODS-FR-CORE-029.** In any error response (FORMERR, NOTIMP, REFUSED, SERVFAIL), the server SHOULD echo the question section as received if it was successfully parsed, with QDCOUNT = 1 in the response header. Where the question section could not be parsed (parse failure before the question section was successfully extracted — for example, oversized labels per ODS-FR-CORE-007, compression-loop in QNAME per ODS-FR-CORE-008, or QDCOUNT > 1), the server MUST emit the response with QDCOUNT = 0 and no records in the question section.
 *Source.* RFC 1035 §4.1.1; defensive composition for malformed inputs where the question content cannot be safely reproduced.
-*Note.* This is the explicit specification of the case left implicit by RFC 1035 §4.1.1 (which presupposes a parseable question). Setting QDCOUNT = 0 in this case is the dominant operational practice among existing implementations and avoids the risk of returning a malformed echoed question to the client.
+*Note.* This is the explicit specification of the case left implicit by RFC 1035 §4.1.1 (which presupposes a parseable question). Setting QDCOUNT = 0 in this case is the dominant operational practice among existing implementations and avoids the risk of returning a malformed echoed question to the client. Earlier draft snapshots used a suffixed CORE label for this requirement; that label is historical only and must not be used for new traceability.
 *Verification.* Conformance tests including queries that fail parsing at the question-section stage; the resulting FORMERR responses MUST exhibit QDCOUNT = 0 with an empty question section.
 
 **ODS-FR-CORE-007.** The server MUST parse the QNAME field as a sequence of length-prefixed labels terminating in a zero-length label, rejecting with FORMERR any message in which an individual label length exceeds 63 octets or the total uncompressed QNAME length exceeds 255 octets.
@@ -1998,8 +1998,9 @@ The area code **ZSM** is allocated.
 *Note.* The SOA poll is optional because IXFR's Mode 3 response (RFC 1995 §4, per ODS-FR-IXFR-004) provides equivalent "no update available" signalling at the cost of one IXFR query rather than one SOA query plus one IXFR query. Implementations may choose either pattern; both are operationally correct.
 *Verification.* Refresh tests with primaries at equal serial confirming refresh is recorded as successful without transfer.
 
-**ODS-FR-ZSM-006a.** SOA poll queries issued under ODS-FR-ZSM-006 MUST be constructed with QNAME equal to the zone apex name, QTYPE = 6 (SOA), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, a QID selected per ODS-FR-SPOOF-001, and (where TSIG is configured for the selected primary) a TSIG record signing the query per §4.9. The query MAY be sent over UDP or TCP; over UDP, response validation MUST apply RFC 5452 (ODS-FR-SPOOF-003 through ODS-FR-SPOOF-006) and any received truncation (TC bit set) MUST cause retry over TCP.
+**ODS-FR-ZSM-014.** SOA poll queries issued under ODS-FR-ZSM-006 MUST be constructed with QNAME equal to the zone apex name, QTYPE = 6 (SOA), QCLASS equal to the configured class of the zone, OPCODE = 0 (QUERY), RD = 0, a QID selected per ODS-FR-SPOOF-001, and (where TSIG is configured for the selected primary) a TSIG record signing the query per §4.9. The query MAY be sent over UDP or TCP; over UDP, response validation MUST apply RFC 5452 (ODS-FR-SPOOF-003 through ODS-FR-SPOOF-006) and any received truncation (TC bit set) MUST cause retry over TCP.
 *Source.* RFC 1034 §4.3.5; RFC 1035 §4.1.2; this SRS §4.5, §4.9.
+*Note.* Earlier draft snapshots used a suffixed ZSM label for this requirement; that label is historical only and must not be used for new traceability.
 *Verification.* Wire-format inspection of outbound SOA poll queries; spoofing-resistance tests parallel to other outbound query paths.
 
 **ODS-FR-ZSM-007.** Where a refresh attempt has been triggered by a NOTIFY message that carried an SOA record in its answer section (per ODS-FR-NOTIFY-008), the state machine MAY use that embedded SOA's serial as the primary-side input to the comparison of ODS-FR-ZSM-006, skipping a separate SOA poll. If the embedded serial is equal to or less than the secondary's held serial, the refresh is recorded as successful per ODS-FR-ZSM-004 without any further query. If greater, the configured transfer protocol is initiated.
