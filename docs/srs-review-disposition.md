@@ -47,6 +47,14 @@ boundary, not deletion: setup/runbooks may remain, but completed long fuzz,
 reference-hardware benchmark, soak, signed-release, and external-operator
 evidence are not Engineering MVP deliverables.
 
+Support tooling follows the same boundary. The installer, release archive
+scripts, Docker image archive workflow, large-zone benchmark harnesses, and
+OxideGun load generator are repository tooling for deployment or evidence
+capture. They do not expand the secondary-server protocol requirements unless a
+current SRS, architecture, or gap-register row explicitly says so. OxideGun's
+AF_XDP backend is test-tool scope only; OxideDNS server XDP/eBPF remains a
+deferred unsafe-boundary track.
+
 ## Primary Sources Checked
 
 | Topic | Primary source | Current disposition |
