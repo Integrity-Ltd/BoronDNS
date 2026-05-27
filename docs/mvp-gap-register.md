@@ -62,11 +62,23 @@ release artifact, or a formal acceptance sign-off is still open.
 
 ## Pending SRS C.5 Decision Overlay
 
-SRS v0.9.1 Appendix C.5 is the canonical project-decision table. Rows whose
-Decision begins `Pending` remain active release-review risks, even where current
-code follows the body default or a document records current implementation
-evidence. Rows marked `Resolved` are retained as audit trail, not open risks.
+SRS v0.9.1 Appendix C.5 is the canonical project-decision table. Rows marked
+`Resolved` are retained as audit trail, not open risks. Rows whose Decision
+begins `Pending` need release-review attention, but they are not all the same
+kind of blocker: some are non-normative quality candidates, some require an
+implementation-or-SRS decision, and some require later formal release evidence.
 Update release notes from the SRS C.5 table, not from this summary.
+
+Current C.5 pending rows are classified here only to make the active queue
+readable:
+
+| C.5 item | Current classification | Handling |
+| --- | --- | --- |
+| Property-based testing in Alpha scope | Non-normative quality candidate | Tracked in the Test Plan; not an Engineering MVP blocker unless promoted to a requirement. |
+| Server module decomposition (`server/lib.rs` monolith) | Non-normative maintainability candidate | Tracked in the Architecture Document; not an Engineering MVP blocker unless module growth makes `ODS-NFR-MAINT-002` evidence weak. |
+| 5000 ms per-query processing timeout | Implementation-or-SRS decision | Covered by the runtime-timeout row above; implement `query.processing_timeout_ms` plus metrics or revise the SRS boundary. |
+| 1000 ms `/livez` probe timeout | Implementation-or-SRS decision | Covered by the runtime-timeout row above; implement `health.livez_timeout_ms` or revise the SRS to rely on orchestrator probe timeouts. |
+| 1% idle CPU bound for 1000 zones | Formal release evidence target | Covered by the performance/resources row above; requires Reference Hardware/Profile measurement or SRS target revision. |
 
 ## Current Verification Commands
 

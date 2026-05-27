@@ -47,6 +47,16 @@ SOURCE_BANNED_PHRASES = [
     "unrecognized_rds",
 ]
 
+REQUIRED_TEXT_BY_PATH = {
+    "docs/mvp-gap-register.md": [
+        "kind of blocker",
+        "Non-normative quality candidate",
+        "Implementation-or-SRS decision",
+        "Formal release evidence target",
+        "not an Engineering MVP blocker unless promoted to a requirement",
+    ],
+}
+
 
 def current_doc_paths() -> list[Path]:
     paths = [ROOT / "README.md"]
@@ -76,6 +86,12 @@ def main() -> int:
             if phrase in text:
                 relative = path.relative_to(ROOT)
                 violations.append(f"{relative}: stale phrase {phrase!r}")
+        relative_string = path.relative_to(ROOT).as_posix()
+        for phrase in REQUIRED_TEXT_BY_PATH.get(relative_string, []):
+            if phrase not in text:
+                violations.append(
+                    f"{relative_string}: missing required phrase {phrase!r}"
+                )
 
     for path in current_source_paths():
         text = path.read_text(encoding="utf-8")
