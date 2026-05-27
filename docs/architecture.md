@@ -91,6 +91,9 @@ The current implementation uses a deliberately small runtime model:
   Metrics still expose the catalog listing with `managed="false"` so operators
   can see the overlap without allowing catalog data to override static
   configuration.
+- Each configured catalog applies its `max_member_zones` cap during membership
+  reconciliation before member transfer plans are created. Excess members are
+  dropped from the applied runtime set and logged.
 - `serve_catalog_zone = false` keeps the catalog zone out of normal query
   lookup. If an operator opts into `serve_catalog_zone = true`, the catalog
   content is served as ordinary authoritative data and must be treated as

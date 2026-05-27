@@ -220,6 +220,8 @@ notify_sources = ["192.0.2.53"]
 # Default: false. Transfer and process the catalog but do not serve the catalog
 # zone itself on the public DNS query interface.
 #serve_catalog_zone = false
+# Default: 10000. Cap catalog-derived member zones accepted from this catalog.
+#max_member_zones = 10000
 
 #[[tsig_keys]]
 #name = "transfer-key."

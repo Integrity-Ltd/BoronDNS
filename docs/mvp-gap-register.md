@@ -44,9 +44,7 @@ release artifact, or a formal acceptance sign-off is still open.
 
 ## Open Implementation Decisions
 
-| Gap | Current posture | Needed decision or change |
-| --- | --- | --- |
-| Catalog member-zone resource cap (`ODS-NFR-SEC-013`) | RFC 9432 catalog support is implemented and tested through explicit/catalog config, mandatory catalog TSIG, internal consumption, live member add/remove, catalog logs, catalog membership metrics, BIND XoT+TSIG, and PowerDNS/PostgreSQL producer coverage. | Implement `max_member_zones` or equivalent, including cap logging/tests, or revise the SRS requirement if the cap is deferred from the current release target. |
+No open Engineering MVP implementation decisions are currently tracked here.
 
 ## Release Acceptance Evidence Still Open
 

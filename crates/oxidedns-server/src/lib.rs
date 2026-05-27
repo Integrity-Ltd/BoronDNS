@@ -67,7 +67,7 @@ use tokio_rustls::{
         pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject},
     },
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use x509_parser::parse_x509_certificate;
 
 // ODS-NFR-MAINT-004 principal functional requirement references for runtime
@@ -6085,13 +6085,27 @@ impl CatalogManager {
             zones.hide_zone(&catalog.origin);
         }
 
-        let members = match parse_catalog_members(snapshot) {
+        let mut members = match parse_catalog_members(snapshot) {
             Ok(members) => members,
             Err(error) => {
                 log_catalog_error(&error);
                 return;
             }
         };
+        let member_count = members.len();
+        if member_count > catalog.config.max_member_zones {
+            let dropped = member_count - catalog.config.max_member_zones;
+            members.truncate(catalog.config.max_member_zones);
+            error!(
+                category = "transfer",
+                event = "catalog_member_limit_exceeded",
+                catalog_zone = %catalog.origin,
+                max_member_zones = catalog.config.max_member_zones,
+                member_count,
+                dropped,
+                "catalog member zone limit exceeded; dropping excess catalog members"
+            );
+        }
 
         let catalog_key = catalog.origin.canonical_key();
         let mut members_by_key = HashMap::new();
@@ -8657,6 +8671,100 @@ mod tests {
         let request = rx.recv().await.expect("member refresh request");
         assert_eq!(request.zone, member_origin);
         assert_eq!(request.reason, super::RefreshReason::Catalog);
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_enforces_member_zone_cap() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                notify_sources = ["192.0.2.53"]
+                tsig_key = "catalog-key."
+                max_member_zones = 1
+            "#,
+        )
+        .expect("valid catalog config");
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let alpha_origin = DomainName::from_absolute_str("alpha.example.").unwrap();
+        let beta_origin = DomainName::from_absolute_str("beta.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog_origin.clone(),
+            Some(7),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![alpha_origin.to_wire()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![beta_origin.to_wire()],
+                ),
+            ],
+        );
+        let zones = ZoneStore::new();
+        zones.insert_loading_hidden(catalog_origin);
+        zones.insert_snapshot(snapshot.clone());
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+        let catalog_manager = CatalogManager::from_config(&config);
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
+        let notify_authority = NotifyAuthority::from_config(&config);
+        let (tx, mut rx) = mpsc::channel(2);
+
+        catalog_manager
+            .apply_snapshot(
+                &snapshot,
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &tx.downgrade(),
+            )
+            .await;
+
+        assert!(transfer_plan.get(&alpha_origin).is_some());
+        assert!(transfer_plan.get(&beta_origin).is_none());
+        assert_eq!(
+            rx.recv().await.expect("member refresh request").zone,
+            alpha_origin
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(captured.contains_all(&[
+            "catalog_member_limit_exceeded",
+            "max_member_zones=1",
+            "member_count=2",
+            "dropped=1",
+        ]));
     }
 
     #[test]

@@ -10,10 +10,9 @@ those member zones.
 
 This feature has moved beyond the earlier static-zone-only scope: `[[zones]]`
 remains supported for explicit zones, and `[[catalog_zones]]` is the supported
-way to let a trusted primary publish the served zone set. The remaining
-implementation gap is the catalog member-zone resource bound tracked as
-`ODS-NFR-SEC-013` in `docs/mvp-gap-register.md`; broader retained evidence is a
-formal SRS acceptance concern.
+way to let a trusted primary publish the served zone set. The remaining work is
+broader retained release evidence against production catalog producers and
+deployment profiles.
 
 ## RFC 9432 Scope
 
@@ -90,11 +89,13 @@ Changing the set of configured catalogs, their primaries, TSIG references, or
 the `serve_catalog_zone` policy requires a process restart. The member-zone set
 inside a catalog is dynamic and follows successful catalog transfers.
 
-The current implementation does not yet expose the `ODS-NFR-SEC-013`
-catalog-member resource bound (`max_member_zones` or equivalent). Until that
-gap is closed, operators should treat catalog producers as trusted capacity
-inputs and constrain catalog size at the producer or deployment boundary. The
-release gap is tracked in `docs/mvp-gap-register.md`.
+Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
+10,000 per `ODS-NFR-SEC-013`. If a catalog lists more member zones than the
+configured cap, OxideDNS accepts the deterministic first `N` members after
+canonical ordering, drops the excess, and emits
+`event=catalog_member_limit_exceeded` with the configured limit, observed member
+count, and dropped count. Operators should size this cap with the memory and
+capacity limits of the deployment.
 
 ## Observability
 

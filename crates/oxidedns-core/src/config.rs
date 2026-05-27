@@ -1424,6 +1424,8 @@ pub struct CatalogZoneConfig {
     pub tsig_key: Option<String>,
     #[serde(default)]
     pub serve_catalog_zone: bool,
+    #[serde(default = "default_catalog_max_member_zones")]
+    pub max_member_zones: usize,
 }
 
 impl CatalogZoneConfig {
@@ -1447,6 +1449,12 @@ impl CatalogZoneConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_member_zones == 0 {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} max_member_zones must be at least 1",
+                self.name
+            )));
+        }
         ZoneConfig {
             name: self.name.clone(),
             class: self.class.clone(),
@@ -1751,6 +1759,10 @@ fn default_tsig_fudge_seconds() -> u16 {
 
 fn default_nsec3_max_iterations() -> u16 {
     100
+}
+
+fn default_catalog_max_member_zones() -> usize {
+    10_000
 }
 
 fn default_health_port() -> u16 {
@@ -2081,6 +2093,7 @@ mod tests {
                 primaries = ["192.0.2.53:53"]
                 notify_sources = ["192.0.2.53"]
                 tsig_key = "catalog-key."
+                max_member_zones = 42
             "#,
         )
         .expect("valid catalog-only config");
@@ -2092,6 +2105,32 @@ mod tests {
             config.catalog_zones[0].transfer_target_addrs(),
             vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
         );
+        assert_eq!(config.catalog_zones[0].max_member_zones, 42);
+    }
+
+    #[test]
+    fn rejects_zero_catalog_member_zone_cap() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "catalog-key."
+                max_member_zones = 0
+            "#,
+        )
+        .expect_err("zero catalog member cap is invalid");
+
+        assert!(error.to_string().contains("max_member_zones"));
     }
 
     #[test]

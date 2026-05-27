@@ -20,7 +20,8 @@ only because they exceed a minimal static-zone secondary-server cut. IXFR, XoT,
 passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, broad EDNS
 response behavior, bounded EDE diagnostics, and opt-in CHAOS self-identification
 all have current code and test ownership; remaining work for those features is
-tracked as evidence or explicit implementation gaps.
+tracked as release evidence or, when one exists, an explicit implementation
+gap.
 
 ## Document Ownership Rules
 

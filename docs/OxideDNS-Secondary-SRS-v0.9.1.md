@@ -121,7 +121,7 @@ Specifically:
 
 - Scope boundaries are stated normatively in §3, §4.18, Appendix C, and the Engineering MVP companion documents.
 - The RFC compliance target is reproduced and maintained through Appendix A and the companion traceability matrix.
-- Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps and release-evidence gaps tracked in `docs/mvp-gap-register.md` and `docs/verification-ledger.md`.
+- Formal milestone acceptance thresholds are stated in §7.4, with current implementation gaps, if any, and release-evidence gaps tracked in `docs/mvp-gap-register.md` and `docs/verification-ledger.md`.
 
 ## 1.3 Intended Audience
 
@@ -3020,13 +3020,14 @@ name = "catalog.dns.example.com."
 primaries = ["10.0.0.1:53", "10.0.0.2:53"]  # per ODS-NFR-SEC-012
 tsig_key = "catalog-tsig-key."               # MANDATORY per ODS-NFR-SEC-010
 serve_catalog_zone = false
-# max_member_zones = 10000                   # per ODS-NFR-SEC-013 when implemented
+max_member_zones = 10000                     # per ODS-NFR-SEC-013
 ```
 
 The configuration validator (per ODS-IF-CONF-005) MUST verify:
 - at least one `[[zones]]` or `[[catalog_zones]]` entry is present;
 - each `[[zones]]` entry has an absolute apex name and at least one `primaries` or `transfer_primaries` target;
 - each `[[catalog_zones]]` entry has an absolute catalog apex name, at least one `primaries` or `transfer_primaries` target, and a `tsig_key`;
+- each `[[catalog_zones]].max_member_zones` value is at least 1 and defaults to 10,000 when omitted;
 - explicit `transfer_primaries` entries satisfy the per-primary XoT validation rules of §4.10 where `transport = "xot"`;
 - catalog member zones inherit the catalog entry's transfer primaries, TSIG key, NOTIFY source policy, transfer source binding, and transfer limits; catalog per-member `primaries` properties MUST NOT override those inherited coordinates per ODS-NFR-SEC-011.
 

@@ -183,10 +183,6 @@ summarized in `docs/mvp-gap-register.md`.
 
 ## Open Near-Term Work
 
-- decide or implement the catalog member-zone resource cap tracked in
-  `docs/mvp-gap-register.md`;
-- decide whether NSEC3 cap observability remains global for Engineering MVP or
-  needs per-zone release evidence;
 - broaden release-grade real-primary interop and retained evidence for IXFR,
   XoT, passive DNSSEC, RRL, DNS Cookies, catalog zones, EDNS/EDE, and CHAOS;
 - execute and attach release-specific policy review records, signed-release

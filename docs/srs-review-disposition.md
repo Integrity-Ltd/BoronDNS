@@ -38,7 +38,7 @@ separately.
 | Passive DNSSEC serving | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/zone.rs` | `scripts/interop-dnssec-serve.sh`; `scripts/interop-dnssec-nsec3-serve.sh`; `scripts/interop-knot-dnssec-docker.sh`; `scripts/audit-dnssec-passive.sh`; `docs/dnssec-conformance-matrix.tsv` | In Engineering MVP scope; server serves transferred records and does not sign or validate. |
 | RRL | `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-rrl-udp.sh`; `scripts/rrl-evidence-campaign.sh`; `docs/rrl-release-thresholds.md` | In Engineering MVP scope; release threshold confirmation remains a C.5/open evidence item. |
 | DNS Cookies | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-dns-cookie-dig.sh` | In Engineering MVP scope; broader deployment interop remains release evidence. |
-| RFC 9432 catalog zones | `crates/oxidedns-core/src/catalog.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `docs/catalog-zone-mvp-rfc9432.md`; `scripts/interop-bind-catalog-zone-docker.sh`; `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh`; `scripts/interop-bind-xot-catalog-zone-docker.sh` | In Engineering MVP scope; `max_member_zones` remains an explicit implementation gap. |
+| RFC 9432 catalog zones | `crates/oxidedns-core/src/catalog.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `docs/catalog-zone-mvp-rfc9432.md`; `scripts/interop-bind-catalog-zone-docker.sh`; `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh`; `scripts/interop-bind-xot-catalog-zone-docker.sh` | In Engineering MVP scope; catalog membership, observability, and per-catalog resource caps are implemented. |
 | Broad EDNS response behavior | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-edns-behavior.sh` | In Engineering MVP scope for OPT parsing, BADVERS, payload ceilings, DO-copy semantics, TCP keepalive, NSID, padding, unknown-option ignore, and non-EDNS truncation behavior. |
 | Bounded EDE diagnostics | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-dnssec-serve.sh`; `scripts/interop-dnssec-nsec3-serve.sh`; `docs/dnssec-conformance-matrix.tsv` | In Engineering MVP scope for `Not Ready` and NSEC3-cap diagnostics only. |
 | Opt-in CHAOS self-identification | `crates/oxidedns-core/src/dns.rs`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-chaos-queries.sh` | In Engineering MVP scope; disabled-by-default posture is retained. |
@@ -59,7 +59,7 @@ feature has completed every formal ODS-VER-008 release-acceptance evidence item.
 
 | Review-suggested defer item | Current OxideDNS disposition | Code/doc alignment |
 | --- | --- | --- |
-| Catalog zones | Retained in Engineering MVP because RFC 9432 catalog transfer, parsing, member add/remove, and observability are implemented. | `max_member_zones` remains a named implementation gap in `docs/mvp-gap-register.md`; catalog internals stay out of normative SRS wording. |
+| Catalog zones | Retained in Engineering MVP because RFC 9432 catalog transfer, parsing, member add/remove, observability, and per-catalog member caps are implemented. | Catalog internals stay out of normative SRS wording; release-specific catalog evidence remains tracked outside the SRS body. |
 | XoT | Retained in Engineering MVP as outbound zone-transfer transport only. | Client-query DoT and NOTIFY-over-TLS listeners remain out of scope. |
 | DNS Cookies | Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism. | Release evidence remains broader than local MVP evidence; DNS Cookies are not described as TSIG-equivalent authentication. |
 | RRL beyond a simple first version | Retained in Engineering MVP as the implemented process-wide UDP response limiter. | The current code owns configurable source-prefix aggregation, category buckets, slip/drop behavior, allowlists, summary logs, and metrics; per-zone RRL remains out of current scope. |
@@ -112,7 +112,7 @@ features that must not be implied by the retention decision.
 | Passive DNSSEC serving | The answer path serves transferred DNSSEC RRsets and selected transferred denial proofs when DO=1, copies the query DO bit into the response OPT, and can omit high-iteration NSEC3 proofs with bounded EDE diagnostics. | Signing, validation, key management, RFC 5011 rollover, generated DNSSEC records, or synthesized denial-proof material. |
 | RRL | UDP responses are classified through process-local source-prefix buckets with configured thresholds, allowlists, slip/drop behavior, summary logging, and metrics. | Per-zone RRL, distributed/shared RRL state across processes, or an RFC-standard RRL profile. |
 | DNS Cookies | EDNS COOKIE parsing, server-cookie emission, and server-cookie verification are implemented for UDP source-address confirmation, with lenient or strict BADCOOKIE policy. | Durable client authentication, TSIG replacement, replay-proof identity, or mandatory cookies for all deployments. |
-| RFC 9432 catalog zones | Configured catalog zones are transferred, parsed, reconciled into member-zone transfer plans, hidden from external service by default, and observed through live add/remove logs plus `oxidedns_catalog_member_info`. | A management API, automatic discovery without catalog configuration, or the still-open catalog member-zone resource cap. |
+| RFC 9432 catalog zones | Configured catalog zones are transferred, parsed, reconciled into member-zone transfer plans subject to the configured member cap, hidden from external service by default, and observed through live add/remove logs plus `oxidedns_catalog_member_info`. | A management API, automatic discovery without catalog configuration, or catalog member metadata beyond the implemented RFC 9432 owner-name and PTR target handling. |
 | EDNS response behavior | The query path owns OPT parsing and response emission for BADVERS, advertised UDP ceilings, DO-bit copy semantics, NSID, TCP keepalive, padding, unknown-option ignore, and non-EDNS truncation behavior. | EDNS Refresh, DNS Stateful Operations, recursive EDNS behavior, or transport protocols outside DNS over UDP/TCP. |
 | Bounded EDE diagnostics | Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only, behind the configured EDE mode. | A full EDE catalogue, resolver-policy explanations, stale-answer diagnostics, filtering diagnostics, or recursive validation errors. |
 | Opt-in CHAOS self-identification | CH/TXT `version.bind.`, `version.server.`, `hostname.bind.`, and `id.server.` responses are disabled by default and require explicit configured values or NSID fallback where applicable. | Automatic host disclosure, arbitrary CHAOS namespaces, non-TXT CHAOS support, or IN-class behavior changes. |
@@ -169,9 +169,10 @@ Primary source links:
 ## Current Intentional Code Alignment Gaps
 
 No protocol-code divergence from the review is intentionally being carried as
-current Engineering MVP scope. Remaining items in the gap register are
-release-evidence or explicitly deferred implementation items, such as the
-catalog member-zone resource cap.
+current Engineering MVP scope. The gap register may still carry
+release-evidence and explicitly deferred implementation items, but it does not
+currently carry a retained Engineering MVP protocol-code divergence from this
+review.
 
 ## Implemented Features Kept In Scope
 
