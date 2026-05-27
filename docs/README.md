@@ -38,6 +38,7 @@ and slowly diverging.
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | Where are deferred optimization tracks detailed? | `future-optimization-tracks.md` | Keep future XDP, packed-store, and response-cache design constraints here; let SRS Appendix C.6 record the formal scope boundary. |
+| What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
 | Where are operator SLOs published? | `operational-slos.md` | Keep informative SLO targets here and link from the operator guide; do not duplicate the SLO table in the SRS. |
 | How is release evidence captured? | `release-evidence-guide.md` | Keep snapshot options and handoff mechanics here; link from operator docs instead of duplicating the runbook. |
@@ -55,6 +56,8 @@ and slowly diverging.
   posture.
 - `future-optimization-tracks.md`: deferred XDP/eBPF, packed-zone-store, and
   response-cache tracks referenced by SRS Appendix C.6.
+- `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
+  header, gzip, and rate-limit contract for `ODS-IF-HEALTH`.
 - `interface-compatibility-policy.md`: semantic-versioned interface compatibility
   policy.
 - `interface-stability-baseline.tsv`: current interface baseline checked by

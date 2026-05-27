@@ -104,6 +104,7 @@ REQUIRED_TEXT_BY_PATH = {
         "What requirement ranges map to evidence?",
         "How is the implementation structured?",
         "Where are deferred optimization tracks detailed?",
+        "What is the health and metrics HTTP contract?",
         "How does an operator run it?",
         "What is the formal benchmark environment?",
         "How was the external review handled?",

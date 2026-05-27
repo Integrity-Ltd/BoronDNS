@@ -435,6 +435,11 @@ If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
 - `GET /healthz`: readiness alias for `/readyz`.
 - `GET /metrics`: returns Prometheus-compatible text metrics.
 
+The exact HTTP body, header, gzip, and rate-limit contract is maintained in
+[`health-metrics-interface.md`](health-metrics-interface.md). Use this operator
+guide for deployment workflow and alerting guidance; use the interface document
+when wiring probes, scrapers, or compatibility checks.
+
 `/metrics` is rate limited per source IP. Configure it under `[health]` with
 `metrics_rate_limit_per_minute` (default `60`) and
 `metrics_rate_limit_idle_seconds` (default `300`). Over-limit scrapes receive

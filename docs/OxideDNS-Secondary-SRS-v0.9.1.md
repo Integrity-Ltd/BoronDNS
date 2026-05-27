@@ -3144,50 +3144,21 @@ The area code **HEALTH** is allocated.
 
 **ODS-IF-HEALTH-001.** The server MUST expose a combined health and metrics endpoint over plain HTTP/1.1 (no TLS, no authentication). The endpoint is activated by configuration per §6.2; when not configured to be active, no HTTP listening socket MUST be opened.
 
-When activated, the endpoint's bind address is determined as follows:
-- If the operator explicitly configures `health.bind_address` and `health.bind_port` in the `[health]` section, the endpoint binds to those values exactly.
-- Otherwise, the endpoint binds to the address(es) configured under `interface.mgmt` (per ODS-IF-NET-005) at a default port (parameter `health.default_port`, default 8080).
-- If neither `health.bind_address` nor `interface.mgmt` is configured, the endpoint binds to localhost (`127.0.0.1` and `::1`) at the default port.
-
-This layered default makes the common case ("expose health alongside other operator access on the management interface") trivial to configure while preserving the operator's option to place the endpoint on its own dedicated address.
+When activated, the endpoint bind precedence MUST be: explicit `[health]` bind address/port first, then `interface.mgmt` with the configured default health port, then localhost with the configured default health port. The concrete path, body, header, and rate-limit contract is maintained in `docs/health-metrics-interface.md`; this SRS section owns the stable requirement IDs and externally observable behavior.
 *Source.* Operational requirement; orchestrator-friendly probing; resolution of v0.4 audit finding about ambiguity between `interface.mgmt` and the health endpoint's own bind configuration.
 *Note.* HTTP/1.1 without TLS is the dominant pattern for in-cluster service probes. Operators requiring secure exposure are expected to bind the endpoint to a private interface or deploy it behind a reverse proxy at the orchestrator level.
 *Verification.* Endpoint reachability tests across enabled and disabled configurations; tests confirming the bind address precedence (explicit override > interface.mgmt default > localhost default).
 
-**ODS-IF-HEALTH-002.** When activated, the endpoint MUST serve the following HTTP paths in response to GET requests, with the response body content as specified:
+**ODS-IF-HEALTH-002.** When activated, the endpoint MUST serve the following GET paths:
 
-**`/livez`** — liveness probe per ODS-NFR-OBS-004. HTTP status 200 whenever the process is able to respond to the probe at all (regardless of zone-load state or draining state). Response body (JSON, MIME type `application/json`):
+| Path | Required behavior |
+| --- | --- |
+| `/livez` | Liveness probe per ODS-NFR-OBS-004. HTTP status 200 whenever the process is able to respond to the probe at all, regardless of zone-load or draining state. OxideDNS does not expose a server-side liveness timeout parameter. Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model. |
+| `/readyz` | Readiness probe per ODS-NFR-OBS-004. HTTP status 200 in the ready state, HTTP 503 in not-ready, draining, or unhealthy states. |
+| `/healthz` | Readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the formal SRS MVP. |
+| `/metrics` | Prometheus-compatible text metrics per ODS-NFR-OBS-003. |
 
-```json
-{"status":"alive","version":"<version>","uptime_seconds":12345}
-```
-
-The `uptime_seconds` field reports elapsed wall-clock time since process start. OxideDNS does not impose a configurable server-side liveness timeout; HTTP failure (5xx) or no response is observed only when the endpoint cannot answer before the client, reverse proxy, or orchestrator timeout.
-
-**`/readyz`** — readiness probe per ODS-NFR-OBS-004. HTTP status 200 with the following body when in the **ready** state (at least one zone in ACTIVE state per ODS-FR-ZONE-006, and not draining):
-
-```json
-{"status":"ready","version":"<version>","zones_active":1234,"zones_loading":12,"zones_expired":0}
-```
-
-HTTP status 503 with the following body when **not-ready** (no zone yet ACTIVE). The `reason` field is a stable machine-readable reason such as `loading` when at least one zone is loading or `no_active_zones` when no active zone is present:
-
-```json
-{"status":"not-ready","reason":"loading","version":"<version>","zones_active":0,"zones_loading":42,"zones_expired":0}
-```
-
-HTTP status 503 with the following body when **draining** (SIGTERM received, graceful shutdown per ODS-NFR-REL-001):
-
-```json
-{"status":"draining","version":"<version>","grace_period_remaining_seconds":15}
-```
-
-**`/healthz`** — readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the formal SRS MVP.
-
-**`/metrics`** — returns server metrics in the Prometheus / OpenMetrics text exposition format per ODS-NFR-OBS-003. HTTP status 200 with the metrics text body, MIME type `text/plain; version=0.0.4` (Prometheus exposition convention).
-
-All other paths — return HTTP status 404 with a minimal JSON body `{"error":"not_found","path":"<requested_path>"}`.
-Methods other than GET MUST receive HTTP status 405 with body `{"error":"method_not_allowed","method":"<received_method>"}`.
+All other paths MUST return HTTP status 404 with a JSON body naming the requested path. Methods other than GET on known paths MUST receive HTTP status 405 with a JSON body naming the requested path. The concrete JSON body field names, stable readiness reasons, metrics content type, gzip headers, and rate-limit body are the external interface details owned by `docs/health-metrics-interface.md`.
 
 The JSON body field names are part of the externally observable interface stability commitment per ODS-NFR-MAINT-006; additions of new optional fields are permitted at minor version increments, removals or semantic changes require a major version increment.
 *Source.* Operational requirement; Kubernetes probe conventions; Prometheus scraping convention; ODS-NFR-OBS-004; resolution of v0.4 audit finding about probe body content.
@@ -3204,8 +3175,8 @@ The JSON body field names are part of the externally observable interface stabil
 
 **ODS-IF-HEALTH-005.** Response time bounds:
 - The `/livez`, `/readyz`, and `/healthz` endpoints MUST start response transmission within 100 milliseconds when the management endpoint task can be scheduled and is able to answer. The probe response time is the elapsed time between TCP-level request receipt and the start of response transmission. Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model.
-- The `/metrics` endpoint SHOULD respond within 500 milliseconds for deployments serving up to 1,000 zones. For larger deployments, the response time scales approximately linearly with the number of exposed metric series; the upper bound is operationally evaluated rather than normatively specified.
-- The `/metrics` endpoint MUST support response compression: when the client request carries `Accept-Encoding: gzip`, the response MUST be transmitted with `Content-Encoding: gzip`. Gzip compression substantially reduces response size for large-zone-count deployments (10× compression ratio is typical for repetitive metrics text).
+- The `/metrics` endpoint SHOULD respond within 500 milliseconds for deployments serving up to 1,000 zones. For larger deployments, the response time scales with the number of exposed metric series and any opt-in metric families that inspect active zone snapshots; the upper bound is operationally evaluated rather than normatively specified.
+- The `/metrics` endpoint MUST support response compression: when the client request carries `Accept-Encoding: gzip`, the response MUST be transmitted with `Content-Encoding: gzip`.
 *Source.* Operational requirement; orchestrator probe timeout discipline (Kubernetes default 1-second probe timeout).
 *Verification.* Probe response-time measurement under load; gzip-compressed response verification; `/metrics` response-time scaling tests across zone counts.
 

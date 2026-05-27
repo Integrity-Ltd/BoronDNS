@@ -16,7 +16,8 @@ The stability commitment covers:
   overrides;
 - command-line modes, flags, and process exit codes;
 - process signal behavior;
-- health endpoint paths, metrics endpoint paths, and response structures;
+- health endpoint and metrics endpoint paths, response structures, headers, and
+  rate-limit bodies documented in `docs/health-metrics-interface.md`;
 - Prometheus/OpenMetrics metric names and label keys;
 - structured log core fields and documented event field names;
 - network interface roles and their configuration names.
