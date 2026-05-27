@@ -26,10 +26,20 @@ EXPECTED_COLUMNS = [
 ]
 
 REQUIRED_CURRENT_RFCS = {
+    "RFC 1995": "IXFR",
+    "RFC 4034": "passive DNSSEC record formats",
+    "RFC 4035": "passive DNSSEC response behavior",
     "RFC 5001": "NSID",
+    "RFC 5155": "NSEC3 serving",
+    "RFC 6840": "DNSSEC DO/AD/CD clarifications",
+    "RFC 6891": "base EDNS response behavior",
+    "RFC 7314": "excluded EDNS EXPIRE boundary",
+    "RFC 7828": "EDNS TCP keepalive",
+    "RFC 7830": "EDNS padding",
     "RFC 7873": "DNS Cookies",
     "RFC 8914": "bounded Extended DNS Errors",
     "RFC 9018": "interoperable DNS Server Cookies",
+    "RFC 9103": "XoT",
     "RFC 9432": "catalog zones",
 }
 
