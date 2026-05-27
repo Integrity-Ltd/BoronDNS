@@ -3219,18 +3219,18 @@ The area code **PROC** is allocated.
 | Exit code | Symbolic name | Meaning |
 |---|---|---|
 | 0 | `EX_OK` | Successful termination (graceful shutdown completed per ODS-NFR-REL-001; `--dump-config`, `--validate-config`, `--version`, `--help` modes completed successfully). |
-| 1 | `EX_GENERAL` | General error (runtime failure not classified under a more specific code; panic with controlled exit; uncategorised internal error). |
+| 1 | `EX_GENERAL` | General error: runtime failure not classified under a more specific code, transfer failure without a more specific I/O/configuration class, or uncategorised internal error. |
 | 2 | `EX_CONFIG_INVALID` | Configuration validation failure (per ODS-IF-CONF-005 or ODS-IF-CONF-010): the configuration file was read but contained errors. |
 | 64 | `EX_USAGE` | Command-line usage error: invalid arguments, conflicting flags, missing required argument. |
-| 70 | `EX_SOFTWARE` | Internal software error: a panic occurred and was caught before exit, indicating an implementation bug; operators SHOULD report this with the surrounding log context. |
+| 70 | `EX_SOFTWARE` | Reserved for future controlled internal software-error paths that can be classified before exit. The current CLI error mapping does not emit this code during normal operation. |
 | 71 | `EX_OSERR` | Operating system error: privilege drop failed, `setresuid` failed, `rlimit` insufficient and not raisable, etc. |
 | 73 | `EX_CANTCREAT` | Cannot create or bind a required output: listen socket failed to bind per ODS-IF-NET-004; secret file unreadable per ODS-IF-CONF-004. |
 | 74 | `EX_IOERR` | I/O error reading the configuration file or secret files referenced by it. |
 | 78 | `EX_CONFIG` | Configuration file unparseable (syntax error in TOML, file not found, or file unreadable due to permissions): distinct from `EX_CONFIG_INVALID` (which is syntactically valid but semantically incorrect). |
 
-Where a graceful path of execution leads to a deliberate non-zero exit (e.g., `--validate-config` finding an invalid configuration), the appropriate symbolic exit code MUST be used per the table above. The server MUST NOT use exit codes outside this enumeration; codes returned by panic-recovery paths that cannot be cleanly mapped MUST default to `EX_GENERAL` (1) with an error-level log entry identifying the unmapped cause.
+Where a graceful path of execution leads to a deliberate non-zero exit (e.g., `--validate-config` finding an invalid configuration), the appropriate symbolic exit code MUST be used per the table above. The server MUST NOT use exit codes outside this enumeration for controlled exits. Uncaught Rust panics are implementation bugs, not graceful exit paths; panic prevention and task-level panic isolation are governed by ODS-INV-006.
 
-The exit code MUST be observable by orchestrators (Kubernetes container restart policy, systemd `Restart=` directives) and used to inform appropriate operator action: `EX_CONFIG_INVALID` and `EX_CONFIG` typically warrant configuration review rather than restart; `EX_OSERR` and `EX_CANTCREAT` typically warrant environment review (privileges, port conflicts); `EX_SOFTWARE` typically warrants bug reporting.
+The exit code MUST be observable by orchestrators (Kubernetes container restart policy, systemd `Restart=` directives) and used to inform appropriate operator action: `EX_CONFIG_INVALID` and `EX_CONFIG` typically warrant configuration review rather than restart; `EX_OSERR` and `EX_CANTCREAT` typically warrant environment review (privileges, port conflicts); any future controlled `EX_SOFTWARE` path would warrant bug reporting.
 *Source.* BSD `sysexits.h` (System V/BSD UNIX programming convention); operational requirement for orchestrator-friendly process exit semantics; resolution of v0.4 audit finding about exit code convention.
 *Verification.* Exit-code tests across each enumerated failure scenario; orchestrator integration tests confirming correct interpretation.
 

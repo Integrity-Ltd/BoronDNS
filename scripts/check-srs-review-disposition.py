@@ -48,6 +48,7 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "NSEC3 cap creates a DNSSEC authentication downgrade",
     "SRS mixed audit findings into normative requirements",
     "Panic isolation wording prescribed `catch_unwind` internals",
+    "Exit-code table claimed controlled panic recovery",
     "Requirements claimed absolute atomicity while grouping many operational cases",
 ]
 
