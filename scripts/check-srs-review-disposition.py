@@ -50,6 +50,9 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "Panic isolation wording prescribed `catch_unwind` internals",
     "Exit-code table claimed controlled panic recovery",
     "Requirements claimed absolute atomicity while grouping many operational cases",
+    "Health and metrics requirement mixed endpoint contract detail into one requirement",
+    "SRS claimed v0.7 structural finality",
+    "Catalog metrics catalogue exceeded implemented observability surface",
 ]
 
 REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
@@ -296,6 +299,57 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
     "External operator acceptance": [
         "Deferred from Engineering MVP execution",
         "external operator sign-off remains a formal release gate",
+    ],
+}
+
+REVIEW_DEFER_CODE_BACKING = {
+    "Catalog zones": [
+        "| RFC 9432 catalog zones |",
+        "oxidedns_catalog_member_info",
+    ],
+    "XoT": [
+        "| XoT |",
+        "Client-query DoT, DoH, DoQ, inbound XoT listeners",
+    ],
+    "DNS Cookies": [
+        "| DNS Cookies |",
+        "Durable client authentication, TSIG replacement",
+    ],
+    "RRL beyond a simple first version": [
+        "| RRL |",
+        "Per-zone RRL, distributed/shared RRL state across processes",
+    ],
+    "Extended DNS Errors": [
+        "| Bounded EDE diagnostics |",
+        "Minimal EDE output is available for `Not Ready` and `Unsupported NSEC3 Iterations` only",
+    ],
+    "CHAOS `version.bind` / `id.server`": [
+        "| Opt-in CHAOS self-identification |",
+        "Automatic host disclosure, arbitrary CHAOS namespaces",
+    ],
+    "Full DNSSEC negative proof synthesis": [
+        "| Passive DNSSEC serving |",
+        "generated DNSSEC records, or synthesized denial-proof material",
+    ],
+    "Full Prometheus metric catalogue": [
+        "| Minimal health, readiness, metrics, and structured logs |",
+        "| Benchmark and tuning harnesses |",
+    ],
+    "Packed zone store / pre-baked response cache": [
+        "| Benchmark and tuning harnesses |",
+        "a response-cache backend",
+    ],
+    "Exact performance MUSTs": [
+        "| Benchmark and tuning harnesses |",
+        "Reference Hardware/Profile conformance",
+    ],
+    "Release signing": [
+        "| Release installer and Docker image archives |",
+        "signed-release acceptance evidence",
+    ],
+    "Full three-primary interop matrix": [
+        "| Supplemental interop harnesses |",
+        "formal NSD/Knot/BIND release matrix",
     ],
 }
 
@@ -654,6 +708,14 @@ def main() -> int:
                     f"code-aligned disposition for review defer item {item!r}: "
                     f"{term!r}"
                 )
+    for item, backing_terms in REVIEW_DEFER_CODE_BACKING.items():
+        for term in backing_terms:
+            if term not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not tie "
+                    f"review-deferred item {item!r} to implemented feature "
+                    f"scope term {term!r}"
+                )
     for scope_path, scope_text in scope_pointer_texts.items():
         if "docs/implemented-feature-scope.md" not in scope_text:
             errors.append(
@@ -801,7 +863,8 @@ def main() -> int:
     print(
         "srs_review_disposition_check=passed "
         f"review_baseline={len(REVIEW_BASELINE_SCOPE)} "
-        f"features={len(FEATURES)} support_tooling={len(SUPPORT_TOOLING)}"
+        f"features={len(FEATURES)} support_tooling={len(SUPPORT_TOOLING)} "
+        f"review_defer_backing={len(REVIEW_DEFER_CODE_BACKING)}"
     )
     return 0
 
