@@ -37,26 +37,14 @@ implemented protocol features is treated as prioritization advice only; the
 project keeps implemented, tested slices in scope and separates them from later
 release-acceptance evidence.
 
-Engineering MVP scope includes:
-
-- static TOML configuration with no runtime reload;
-- secondary-only operation from configured primaries;
-- memory-resident zone snapshots with atomic publication;
-- UDP and TCP authoritative serving for active zones;
-- AXFR initial load and refresh, with IXFR attempted where existing zone state
-  permits it and AXFR fallback retained;
-- authorized NOTIFY-triggered refresh;
-- TSIG HMAC-SHA transfer and query handling;
-- the retained post-Alpha slices owned by
-  `docs/implemented-feature-scope.md`;
-- SRS v0.9.1 architectural invariants INV-001 through INV-009, including
-  authoritative-only response composition, single-process operation, and no
-  runtime code loading;
-- SRS v0.9.1 interface surface: static configuration including validation and
-  dump modes, canonical structured logging, process exit/help/version behavior,
-  health/metrics, management readiness, and graceful shutdown;
-- safe-Rust, dependency-audit, parser-fuzz compile, unused-code, and bounded
-  performance-smoke evidence commands retained in the repo.
+At plan level, Engineering MVP scope is the deployable secondary-authoritative
+server, its static configuration and operating interfaces, its current retained
+implemented protocol slices, and the bounded local verification profile. The
+exact retained feature slices, source ownership, representative evidence, and
+nearby non-claims are owned by `docs/implemented-feature-scope.md`. Current
+evidence state and remaining formal-acceptance gaps are owned by
+`docs/verification-ledger.md`, `docs/mvp-gap-register.md`, and
+`docs/appendix-a-traceability-matrix.md`.
 
 Engineering MVP runtime scope excludes eBPF/XDP, OxideDNS server AF_XDP,
 io_uring, NSD-style packed arena storage, and a hot response-cache backend.
@@ -81,14 +69,11 @@ The SRS Alpha gate remains useful as historical context, but it is no longer the
 active feature boundary. Engineering MVP includes implemented post-Alpha slices
 listed in `docs/implemented-feature-scope.md`.
 
-Historically deferred from Alpha to the formal SRS MVP release gate
-(`ODS-VER-008`) per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL,
-full DNS Cookies, expanded RR catalogue, `/livez` and `/readyz` split
-conformance, health response-time and metrics rate-limit requirements,
-performance NFR conformance, full security/maintainability verification,
-reliability/resource/observability extensions, and second and third primary
-interop. Many of those feature slices are now implemented; this paragraph is not
-a deferral list. Current status and remaining evidence gaps are recorded in
+SRS ODS-VER-007 still records the historical Alpha-vs-formal-SRS-MVP split.
+That split must not be read as the current implementation boundary. Several
+items that were historically outside the Alpha gate are now implemented
+Engineering MVP slices; their current status and remaining release-acceptance
+gaps are recorded in `docs/implemented-feature-scope.md`,
 `docs/mvp-gap-register.md`, `docs/verification-ledger.md`, and
 `docs/appendix-a-traceability-matrix.md`.
 

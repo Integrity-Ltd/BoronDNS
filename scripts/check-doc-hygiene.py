@@ -129,6 +129,8 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",
         "it is not the canonical inventory of every evidence script",
+        "At plan level, Engineering MVP scope is the deployable secondary-authoritative",
+        "exact retained feature slices, source ownership, representative evidence",
         "put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`",
         "put evidence state by requirement family in `docs/verification-ledger.md`",
         "does not duplicate the acceptance",
@@ -157,6 +159,9 @@ FORBIDDEN_TEXT_BY_PATH = {
         "signed release artifacts produced",
         "at least one production-representative external operator has independently",
         "interoperability with NSD, Knot DNS, and BIND 9 primaries",
+        "Engineering MVP scope includes:",
+        "Historically deferred from Alpha to the formal SRS MVP release gate",
+        "IXFR, full TSIG, XoT, DNSSEC serving, RRL,",
     ],
 }
 
