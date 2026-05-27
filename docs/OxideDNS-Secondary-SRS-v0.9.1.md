@@ -717,7 +717,7 @@ This procedure produces a stable, predictable selection for a given zone state, 
 *Verification.* Default-configuration tests.
 
 **ODS-FR-QRY-007.** The server MUST NOT use the synthesised HINFO response style described in RFC 8482 §4.2.
-*Rationale.* The HINFO synthesis style requires emitting a record that is not really a HINFO, which has been criticised as misleading to operators inspecting captured traffic. The subset-of-data approach (QRY-005) is more transparent.
+*Rationale.* RFC 8482 §4 offers multiple optional minimal-response behaviours. OxideDNS selects the §4.1 subset-of-available-RRsets profile because it answers from transferred zone data and avoids adding synthetic ANY-specific HINFO content to the authoritative response path.
 *Verification.* Wire-format inspection of ANY responses.
 
 ### Meta-type query rejection
