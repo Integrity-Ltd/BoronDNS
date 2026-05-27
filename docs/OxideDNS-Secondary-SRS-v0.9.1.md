@@ -4559,7 +4559,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | **Resolved (v0.9.1 doc alignment): Security Policy records 30-day Critical/High and 90-day Medium/Low remediation targets, with release-specific exceptions recorded as evidence** |
 | 1% idle CPU bound for 1000 zones (default) | §5.7, ODS-NFR-RES-006 | Confirm | Pending |
 | Latency histogram bucket boundaries (defaults) | §5.6, ODS-NFR-OBS-007 | Confirm | **Resolved (v0.9.1 code alignment): default buckets are implemented in `MetricsConfig` and configurable via `[metrics].latency_histogram_buckets`** |
-| Multi-primary randomised initial selection | §4.6, ODS-FR-AXFR-016 | Confirm | Pending |
+| Multi-primary randomised initial selection | §4.6, ODS-FR-AXFR-016 | Confirm | **Resolved (v0.9.1 code alignment): `TransferPlan::from_config` samples a per-zone initial primary with unbiased rejection sampling, rotates the configured primary list once for the process lifetime, and preserves stable failover order; covered by transfer-plan rotation tests and Appendix A traceability** |
 | Slip = 2 (RRL default) | §4.17 | Confirm | **Resolved (v0.9.1 code alignment): `rrl.slip` defaults to 2; release threshold evidence still tracks operational review separately** |
 | Three-state zone lifecycle model (LOADING/ACTIVE/EXPIRED) | §4.15 | Confirm | **Resolved (v0.9.1 code alignment): zone state machine and readiness/metrics use LOADING, ACTIVE, and EXPIRED** |
 | DNS Cookies default policy ("lenient") | §4.19, ODS-FR-COOKIE-008 | Confirm | **Resolved (v0.9.1 code alignment): `cookie.policy` defaults to `lenient`** |
