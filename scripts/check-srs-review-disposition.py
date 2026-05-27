@@ -52,9 +52,28 @@ REQUIRED_REVIEW_DISPOSITIONS = [
 REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "MVP Trim Reconciliation",
     "not as a deletion list for already-implemented code",
+    "mirrors the review's \"defer these\" list item by item",
     "Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend.",
     "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material.",
     "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
+]
+
+REVIEW_SUGGESTED_DEFER_ITEMS = [
+    "Catalog zones",
+    "XoT",
+    "DNS Cookies",
+    "RRL beyond a simple first version",
+    "Extended DNS Errors",
+    "CHAOS `version.bind` / `id.server`",
+    "Full DNSSEC negative proof synthesis",
+    "Full Prometheus metric catalogue",
+    "Packed zone store / pre-baked response cache",
+    "30-day soak test",
+    "Full three-primary interop matrix",
+    "Exact performance MUSTs",
+    "Release signing",
+    "CVE governance",
+    "External operator acceptance",
 ]
 
 FEATURES = {
@@ -235,6 +254,12 @@ def main() -> int:
             errors.append(
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits scope-trim "
                 f"boundary term {term!r}"
+            )
+    for item in REVIEW_SUGGESTED_DEFER_ITEMS:
+        if item not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits review-suggested "
+                f"defer item {item!r}"
             )
 
     for feature, spec in FEATURES.items():
