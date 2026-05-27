@@ -183,6 +183,16 @@ def main() -> None:
         "does not run fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
         f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs fuzz, invariant, interop, or perf-smoke commands",
     )
+    for phrase in [
+        "architectural, read-only-runtime, safe-Rust, spoofing, log-field, maintainability, XoT revocation, and passive-DNSSEC audit output",
+        "bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts",
+        "Those focused default smoke scripts are not the broader real-primary interop matrix",
+        "remains opt-in through `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` or `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`",
+    ]:
+        require(
+            phrase in release_guide,
+            f"{RELEASE_GUIDE}: missing release snapshot default/optional boundary phrase: {phrase}",
+        )
     for stale_claim in [
         "parser fuzz compile checks",
         "invariant audits, portability",

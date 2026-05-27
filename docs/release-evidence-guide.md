@@ -34,6 +34,8 @@ under `target/evidence/<timestamp>/`. By default it captures:
 - git state;
 - the current verification command list;
 - Test Plan shape check output;
+- architectural, read-only-runtime, safe-Rust, spoofing, log-field,
+  maintainability, XoT revocation, and passive-DNSSEC audit output;
 - portability evidence under `portability-evidence/`;
 - unused/dead-code audit artifacts under `unused-code-audit/`;
 - resource smoke artifacts under `resource-evidence/`;
@@ -48,6 +50,15 @@ under `target/evidence/<timestamp>/`. By default it captures:
 - long-run soak setup/report files under `soak-handoff/`;
 - reproducible-build setup files under `reproducible-build-handoff/`;
 - release-governance setup files under `release-handoff/`.
+- bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts
+  for negative responses, NOTIFY rejection, TCP truncation retry, EDNS behavior,
+  DNS Cookies, IXFR NOTIMP fallback, passive DNSSEC/NSEC3 serving, and RRL UDP
+  limiting.
+
+Those focused default smoke scripts are not the broader real-primary interop
+matrix. The broad BIND, NSD, Knot, PowerDNS/PostgreSQL, packet-torture, XoT,
+and long RRL campaign command set remains opt-in through
+`OXIDEDNS_EVIDENCE_RUN_INTEROP=1` or `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`.
 
 The unsafe dependency evidence records scanner caveats and must be reviewed
 before it is treated as complete. The info-verbosity, interface-compatibility,
