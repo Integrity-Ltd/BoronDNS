@@ -18,11 +18,11 @@ acceptance has been completed.
 `scripts/engineering-mvp-evidence.sh` writes the bounded Engineering MVP
 evidence profile under `target/evidence/engineering-mvp/<timestamp>/`. It runs
 security-policy, CLI, log, signal, health/metrics, malformed-query,
-portability, resource, coverage, unsafe-dependency, interface-compatibility,
-unused-code, and functional-requirement-reference checks. It does not run fuzz
-build/campaign commands, invariant audits, real-primary interop scripts, or
-`scripts/perf-smoke.sh` in the default bounded profile; those commands are
-recorded as deferred release/operations work.
+portability, resource, coverage, interface-compatibility, unused-code, and
+functional-requirement-reference checks. It does not run transitive unsafe
+dependency enumeration, fuzz build/campaign commands, invariant audits,
+real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded
+profile; those commands are recorded as deferred release/operations work.
 
 `scripts/release-evidence-snapshot.sh` writes release-candidate command logs
 under `target/evidence/<timestamp>/`. By default it captures:

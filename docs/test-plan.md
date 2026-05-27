@@ -37,7 +37,7 @@ until their corresponding retained runs exist.
 
 | Verification method | Cadence | Current harness or evidence command | Requirement coverage owner |
 | --- | --- | --- | --- |
-| Static analysis | Continuous | `cargo fmt --all --check`; `scripts/check-shell-scripts.sh` (`shfmt -w` plus `shellcheck`); `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
+| Static analysis | Continuous plus release review | `cargo fmt --all --check`; `scripts/check-shell-scripts.sh` (`shfmt -w` plus `shellcheck`); `cargo clippy --workspace --all-targets -- -D warnings`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | `cargo test --workspace`; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
 | Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |
@@ -68,8 +68,14 @@ enabled. The command must remain build-blocking for:
 - Rust formatting, shell formatting/linting, clippy, workspace tests, and
   coverage threshold evidence;
 - dependency advisory/license/source checks through `cargo deny check`;
-- transitive unsafe enumeration and first-party package unsafe-count checks
-  through `scripts/capture-unsafe-dependency-evidence.sh`.
+- first-party safe-Rust and audited unsafe-boundary checks through
+  `scripts/audit-safe-rust.sh` and `scripts/check-unsafe-boundaries.py`.
+
+Transitive unsafe dependency enumeration through
+`scripts/capture-unsafe-dependency-evidence.sh` is retained as release-review
+evidence because it depends on `cargo-geiger` scanner behavior and can be
+slow or partial. It is not part of the default Engineering MVP evidence
+profile.
 
 Hosted continuous CI for every main-branch candidate is intentionally deferred
 while the repository remains private. This avoids spending GitHub Actions

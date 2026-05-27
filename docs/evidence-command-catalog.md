@@ -23,7 +23,6 @@ scripts/capture-malformed-query-evidence.sh
 scripts/capture-portability-evidence.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
-scripts/capture-unsafe-dependency-evidence.sh
 scripts/capture-interface-compatibility-evidence.sh
 scripts/audit-unused-code.sh
 scripts/check-functional-requirement-references.py
@@ -31,7 +30,10 @@ scripts/check-functional-requirement-references.py
 
 `scripts/engineering-mvp-evidence.sh` runs only this narrow profile by default,
 uses per-command timeouts, and writes broader release/operations commands to a
-deferred list instead of executing them.
+deferred list instead of executing them. Transitive unsafe dependency
+enumeration through `scripts/capture-unsafe-dependency-evidence.sh` is kept in
+the broader SRS acceptance profile because it depends on `cargo-geiger` and is
+release-review evidence rather than a cheap Engineering MVP gate.
 
 ## Broader SRS Acceptance Commands
 

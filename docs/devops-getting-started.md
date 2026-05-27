@@ -21,8 +21,15 @@ Required for normal build and test work:
 ```bash
 rustup toolchain install 1.95
 rustup component add rustfmt clippy --toolchain 1.95
-cargo install cargo-deny cargo-machete cargo-geiger
+cargo install cargo-deny cargo-machete
 # Install shfmt and shellcheck with the host package manager.
+```
+
+Install `cargo-geiger` only when preparing formal release-review unsafe
+dependency evidence:
+
+```bash
+cargo install cargo-geiger
 ```
 
 Useful for runtime smoke checks and interop scripts:

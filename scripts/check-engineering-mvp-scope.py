@@ -52,7 +52,6 @@ REQUIRED_EVIDENCE_COMMANDS = [
     "scripts/capture-portability-evidence.sh",
     "scripts/capture-resource-evidence.sh",
     "scripts/capture-coverage-evidence.sh",
-    "scripts/capture-unsafe-dependency-evidence.sh",
     "scripts/capture-interface-compatibility-evidence.sh",
     "scripts/audit-unused-code.sh",
     "scripts/check-functional-requirement-references.py",
@@ -66,6 +65,7 @@ FORBIDDEN_EVIDENCE_RUN_COMMANDS = [
     "scripts/audit-spoof-evidence.py",
     "scripts/audit-log-fields.py",
     "scripts/audit-log-lazy-formatting.py",
+    "scripts/capture-unsafe-dependency-evidence.sh",
     "scripts/perf-smoke.sh",
     "scripts/interop-negative-responses.sh",
     "scripts/interop-notify-negative.sh",
@@ -180,8 +180,8 @@ def main() -> None:
 
     release_guide = normalized(RELEASE_GUIDE)
     require(
-        "does not run fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
-        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs fuzz, invariant, interop, or perf-smoke commands",
+        "does not run transitive unsafe dependency enumeration, fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
+        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs unsafe dependency enumeration, fuzz, invariant, interop, or perf-smoke commands",
     )
     for phrase in [
         "architectural, read-only-runtime, safe-Rust, spoofing, log-field, maintainability, XoT revocation, and passive-DNSSEC audit output",

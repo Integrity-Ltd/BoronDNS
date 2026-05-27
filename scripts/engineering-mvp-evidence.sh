@@ -40,12 +40,12 @@ the full SRS ODS-VER-008 acceptance matrix.
 
 The default profile runs only bounded local Engineering MVP evidence commands:
 security-policy, CLI, log, signal, health/metrics, malformed-query,
-portability, resource, coverage, unsafe-dependency, interface-compatibility,
-unused-code, and functional-requirement-reference checks. Long-running
-evidence, fuzz build/campaign commands, invariant audits, real-primary interop
-sweeps, release benchmark/soak handoffs, signed artifact production, and
-external acceptance are deferred to release/operations profiles and are not
-executed by this script.
+portability, resource, coverage, interface-compatibility, unused-code, and
+functional-requirement-reference checks. Transitive unsafe dependency
+enumeration, long-running evidence, fuzz build/campaign commands, invariant
+audits, real-primary interop sweeps, release benchmark/soak handoffs, signed
+artifact production, and external acceptance are deferred to release/operations
+profiles and are not executed by this script.
 EOF
 
 git -C "$repo_root" status --short >"$snapshot_dir/git-status.txt"
@@ -65,7 +65,6 @@ scripts/capture-malformed-query-evidence.sh
 scripts/capture-portability-evidence.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
-scripts/capture-unsafe-dependency-evidence.sh
 scripts/capture-interface-compatibility-evidence.sh
 EOF
 
@@ -80,6 +79,7 @@ scripts/audit-readonly-runtime.sh
 scripts/audit-spoof-evidence.py
 scripts/audit-log-fields.py
 scripts/audit-log-lazy-formatting.py
+scripts/capture-unsafe-dependency-evidence.sh
 scripts/perf-smoke.sh
 scripts/interop-negative-responses.sh
 scripts/interop-notify-negative.sh
@@ -107,7 +107,6 @@ run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_M
 run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
 run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
 run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
-run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR='$snapshot_dir/unsafe-dependency-evidence' scripts/capture-unsafe-dependency-evidence.sh"
 run_and_capture interface-compatibility-evidence bash -lc "cd '$repo_root' && OXIDEDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility-evidence' scripts/capture-interface-compatibility-evidence.sh"
 run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
 run_and_capture functional-requirement-references bash -lc "cd '$repo_root' && scripts/check-functional-requirement-references.py"

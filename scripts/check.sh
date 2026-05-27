@@ -84,7 +84,6 @@ bash -n scripts/benchmark-large-catalog-zones.sh
 scripts/audit-xot-revocation.sh
 scripts/audit-dnssec-passive.sh
 scripts/interop-chaos-queries.sh
-scripts/capture-unsafe-dependency-evidence.sh
 scripts/audit-unused-code.sh
 scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
