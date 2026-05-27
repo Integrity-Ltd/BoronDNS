@@ -45,3 +45,18 @@ These slices are Engineering MVP scope because current code and tests own them.
 They are not complete formal SRS release-acceptance claims until the relevant
 rows in `docs/mvp-gap-register.md`, `docs/verification-ledger.md`, and
 `docs/appendix-a-traceability-matrix.md` have retained release-grade evidence.
+
+## Retained Support And Evidence Tooling
+
+The external review also called out packaging, performance evidence, and
+interop breadth as too much for a trimmed MVP. Those concerns are handled as
+tooling boundaries: the following artifacts may remain in the repository
+because they support deployment or evidence capture, but they do not expand the
+OxideDNS server protocol surface unless a current SRS requirement says so.
+
+| Tooling family | Retained tooling slice | Not claimed by this slice | Current source ownership | Representative evidence ownership |
+| --- | --- | --- | --- | --- |
+| Release installer and Docker image archives | The release path can build an `x86_64-unknown-linux-musl` installer `.tar.xz`, an Alpine-based Docker image archive `.tar.xz`, SHA256 sidecars, and local installer/container smoke checks. | A package repository, Docker registry publication, Kubernetes chart, multi-architecture release matrix, or signed-release acceptance evidence. | `scripts/package-installer.sh`; `scripts/package-docker-image.sh`; `.github/workflows/release-installer.yml` | `scripts/test-installer-docker.sh`; `scripts/test-docker-image.sh`; `docs/devops-getting-started.md`; `docs/release-evidence-guide.md` |
+| OxideGun load generator | The workspace includes a support-tool DNS load generator with a portable UDP backend and an explicit Linux AF_XDP backend behind the `xdp` Cargo feature for lab hosts. | OxideDNS server XDP/eBPF support, a production packet-I/O backend, DNS protocol conformance authority, or automatic privileged deployment. | `crates/oxide-gun/src/main.rs`; `crates/oxide-gun/src/xdp_backend.rs`; `docs/unsafe-boundaries.tsv` | `docs/oxide-gun.md`; `scripts/oxide-gun-self-test.sh`; `scripts/oxide-gun-xdp-veth-smoke.sh`; `crates/oxide-gun/tests/cli.rs` |
+| Benchmark and tuning harnesses | Local UDP/TCP DNS client benchmarks, large catalog-zone data generation, optional query-pipeline timing metrics, and response-cache candidate counters exist for evidence-driven tuning. | Formal Reference Hardware/Profile conformance, always-on high-cardinality metrics, a response-cache backend, or proof of equivalence to NSD, Knot DNS, BIND, or another authoritative server. | `scripts/benchmark-dns-clients.sh`; `scripts/benchmark-large-catalog-zones.sh`; `crates/oxidedns-core/src/config.rs`; `crates/oxidedns-server/src/lib.rs` | `docs/dns-client-benchmark.md`; `scripts/capture-benchmark-handoff.sh`; `scripts/check-perf-regression.py` |
+| Supplemental interop harnesses | BIND packet-torture comparison and PowerDNS/PostgreSQL catalog-TSIG interop scripts exercise broad record mixes, live catalog updates, TSIG-gated catalog transfer, and retained packet captures. | Mandatory execution in every local check, a replacement for the formal NSD/Knot/BIND release matrix, or a claim that PowerDNS is part of ODS-VER-003. | `scripts/interop-bind-packet-torture-docker.sh`; `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh`; `docs/manual-bind-interop.md` | `docs/manual-bind-interop.md`; retained script artifact directories under `target/evidence/` when the scripts are run |

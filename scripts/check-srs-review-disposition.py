@@ -75,6 +75,16 @@ REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
     "Automatic host disclosure, arbitrary CHAOS namespaces",
 ]
 
+REQUIRED_SUPPORT_TOOLING_BOUNDARIES = [
+    "## Retained Support And Evidence Tooling",
+    "Release installer and Docker image archives",
+    "OxideGun load generator",
+    "Benchmark and tuning harnesses",
+    "Supplemental interop harnesses",
+    "do not expand the OxideDNS server protocol surface",
+    "not expand the secondary-server protocol requirements",
+]
+
 REVIEW_SUGGESTED_DEFER_ITEMS = [
     "Catalog zones",
     "XoT",
@@ -290,11 +300,106 @@ FEATURES = {
     },
 }
 
+SUPPORT_TOOLING = {
+    "release packaging": {
+        "paths": [
+            "scripts/package-installer.sh",
+            "scripts/package-docker-image.sh",
+            ".github/workflows/release-installer.yml",
+        ],
+        "evidence_paths": [
+            "scripts/test-installer-docker.sh",
+            "scripts/test-docker-image.sh",
+            "docs/devops-getting-started.md",
+            "docs/release-evidence-guide.md",
+        ],
+        "source_needles": [
+            "x86_64-unknown-linux-musl",
+            "tar.xz",
+            "sha256",
+            "OXIDEDNS_DOCKER_ALPINE_VERSION",
+        ],
+        "evidence_needles": [
+            "docker load",
+            "x86_64-unknown-linux-musl-docker-image.tar.xz",
+        ],
+    },
+    "oxide-gun": {
+        "paths": [
+            "crates/oxide-gun/src/main.rs",
+            "crates/oxide-gun/src/xdp_backend.rs",
+            "docs/unsafe-boundaries.tsv",
+        ],
+        "evidence_paths": [
+            "docs/oxide-gun.md",
+            "scripts/oxide-gun-self-test.sh",
+            "scripts/oxide-gun-xdp-veth-smoke.sh",
+            "crates/oxide-gun/tests/cli.rs",
+        ],
+        "source_needles": [
+            "backend xdp requires",
+            "AF_XDP",
+            "oxidegun-xdp-af-xdp",
+        ],
+        "evidence_needles": [
+            "pkexec",
+            "oxide-gun self-test",
+            "veth",
+        ],
+    },
+    "benchmark tooling": {
+        "paths": [
+            "scripts/benchmark-dns-clients.sh",
+            "scripts/benchmark-large-catalog-zones.sh",
+            "crates/oxidedns-core/src/config.rs",
+            "crates/oxidedns-server/src/lib.rs",
+        ],
+        "evidence_paths": [
+            "docs/dns-client-benchmark.md",
+            "scripts/capture-benchmark-handoff.sh",
+            "scripts/check-perf-regression.py",
+        ],
+        "source_needles": [
+            "OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED",
+            "OXIDEDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED",
+            "pipeline_timing_enabled",
+            "response_cache_candidate",
+        ],
+        "evidence_needles": [
+            "local engineering benchmark",
+            "Reference Hardware/Profile",
+            "check-perf-regression.py",
+        ],
+    },
+    "supplemental interop": {
+        "paths": [
+            "scripts/interop-bind-packet-torture-docker.sh",
+            "scripts/interop-powerdns-postgres-catalog-tsig-docker.sh",
+            "docs/manual-bind-interop.md",
+        ],
+        "evidence_paths": [
+            "docs/manual-bind-interop.md",
+        ],
+        "source_needles": [
+            "dumpcap",
+            "dns-torture.pcapng",
+            "PowerDNS Authoritative",
+            "gpgsql",
+        ],
+        "evidence_needles": [
+            "PowerDNS PostgreSQL Catalog Check",
+            "target/evidence",
+        ],
+    },
+}
+
 
 def main() -> int:
     errors: list[str] = []
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
     feature_scope = FEATURE_SCOPE_PATH.read_text(encoding="utf-8")
+    normalized_disposition = normalize_whitespace(disposition)
+    normalized_feature_scope = normalize_whitespace(feature_scope)
     scope_pointer_texts = {
         path: normalize_whitespace(path.read_text(encoding="utf-8"))
         for path in SCOPE_POINTER_DOCUMENTS
@@ -317,6 +422,12 @@ def main() -> int:
             errors.append(
                 f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits code-alignment "
                 f"boundary term {term!r}"
+            )
+    for term in REQUIRED_SUPPORT_TOOLING_BOUNDARIES:
+        if term not in normalized_feature_scope and term not in normalized_disposition:
+            errors.append(
+                "support-tooling scope omits boundary term "
+                f"{term!r} from feature scope and review disposition"
             )
     for item in REVIEW_SUGGESTED_DEFER_ITEMS:
         if item not in disposition:
@@ -374,12 +485,62 @@ def main() -> int:
                     f"marker {needle!r}"
                 )
 
+    for tooling, spec in SUPPORT_TOOLING.items():
+        paths = spec["paths"]
+        evidence_paths = spec["evidence_paths"]
+        source = "\n".join(
+            (ROOT / relative_path).read_text(encoding="utf-8")
+            for relative_path in paths
+            if (ROOT / relative_path).exists()
+        )
+        evidence = "\n".join(
+            (ROOT / relative_path).read_text(encoding="utf-8")
+            for relative_path in evidence_paths
+            if (ROOT / relative_path).exists()
+        )
+        for relative_path in paths:
+            if relative_path not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} for support tooling {tooling}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(
+                    f"missing support tooling path for {tooling}: {relative_path}"
+                )
+        for relative_path in evidence_paths:
+            if relative_path not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} evidence for support tooling {tooling}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(
+                    f"missing support tooling evidence path for {tooling}: "
+                    f"{relative_path}"
+                )
+        for needle in spec["source_needles"]:
+            if needle not in source:
+                errors.append(
+                    f"support tooling {tooling} lacks source marker "
+                    f"{needle!r}"
+                )
+        for needle in spec["evidence_needles"]:
+            if needle not in evidence:
+                errors.append(
+                    f"support tooling {tooling} lacks evidence marker "
+                    f"{needle!r}"
+                )
+
     if errors:
         for error in errors:
             print(f"srs_review_disposition_check=failed {error}", file=sys.stderr)
         return 1
 
-    print(f"srs_review_disposition_check=passed features={len(FEATURES)}")
+    print(
+        "srs_review_disposition_check=passed "
+        f"features={len(FEATURES)} support_tooling={len(SUPPORT_TOOLING)}"
+    )
     return 0
 
 

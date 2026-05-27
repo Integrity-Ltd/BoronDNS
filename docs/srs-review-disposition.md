@@ -88,10 +88,13 @@ rule, CD-bit project-policy wording, RRSIG RRset exceptions, and the
 release-artifact static-linking boundary.
 
 Support tooling follows the same boundary. The installer, release archive
-scripts, Docker image archive workflow, large-zone benchmark harnesses, and
-OxideGun load generator are repository tooling for deployment or evidence
-capture. They do not expand the secondary-server protocol requirements unless a
-current SRS, architecture, or gap-register row explicitly says so. OxideGun's
+scripts, Docker image archive workflow, large-zone benchmark harnesses,
+BIND/PowerDNS supplemental interop scripts, and OxideGun load generator are
+repository tooling for deployment or evidence capture. The retained tooling
+slice and the adjacent non-claims are recorded in
+`docs/implemented-feature-scope.md` under "Retained Support And Evidence
+Tooling". They do not expand the secondary-server protocol requirements unless
+a current SRS, architecture, or gap-register row explicitly says so. OxideGun's
 AF_XDP backend is test-tool scope only; OxideDNS server XDP/eBPF remains a
 deferred unsafe-boundary track.
 
