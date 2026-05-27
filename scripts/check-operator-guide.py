@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "operator-deployment-guide.md"
 RELEASE_GUIDE = ROOT / "docs" / "release-evidence-guide.md"
 SLO_GUIDE = ROOT / "docs" / "operational-slos.md"
+DEBIAN_PROFILE = ROOT / "docs" / "debian12-beta-vm-profile.md"
 CLI_MAIN = ROOT / "crates" / "oxidedns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
@@ -36,6 +37,7 @@ REQUIRED_TEXT = [
     "security@integrity.hu",
     "ODS-FR-XOT-012",
     "docs/operational-slos.md",
+    "debian12-beta-vm-profile.md",
 ]
 
 RELEASE_GUIDE_TEXT = [
@@ -68,6 +70,17 @@ SLO_TEXT = [
     "bounded local Engineering MVP has completed those long-running runs",
 ]
 
+DEBIAN_PROFILE_TEXT = [
+    "Debian 12 beta-test VM",
+    "Docker CE",
+    "nftables",
+    "fail2ban",
+    "docker load",
+    "--network host",
+    "CAP_NET_BIND_SERVICE",
+    "OXIDEDNS_DOCKER_ALPINE_VERSION",
+]
+
 FORBIDDEN_TEXT = [
     "Suggested Engineering MVP SLOs",
     "scripts that double as Engineering MVP and SRS acceptance evidence collection commands",
@@ -83,6 +96,7 @@ def main() -> None:
     text = GUIDE.read_text(encoding="utf-8")
     release_text = RELEASE_GUIDE.read_text(encoding="utf-8")
     slo_text = SLO_GUIDE.read_text(encoding="utf-8")
+    debian_profile_text = DEBIAN_PROFILE.read_text(encoding="utf-8")
     for needle in FORBIDDEN_TEXT:
         if needle in text:
             fail(f"{GUIDE} contains stale wording: {needle}")
@@ -92,6 +106,9 @@ def main() -> None:
     for needle in SLO_TEXT:
         if needle not in slo_text:
             fail(f"{SLO_GUIDE} missing required text: {needle}")
+    for needle in DEBIAN_PROFILE_TEXT:
+        if needle not in debian_profile_text:
+            fail(f"{DEBIAN_PROFILE} missing required text: {needle}")
     for needle in RELEASE_GUIDE_TEXT:
         if needle not in release_text:
             fail(f"{RELEASE_GUIDE} missing required text: {needle}")

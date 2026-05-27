@@ -61,6 +61,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Architecture](docs/architecture.md)
 - [Test plan](docs/test-plan.md)
 - [Release evidence guide](docs/release-evidence-guide.md)
+- [Debian 12 beta VM profile](docs/debian12-beta-vm-profile.md)
 - [Operational SLO guide](docs/operational-slos.md)
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)

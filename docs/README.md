@@ -63,6 +63,8 @@ and slowly diverging.
 
 - `devops-getting-started.md`: clone, build, validate, and first local run guide.
 - `operator-deployment-guide.md`: practical deployment and operations guide.
+- `debian12-beta-vm-profile.md`: Debian 12 container-in-VM beta handover
+  profile linked from the Operator Deployment Guide.
 - `operational-slos.md`: informative SLO publication linked from the Operator
   Deployment Guide.
 - `manual-bind-interop.md`: manual BIND interop smoke procedure.
