@@ -4538,7 +4538,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Server module decomposition (server/lib.rs monolith) | §5.4, ODS-NFR-MAINT-002 | Decompose `server::health` and `server::transfer` from monolithic `server/lib.rs` | **Pending: non-normative maintainability candidate; module organisation per ODS-NFR-MAINT-002 to be tracked in Architecture Document** |
 | `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | **Resolved (v0.9.1 doc/tool alignment): default remains 10%, implemented by `scripts/check-perf-regression.py` and documented in the Test Plan and release-notes template** |
 | PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | **Resolved (v0.9.1 doc alignment): not added to the mandatory ODS-VER-003 NSD/Knot/BIND matrix; retained as supplemental RFC 9432 catalog-producer interop evidence with PostgreSQL/gpgsql** |
-| External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | Pending |
+| External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | **Resolved (v0.9.1 doc alignment): required for the formal ODS-VER-008 SRS MVP release gate and release-notes sign-off, but explicitly outside the bounded Engineering MVP profile** |
 | Strict default for ANY-query mode ("minimal") | §4.2 | Confirm | **Resolved (v0.9.1 code alignment): `QuerySettings` defaults to minimal ANY responses per ODS-FR-QRY-006** |
 | Minimal-ANY deterministic selection algorithm | §4.2, ODS-FR-QRY-005 | Specify (CNAME-first, then lowest-type) | **Resolved (v0.3): specified in ODS-FR-QRY-005** |
 | 4 concurrent transfer sessions (default) | §4.6 | Confirm | **Resolved (v0.9.1 code alignment): `limits.max_concurrent_transfers` defaults to 4** |
@@ -4550,7 +4550,7 @@ The following items were specifically flagged during SRS drafting for explicit t
 | 86400-second max effective REFRESH (default) | §4.16, ODS-FR-ZSM-011 | Confirm | **Resolved (v0.9.1 code alignment): `limits.zsm_max_interval_secs` defaults to 86400** |
 | 3600-second LOADING warning threshold (default) | §4.16, ODS-FR-ZSM-013 | Confirm | **Resolved (v0.9.1 code alignment): `limits.zsm_loading_warning_threshold_secs` defaults to 3600** |
 | 30-second SIGTERM grace period (default) | §5.2, ODS-NFR-REL-001 | Confirm | **Resolved (v0.9.1 code alignment): `limits.graceful_shutdown_secs` defaults to 30** |
-| 10% memory growth threshold over 30 days (default) | §5.2, ODS-NFR-REL-003 | Confirm | Pending |
+| 10% memory growth threshold over 30 days (default) | §5.2, ODS-NFR-REL-003 | Confirm | **Resolved (v0.9.1 tool alignment): 10% remains the formal soak threshold and is the default in `scripts/capture-soak-handoff.sh`; actual 30-day soak execution remains ODS-VER-008 release acceptance, not Engineering MVP evidence** |
 | 5000 ms per-query processing timeout (default) | §5.2, ODS-NFR-REL-006 | Confirm | Pending |
 | 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | **Resolved (v0.9.1 code alignment): TSIG fudge defaults to 300 seconds; DNS Cookie past/future timestamp tolerances default to 3600/300 seconds** |
 | 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | Pending |
