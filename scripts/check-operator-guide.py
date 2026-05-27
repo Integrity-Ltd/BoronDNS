@@ -45,6 +45,14 @@ SLO_TEXT = [
     "ODS-NFR-REL-003",
     "ODS-NFR-REL-005",
     "ODS-NFR-REL-007",
+    "Suggested operational SLOs",
+    "formal release/operations targets",
+    "bounded local Engineering MVP has completed those long-running runs",
+]
+
+FORBIDDEN_TEXT = [
+    "Suggested Engineering MVP SLOs",
+    "scripts that double as Engineering MVP and SRS acceptance evidence collection commands",
 ]
 
 
@@ -55,6 +63,9 @@ def fail(message: str) -> None:
 
 def main() -> None:
     text = GUIDE.read_text(encoding="utf-8")
+    for needle in FORBIDDEN_TEXT:
+        if needle in text:
+            fail(f"{GUIDE} contains stale wording: {needle}")
     for needle in REQUIRED_TEXT + SLO_TEXT:
         if needle not in text:
             fail(f"{GUIDE} missing required text: {needle}")

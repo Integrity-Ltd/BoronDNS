@@ -620,7 +620,7 @@ evidence commands and handoff path; release acceptance still depends on later
 performance, reliability, soak, and external-operator evidence execution listed
 in the gap register.
 
-Suggested Engineering MVP SLOs:
+Suggested operational SLOs:
 
 | Objective | Suggested target | Evidence source |
 | --- | --- | --- |
@@ -632,17 +632,21 @@ Suggested Engineering MVP SLOs:
 | Rolling restart drain | After SIGTERM, `/readyz` reports draining and TCP listeners stop accepting new connections within 100 ms, matching `ODS-NFR-REL-005` | signal/rolling-restart artifacts |
 | Clock synchronisation | Host clock drift stays well below the configured TSIG and DNS Cookie tolerance windows; investigate clock synchronisation drift above 1 second for NTP/PTP-managed hosts, matching the operational premise of `ODS-NFR-REL-007` | host time-sync monitoring, TSIG BADTIME and cookie-invalid metrics/logs |
 
-Operators should tune SLO thresholds to their zone count, primary behavior,
-anycast or load-balancer design, and query mix. A release note may publish
-stricter or looser deployment-specific SLOs, but it must not weaken the
-normative SRS acceptance targets.
+The first two rows are practical day-one Engineering MVP operating checks. Rows
+that depend on the Reference Hardware Profile, 30-day soak, or release-retained
+artifacts are formal release/operations targets; they are not evidence that the
+bounded local Engineering MVP has completed those long-running runs. Operators
+should tune SLO thresholds to their zone count, primary behavior, anycast or
+load-balancer design, and query mix. A release note may publish stricter or
+looser deployment-specific SLOs, but it must not weaken the normative SRS
+acceptance targets.
 
 ## Primary Interoperability Scripts
 
-The repository includes primary interoperability scripts that double as
-Engineering MVP and SRS acceptance evidence collection commands. Run them from
-the repository root after building the debug binary or allow the scripts to
-build as needed.
+The repository includes primary interoperability scripts used by the bounded
+Engineering MVP profile and by later SRS acceptance evidence collection. Run
+them from the repository root after building the debug binary or allow the
+scripts to build as needed.
 
 General validation:
 
