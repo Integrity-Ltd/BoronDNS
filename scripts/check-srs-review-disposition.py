@@ -12,6 +12,23 @@ DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
 
+REQUIRED_REVIEW_DISPOSITIONS = [
+    "ODS/RDS namespace mismatch",
+    "Suffixed functional IDs violated the numeric scheme",
+    "UPDATE rejection cross-reference pointed at `CORE-007`",
+    "Response DO-bit semantics were wrong",
+    "CD-bit handling needed authoritative-server context",
+    "RRSIG records were incorrectly covered by ordinary RRset wording",
+    "Static binary wording contradicted dynamic-link allowances",
+    "SRS prescribed `ZoneProvider`/`ZoneSpec`/`ZoneSetDelta` internals",
+    "Catalog zones should be deferred from MVP",
+    "Verification governance is too heavy for local MVP",
+    "Performance numbers should be targets rather than immediate local MVP blockers",
+    "NSEC3 cap creates a DNSSEC authentication downgrade",
+    "SRS mixed audit findings into normative requirements",
+    "Requirements claimed absolute atomicity while grouping many operational cases",
+]
+
 FEATURES = {
     "IXFR": {
         "aliases": ["IXFR"],
@@ -176,6 +193,13 @@ def main() -> int:
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
     mvp_scope = MVP_SCOPE_PATH.read_text(encoding="utf-8")
     implementation_plan = IMPLEMENTATION_PLAN_PATH.read_text(encoding="utf-8")
+
+    for finding in REQUIRED_REVIEW_DISPOSITIONS:
+        if finding not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits review finding "
+                f"{finding!r}"
+            )
 
     for feature, spec in FEATURES.items():
         aliases = spec["aliases"]
