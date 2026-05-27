@@ -1,8 +1,8 @@
-# Catalog Zone Engineering MVP Based on RFC 9432
+# Catalog Zone Support Based on RFC 9432
 
 Status: implemented Engineering MVP scope with explicit release-acceptance gaps
 
-OxideDNS supports an Engineering MVP subset of DNS Catalog Zones as described
+OxideDNS supports a bounded subset of DNS Catalog Zones as described
 by RFC 9432. A configured catalog zone is transferred from trusted primaries in
 the same way as ordinary secondary zones. OxideDNS then reads member-zone PTR
 records under `zones.<catalog-zone>` and creates in-memory secondary service for
@@ -16,7 +16,7 @@ deployment profiles.
 
 ## RFC 9432 Scope
 
-Implemented Engineering MVP behavior:
+Implemented behavior in the current Engineering MVP:
 
 - Catalog zones are configured explicitly by the operator.
 - Catalog zones are fetched over AXFR/IXFR from configured transfer primaries.
@@ -32,7 +32,7 @@ Implemented Engineering MVP behavior:
 - Duplicate member zones or malformed required catalog data cause OxideDNS to
   leave the previous applied catalog membership unchanged.
 
-Out of this Engineering MVP catalog slice:
+Outside this Engineering MVP catalog slice:
 
 - Per-member custom transfer settings from catalog properties.
 - Catalog migration state beyond replacing the previous in-memory membership

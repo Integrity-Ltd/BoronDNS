@@ -50,6 +50,7 @@ BANNED_PHRASES = [
     "preferred MVP path",
     "through MVP,",
     "Catalog Zone MVP based",
+    "catalog-zone-mvp-rfc9432.md",
     "Implemented MVP behavior:",
     "Out of MVP scope:",
     "catalog-zone MVP extension",

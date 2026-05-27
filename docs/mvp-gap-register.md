@@ -16,7 +16,7 @@ Detailed evidence ownership:
   accepted protocol fixes, and rejected scope-trim suggestions.
 - `docs/implemented-feature-scope.md` records the retained post-Alpha feature
   slices and nearby behavior that is not claimed by those slices.
-- Feature-specific documents such as `docs/catalog-zone-mvp-rfc9432.md`,
+- Feature-specific documents such as `docs/catalog-zone-rfc9432.md`,
   `docs/dnssec-conformance-matrix.tsv`, and
   `docs/rrl-release-thresholds.md` hold focused evidence detail.
 

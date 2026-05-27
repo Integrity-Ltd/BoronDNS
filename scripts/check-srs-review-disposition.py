@@ -208,7 +208,7 @@ FEATURES = {
             "crates/oxidedns-server/src/lib.rs",
         ],
         "evidence_paths": [
-            "docs/catalog-zone-mvp-rfc9432.md",
+            "docs/catalog-zone-rfc9432.md",
             "scripts/interop-bind-catalog-zone-docker.sh",
             "scripts/interop-powerdns-postgres-catalog-tsig-docker.sh",
             "scripts/interop-bind-xot-catalog-zone-docker.sh",
