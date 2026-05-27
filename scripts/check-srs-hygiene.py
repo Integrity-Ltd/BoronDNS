@@ -38,6 +38,8 @@ REQUIRED_TEXT = [
     "RRSIG records are handled by DNSSEC-specific rules",
     "RFC 4035 §2.2 exception",
     "RRSIG records do not form ordinary RRsets",
+    "*Source.* RFC 2181 §5; RFC 4035 §2.2; RFC 4034 §3.",
+    "*Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.",
     "The published Linux release artifact targets `x86_64-unknown-linux-musl`",
     "Developer and distribution builds that use another target MAY dynamically link",
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",

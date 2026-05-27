@@ -650,12 +650,12 @@ Requirements are grouped thematically for readability; the grouping has no norma
 ### RRset semantics
 
 **ODS-FR-CORE-026.** Except for RRSIG records, the server MUST treat all resource records sharing owner name, class, and type as a single RRset and MUST return all members of that RRset together when the RRset is the subject of a positive answer. The server MUST NOT return a proper subset of an RRset in the answer section of a positive response.
-*Source.* RFC 2181 §5; RFC 4034 §3.
+*Source.* RFC 2181 §5; RFC 4035 §2.2; RFC 4034 §3.
 *Note.* RRSIG records are handled by DNSSEC-specific rules: each RRSIG covers an RRset identified by its Type Covered field, and multiple RRSIG records at the same owner name may cover different RRsets. They are therefore matched to the covered RRsets per ODS-FR-DNSSEC-003 rather than treated as one ordinary owner/class/type RRset.
 *Verification.* Lookup tests confirming RRset integrity in responses, including responses near the UDP message size boundary (see §4.11 for EDNS interactions), plus DNSSEC tests confirming RRSIG selection by Type Covered.
 
 **ODS-FR-CORE-027.** Except for RRSIG records, the server MUST apply a single TTL value to all members of an RRset served from its in-memory zone store. Where a zone transfer delivers an RRset whose members carry differing TTLs, the server MUST adopt the lowest TTL among them for the RRset, in accordance with RFC 2181 §5.2, and MUST emit a warning-level log entry recording the inconsistency.
-*Source.* RFC 2181 §5.2; RFC 4034 §3.
+*Source.* RFC 2181 §5.2; RFC 4035 §2.2; RFC 4034 §3.
 *Note.* RFC 2181 deprecates non-uniform TTLs within an RRset; the secondary's behaviour is defensive against a non-compliant primary. RRSIG TTL handling follows the RFC 4035 §2.2 exception: RRSIG records do not form ordinary RRsets, and their TTL values at a common owner name do not follow normal RRset TTL rules. RFC 4034 §3.1.4 supplies the covered-RRset Original TTL field used by validators.
 *Verification.* Zone-transfer tests delivering non-uniform TTLs; log inspection; DNSSEC transfer/serving tests with RRSIG records covering RRsets with different TTLs at the same owner name.
 
@@ -4744,7 +4744,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **CAA.** Certification Authority Authorization record (type 257, RFC 8659). Handled as an unknown type per §4.4.
 
-**CD bit.** Checking Disabled bit (RFC 4035). Used in queries from validating resolvers. This server sets CD = 0 unconditionally in responses (ODS-FR-DNSSEC-011).
+**CD bit.** Checking Disabled bit (RFC 4035). Used primarily between security-aware resolvers and recursive name servers. For OxideDNS authoritative responses, RFC 4035 §3.1.6 says the bit is mostly irrelevant and that security-aware authoritative name servers SHOULD clear it; this server makes clearing CD mandatory by project policy (ODS-FR-DNSSEC-011).
 
 **CHAOS class.** DNS resource class 3 (CH), historically allocated for Chaosnet and now commonly used by DNS tooling for diagnostic TXT probes such as `version.bind.` and `id.server.`. OxideDNS support is specified in §4.21.
 
