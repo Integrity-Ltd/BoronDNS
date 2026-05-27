@@ -92,8 +92,8 @@ and slowly diverging.
 - `rrl-release-thresholds.md`: RRL threshold baseline and release-review
   notes.
 - `srs-review-disposition.md`: disposition register for the external SRS review,
-  including accepted protocol fixes, rejected scope-trim suggestions, and known
-  implementation-alignment gaps.
+  including accepted protocol fixes, rejected scope-trim suggestions, and the
+  current code-alignment boundary for retained post-Alpha features.
 
 ## Release Scaffolding
 
@@ -115,7 +115,7 @@ The planning and evidence documents are companion working artifacts. They remain
 subordinate to the current SRS v0.9.1 requirement set when scope or behavioral
 wording differs.
 
-Known implementation-alignment gaps are recorded in `implementation-plan.md`,
-`mvp-gap-register.md`, and the traceability matrices. The v0.9.1 SRS cleanup
-corrected response DO-bit handling to RFC 6840 query-bit copy semantics, and
-current unit/runtime evidence now follows that rule.
+Current implementation and evidence status is recorded in
+`implementation-plan.md`, `mvp-gap-register.md`, and the traceability matrices.
+The v0.9.1 SRS cleanup corrected response DO-bit handling to RFC 6840 query-bit
+copy semantics, and current unit/runtime evidence now follows that rule.
