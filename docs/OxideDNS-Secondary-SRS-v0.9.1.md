@@ -2456,18 +2456,18 @@ This section specifies properties of the system beyond its functional behaviour:
 
 Each subsection allocates an area code per the scheme of §1.4.3 (ODS-NFR-<AREA>-NNN). The standard requirement template applies, presented more compactly than the functional sections; the per-subsection identifier range follows.
 
-Many of the targets below are derived from PID §6.1 (success criteria) and operational benchmarking against existing secondary-only authoritative servers (NSD, Knot DNS). Where the PID did not specify a target explicitly, proposed values consistent with established practice are recorded; these are flagged in Appendix C.5 for review.
+The targets below are formal project acceptance targets for the OxideDNS reference verification profile. They are not a statement that the current Engineering MVP has already met every numerical value, nor that local smoke or loopback benchmarks demonstrate equivalence to NSD, Knot DNS, BIND, or any other authoritative server. Where the PID did not specify a target explicitly, proposed values consistent with the project capacity goal are recorded; these are flagged in Appendix C.5 for review.
 
 **Reference Profile.** All quantitative performance and resource targets in this section are stated with respect to the **Reference Hardware Profile** and the **Reference Query Mix** specified in Appendix E. Verification of performance NFRs is performed on hardware matching the Reference Hardware Profile, against the Reference Query Mix; deviations from the Profile during verification (e.g., different CPU, different NIC) must be recorded and may be cause for the verification result to be qualified rather than treated as conformance evidence. Where defaults are stated in non-functional requirements, every such default is operator-configurable per §6.2 unless explicitly stated otherwise; the configuration parameter name is identified in each requirement.
 
-For the repository's Engineering MVP, local smoke and large-catalog benchmark harnesses record measured performance and identify bottlenecks. Full conformance to the quantitative targets below is a formal ODS-VER-008 release-acceptance activity, not a prerequisite for the bounded Engineering MVP evidence profile.
+For the repository's Engineering MVP, local smoke and large-catalog benchmark harnesses record measured performance and identify bottlenecks in the implemented code. Those harnesses are engineering evidence for tuning decisions; they are not formal conformance evidence for the quantitative NFR targets unless a release run explicitly executes the Reference Hardware/Profile procedure and retains the artifacts required by Appendix E.4. Full conformance to the quantitative targets below is a formal ODS-VER-008 release-acceptance activity, not a prerequisite for the bounded Engineering MVP evidence profile.
 
 ## 5.1 Performance
 
 The area code **PERF** is allocated.
 
 **ODS-NFR-PERF-001.** Under the Reference Query Mix of Appendix E.3, on hardware matching the Reference Hardware Profile of Appendix E.2, with the metrics endpoint enabled (per ODS-NFR-OBS-003, default 10-second scrape interval), with logging at info level (per ODS-NFR-OBS-002 default), and with RRL accounting enabled (per ODS-FR-RRL-001 default), the server MUST sustain a query-handling throughput of at least 50,000 UDP queries per second per CPU core dedicated to query handling, where TSIG verification on queries is not exercised and DNSSEC augmentation is not exercised (DO = 0 in all queries).
-*Source.* Operational requirement; comparable to NSD and Knot on equivalent hardware.
+*Source.* Project reference-hardware throughput target; formal acceptance evidence required before asserting conformance.
 *Note.* "Per CPU core dedicated to query handling" is normalised to the per-core throughput because the implementation's multi-core scaling factor is an architectural choice recorded in the Architecture Document. The Reference Profile specifies a Dual Xeon Gold 6230R (52 physical cores total); the per-core target multiplied by the cores dedicated to query handling yields the aggregate throughput target for the deployment.
 *Verification.* Sustained-load benchmarking using `dnsperf` or `kxdpgun` against the Reference Query Mix on hardware matching the Reference Hardware Profile, with the operational stack (metrics, logging, RRL) enabled per the conditions above. Results are recorded with their exact hardware, kernel version, container runtime, and benchmark-tool versions for reproducibility.
 
@@ -5080,7 +5080,7 @@ Adding a new area code requires editing this registry in the same SRS revision a
 
 Appendix E specifies the reference environment against which the quantitative non-functional requirements of §5 (the ODS-NFR-PERF-* and ODS-NFR-RES-* targets) are stated and verified. Without a concrete reference, performance numbers are unfalsifiable: "50,000 queries per second per core" on a 2008 server is a very different commitment from the same number on a 2026 server. The reference profile fixes the verification environment so that conformance claims are objective.
 
-The Profile reflects a deliberate choice: it is more powerful than strictly necessary for the secondary's expected production workload, but it is selected as the project's standard verification platform. Production deployments on weaker hardware are supported and operationally common; their performance is expected to scale roughly with available CPU and network resources, but conformance to the §5 numerical targets is asserted only against this Profile.
+The Profile reflects a deliberate choice: it is more powerful than strictly necessary for the secondary's expected production workload, but it is selected as the project's standard verification platform. Production deployments on weaker hardware are supported and operationally common; their performance will depend on CPU, memory, NIC, kernel, container, and traffic-mix details. Conformance to the §5 numerical targets is asserted only against this Profile after the Appendix E.4 recordkeeping artifacts are retained.
 
 ## E.2 Reference Hardware Profile
 

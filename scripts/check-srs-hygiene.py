@@ -50,6 +50,9 @@ FORBIDDEN_TEXT = {
     "The design specified below follows the Vixie / Schryver model implemented in BIND 9": "RRL implementation models differ; define the OxideDNS model directly",
     "Vixie / Schryver RRL design; BIND 9 RRL implementation": "avoid treating BIND behavior as the direct source for OxideDNS RRL semantics",
     "BIND 9 default RRL configuration": "OxideDNS RRL thresholds are project defaults, not BIND defaults",
+    "operational benchmarking against existing secondary-only authoritative servers (NSD, Knot DNS)": "performance targets must not be presented as existing cross-server benchmark evidence",
+    "comparable to NSD and Knot on equivalent hardware": "performance targets require retained OxideDNS benchmark evidence before conformance claims",
+    "performance is expected to scale roughly with available CPU and network resources": "avoid unsupported performance scaling claims",
 }
 
 REQUIRED_TEXT = [
@@ -85,6 +88,10 @@ REQUIRED_TEXT = [
     "This subsection therefore defines the OxideDNS project model explicitly",
     "OxideDNS project default baseline, recorded in `docs/rrl-release-thresholds.md`",
     "These defaults are project defaults, not inherited vendor defaults.",
+    "formal project acceptance targets for the OxideDNS reference verification profile",
+    "not formal conformance evidence for the quantitative NFR targets",
+    "Project reference-hardware throughput target; formal acceptance evidence required before asserting conformance.",
+    "Conformance to the §5 numerical targets is asserted only against this Profile after the Appendix E.4 recordkeeping artifacts are retained.",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
