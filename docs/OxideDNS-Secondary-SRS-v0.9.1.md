@@ -19,7 +19,7 @@
 | Author | DT (Architect, Lead Developer) |
 | Reviewer | DTK (Sponsor, Reviewer) |
 | Tester | SzI (Alpha Tester) |
-| Related documents | Historical PID v0.1 planning input (May 2026, not stored in this repository); Architecture Document; Test Plan; Operator Deployment Guide (per ODS-NFR-MAINT-009) |
+| Related documents | Architecture Document; Test Plan; Operator Deployment Guide (per ODS-NFR-MAINT-009); verification ledger; gap register |
 
 ### Revision History
 
@@ -113,9 +113,16 @@ This Software Requirements Specification (SRS) defines the functional and non-fu
 
 This document is the normative reference for externally observable behaviour, explicit scope exclusions, and the criteria against which correctness will be judged. Internal design choices, data structures, concurrency models, and implementation evidence belong in the Architecture Document, Test Plan, verification ledger, or release notes unless they are necessary to define externally observable behaviour.
 
-## 1.2 Relationship to Upstream Planning Inputs
+## 1.2 Requirements Authority
 
-The PID (v0.1, May 2026) is a historical upstream planning input for the business case, scope boundaries, stakeholders, and high-level RFC compliance target. It is not stored in this repository. For this repository, the checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities. If a future PID revision is introduced into the project record, the SRS and companion documents must be reviewed and updated in the same change set where any scope, stakeholder, or success-criteria change is adopted.
+Earlier May 2026 planning material informed the business case, scope boundaries,
+stakeholders, and high-level RFC compliance target, but it is not an operative
+requirements authority for this repository. The checked-in SRS and its companion
+Architecture Document, Test Plan, Operator Deployment Guide, verification
+ledger, and gap register are the operative requirements and evidence
+authorities. If a future planning revision changes scope, stakeholders, or
+success criteria, the SRS and companion documents must be reviewed and updated
+in the same change set.
 
 Specifically:
 
@@ -190,7 +197,7 @@ Each requirement carries a status of **Draft**, **Approved**, **Deprecated**, or
 
 ### 1.4.6 Cross-References
 
-References to RFCs follow the form *RFC NNNN §S.S* where a specific clause is cited. References to requirements within this document follow the form of the identifier itself (`ODS-CAT-AREA-NNN`). Historical references to PID sections follow the form *PID §N.N* and are provenance labels only unless the requirement text restates the operative scope in this SRS. References to sections of this document follow the form *§N.N*.
+References to RFCs follow the form *RFC NNNN §S.S* where a specific clause is cited. References to requirements within this document follow the form of the identifier itself (`ODS-CAT-AREA-NNN`). References to sections of this document follow the form *§N.N*. External planning references, if any appear in archived documents, are provenance only and do not define current requirements unless the requirement text restates the operative scope in this SRS.
 
 ## 1.5 Definitions, Acronyms, and Abbreviations
 
@@ -213,7 +220,6 @@ The following terms appear normatively throughout this document. A complete glos
 | SOA | Start of Authority record. |
 | Zone | A contiguous portion of the DNS namespace administered as a unit. |
 | Zone refresh | The process by which a secondary updates its in-memory zone data from a primary. |
-| PID | Historical upstream Project Initiation Document, v0.1, May 2026, not stored in this repository. |
 | SRS | This document. |
 | ODS | OxideDNS-Secondary requirement namespace. |
 
@@ -221,7 +227,6 @@ The following terms appear normatively throughout this document. A complete glos
 
 ### 1.6.1 Project Documents
 
-- **Historical PID planning input** — *OxideDNS-Secondary Project Initiation Document*, v0.1, May 2026. This planning input is not stored in this repository; operative requirements and evidence authority live in this SRS and the companion documents listed below.
 - **Architecture Document** — `docs/architecture.md`, the current
   Architecture and Release Governance companion document. It records
   implementation decisions, module ownership, unsafe-boundary posture, and
@@ -312,7 +317,7 @@ The server interacts with five distinct classes of actor. Requirements in §4–
 
 ## 2.5 Design and Implementation Constraints
 
-The following constraints originate in upstream planning and are binding because they are restated here. They are formalised as architectural invariants with identifiers in §3.
+The following constraints are binding because they are restated here. They are formalised as architectural invariants with identifiers in §3.
 
 **Implementation language.** Rust. Rationale: memory safety without garbage collection, suitable for a network-facing server processing untrusted input at high query rates.
 
@@ -3674,7 +3679,7 @@ current catalogue.
 
 ## C.1 Purpose
 
-Appendix C catalogues items outside this server's scope, with rationale for each exclusion and reference to the SRS clause that records or enforces it. The intent is that a reader of the SRS alone can understand where the project's boundaries lie without needing to consult the PID for context.
+Appendix C catalogues items outside this server's scope, with rationale for each exclusion and reference to the SRS clause that records or enforces it. The intent is that a reader of the SRS alone can understand where the project's boundaries lie without needing to consult external planning material for context.
 
 Three kinds of entry are distinguished:
 
@@ -4172,8 +4177,6 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 **Orchestrator.** Automated process supervisor; in this SRS, typically Kubernetes, systemd, or equivalent. *See also.* Actor classes in D.4.
 
 **Original ID.** TSIG RDATA field (RFC 8945 §4.2). Used to reconstruct the original message ID for MAC verification when the message has transited a NAT or similar intermediary.
-
-**PID.** Historical upstream Project Initiation Document (this project, v0.1, May 2026), not stored in this repository. Current operative requirements and evidence authority are this SRS and its companion documents.
 
 **PKIX.** Public Key Infrastructure using X.509 (RFC 5280). The certificate-authentication framework used for XoT trust validation.
 

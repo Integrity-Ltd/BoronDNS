@@ -113,6 +113,9 @@ FORBIDDEN_TEXT = {
     "Acceptance Criteria for PID Milestones": "formal milestone criteria must not depend on an unavailable PID document",
     "PID prevails": "unavailable historical PID must not control the checked-in SRS",
     "PID Phase 4": "formal release acceptance must be described in SRS terms",
+    "Historical PID": "current SRS must not name an unavailable PID as a related or authority document",
+    "Project Initiation Document": "current SRS must be self-contained instead of relying on a hidden planning document",
+    "PID §": "current SRS references must not depend on unavailable planning sections",
     "out of PID scope": "scope exclusions must be stated in current SRS terms",
     "not in PID scope": "scope exclusions must be stated in current SRS terms",
     "incoming v0.9.1 SRS attachment": "import-process wording belongs in review disposition, not the current SRS",
@@ -321,8 +324,9 @@ REQUIRED_TEXT = [
     "The gap register records any current implementation gap between this formal SRS MVP policy and the Engineering MVP code evidence.",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
-    "It is not stored in this repository.",
-    "the checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities",
+    "Earlier May 2026 planning material informed the business case",
+    "it is not an operative requirements authority for this repository",
+    "The checked-in SRS and its companion Architecture Document, Test Plan, Operator Deployment Guide, verification ledger, and gap register are the operative requirements and evidence authorities",
     "The RFC compliance target is defined and maintained through Appendix A, the companion traceability matrix, and the canonical RFC compliance assertion register.",
     "Primary documentation MUST NOT maintain a second hand-copied RFC compliance table.",
     "Informative operational guidance appears only where it is directly relevant to a requirement, appendix note, or companion document.",
@@ -354,6 +358,7 @@ SECTION_4_RE = re.compile(r"^## (4\.\d+) ", re.MULTILINE)
 
 def main() -> int:
     text = SRS.read_text(encoding="utf-8")
+    normalized_text = " ".join(text.split())
     reference_profile = REFERENCE_PROFILE.read_text(encoding="utf-8")
     future_optimization_tracks = FUTURE_OPTIMIZATION_TRACKS.read_text(
         encoding="utf-8"
@@ -366,7 +371,7 @@ def main() -> int:
             errors.append(f"forbidden SRS text {needle!r}: {reason}")
 
     for needle in REQUIRED_TEXT:
-        if needle not in text:
+        if " ".join(needle.split()) not in normalized_text:
             errors.append(f"missing required SRS hygiene text: {needle!r}")
 
     for needle in REQUIRED_RFC_TRACEABILITY_POLICY_TEXT:
