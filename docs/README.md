@@ -38,6 +38,7 @@ and slowly diverging.
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
+| Where are operator SLOs published? | `operational-slos.md` | Keep informative SLO targets here and link from the operator guide; do not duplicate the SLO table in the SRS. |
 | How is release evidence captured? | `release-evidence-guide.md` | Keep snapshot options and handoff mechanics here; link from operator docs instead of duplicating the runbook. |
 | What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
@@ -62,6 +63,8 @@ and slowly diverging.
 
 - `devops-getting-started.md`: clone, build, validate, and first local run guide.
 - `operator-deployment-guide.md`: practical deployment and operations guide.
+- `operational-slos.md`: informative SLO publication linked from the Operator
+  Deployment Guide.
 - `manual-bind-interop.md`: manual BIND interop smoke procedure.
 - `dns-client-benchmark.md`: bounded local client benchmark and large-catalog
   benchmark guide.

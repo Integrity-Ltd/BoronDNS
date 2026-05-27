@@ -1,6 +1,6 @@
 # OxideDNS Operator Deployment Guide
 
-Status: Engineering MVP operator guide and SRS acceptance evidence artifact
+Status: Engineering MVP operator guide and formal SRS acceptance input
 
 This guide describes how to deploy and operate OxideDNS as a secondary-only
 authoritative DNS server for Engineering MVP validation and later SRS
@@ -535,8 +535,8 @@ HTTP 429, a `Retry-After` header, and a JSON body; `/livez`, `/readyz`, and
 
 The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
 process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
-zones. It is intended for alerts around zones that have not completed initial
-transfer after startup. The scheduler also emits repeated
+zones. It is intended for alerts around long-LOADING zones that have not
+completed initial transfer after startup. The scheduler also emits repeated
 `category=transfer`, `event=zone_loading_threshold_exceeded` warning logs at
 `[limits].zsm_loading_warning_threshold_secs` while a zone remains in LOADING.
 
@@ -615,33 +615,12 @@ external operator acceptance can review them.
 
 ## Service Level Objectives
 
-This section is the informative SLO publication required by the current
-Appendix C.5 decision list for `ODS-NFR-MAINT-009`. It is an operator starting
-point, not a full SRS acceptance claim. Engineering MVP sets up the
-evidence commands and handoff path; release acceptance still depends on later
-performance, reliability, soak, and external-operator evidence execution listed
-in the gap register.
-
-Suggested operational SLOs:
-
-| Objective | Suggested target | Evidence source |
-| --- | --- | --- |
-| Authoritative service readiness | `/readyz` is HTTP 200 for at least 99.9% of one-minute probes outside declared maintenance when at least one zone is expected ACTIVE | `GET /readyz`, zone-state metrics, maintenance record |
-| Initial and refresh transfer health | Every configured zone reaches ACTIVE inside the operator's expected transfer window; long-LOADING behavior beyond `[limits].zsm_loading_warning_threshold_secs` is actionable | `/readyz`, `oxidedns_secondary_zone_loading_seconds`, `zone_loading_threshold_exceeded` logs |
-| Direct-hit latency | On the Reference Hardware Profile, keep p99 direct-hit UDP query processing below 1 ms at up to 50% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-002` | release benchmark artifacts; smoke metrics are not enough for acceptance |
-| Near-capacity latency | On the Reference Hardware Profile, keep p99 query processing below 10 ms at up to 90% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-003` | release benchmark artifacts |
-| Memory growth | During the 30-day soak, RSS at day 30 remains within 10% of the 24-hour baseline for stable workload conditions, matching `ODS-NFR-REL-003` | soak report with RSS samples and workload description |
-| Rolling restart drain | After SIGTERM, `/readyz` reports draining and TCP listeners stop accepting new connections within 100 ms, matching `ODS-NFR-REL-005` | signal/rolling-restart artifacts |
-| Clock synchronisation | Host clock drift stays well below the configured TSIG and DNS Cookie tolerance windows; investigate clock synchronisation drift above 1 second for NTP/PTP-managed hosts, matching the operational premise of `ODS-NFR-REL-007` | host time-sync monitoring, TSIG BADTIME and cookie-invalid metrics/logs |
-
-The first two rows are practical day-one Engineering MVP operating checks. Rows
-that depend on the Reference Hardware Profile, 30-day soak, or release-retained
-artifacts are formal release/operations targets; they are not evidence that the
-bounded local Engineering MVP has completed those long-running runs. Operators
-should tune SLO thresholds to their zone count, primary behavior, anycast or
-load-balancer design, and query mix. A release note may publish stricter or
-looser deployment-specific SLOs, but it must not weaken the normative SRS
-acceptance targets.
+`docs/operational-slos.md` is the informative SLO publication required by the
+current Appendix C.5 decision list for `ODS-NFR-MAINT-009`. Treat those SLOs as
+an operator starting point, not a full SRS acceptance claim. Engineering MVP
+sets up the evidence commands and handoff path; release acceptance still
+depends on later performance, reliability, soak, and external-operator evidence
+execution listed in the gap register.
 
 ## Primary Interoperability Scripts
 
@@ -733,7 +712,8 @@ TSIG:
 - TSIG secrets are base64 encoded. Configure exactly one of inline `secret` or
   `secret_file`; when using `secret_file`, the file must be readable by the
   OxideDNS process and must not be world-readable.
-- System time must be synchronized within the TSIG fudge window or signed
+- System time must be synchronized within the TSIG fudge window; this is the
+  clock synchronisation requirement of `ODS-NFR-REL-007`, and signed
   transfers and NOTIFY messages can fail authentication.
 
 XoT:

@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "operator-deployment-guide.md"
 RELEASE_GUIDE = ROOT / "docs" / "release-evidence-guide.md"
+SLO_GUIDE = ROOT / "docs" / "operational-slos.md"
 CLI_MAIN = ROOT / "crates" / "oxidedns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
@@ -34,6 +35,7 @@ REQUIRED_TEXT = [
     "privilege",
     "security@integrity.hu",
     "ODS-FR-XOT-012",
+    "docs/operational-slos.md",
 ]
 
 RELEASE_GUIDE_TEXT = [
@@ -54,13 +56,14 @@ RELEASE_GUIDE_TEXT = [
 ]
 
 SLO_TEXT = [
+    "informative operator SLO publication",
     "ODS-NFR-PERF-001",
     "ODS-NFR-PERF-002",
     "ODS-NFR-PERF-003",
     "ODS-NFR-REL-003",
     "ODS-NFR-REL-005",
     "ODS-NFR-REL-007",
-    "Suggested operational SLOs",
+    "Suggested Operational SLOs",
     "formal release/operations targets",
     "bounded local Engineering MVP has completed those long-running runs",
 ]
@@ -79,12 +82,16 @@ def fail(message: str) -> None:
 def main() -> None:
     text = GUIDE.read_text(encoding="utf-8")
     release_text = RELEASE_GUIDE.read_text(encoding="utf-8")
+    slo_text = SLO_GUIDE.read_text(encoding="utf-8")
     for needle in FORBIDDEN_TEXT:
         if needle in text:
             fail(f"{GUIDE} contains stale wording: {needle}")
-    for needle in REQUIRED_TEXT + SLO_TEXT:
+    for needle in REQUIRED_TEXT:
         if needle not in text:
             fail(f"{GUIDE} missing required text: {needle}")
+    for needle in SLO_TEXT:
+        if needle not in slo_text:
+            fail(f"{SLO_GUIDE} missing required text: {needle}")
     for needle in RELEASE_GUIDE_TEXT:
         if needle not in release_text:
             fail(f"{RELEASE_GUIDE} missing required text: {needle}")
