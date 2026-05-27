@@ -244,7 +244,7 @@ The set of RFCs constituting the compliance target for the software is recorded 
 
 ### 1.6.4 Informative References
 
-Implementations, operational surveys, and guidance documents not formally required for compliance are listed in Appendix D.
+Informative operational guidance appears only where it is directly relevant to a requirement, appendix note, or companion document. Appendix D is the glossary and identifier registry, not a general bibliography.
 
 ---
 
