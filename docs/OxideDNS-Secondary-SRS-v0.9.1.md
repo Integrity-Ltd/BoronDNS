@@ -802,7 +802,7 @@ This procedure produces a stable, predictable selection for a given zone state, 
 ### Statistics
 
 **ODS-FR-QRY-024.** The server MUST maintain in-memory counters for: queries received, queries answered with each RCODE value emitted, queries terminated by CNAME-chain limit, queries terminated by CNAME-loop detection, and queries truncated due to message-size limits (see §4.12). These counters MUST be maintained both globally (across all zones) and per-zone for zone-scoped metrics (query count, RCODE distribution). The exposure of these counters to external observers is specified in §5.6 and §6.4.
-*Source.* Operational requirement informed by RFC 8906.
+*Source.* Operational requirement; informed by RFC 8906 response-behavior testing guidance.
 *Note.* Per-zone disaggregation is essential for production monitoring; an operator serving many zones must be able to distinguish per-zone traffic patterns to detect anomalies, capacity-plan, and diagnose incidents. The implementation MUST expose per-zone counters as labels on the corresponding metric series (e.g., Prometheus `zone="example.com"` label) rather than as separate top-level metric names.
 *Verification.* Inspection of counter values under controlled query load distributed across multiple zones; verify both global aggregates and per-zone disaggregation.
 
@@ -1309,7 +1309,7 @@ The area code **NOTIFY** is allocated.
 ### Logging
 
 **ODS-FR-NOTIFY-010.** The server MUST emit a log entry at info level for each accepted NOTIFY message, recording at minimum the source IP address, the QNAME, the embedded SOA serial (where present per ODS-FR-NOTIFY-008), and the action taken (refresh signalled, or deduplicated). Discards and rejections MUST be logged at warning level per ODS-FR-NOTIFY-004 and ODS-FR-NOTIFY-005, subject to the rate-limit logging discipline of ODS-FR-NOTIFY-011.
-*Source.* Operational requirement; RFC 8906 (operational visibility).
+*Source.* Operational requirement.
 *Verification.* Log inspection across acceptance, deduplication, and rejection scenarios.
 
 **ODS-FR-NOTIFY-011.** To prevent log flooding under hostile conditions (an attacker spoofing NOTIFY messages from many source IP addresses), the server MUST apply rate-limited logging to unauthorised-source NOTIFY discards (per ODS-FR-NOTIFY-004) and TSIG-failure NOTIFY rejections (per ODS-FR-NOTIFY-005). The discipline is parallel to ODS-FR-RRL-011:
@@ -1442,7 +1442,7 @@ A message is considered authenticated only when all five checks pass.
 - any TSIG error (BADKEY, BADSIG, BADTIME, BADALG, BADTRUNC), inbound or outbound: warning level, with at minimum key name, error type, peer IP, message direction, and timestamp.
 
 MAC values, shared secret material, and any other key-derived material MUST NOT appear in any log entry at any level.
-*Source.* Operational requirement informed by RFC 8906; security requirement for key material confidentiality.
+*Source.* Operational requirement; security requirement for key material confidentiality.
 *Verification.* Log inspection across success and failure scenarios; static analysis of log-statement contents.
 
 ## 4.10 Zone Transfer over TLS (XoT)
@@ -2147,7 +2147,7 @@ Per-event logging of individual drops or truncations MUST NOT be performed at in
 - accounting key evictions due to the cap of ODS-FR-RRL-010.
 
 Exposure of these counters is per §5.6 and §6.4.
-*Source.* Operational requirement informed by RFC 8906.
+*Source.* Operational requirement; observability for rate-limit enforcement.
 *Verification.* Counter inspection under controlled load.
 
 ## 4.18 Negative Requirements
@@ -3766,7 +3766,7 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 
 **RFC 8906 — A Common Operational Problem in DNS Servers: Failure To Communicate** (Andrews & Huque, 2020).
 *Scope.* Informative (operational guidance for testing).
-*Implementing sections.* Cited in §4.2 (QRY-024 statistics), §4.8 (NOTIFY-010 logging); used as test-design input per §7.3.
+*Implementing sections.* Informative input to response-behavior and test-design requirements in §4.1, §4.2, §4.11, and §7.3; not a source for logging or metrics requirements.
 
 ### A.3.8 TLS standards underlying XoT
 
