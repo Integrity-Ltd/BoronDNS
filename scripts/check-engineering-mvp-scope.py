@@ -9,6 +9,7 @@ PLAN = ROOT / "docs" / "implementation-plan.md"
 GAPS = ROOT / "docs" / "mvp-gap-register.md"
 LEDGER = ROOT / "docs" / "verification-ledger.md"
 READINESS = ROOT / "docs" / "engineering-mvp-readiness.md"
+RELEASE_GUIDE = ROOT / "docs" / "release-evidence-guide.md"
 HANDOFF_SCRIPTS = [
     ROOT / "scripts" / "capture-benchmark-handoff.sh",
     ROOT / "scripts" / "capture-info-verbosity-handoff.sh",
@@ -176,6 +177,20 @@ def main() -> None:
                 command not in line,
                 f"{EVIDENCE}: Engineering MVP evidence profile must not run {command}",
             )
+
+    release_guide = normalized(RELEASE_GUIDE)
+    require(
+        "does not run the real-primary interop scripts or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
+        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs interop or perf-smoke",
+    )
+    for stale_claim in [
+        "performance smoke, and BIND AXFR",
+        "TSIG AXFR, and NOTIFY refresh interop logs",
+    ]:
+        require(
+            stale_claim not in release_guide,
+            f"{RELEASE_GUIDE}: stale Engineering MVP evidence claim: {stale_claim}",
+        )
 
     for path in HANDOFF_SCRIPTS:
         script = path.read_text(encoding="utf-8")

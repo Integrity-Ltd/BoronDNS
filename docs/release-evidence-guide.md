@@ -19,8 +19,10 @@ acceptance has been completed.
 evidence profile under `target/evidence/engineering-mvp/<timestamp>/`. It runs
 repository checks, parser fuzz compile checks, invariant audits, portability
 inventory/probes, unused/dead-code audit, resource smoke evidence, coverage
-evidence, performance smoke, and BIND AXFR, TSIG AXFR, and NOTIFY refresh
-interop logs.
+evidence, unsafe-dependency enumeration, and interface-compatibility evidence.
+It does not run the real-primary interop scripts or `scripts/perf-smoke.sh` in
+the default bounded profile; those commands are recorded as deferred
+release/operations work.
 
 `scripts/release-evidence-snapshot.sh` writes release-candidate command logs
 under `target/evidence/<timestamp>/`. By default it captures:
