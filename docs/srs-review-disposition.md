@@ -61,7 +61,7 @@ feature has completed every formal ODS-VER-008 release-acceptance evidence item.
 | --- | --- | --- |
 | Catalog zones | Retained in Engineering MVP because RFC 9432 catalog transfer, parsing, member add/remove, observability, and per-catalog member caps are implemented. | Catalog internals stay out of normative SRS wording; release-specific catalog evidence remains tracked outside the SRS body. |
 | XoT | Retained in Engineering MVP as outbound zone-transfer transport only. | Client-query DoT and NOTIFY-over-TLS listeners remain out of scope. |
-| DNS Cookies | Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism. | Release evidence remains broader than local MVP evidence; DNS Cookies are not described as TSIG-equivalent authentication. |
+| DNS Cookies | Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism. | Release evidence remains broader than Engineering MVP evidence; DNS Cookies are not described as TSIG-equivalent authentication. |
 | RRL beyond a simple first version | Retained in Engineering MVP as the implemented process-wide UDP response limiter. | The current code owns configurable source-prefix aggregation, category buckets, slip/drop behavior, allowlists, summary logs, and metrics; per-zone RRL remains out of current scope. |
 | Extended DNS Errors | Retained only as the bounded implemented profile. | Current EDE output is limited to `Not Ready` and `Unsupported NSEC3 Iterations`; policy, filtering, validator, stale-cache, and recursive EDE mappings remain out of scope. |
 | CHAOS `version.bind` / `id.server` | Retained as disabled-by-default, opt-in diagnostics. | Unsupported names/types are refused; operators must configure exposed values intentionally. |

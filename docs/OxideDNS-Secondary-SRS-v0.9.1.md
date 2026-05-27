@@ -3416,7 +3416,7 @@ The interop pass/fail assertion is bound to this specific configuration. Re-test
 - the RFC number and title;
 - the compliance status: **Fully Compliant**, **Partially Compliant** (with scope qualifier), **Not Compliant** (with rationale), or **Informative Only** (the RFC is referenced for guidance, not for normative compliance);
 - the scope qualifier where applicable (e.g., "secondary-side clauses only", "wire-format aspects only", "selected clauses: §N.M, §P.Q");
-- any unresolved compliance gaps with target resolution release (for example, a future-scope transport RFC or an explicitly deferred primary-side clause);
+- any unresolved compliance gaps with a `Target resolution milestone` value (for example, a future-scope transport RFC or an explicitly deferred primary-side clause);
 - the SRS revision against which the assertion is made (the SRS version current at the release).
 
 The same structured list MUST be reproduced — verbatim or via single-source synchronisation — in the project's primary documentation (the Operator Deployment Guide per ODS-NFR-MAINT-009 at minimum; optionally also the repository README) so that potential operators can assess the project's compliance posture without parsing release notes.

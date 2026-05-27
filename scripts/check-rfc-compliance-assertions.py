@@ -13,6 +13,8 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTER = REPO_ROOT / "docs" / "rfc-compliance-assertions.md"
+SRS = REPO_ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
+RELEASE_NOTES_TEMPLATE = REPO_ROOT / "docs" / "release-notes-template.md"
 
 EXPECTED_COLUMNS = [
     "RFC number",
@@ -101,6 +103,18 @@ def main() -> int:
     source_text = (REPO_ROOT / "crates" / "oxidedns-core" / "src" / "dns.rs").read_text(
         encoding="utf-8"
     )
+    for path in (SRS, RELEASE_NOTES_TEMPLATE):
+        text = path.read_text(encoding="utf-8")
+        if "Target resolution milestone" not in text:
+            raise SystemExit(
+                f"{path.relative_to(REPO_ROOT)} must use "
+                "'Target resolution milestone' for ODS-VER-014"
+            )
+        if "Target resolution release" in text:
+            raise SystemExit(
+                f"{path.relative_to(REPO_ROOT)} still uses stale "
+                "'Target resolution release' wording"
+            )
 
     missing = sorted(set(REQUIRED_CURRENT_RFCS) - set(by_rfc))
     if missing:
