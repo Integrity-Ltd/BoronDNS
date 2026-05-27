@@ -910,7 +910,7 @@ The area code **URR** is allocated.
 
 This subsection specifies the server's measures to resist spoofed traffic, derived from RFC 5452. The principal exposure of a secondary-only server is on its *outbound* query path — when the server issues SOA poll queries, IXFR queries, or other queries toward configured primaries. RFC 5452 measures (QID randomisation, source port randomisation, strict response matching) constitute the baseline defence on this path; TSIG (§4.9), where configured, provides a substantially stronger cryptographic defence and supersedes these baseline measures in effectiveness.
 
-Adjacent anti-spoofing concerns are specified separately: Response Rate Limiting in §4.17, TSIG authentication in §4.9, NOTIFY source validation in §4.8, transfer-peer validation in §4.6 and §4.7, response size minimisation in §4.11, **DNS Cookies in §4.19** (which provides lightweight transaction authentication for the inbound query path against off-path spoofers). Network-layer source-address filtering (BCP 38 / RFC 2827) is the responsibility of the operator and the network in which the server is deployed; it is not within the server's scope.
+Adjacent anti-spoofing concerns are specified separately: Response Rate Limiting in §4.17, TSIG authentication in §4.9, NOTIFY source validation in §4.8, transfer-peer validation in §4.6 and §4.7, response size minimisation in §4.11, **DNS Cookies in §4.19** (which provides lightweight source-address confirmation for the inbound query path against off-path spoofers). Network-layer source-address filtering (BCP 38 / RFC 2827) is the responsibility of the operator and the network in which the server is deployed; it is not within the server's scope.
 
 The area code **SPOOF** is allocated.
 
@@ -1340,7 +1340,7 @@ The area code **TSIG** is allocated.
 
 **ODS-FR-TSIG-002.** The server MUST implement and accept the HMAC-SHA1 algorithm for TSIG signing and verification (algorithm name `hmac-sha1`).
 *Source.* RFC 4635 §3.
-*Rationale.* SHA-1-based TSIG remains widely deployed in primary implementations and operator configurations; support is required for interoperability.
+*Rationale.* SHA-1-based TSIG is retained for interoperability with existing primary deployments and operator configurations. HMAC-MD5 remains prohibited by ODS-FR-TSIG-004.
 *Verification.* Cryptographic test vectors per RFC 2202.
 
 **ODS-FR-TSIG-003.** The server SHOULD implement and accept the HMAC-SHA384 and HMAC-SHA512 algorithms (algorithm names `hmac-sha384` and `hmac-sha512`).
@@ -2240,9 +2240,9 @@ The category identifier is **NEG**; per §1.4.3, the AREA component is omitted f
 
 ## 4.19 DNS Cookies
 
-This subsection specifies the server's implementation of DNS Cookies per RFC 7873. DNS Cookies is a lightweight transaction-authentication mechanism: the server and client each maintain a secret cookie value, and well-formed cookies in queries and responses substantially raise the cost of off-path spoofing attacks against UDP responses.
+This subsection specifies the server's implementation of DNS Cookies per RFC 7873. DNS Cookies is a lightweight DNS transaction-security mechanism that provides limited protection against off-path spoofing, amplification, answer-forgery, and cache-poisoning attacks. The mechanism is deliberately weaker than TSIG, but it avoids TSIG's pre-arranged shared-secret and per-client key-distribution requirements.
 
-DNS Cookies complements the RFC 5452 measures of §4.5 (QID randomisation, source-port randomisation, strict response matching). The §4.5 measures resist off-path attackers blindly guessing transaction details; DNS Cookies additionally requires the attacker to observe at least one legitimate exchange between a given client and server pair to obtain the server cookie, raising the bar substantially. DNS Cookies is widely deployed in BIND 9, NSD, Knot DNS, and PowerDNS, and provides anti-spoofing benefit comparable to TSIG with substantially less operational overhead (no shared-secret distribution).
+DNS Cookies complements the RFC 5452 measures of §4.5 (QID randomisation, source-port randomisation, strict response matching). The §4.5 measures resist off-path attackers blindly guessing transaction details; a valid Server Cookie additionally indicates that the client has previously completed an exchange with this server from the claimed source address and Client Cookie. OxideDNS uses that address-confirmation property for UDP spoofing resistance and RRL exemption policy, not as general client identity or TSIG-equivalent authorization.
 
 The area code **COOKIE** is allocated.
 
@@ -2258,13 +2258,13 @@ The area code **COOKIE** is allocated.
 
 ### Server Cookie computation
 
-**ODS-FR-COOKIE-003.** The Server Cookie computed by the server MUST follow the construction of RFC 9018 §2: a SipHash-2-4 (RFC 9018 §3) MAC over the input fields (Client Cookie, Version, Reserved, Timestamp, Client IP address) using a per-server-instance secret key. The cookie format MUST include the 1-octet Version field set to 1, the 3-octet Reserved field set to 0, the 4-octet Timestamp field encoding the cookie's generation time in seconds since the Unix epoch, and the 8-octet MAC. The total Server Cookie length is thus 16 octets.
-*Source.* RFC 9018 §2; RFC 9018 §3.
-*Note.* RFC 9018 is the current standard for Server Cookie construction, superseding the implementation guidance of RFC 7873 §6 which permitted variable algorithms. Conformance with RFC 9018 ensures cookie interoperability with other RFC 9018 implementations (e.g., recursive resolvers also implementing cookies).
-*Verification.* Cryptographic test vectors per RFC 9018 §4; cookie computation tests against reference values from BIND and Knot.
+**ODS-FR-COOKIE-003.** The Server Cookie computed by the server MUST follow the construction of RFC 9018 §4: a SipHash-2-4 (RFC 9018 §4.4) MAC over the input fields (Client Cookie, Version, Reserved, Timestamp, Client IP address) using a per-server-instance secret key. The cookie format MUST include the 1-octet Version field set to 1, the 3-octet Reserved field set to 0, the 4-octet Timestamp field encoding the cookie's generation time in seconds since the Unix epoch, and the 8-octet MAC. The total Server Cookie length is thus 16 octets.
+*Source.* RFC 9018 §4, §4.3, §4.4.
+*Note.* RFC 9018 replaces the RFC 7873 example Server Cookie algorithms with an interoperable Version 1 construction. OxideDNS follows that construction for locally generated and validated Server Cookies.
+*Verification.* Tests for RFC 9018 field construction, fixed 16-octet Server Cookie length, timestamp handling, IPv4/IPv6 Client-IP input length, and successful validation of cookies generated by the implementation.
 
 **ODS-FR-COOKIE-004.** The server cookie secret MUST be a 16-octet (128-bit) random value, generated from a cryptographically secure random source at process startup. The secret MUST NOT be persisted to disk (per ODS-INV-004); it lives only in process memory. Each process restart MUST generate a fresh secret.
-*Source.* RFC 9018 §3.2; ODS-INV-004.
+*Source.* RFC 9018 §4; ODS-INV-004.
 *Note.* Restarts invalidate all previously issued server cookies; legitimate clients re-acquire a fresh server cookie on their next exchange, costing one round-trip per client. This is operationally acceptable and avoids the security risks of persistent secret material on disk.
 *Verification.* Code review confirming secret generation at startup and absence of disk persistence.
 
@@ -2287,20 +2287,20 @@ The "strict" policy raises the effective resistance to spoofing further (no usef
 - **Valid Server Cookie (case (d)):** The server MUST process the query normally, the response MUST include a COOKIE option carrying the received Client Cookie and a freshly computed Server Cookie (the cookie is refreshed on each exchange), and the response is exempt from RRL accounting (parallel to TSIG-authenticated queries per ODS-FR-RRL-008).
 - **Invalid Server Cookie (case (c)):** The server MUST treat the query as if no Server Cookie were present, applying the policy of ODS-FR-COOKIE-006 (lenient or strict).
 
-*Source.* RFC 7873 §5.2.3, §5.2.4; RFC 9018 §3.
+*Source.* RFC 7873 §5.2.4, §5.2.5; RFC 9018 §4.3, §4.4.
 *Verification.* Tests with valid, expired, future-skewed, and tampered Server Cookies; verify constant-time comparison and correct response action under each case.
 
 ### Configuration
 
 **ODS-FR-COOKIE-008.** DNS Cookies MUST be enabled by default with the "lenient" policy. The configuration MUST permit the operator to disable cookies entirely or to switch to "strict" policy per §6.2. The cookie secret regeneration interval (default: once per process lifetime, i.e., the secret persists until process restart) MAY be configurable for operators who want periodic rotation within a long-running process.
 *Source.* Operational defaults; PID Appendix A.
-*Note.* RFC 7873 §5.4 anticipates the "strict" policy as an option; "lenient" is the dominant default in widely deployed implementations (BIND 9, Knot, PowerDNS). The lenient default provides cookie benefits to legitimate clients without breaking interoperability with non-cookie-aware clients.
+*Note.* RFC 7873 §5.2.3 permits a server receiving a Client-Cookie-only query to discard the request, send BADCOOKIE, or process the request and return a Server Cookie. OxideDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie while still issuing Server Cookies to clients that request them. Operators that need a stricter UDP anti-spoofing posture can opt into BADCOOKIE enforcement.
 *Verification.* Configuration round-trip tests across the three modes; behavioural tests confirming each mode's response composition.
 
 ### RRL interaction
 
-**ODS-FR-COOKIE-009.** Responses to queries that carried a valid Server Cookie (case (d) of ODS-FR-COOKIE-002, per ODS-FR-COOKIE-007) MUST NOT be subject to RRL accounting or limit enforcement, parallel to TSIG-authenticated queries per ODS-FR-RRL-008. The valid Server Cookie is sufficient evidence of client legitimacy.
-*Source.* RFC 7873 §5.4; this SRS §4.17.
+**ODS-FR-COOKIE-009.** Responses to queries that carried a valid Server Cookie (case (d) of ODS-FR-COOKIE-002, per ODS-FR-COOKIE-007) MUST NOT be subject to RRL accounting or limit enforcement, parallel to TSIG-authenticated queries per ODS-FR-RRL-008. The valid Server Cookie is sufficient evidence for this server's RRL policy that the client completed a prior exchange from the claimed source address; it is not a general client-identity assertion.
+*Source.* RFC 7873 §5.2.5; this SRS §4.17.
 *Verification.* Tests with sustained valid-cookie traffic; verify no RRL action.
 
 ### Logging
@@ -2556,7 +2556,7 @@ Whether end-to-end service continuity is achieved depends on the orchestrator's 
 Clock drift exceeding the configured tolerances will cause authentication failures (BADTIME from TSIG, invalid Server Cookie from ODS-FR-COOKIE-007 case (c)), but MUST NOT cause process malfunction; the server MUST distinguish clock-related authentication failures from key-mismatch failures in log entries and per-zone metrics to support operator diagnosis.
 
 Clock synchronisation itself is the operator's responsibility (the server does not embed an NTP client); the Operator Deployment Guide per ODS-NFR-MAINT-009 MUST document the clock-synchronisation requirement and recommended practices.
-*Source.* RFC 8945 §10.4 (TSIG time-window discussion); RFC 9018 §2 (Server Cookie timestamp); operational practice in production DNS deployments.
+*Source.* RFC 8945 §10.4 (TSIG time-window discussion); RFC 9018 §4.3 (Server Cookie timestamp); operational practice in production DNS deployments.
 *Verification.* Tests with deliberate clock-skew injection across the configured tolerance boundaries; log inspection confirming distinct logging of clock-related vs key-related authentication failures.
 
 ## 5.3 Security
@@ -4326,7 +4326,7 @@ These items could be added in a future version without violating any architectur
 
 ### C.3.1 DNS Cookies (RFC 7873) — *withdrawn (now in MVP scope)*
 
-*Disposition.* Brought into MVP scope per v0.3 of this SRS. Specified at §4.19 (ODS-FR-COOKIE-001 through ODS-FR-COOKIE-011). Removed from §4.11's out-of-scope closing note. Removed from C.5 decision queue. The decision to include DNS Cookies in MVP was recorded on 24 May 2026 following the v0.2 functional audit recommendation; the rationale is that DNS Cookies provides the strongest improvement-per-codebase-octet of any candidate functional addition.
+*Disposition.* Brought into MVP scope per v0.3 of this SRS. Specified at §4.19 (ODS-FR-COOKIE-001 through ODS-FR-COOKIE-011). Removed from §4.11's out-of-scope closing note. Removed from C.5 decision queue. The decision to include DNS Cookies in MVP was recorded on 24 May 2026 following the v0.2 functional audit recommendation; the rationale is that DNS Cookies add useful UDP off-path spoofing resistance with modest operational complexity and no per-client shared-secret distribution.
 
 ### C.3.2 EDNS Client Subnet (RFC 7871)
 
@@ -4758,7 +4758,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **Compression.** DNS name compression (RFC 1035 §4.1.4). The encoding of repeated domain names within a DNS message as 14-bit pointers into earlier in the message. The compression policy per RR type is specified in §4.14 and Appendix B.
 
-**Cookie, DNS Cookies.** The EDNS COOKIE option (option code 10, RFC 7873) carrying a Client Cookie (always 8 octets) and optionally a Server Cookie (16 octets per RFC 9018). Provides lightweight transaction authentication, raising the cost of off-path UDP-response spoofing. Implemented per §4.19. *See also.* Client Cookie, Server Cookie.
+**Cookie, DNS Cookies.** The EDNS COOKIE option (option code 10, RFC 7873) carrying a Client Cookie (always 8 octets) and optionally a Server Cookie (16 octets per RFC 9018). Provides lightweight transaction-security and source-address confirmation against off-path UDP spoofing, without TSIG-equivalent client authorization. Implemented per §4.19. *See also.* Client Cookie, Server Cookie.
 
 **DANE.** DNS-based Authentication of Named Entities (RFC 6698 et al.). The TLSA record is the principal DANE mechanism. This server serves TLSA records as data but does not perform DANE validation.
 
@@ -4916,7 +4916,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **SERVFAIL.** Server Failure response (RCODE = 2). Returned for internal errors or expired zones (ODS-FR-QRY-021, ODS-FR-ZONE-006).
 
-**Server Cookie.** The optional 16-octet portion of the DNS COOKIE EDNS option (8 to 32 octets in RFC 7873; constrained to exactly 16 octets by RFC 9018) computed by the server as a MAC over the (Client Cookie, version, timestamp, client IP, server secret) tuple. Provides the server's transaction-binding evidence; a valid Server Cookie demonstrates the client has previously exchanged messages with this server from its claimed source address. See §4.19 (ODS-FR-COOKIE-003) and RFC 9018.
+**Server Cookie.** The optional 16-octet portion of the DNS COOKIE EDNS option (8 to 32 octets in RFC 7873; constrained to exactly 16 octets by RFC 9018) computed by the server as a MAC over the (Client Cookie, version, timestamp, client IP, server secret) tuple. Provides source-address confirmation for this server's UDP spoofing and RRL decisions; it does not authenticate a durable client identity. See §4.19 (ODS-FR-COOKIE-003) and RFC 9018.
 
 **SHA-1, SHA-256, SHA-384, SHA-512.** Secure Hash Algorithm variants. Used as TSIG algorithm primitives (RFC 4635).
 

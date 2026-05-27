@@ -97,6 +97,7 @@ deferred unsafe-boundary track.
 | RRSIG RRset exception | RFC 4035 section 2.2, plus RFC 4034 section 3 RRSIG field definitions | SRS has an explicit RRSIG carve-out from normal RRset/TTL rules and maps Type Covered handling to DNSSEC response rules. |
 | NSEC3 iteration cap | RFC 9276 section 2.4 | SRS treats proof omission above the cap as an availability/CPU-protection downgrade with optional diagnostic EDE, not normal authenticated denial. |
 | Catalog zones | RFC 9432 sections 3, 5, and 7 | Catalog zones remain in scope because OxideDNS implements catalog transfer/parsing/reconciliation/observability. The SRS now states observable behavior and keeps implementation shape in architecture docs. |
+| DNS Cookies | RFC 7873 sections 2, 3, 5.2, and 5.4; RFC 9018 section 4 | SRS treats DNS Cookies as limited UDP off-path spoofing resistance and source-address confirmation, not TSIG-equivalent client authentication. The `lenient` default is a project compatibility policy; `strict` BADCOOKIE enforcement is available for stronger anti-spoofing posture. |
 
 Primary source links:
 
@@ -105,6 +106,8 @@ Primary source links:
 - <https://www.rfc-editor.org/rfc/rfc4034>
 - <https://www.rfc-editor.org/rfc/rfc9276>
 - <https://www.rfc-editor.org/rfc/rfc9432>
+- <https://www.rfc-editor.org/rfc/rfc7873>
+- <https://www.rfc-editor.org/rfc/rfc9018>
 
 ## Finding Disposition
 

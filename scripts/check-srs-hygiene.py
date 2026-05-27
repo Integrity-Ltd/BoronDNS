@@ -37,6 +37,13 @@ FORBIDDEN_TEXT = {
     "RFC 8906 (operational visibility)": "RFC 8906 is response-behavior guidance, not a logging/metrics standard",
     "Operational requirement informed by RFC 8906; security": "RFC 8906 is response-behavior guidance, not a TSIG logging source",
     "Operational requirement informed by RFC 8906.\n*Verification.* Counter inspection": "RFC 8906 is response-behavior guidance, not a generic counter source",
+    "DNS Cookies is widely deployed in BIND 9, NSD, Knot DNS, and PowerDNS": "avoid unsourced implementation-deployment claims",
+    "provides anti-spoofing benefit comparable to TSIG": "DNS Cookies are not TSIG-equivalent authentication",
+    "dominant default in widely deployed implementations": "avoid unsourced implementation-default claims",
+    "reference values from BIND and Knot": "implementation-specific cookie references need retained interop evidence",
+    "strongest improvement-per-codebase-octet": "avoid marketing-style rationale in the SRS",
+    "RFC 9018 §2 (Server Cookie timestamp)": "RFC 9018 server-cookie timestamp is section 4.3",
+    "RFC 9018 §3.2": "RFC 9018 server-cookie construction is section 4",
 }
 
 REQUIRED_TEXT = [
@@ -61,6 +68,11 @@ REQUIRED_TEXT = [
     "Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled",
     "*Source.* Operational visibility for the RFC 7873 §5.2 cookie processing cases and RFC 9018 server-cookie validation profile.",
     "not a source for logging or metrics requirements",
+    "DNS Cookies is a lightweight DNS transaction-security mechanism that provides limited protection against off-path spoofing",
+    "not as general client identity or TSIG-equivalent authorization",
+    "RFC 9018 §4, §4.3, §4.4",
+    "OxideDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie",
+    "DNS Cookies add useful UDP off-path spoofing resistance with modest operational complexity",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
