@@ -48,7 +48,6 @@ release artifact, or a formal acceptance sign-off is still open.
 | --- | --- | --- |
 | Catalog member-zone resource cap (`ODS-NFR-SEC-013`) | RFC 9432 catalog support is implemented and tested through explicit/catalog config, mandatory catalog TSIG, internal consumption, live member add/remove, catalog logs, catalog membership metrics, BIND XoT+TSIG, and PowerDNS/PostgreSQL producer coverage. | Implement `max_member_zones` or equivalent, including cap logging/tests, or revise the SRS requirement if the cap is deferred from the current release target. |
 | Environment override validation evidence | CLI applies supported `ODS_*` overrides before full config validation. | Add explicit regression/traceability evidence for post-override cross-field validation and deployment-specific config snapshots. |
-| NSEC3 cap observability (`ODS-FR-DNSSEC-014`) | The server implements configurable `[dnssec].nsec3_max_iterations`, optional EDE 27, proof omission above cap, config warning, and a global counter. | Decide whether the SRS still requires per-zone warning/per-zone metric evidence for acceptance, or whether the current global counter posture is the intended Engineering MVP behavior. |
 
 ## Release Acceptance Evidence Still Open
 

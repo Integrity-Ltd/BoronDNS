@@ -51,6 +51,8 @@ BANNED_PHRASES = [
     "TSIG environment-variable loading",
     "environment-variable secret provisioning",
     "query.processing_timeout_ms",
+    "oxidedns_dnssec_nsec3_cap_exceeded_total",
+    "per-zone warning/metric",
 ]
 
 SOURCE_BANNED_PHRASES = [

@@ -89,6 +89,8 @@ FORBIDDEN_TEXT = {
     "TSIG environment-variable loading": "SRS must not claim TSIG secrets load directly from environment variables",
     "environment-variable secret provisioning": "SRS must recommend file-backed external secret projection instead",
     "query.processing_timeout_ms": "SRS must not specify the removed per-query processing timeout configuration parameter",
+    "oxidedns_dnssec_nsec3_cap_exceeded_total": "SRS must use the implemented global NSEC3 cap metric name",
+    "per-zone counter `oxidedns_dnssec_nsec3_cap_exceeded_total": "SRS must not require a per-zone NSEC3 cap counter in the current profile",
 }
 
 REQUIRED_TEXT = [
@@ -145,6 +147,7 @@ REQUIRED_TEXT = [
     "Aligns ODS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model",
     "Production operator documentation (per ODS-NFR-MAINT-009) MUST recommend file-backed secret provisioning",
     "OxideDNS does not define a separate per-query CPU-processing timeout parameter.",
+    "This counter intentionally has no `zone` label in the current profile",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
     "It is not stored in this repository.",

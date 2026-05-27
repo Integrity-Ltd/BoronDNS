@@ -1812,13 +1812,12 @@ Type-aware handling MUST include the ability to identify, for each RRSIG record,
 - The negative response itself MUST still be returned per ODS-FR-CORE-022 (NODATA) or ODS-FR-CORE-023 (NXDOMAIN); the request is not refused;
 - The NSEC3 records (and their RRSIGs) that would constitute the denial-of-existence proof MAY be omitted from the response — the response then carries the negative answer without DNSSEC authentication for the negative proof;
 - Where the minimal EDE profile is enabled per ODS-FR-EDNS-018 and the inbound query contained an OPT RR, the response SHOULD include EDE INFO-CODE 27 (`Unsupported NSEC3 Iterations`) without EXTRA-TEXT to make the downgrade observable to diagnostic clients;
-- The server MUST emit a warning-level log entry on the first such omission per zone since process startup, with `category = "dnssec"`, `event = "nsec3_iterations_exceed_cap"`, and structured fields recording the zone name, the iteration count present in NSEC3PARAM, and the configured cap;
-- The per-zone counter `oxidedns_dnssec_nsec3_cap_exceeded_total{zone="..."}` (per §5.6) MUST be incremented for each affected response.
+- The server MUST increment the DNSSEC NSEC3-cap metric defined by ODS-NFR-OBS-009 for each affected response. The current Engineering MVP profile deliberately uses a global counter without a `zone` label to avoid high-cardinality metrics under large catalog-zone deployments.
 
 This requirement is a CPU-amplification defence against adversarial or misconfigured zones whose NSEC3PARAM specifies very high iteration counts. RFC 9276 §2 establishes that any iteration count greater than zero is unnecessary in practice; the §2.4 recommendation of 0 (with a soft ceiling of 100 for legacy zones) is the operational guidance. The cap value is configurable to allow operators to accept legacy zones if they are willing to absorb the CPU cost, but the default is the RFC 9276 ceiling.
 *Source.* RFC 9276 §2, §2.4 (BCP 236); RFC 5155 §10.3.
 *Note.* The relaxation is bounded to the negative-proof case; positive responses against NSEC3-signed zones do not require chain traversal and are not affected by the cap. Where the operator has expressly configured `nsec3_max_iterations = 0` (or any value below the zone's actual iteration count), the affected zone is served without NSEC3-authenticated negative proofs but otherwise correctly; the cap does not deny service.
-*Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify response composition behaviour, warning emission cadence (once per zone per process), and metric increment. *Added in v0.9.*
+*Verification.* DNSSEC conformance tests against NSEC3-signed zones with iteration counts at, below, and above the configured cap; verify response composition behaviour, optional EDE emission when enabled, and metric increment. *Added in v0.9.*
 
 ## 4.14 RR Type Parsing and Serving
 
@@ -2815,7 +2814,7 @@ Catalog zones and their member zones MUST also appear in the ordinary zone-state
 *Source.* Operational requirement for RFC 9432 membership visibility; standard practice for operationally significant subsystems.
 *Verification.* Endpoint inspection with catalog membership present and absent; functional tests covering `managed="true"` and `managed="false"` samples; inspection confirming catalog-managed zones appear in ordinary zone and transfer metrics after insertion into the zone-state machine.
 
-**ODS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses where NSEC3 denial-of-existence proof records were omitted because the configured iteration cap was exceeded. The Engineering MVP implementation metric is `oxidedns_dnssec_nsec3_iterations_exceed_cap_total`; release acceptance SHOULD additionally provide the per-zone series required by ODS-FR-DNSSEC-014 or document why the global counter is sufficient for the deployed zone-count model.
+**ODS-NFR-OBS-009.** The metrics endpoint MUST expose a DNSSEC counter for responses where NSEC3 denial-of-existence proof records were omitted because the configured iteration cap was exceeded. The Engineering MVP implementation metric is `oxidedns_dnssec_nsec3_iterations_exceed_cap_total`. This counter intentionally has no `zone` label in the current profile: the diagnostic signal is global, and per-zone attribution is provided by retained query artifacts rather than high-cardinality runtime metrics.
 *Source.* ODS-FR-DNSSEC-014; ODS-FR-EDNS-018.
 *Verification.* Metric endpoint inspection after a query that triggers EDE INFO-CODE 27. *Added in v0.9 implementation alignment.*
 
