@@ -185,8 +185,6 @@ summarized in `docs/mvp-gap-register.md`.
 
 - decide or implement the catalog member-zone resource cap tracked in
   `docs/mvp-gap-register.md`;
-- decide the TSIG environment-secret boundary tracked in
-  `docs/mvp-gap-register.md`;
 - resolve runtime timeout defaults or revise the SRS boundary;
 - decide whether NSEC3 cap observability remains global for Engineering MVP or
   needs per-zone release evidence;

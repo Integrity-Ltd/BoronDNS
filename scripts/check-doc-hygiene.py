@@ -47,6 +47,9 @@ BANNED_PHRASES = [
     "Health endpoints, metrics, logging, and process interfaces are implemented:",
     "health.livez_timeout_ms",
     "ODS_HEALTH_LIVEZ_TIMEOUT_MS",
+    "TSIG secret loading from environment",
+    "TSIG environment-variable loading",
+    "environment-variable secret provisioning",
 ]
 
 SOURCE_BANNED_PHRASES = [

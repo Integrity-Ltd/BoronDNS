@@ -85,6 +85,9 @@ FORBIDDEN_TEXT = {
     "health.livez_timeout_ms": "SRS must not specify the removed liveness timeout configuration parameter",
     "ODS_HEALTH_LIVEZ_TIMEOUT_MS": "SRS must not document an environment override for a removed configuration parameter",
     "explicit liveness-probe-timeout": "SRS must treat liveness probe timeout policy as external to OxideDNS configuration",
+    "TSIG secret loading from environment": "SRS must align ODS-NFR-SEC-008 with inline and file-backed TSIG secrets",
+    "TSIG environment-variable loading": "SRS must not claim TSIG secrets load directly from environment variables",
+    "environment-variable secret provisioning": "SRS must recommend file-backed external secret projection instead",
 }
 
 REQUIRED_TEXT = [
@@ -138,6 +141,8 @@ REQUIRED_TEXT = [
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
     "OxideDNS does not expose a server-side liveness timeout parameter.",
     "Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model.",
+    "Aligns ODS-NFR-SEC-008 with the implemented inline/`secret_file` TSIG secret model",
+    "Production operator documentation (per ODS-NFR-MAINT-009) MUST recommend file-backed secret provisioning",
     "Capitalized requirement keywords in this C.6 section are conditional promotion",
     "Engineering MVP conformance",
     "It is not stored in this repository.",
