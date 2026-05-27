@@ -19,6 +19,9 @@ ID_RE = re.compile(ID_PATTERN)
 RANGE_RE = re.compile(rf"({ID_PATTERN})\.\.({ID_PATTERN})")
 SRS_DEF_RE = re.compile(rf"^\*\*({ID_PATTERN})\b", re.MULTILINE)
 VALID_STATES = {"Not Verified", "Partial", "Verified", "Deferred"}
+STALE_COUNT_RE = re.compile(
+    r"\ball\s+[0-9]+\s+SRS v0\.9\.1 requirement IDs\b"
+)
 
 
 def requirement_prefix(requirement_id: str) -> str:
@@ -93,6 +96,13 @@ def main() -> int:
     rows = ledger_rows(ledger_text)
     if not rows:
         errors.append("ledger table has no data rows")
+
+    for match in STALE_COUNT_RE.finditer(ledger_text):
+        line_number = ledger_text.count("\n", 0, match.start()) + 1
+        errors.append(
+            f"line {line_number}: avoid hardcoded SRS requirement counts; "
+            "refer to the generated checker instead"
+        )
 
     for line_number, columns in rows:
         state = columns[3]
