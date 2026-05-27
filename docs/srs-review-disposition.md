@@ -51,9 +51,11 @@ evidence are not Engineering MVP deliverables.
 This scope-trim boundary is code-checked by
 `scripts/check-srs-review-disposition.py`, which requires each retained
 post-Alpha feature family to cite current source paths, retained evidence
-paths, and implementation-specific source markers. If a feature is removed from
-code, the review disposition and Engineering MVP scope must change in the same
-patch.
+paths, and implementation-specific source markers. The same check also requires
+the reader-facing README, documentation index, Engineering MVP scope,
+implementation plan, gap register, and verification ledger to continue naming
+those families as implemented Engineering MVP scope. If a feature is removed
+from code, the scope documents must change in the same patch.
 
 The main SRS hygiene regressions from this review are also checked by
 `scripts/check-srs-hygiene.py`: old namespace artifacts, suffixed requirement

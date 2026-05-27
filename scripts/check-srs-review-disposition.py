@@ -11,6 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
+README_PATH = ROOT / "README.md"
+DOCS_README_PATH = ROOT / "docs" / "README.md"
+GAP_REGISTER_PATH = ROOT / "docs" / "mvp-gap-register.md"
+VERIFICATION_LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
+
+SCOPE_DOCUMENTS = [
+    DISPOSITION_PATH,
+    MVP_SCOPE_PATH,
+    IMPLEMENTATION_PLAN_PATH,
+    README_PATH,
+    DOCS_README_PATH,
+    GAP_REGISTER_PATH,
+    VERIFICATION_LEDGER_PATH,
+]
+
+
+def normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
 
 REQUIRED_REVIEW_DISPOSITIONS = [
     "ODS/RDS namespace mismatch",
@@ -191,8 +209,10 @@ FEATURES = {
 def main() -> int:
     errors: list[str] = []
     disposition = DISPOSITION_PATH.read_text(encoding="utf-8")
-    mvp_scope = MVP_SCOPE_PATH.read_text(encoding="utf-8")
-    implementation_plan = IMPLEMENTATION_PLAN_PATH.read_text(encoding="utf-8")
+    scope_document_texts = {
+        path: normalize_whitespace(path.read_text(encoding="utf-8"))
+        for path in SCOPE_DOCUMENTS
+    }
 
     for finding in REQUIRED_REVIEW_DISPOSITIONS:
         if finding not in disposition:
@@ -212,12 +232,12 @@ def main() -> int:
         )
         if not any(alias in disposition for alias in aliases):
             errors.append(f"{DISPOSITION_PATH.relative_to(ROOT)} omits {feature!r}")
-        if not any(alias in mvp_scope for alias in aliases):
-            errors.append(f"{MVP_SCOPE_PATH.relative_to(ROOT)} omits {feature!r}")
-        if not any(alias in implementation_plan for alias in aliases):
-            errors.append(
-                f"{IMPLEMENTATION_PLAN_PATH.relative_to(ROOT)} omits {feature!r}"
-            )
+        for scope_path, scope_text in scope_document_texts.items():
+            if not any(alias in scope_text for alias in aliases):
+                errors.append(
+                    f"{scope_path.relative_to(ROOT)} omits implemented "
+                    f"post-Alpha feature {feature!r}"
+                )
         for relative_path in paths:
             if relative_path not in disposition:
                 errors.append(
