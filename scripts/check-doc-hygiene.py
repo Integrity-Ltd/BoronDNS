@@ -21,6 +21,10 @@ BANNED_PHRASES = [
     "udns",
     "raw email intentionally",
     "Per VER-007 deferred",
+    "RFC 8914 EDE planned for v2",
+    "`BTreeMap`-backed zone store",
+    "Architecture Document will choose the initial implementation",
+    "v0.1–v0.2 design phase",
 ]
 
 
