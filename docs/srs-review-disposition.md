@@ -46,7 +46,10 @@ evidence are not Engineering MVP deliverables.
 ## MVP Trim Reconciliation
 
 The review's suggested MVP trim is treated as a starting-point recommendation,
-not as a deletion list for already-implemented code. The current boundary is:
+not as a deletion list for already-implemented code. The current boundary is the
+Engineering MVP scope plus the code-backed feature inventory in
+`docs/implemented-feature-scope.md`; formal SRS release acceptance remains a
+separate evidence gate.
 
 The table below mirrors the review's "defer these" list item by item. "Retained"
 means current code and tests already own a bounded slice; it does not mean the

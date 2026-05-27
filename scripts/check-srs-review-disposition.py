@@ -60,6 +60,8 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "MVP Trim Reconciliation",
     "not as a deletion list for already-implemented code",
     "mirrors the review's \"defer these\" list item by item",
+    "Engineering MVP scope plus the code-backed feature inventory",
+    "formal SRS release acceptance remains a separate evidence gate",
     "the governing test is current-code alignment",
     "first-party source ownership, representative tests or interop evidence, and current SRS owner identifiers",
     "move to a deferred or gap state in the same patch",
