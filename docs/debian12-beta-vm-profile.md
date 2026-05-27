@@ -14,6 +14,16 @@ repository:
 - Management interface: SSH and local-only health/metrics access, usually
   through an SSH tunnel.
 
+This VM is the secondary DNS server under test. It requires at least one
+configured primary authoritative DNS server, such as a BIND 9 host, that serves
+the master copy of the test zone and allows AXFR/IXFR from the OxideDNS VM. The
+primary should be authoritative-only for this test role: it should not provide
+recursive resolution, and it should be reachable only from the test OxideDNS
+addresses. Allow UDP/TCP 53 to the OxideDNS DNS interface, outbound TCP 53 or
+853 from OxideDNS to the primary, authorized NOTIFY from the primary, and ICMP
+Path MTU messages, including IPv4 Destination Unreachable / Fragmentation
+Needed (Type 3, Code 4) and ICMPv6 Packet Too Big.
+
 For this profile, prefer loading the release asset locally instead of relying on
 a registry during beta handover:
 
@@ -77,6 +87,7 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network host \
   --read-only \
+  --ulimit nofile=65536:65536 \
   --tmpfs /tmp:rw,size=32m \
   --tmpfs /run:rw,size=8m \
   --cap-drop ALL \

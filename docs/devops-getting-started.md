@@ -143,6 +143,12 @@ xz -dc target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | do
 docker run --rm oxidedns:<version> --version
 ```
 
+If Docker prints `WARNING: IPv4 forwarding is disabled. Networking will not
+work.`, that warning is from the Docker host, not from OxideDNS. Version output
+still works, but bridge networking and published ports may not. Enable Docker's
+required host forwarding, or use a deliberately designed host-network profile
+with host firewall rules.
+
 Recommended runtime hardening keeps the image non-root, read-only, and without
 ambient Linux capabilities. Map host port 53 to the image's unprivileged 5300
 listener instead of adding `CAP_NET_BIND_SERVICE`:
@@ -150,6 +156,7 @@ listener instead of adding `CAP_NET_BIND_SERVICE`:
 ```bash
 docker run -d --name oxidedns \
   --read-only \
+  --ulimit nofile=65536:65536 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 128 \
@@ -157,7 +164,8 @@ docker run -d --name oxidedns \
   -p 53:5300/tcp \
   -p 127.0.0.1:8080:8080/tcp \
   -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
-  oxidedns:<version>
+  oxidedns:<version> \
+  serve --config /etc/oxidedns-secondary/config.toml
 ```
 
 ## 7. Create a Config
@@ -169,7 +177,10 @@ cp config/oxidedns.example.toml /tmp/oxidedns.toml
 $EDITOR /tmp/oxidedns.toml
 ```
 
-For a real environment, replace at least:
+OxideDNS is a secondary-only authoritative server. It does not load BIND-style
+zone files directly and it does not act as the primary. For a real environment,
+first choose the primary authoritative server that will hold the zone master
+copy, then replace at least:
 
 - `[[zones]].name`
 - `[[zones]].primaries` or `[[zones.transfer_primaries]]`

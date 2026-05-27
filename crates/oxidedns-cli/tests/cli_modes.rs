@@ -74,7 +74,7 @@ fn validate_config_counts_dns_interface_listeners() {
     );
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("configuration ok: 1 zone(s), 1 UDP listener(s), 1 TCP listener(s)")
+            .contains("configuration ok: 1 secondary zone(s), 0 catalog zone(s), 1 UDP listener(s), 1 TCP listener(s)")
     );
 
     let _ = fs::remove_file(config);

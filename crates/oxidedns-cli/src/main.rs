@@ -146,8 +146,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             emit_config_warnings_to_stderr(&loaded.warnings);
             init_logging(&loaded.config)?;
             write_stdout_text(&format!(
-                "configuration ok: {} zone(s), {} UDP listener(s), {} TCP listener(s)",
+                "configuration ok: {} secondary zone(s), {} catalog zone(s), {} UDP listener(s), {} TCP listener(s)",
                 loaded.config.zones.len(),
+                loaded.config.catalog_zones.len(),
                 loaded.config.udp_listeners().len(),
                 loaded.config.tcp_listeners().len()
             ))

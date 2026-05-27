@@ -5,6 +5,8 @@
 OxideDNS is a secondary-only authoritative DNS server. It loads zone data from
 configured primary DNS servers over AXFR or IXFR, keeps the active zone state in
 memory, and serves authoritative DNS answers over UDP and TCP.
+It is not a recursive resolver, forwarder, primary DNS server, or zone-file
+loader.
 It uses separate DNS, transfer, and management interface roles. OxideDNS accepts authorized NOTIFY on the DNS listeners.
 
 The project is currently aimed at an Engineering MVP: a working, testable
@@ -43,7 +45,8 @@ cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
 
 The checked-in example uses high DNS ports so it can run without root. For a real
 deployment, copy it and replace the example primary addresses, zone names, TSIG
-keys, XoT files, listener addresses, and management bind address.
+keys, XoT files, listener addresses, and management bind address. At least one
+static secondary zone or catalog zone must be configured before service startup.
 
 When no config path is supplied, `oxidedns` reads
 `/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path

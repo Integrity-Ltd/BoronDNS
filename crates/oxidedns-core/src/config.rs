@@ -140,7 +140,7 @@ impl ServerConfig {
 
         if self.zones.is_empty() && self.catalog_zones.is_empty() {
             return Err(ConfigError::Invalid(
-                "at least one served zone or catalog zone is required".to_owned(),
+                "at least one [[zones]] or [[catalog_zones]] entry is required; OxideDNS is a secondary-only authoritative server, so configure a primary DNS server to transfer from before starting service".to_owned(),
             ));
         }
 

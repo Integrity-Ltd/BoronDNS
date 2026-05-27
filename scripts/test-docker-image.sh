@@ -89,6 +89,7 @@ EOF
 docker run -d \
     --name "$container" \
     --read-only \
+    --ulimit nofile=65536:65536 \
     --cap-drop ALL \
     --security-opt no-new-privileges \
     --pids-limit 128 \

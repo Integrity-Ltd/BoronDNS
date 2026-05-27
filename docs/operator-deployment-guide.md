@@ -98,11 +98,19 @@ xz -dc oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker
 docker run --rm oxidedns:<version> --version
 ```
 
+If Docker prints `WARNING: IPv4 forwarding is disabled. Networking will not
+work.`, that warning is emitted by the Docker host before OxideDNS starts.
+`--version` can still succeed, but bridge networking and `-p` port publishing
+may not. Fix the host Docker/sysctl networking setup before using bridge-mode
+service examples, or use a host-network deployment profile with explicit host
+firewall policy.
+
 Recommended Docker runtime hardening:
 
 ```sh
 docker run -d --name oxidedns \
   --read-only \
+  --ulimit nofile=65536:65536 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 128 \
@@ -110,7 +118,8 @@ docker run -d --name oxidedns \
   -p 53:5300/tcp \
   -p 127.0.0.1:8080:8080/tcp \
   -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
-  oxidedns:<version>
+  oxidedns:<version> \
+  serve --config /etc/oxidedns-secondary/config.toml
 ```
 
 The image runs as UID/GID `53053`, binds unprivileged container ports by
@@ -118,7 +127,10 @@ default, and expects configuration at
 `/etc/oxidedns-secondary/config.toml`. Mapping host port 53 to container port
 5300 avoids adding `CAP_NET_BIND_SERVICE`; if an operator changes the container
 configuration to bind port 53 directly, grant only that capability rather than
-running privileged.
+running privileged. The `--ulimit nofile=65536:65536` setting is intentionally
+shown even for small test deployments because host and Docker daemon defaults
+vary; OxideDNS validates the effective file-descriptor limit at startup against
+the configured TCP and transfer limits.
 
 The dedicated [Debian 12 beta VM profile](debian12-beta-vm-profile.md) covers
 the container-in-VM handover shape, including local image loading, host
