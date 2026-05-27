@@ -92,5 +92,5 @@ scripts/capture-interface-compatibility-evidence.sh
 scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace -- --test-threads=1
 cargo deny check

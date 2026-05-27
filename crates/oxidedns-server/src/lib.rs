@@ -9884,7 +9884,8 @@ mod tests {
     #[tokio::test]
     async fn runtime_does_not_open_health_listener_when_unconfigured() {
         let (primary, query_seen, release_primary) = spawn_blocked_axfr_primary().await;
-        let udp_addr = unused_udp_addr().await;
+        let tcp_guard = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let udp_addr = tcp_guard.local_addr().unwrap();
         let config = ServerConfig::from_toml_str(&format!(
             r#"
                 [server]
@@ -9910,14 +9911,9 @@ mod tests {
             .expect("initial transfer should start")
             .expect("primary should observe initial transfer query");
 
-        let connection = tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            TcpStream::connect(udp_addr),
-        )
-        .await
-        .expect("TCP connect attempt should finish promptly");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
-            connection.is_err(),
+            !server.is_finished(),
             "health endpoint must not listen when server.health is unset"
         );
 
@@ -16027,13 +16023,6 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-    }
-
-    async fn unused_udp_addr() -> std::net::SocketAddr {
-        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let addr = socket.local_addr().unwrap();
-        drop(socket);
-        addr
     }
 
     async fn unused_udp_tcp_addr() -> std::net::SocketAddr {

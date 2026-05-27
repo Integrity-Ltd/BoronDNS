@@ -50,8 +50,14 @@ cargo_summary_json="$cargo_artifact_dir/coverage-summary.json"
 
 cd "$repo_root"
 {
-    printf '$ cargo llvm-cov --workspace --summary-only --json --output-path %q\n\n' "$cargo_summary_json"
-    cargo llvm-cov --workspace --summary-only --json --output-path "$cargo_summary_json"
+    printf '$ cargo llvm-cov --workspace --summary-only --json --output-path %q -- --test-threads=1\n\n' "$cargo_summary_json"
+    cargo llvm-cov \
+        --workspace \
+        --summary-only \
+        --json \
+        --output-path "$cargo_summary_json" \
+        -- \
+        --test-threads=1
 } >"$coverage_log" 2>&1
 
 python3 - "$summary_json" "$artifact_dir" <<'PY'
