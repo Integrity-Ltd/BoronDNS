@@ -57,6 +57,18 @@ REQUIRED_TEXT_BY_PATH = {
         "Implementation-or-SRS decision",
         "Formal release evidence target",
         "not an Engineering MVP blocker unless promoted to a requirement",
+        "documentation ownership map",
+    ],
+    "docs/README.md": [
+        "## Document Ownership Rules",
+        "What is required behavior?",
+        "What is the local Engineering MVP boundary?",
+        "What is still open?",
+        "What evidence exists by requirement family?",
+        "What requirement ranges map to evidence?",
+        "How is the implementation structured?",
+        "How does an operator run it?",
+        "How was the external review handled?",
     ],
 }
 

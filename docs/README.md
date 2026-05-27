@@ -22,6 +22,24 @@ response behavior, bounded EDE diagnostics, and opt-in CHAOS self-identification
 all have current code and test ownership; remaining work for those features is
 tracked as evidence or explicit implementation gaps.
 
+## Document Ownership Rules
+
+Use this ownership map when editing docs. It is meant to prevent status text,
+evidence claims, and requirement wording from being copied into several places
+and slowly diverging.
+
+| Question | Owning document | Other documents should |
+| --- | --- | --- |
+| What is required behavior? | `OxideDNS-Secondary-SRS-v0.9.1.md` | Link to the requirement ID instead of restating normative wording. |
+| What is the local Engineering MVP boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred. |
+| Is the Engineering MVP ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
+| What is still open? | `mvp-gap-register.md` | Keep only short active gaps here; put detailed evidence in the ledger or Appendix A. |
+| What evidence exists by requirement family? | `verification-ledger.md` | Keep coarse status here; put per-requirement/range detail in Appendix A. |
+| What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
+| How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
+| How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
+| How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
+
 ## Current Requirements and Design
 
 - `OxideDNS-Secondary-SRS-v0.9.1.md`: current normative Software Requirements

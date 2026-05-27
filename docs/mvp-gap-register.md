@@ -6,6 +6,9 @@ detailed evidence ledger.
 
 Detailed evidence ownership:
 
+- `docs/README.md` records the documentation ownership map used to keep SRS,
+  scope, gap, evidence, traceability, architecture, and operator material from
+  becoming competing sources of truth.
 - `docs/verification-ledger.md` records coarse verification state.
 - `docs/appendix-a-traceability-matrix.md` records requirement-range evidence
   and remaining acceptance work.
