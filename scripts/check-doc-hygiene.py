@@ -156,6 +156,13 @@ REQUIRED_TEXT_BY_PATH = {
         "keep release-build tuning history in `CHANGELOG.md`",
         "docs/future-optimization-tracks.md",
     ],
+    "docs/health-metrics-interface.md": [
+        "`ODS-NFR-OBS-003..009`",
+        "current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is",
+        "coupled to emitted EDE INFO-CODE 27",
+        "with `edns.extended_dns_errors = \"off\"",
+        "owned by `docs/mvp-gap-register.md`",
+    ],
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",
         "it is not the canonical inventory of every evidence script",

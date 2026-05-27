@@ -1,7 +1,7 @@
 # Health and Metrics Interface
 
 Status: current interface contract for `ODS-IF-HEALTH-001..006` and
-`ODS-NFR-OBS-003..008`.
+`ODS-NFR-OBS-003..009`.
 
 This document owns the concrete HTTP shape of the OxideDNS health and metrics
 endpoint. The SRS owns the normative requirement IDs; this document keeps the
@@ -108,6 +108,11 @@ The metrics endpoint exposes these implemented metric families:
   buckets configured by `[metrics].latency_histogram_buckets`;
 - opt-in active-zone shape gauges under `oxidedns_zone_shape_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
+
+The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
+coupled to emitted EDE INFO-CODE 27: with `edns.extended_dns_errors = "off"`,
+over-cap NSEC3 proof omissions are not counted yet. The formal acceptance gap is
+owned by `docs/mvp-gap-register.md`.
 
 The opt-in metric families may walk active zone snapshots or collect extra
 pipeline timing. Keep `[metrics].zone_shape_enabled` and
