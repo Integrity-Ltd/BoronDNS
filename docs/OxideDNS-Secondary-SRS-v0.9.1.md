@@ -2956,7 +2956,7 @@ Direct integration with external secret stores (HashiCorp Vault, AWS Secrets Man
 *Verification.* SIGHUP signal tests confirming no configuration change behaviour.
 
 **ODS-IF-CONF-008.** The server SHOULD detect operationally suspicious but technically valid configurations and emit warning-level log entries at startup describing each concern, WITHOUT preventing startup. The catalogue of suspicious patterns the server SHOULD detect includes at minimum:
-- TSIG fudge value larger than 60 seconds (RFC 8945 §10.4 recommends short fudges; per ODS-NFR-REL-007 operationally tipical is 5–30 seconds);
+- TSIG fudge value larger than 60 seconds (RFC 8945 §10.4 recommends short fudges; per ODS-NFR-REL-007 operationally typical is 5–30 seconds);
 - SOA REFRESH or RETRY values approaching the maximum effective ceiling of ODS-FR-ZSM-011 (suggesting the operator may have intended a smaller value);
 - RRL allowlist (ODS-FR-RRL-006) containing `0.0.0.0/0` or `::/0` (effectively disabling RRL);
 - DNS Cookies disabled in configuration (operationally significant security regression);

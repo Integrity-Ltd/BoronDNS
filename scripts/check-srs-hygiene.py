@@ -149,6 +149,7 @@ FORBIDDEN_TEXT = {
     "RFC 9276 section 2.4": "RFC 9276 section 2.4 is salt; NSEC3 iteration guidance is in sections 2.3 and 3.1",
     "soft ceiling recommended by RFC 9276": "RFC 9276 recommends zero NSEC3 iterations; 100 is an OxideDNS compatibility default informed by Appendix A measurements",
     "default is the RFC 9276 ceiling": "RFC 9276 recommends zero NSEC3 iterations; 100 is an OxideDNS compatibility default",
+    "tipical": "typo in normative SRS text",
     "Each process restart MUST generate a fresh secret.": "process-local DNS Cookie secrets are Engineering MVP behavior, not the full RFC 9018 shared-secret target",
     "DNS Cookie secrets replaced with `<redacted>`": "current configuration has no DNS Cookie secret field; future configured Server Secret material must be described conditionally",
     "MUST compile the kernel-side eBPF program at server build time and embed it in the server binary as compiled bytecode": "future eBPF packaging detail belongs in future optimization and architecture docs, not the current invariant",
