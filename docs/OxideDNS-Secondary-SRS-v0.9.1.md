@@ -4580,28 +4580,66 @@ The Decision column is to be populated as the project's review process reaches e
 
 ## C.6 Post-MVP / v2 Scope Items
 
-This section records architectural enhancements that have been explicitly considered during the v0.1–v0.2 design phase and deliberately deferred beyond the MVP. They are recorded here — rather than discarded — because the decisions are live, the context is fresh, and the Architecture Document must be written with these future directions in mind so that the MVP design does not inadvertently foreclose them. Each entry states the feature, the rationale for deferral, the entry condition for re-evaluation, and any architectural constraints the MVP implementation must observe to remain compatible.
+This section records future OxideDNS server optimisation tracks that remain
+outside the current Engineering MVP runtime. They are retained so the current
+architecture does not foreclose later packet-I/O, zone-store, or response-cache
+work, but they are not hidden MVP requirements. Current implementation status
+and unsafe-boundary ownership are maintained by the Architecture Document,
+`docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
 
 ### C.6.1 XDP/eBPF Kernel-Bypass on the DNS Query Interface
 
-*Description.* Deploying an XDP (eXpress Data Path) programme — written using the Aya Rust eBPF framework — on the DNS query interface NIC driver. The XDP programme performs a first-pass classification of inbound packets: well-formed DNS/UDP queries can be answered entirely within the XDP hook via `XDP_TX` (the response never enters the kernel network stack); packets requiring full application processing are forwarded via an AF_XDP socket to the Tokio async worker pool.
+*Description.* Future deployment of an XDP (eXpress Data Path) program on the
+OxideDNS server DNS query interface. A future implementation may use a
+kernel-side classifier for simple DNS/UDP responses and an AF_XDP userspace path
+for packets requiring full application processing, but the current OxideDNS
+server runtime uses Tokio UDP/TCP sockets and has no XDP/eBPF or AF_XDP packet
+backend.
 
-*Rationale for deferral.* Native XDP requires driver-mode support (`XDP_FLAGS_DRV_MODE`), which is unavailable in virtual machines under most hypervisors (KVM, VMware, Hyper-V). The MVP deployment model is container-first on general-purpose Linux hosts, which may be VMs. Generic/SKB-mode XDP is available in VMs but provides no meaningful performance benefit over standard socket I/O. The feature becomes viable only in deployments with a dedicated physical NIC (or SR-IOV Virtual Function) passed through directly to the container — a deployment precondition that is outside the MVP scope.
+*Scope boundary.* The current `oxide-gun` crate has an explicit AF_XDP backend
+for load-generation on Linux lab hosts. That code is test-tool scope only and
+does not satisfy or activate this OxideDNS server optimisation track.
 
-*Entry condition for re-evaluation.* Performance benchmarking of the current implementation reveals that the 50,000 qps per core target (ODS-NFR-PERF-001) cannot be met without kernel bypass, or an operational environment with SR-IOV NIC passthrough becomes available as a standard deployment target.
+*Rationale for deferral.* XDP/eBPF and AF_XDP require deployment-specific
+kernel, NIC, queue, capability, attach/detach, and fallback handling. The
+current Engineering MVP deployment model is a general Linux/POSIX process or
+container profile using ordinary kernel sockets. Bringing XDP/eBPF into the
+server would require a separate privileged deployment profile and targeted
+adapter safety evidence.
+
+*Entry condition for re-evaluation.* Benchmarks of the current implementation
+show that the Tokio socket path, rather than zone lookup or response assembly,
+prevents the server from meeting the relevant performance target, or a
+deployment profile with dedicated XDP-capable network hardware becomes a
+standard target.
 
 *Architectural constraints on the current implementation.*
 - The DNS query socket layer MUST be encapsulated behind a trait abstraction (e.g., `trait PacketIo`) so that the XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
 - The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the MVP.
-- When ODS-IF-NET-006 is re-evaluated for the XDP variant, the ICMP Fragmentation Needed / Packet Too Big handling that the kernel currently performs transparently MUST be re-implemented in the XDP programme, since the bypass eliminates the kernel path that would otherwise generate these responses.
+- When ODS-IF-NET-006 is re-evaluated for the XDP variant, packet-size and path-MTU behaviour that is currently delegated to the kernel socket path MUST be covered by explicit implementation and tests for the bypass path.
+- Runtime loading of operator-supplied eBPF programs remains prohibited by ODS-INV-009. Any future kernel-side program MUST be built as a versioned project artifact and attached only through the audited adapter path.
+- First-party `unsafe` and unsafe-prone dependencies for this backend MUST remain confined to the registry-listed packet-I/O adapter boundary and MUST carry `/// # Safety` / `// SAFETY:` rationale and backend fault evidence before production enablement.
 
-*Note.* The decision to use Aya (pure-Rust eBPF) rather than libbpf/C eBPF is consistent with the project's Rust-only implementation constraint (ODS-INV-002 equivalent) and should be confirmed when this feature is brought into scope.
+*Note.* The concrete eBPF userspace library choice, such as Aya versus a
+libbpf-based crate, is not fixed by this SRS revision. It must be selected and
+reviewed when this feature is brought into scope.
 
 ### C.6.2 Optimised Packed-Binary In-Memory Zone Store
 
-*Description.* Replacing the MVP zone store data structure with a packed-binary region layout modelled on NSD's approach but potentially improved further for Rust. In this model, all RRs for a zone are serialised in DNS wire format into a single contiguous memory arena (bump-allocated at AXFR ingestion time); the lookup index (a radix tree or critbit tree) stores integer offsets into the arena rather than pointers to heap-allocated objects. Zone replacement on refresh is a single atomic `Arc` swap of the arena plus index pair.
+*Description.* Replacing the current Engineering MVP zone store with a
+packed-binary region layout modelled on NSD-style memory locality. In this
+model, all RRs for a zone may be serialised in DNS wire format into a contiguous
+memory arena built at transfer-ingestion time; the lookup index would store
+integer offsets into the arena rather than pointers to heap-allocated objects.
+Zone replacement on refresh would remain atomic by publishing a complete arena
+plus index snapshot.
 
-*Rationale for deferral.* The MVP in-memory store is specified only at the requirement level (§4.15); the Architecture Document will choose the initial implementation. A simpler structure (e.g., `BTreeMap<Name, Vec<RrSet>>`) is easier to implement correctly and passes all functional requirements. The packed-binary layout is a performance optimisation whose benefit is quantifiable only after MVP benchmarking.
+*Rationale for deferral.* The current implementation uses a simple
+memory-resident `HashMap` snapshot store protected by `RwLock` and publishes
+complete `Arc<ZoneSnapshot>` values. This is easy to inspect, has direct
+functional coverage, and is already benchmarked before any packed-store work is
+justified. The packed-binary layout is a performance and memory-locality
+optimisation whose benefit must be demonstrated against measured bottlenecks.
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
 
@@ -4614,9 +4652,21 @@ This section records architectural enhancements that have been explicitly consid
 
 ### C.6.3 Pre-Baked Response Cache for Hot Query Patterns
 
-*Description.* A lock-free in-process cache of serialised DNS response packets (wire format, ready to send) keyed on `(QNAME, QTYPE, DO-bit)`. On a cache hit, the server copies the pre-built packet, patches the QID field, and sends — bypassing zone-store lookup and response assembly entirely. The cache is sized to cover the most frequent query patterns (DNS query traffic is empirically Zipf-distributed; the top ~5% of QNAME/QTYPE pairs typically account for ~80% of query volume). Cache invalidation on zone refresh purges all entries belonging to the refreshed zone.
+*Description.* A future in-process cache of serialised authoritative DNS
+response packets (wire format, ready to send) keyed on the fields that affect
+response composition, at minimum `(QNAME, QTYPE, DO-bit)`. On a cache hit, the
+server would copy the pre-built packet, patch the QID field, and send it,
+bypassing zone-store lookup and response assembly. Cache sizing and admission
+policy would be driven by measured query distribution rather than fixed in this
+SRS revision. Cache invalidation on zone refresh must purge all entries
+belonging to the refreshed zone.
 
-*Rationale for deferral.* The MVP already serves zones entirely from memory (§4.15); the marginal benefit of the response cache over an already-in-memory zone store is measurable only after MVP benchmarking. The cache introduces complexity (invalidation logic, DO-bit interaction, DNSSEC TTL decay) that is unjustified before measured evidence of need.
+*Rationale for deferral.* The current Engineering MVP already serves zones
+entirely from memory (§4.15). The marginal benefit of a response cache over the
+current in-memory zone store and response path is measurable only after
+benchmarking identifies response assembly as a bottleneck. The cache introduces
+complexity (invalidation logic, DO-bit interaction, DNSSEC TTL decay) that is
+unjustified before measured evidence of need.
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
 
