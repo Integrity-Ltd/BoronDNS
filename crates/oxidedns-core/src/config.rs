@@ -455,7 +455,7 @@ impl ServerConfig {
                 code: "nsec3_iterations_large",
                 parameter: "dnssec.nsec3_max_iterations".to_owned(),
                 message: format!(
-                    "NSEC3 iteration cap {} exceeds the RFC 9276 / BCP 236 soft ceiling of {}",
+                    "NSEC3 iteration cap {} exceeds the OxideDNS compatibility default of {}; RFC 9276 / BCP 236 recommends zero iterations for NSEC3 publishers",
                     self.dnssec.nsec3_max_iterations,
                     default_nsec3_max_iterations()
                 ),
