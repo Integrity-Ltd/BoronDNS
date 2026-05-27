@@ -227,7 +227,7 @@ For privileged port 53, prefer one of:
 OxideDNS ignores `SIGHUP`; configuration changes require a process restart.
 `SIGTERM` and `SIGINT` trigger graceful shutdown.
 
-## 10. Next Documents
+## 11. Next Documents
 
 - [Operator deployment guide](operator-deployment-guide.md): full runtime,
   monitoring, security, and release evidence guidance.

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+TOP_LEVEL_NUMBERED_HEADING = re.compile(r"^## ([0-9]+)\. ")
 
 BANNED_PHRASES = [
     "Tibor's SRS",
@@ -202,9 +204,23 @@ def main() -> int:
     violations: list[str] = []
     for path in current_doc_paths():
         text = path.read_text(encoding="utf-8")
+        numbered_headings: dict[str, int] = {}
+        relative = path.relative_to(ROOT)
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            match = TOP_LEVEL_NUMBERED_HEADING.match(line)
+            if match is None:
+                continue
+            heading_number = match.group(1)
+            if heading_number in numbered_headings:
+                violations.append(
+                    f"{relative}: duplicate top-level numbered heading "
+                    f"{heading_number!r} at lines "
+                    f"{numbered_headings[heading_number]} and {line_number}"
+                )
+            else:
+                numbered_headings[heading_number] = line_number
         for phrase in BANNED_PHRASES:
             if phrase in text:
-                relative = path.relative_to(ROOT)
                 violations.append(f"{relative}: stale phrase {phrase!r}")
         relative_string = path.relative_to(ROOT).as_posix()
         for phrase in REQUIRED_TEXT_BY_PATH.get(relative_string, []):
