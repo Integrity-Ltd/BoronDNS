@@ -386,7 +386,7 @@ Zone-state data carried as optional content in NOTIFY messages — most notably 
 
 Configuration file reading and secret-file reading per ODS-IF-CONF-004 occur only during the startup phase, before query handling begins; these are not within scope of the prohibition. Log emission to stdout and stderr (per ODS-IF-LOG-001) is file-descriptor I/O directed at standard streams, not filesystem path I/O against zone storage; this is permitted.
 
-*Rationale.* Eliminates an entire class of latency variability and a category of operational complexity. Removes the possibility of inconsistent on-disk state outliving an operational error. Permits deployment on read-only root filesystems and on scratch container images.
+*Rationale.* Eliminates an entire class of latency variability and a category of operational complexity. Removes the possibility of inconsistent on-disk state outliving an operational error. Supports deployment on read-only root filesystems. It does not by itself prove scratch or distroless image compatibility; that claim depends on the release artifact boundary in §2.4 and §2.5, including binary inspection for runtime shared-library dependencies.
 
 *Implications.* Zone data is not memory-mapped from disk. There is no on-disk zone cache. There is no swap-eligible zone storage in the design — operators are responsible for ensuring sufficient RAM (per ODS-NFR-RES-003) and for disabling swap where production performance requires it. Configuration parsing is a startup-only filesystem operation; once startup completes, the query path is filesystem-free.
 
