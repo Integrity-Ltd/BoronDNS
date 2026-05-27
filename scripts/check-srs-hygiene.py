@@ -59,6 +59,14 @@ FORBIDDEN_TEXT = {
     "final audit cycle revision": "review cycles must remain open to corrective code/RFC alignment",
     "Audit cycles of equivalent depth are not anticipated": "review cycles must remain open to corrective code/RFC alignment",
     "The SRS body is considered structurally stable from v0.7 onward": "identifier stability must not block corrective SRS restructuring",
+    "catalog-specific Prometheus metrics catalogue": "SRS must not require unimplemented catalog-specific counter families",
+    "oxidedns_secondary_catalog_member_zones": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_last_transfer_timestamp_seconds": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_transfer_failures_total": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_member_additions_total": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_member_removals_total": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_members_rejected_total": "SRS must align with implemented catalog membership metric",
+    "oxidedns_secondary_catalog_state": "SRS must align with implemented catalog membership metric",
 }
 
 REQUIRED_TEXT = [
@@ -104,6 +112,9 @@ REQUIRED_TEXT = [
     "The v0.7 audit pass is historical evidence, not a prohibition on later corrective review.",
     "The requirement identifier and category framework remains stable for traceability",
     "Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope",
+    "oxidedns_catalog_member_info{catalog_zone=\"<catalog-apex>\",zone=\"<member-apex>\",managed=\"<true|false>\"} 1",
+    "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
+    "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
