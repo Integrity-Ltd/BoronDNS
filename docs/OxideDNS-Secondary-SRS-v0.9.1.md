@@ -1531,7 +1531,7 @@ This subsection specifies the server's implementation of Extension Mechanisms fo
 
 The interaction between EDNS0 UDP payload negotiation and TCP fallback is governed jointly by this subsection and §4.12; the response truncation behaviour (TC bit setting and message construction under size constraints) is specified in §4.12, while the determination of the applicable UDP size ceiling is specified here.
 
-EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in scope per PID Appendix A. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
+EDNS options not enumerated in this subsection are recognised as unknown and handled per ODS-FR-EDNS-014. EDNS Client Subnet (RFC 7871) and EDNS Expire (RFC 7314) are not in scope per PID Appendix A. The EDNS Expire exclusion is limited to the EDNS option-code mechanism of RFC 7314; it does not remove the ordinary SOA REFRESH/RETRY/EXPIRE, AXFR/IXFR, and NOTIFY behaviours specified in §4.6, §4.7, §4.8, and §4.16. DNS Cookies (RFC 7873) is in scope and specified in §4.19. NSID (RFC 5001) is in scope and specified in ODS-FR-EDNS-016 above. Extended DNS Errors (RFC 8914) are in scope only for the bounded diagnostic profile specified in ODS-FR-EDNS-018.
 
 The area code **EDNS** is allocated.
 
@@ -4392,9 +4392,9 @@ The entry is preserved in this register, with this updated status, per the ident
 
 ### C.3.10 EDNS Expire (RFC 7314)
 
-*Description.* An EDNS option allowing a primary to convey the SOA EXPIRE value to a secondary directly during zone transfer, avoiding subsequent SOA polls in some scenarios.
+*Description.* An experimental EDNS option for zone maintenance queries (typically SOA, AXFR, and IXFR) that lets a primary or intermediate secondary convey remaining expire-timer information to a secondary. RFC 7314 is intended to preserve SOA EXPIRE semantics across indirect secondary-to-secondary transfer graphs; it is not a replacement for ordinary SOA refresh polling, NOTIFY, AXFR, or IXFR.
 
-*Rationale for exclusion.* Minor operational optimisation; out of PID scope.
+*Rationale for exclusion.* Minor operational optimisation for indirect transfer topologies; out of PID scope.
 
 *Enforcement.* Not implemented.
 

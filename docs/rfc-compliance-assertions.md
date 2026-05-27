@@ -5,6 +5,8 @@ Status: current Engineering MVP compliance posture, synchronized with SRS v0.9.1
 This register is the primary documentation source for ODS-VER-014. Release notes
 must copy this structured list, update the evidence pointers to the release
 snapshot, and replace any current-main gaps with release-specific dispositions.
+Rows marked `Informative Only` are not compliance claims; they record standards
+cited for context or explicitly excluded from the current SRS scope.
 
 | RFC number | RFC title | Compliance status | Scope qualifier | Unresolved compliance gaps | Target resolution release | SRS revision | Evidence pointer |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -29,6 +31,7 @@ snapshot, and replace any current-main gaps with release-specific dispositions.
 | RFC 7766 | DNS Transport over TCP | Partially Compliant | DNS-over-TCP query and transfer transport | Broader write-timeout, release-retained outbound-connect-timeout, release-retained saturation, and cap-edge evidence remains open | MVP | SRS v0.9.1 | scripts/interop-tcp-truncation-retry.sh |
 | RFC 7828 | edns-tcp-keepalive EDNS0 Option | Partially Compliant | EDNS keepalive request handling and TCP timeout advertisement | Release-specific client interop remains open | MVP | SRS v0.9.1 | scripts/interop-edns-behavior.sh |
 | RFC 7830 | EDNS(0) Padding Option | Partially Compliant | response padding option when configured | Release-specific client interop remains open | MVP | SRS v0.9.1 | scripts/interop-edns-behavior.sh |
+| RFC 7314 | EDNS EXPIRE Option | Informative Only | explicitly excluded EDNS zone-expire signalling; ordinary SOA refresh/expire, AXFR/IXFR, and NOTIFY remain in scope elsewhere | None; C.3.10 records current-scope exclusion | N/A | SRS v0.9.1 | docs/OxideDNS-Secondary-SRS-v0.9.1.md |
 | RFC 7873 | Domain Name System (DNS) Cookies | Partially Compliant | server-side COOKIE option recognition, response cases, BADCOOKIE behavior, and RRL interaction | Broader BIND/Knot deployment interop and release-level COOKIE narrative remain open | MVP | SRS v0.9.1 | scripts/interop-dns-cookie-dig.sh; crates/oxidedns-core/src/dns.rs; crates/oxidedns-server/src/lib.rs |
 | RFC 9018 | Interoperable DNS Server Cookies | Partially Compliant | version-1 server-cookie construction, validation, timestamp tolerance, and rotation policy | Broader deployment interop artifacts remain open | MVP | SRS v0.9.1 | scripts/interop-dns-cookie-dig.sh; crates/oxidedns-core/src/dns.rs |
 | RFC 8914 | Extended DNS Errors | Partially Compliant | bounded opt-in authoritative diagnostics only: Not Ready and Unsupported NSEC3 Iterations | Broader EDE client interop and traceability remain open | MVP | SRS v0.9.1 | crates/oxidedns-core/src/dns.rs; crates/oxidedns-server/src/lib.rs; scripts/interop-edns-behavior.sh; scripts/interop-dnssec-nsec3-serve.sh |

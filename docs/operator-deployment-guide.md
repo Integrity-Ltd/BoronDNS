@@ -852,6 +852,9 @@ Refresh checks:
   movement after a primary sends NOTIFY.
 - Confirm expired or loading zones return SERVFAIL rather than stale
   authoritative data.
+- Do not expect EDNS Expire (RFC 7314) signalling in SOA/AXFR/IXFR exchanges.
+  OxideDNS uses the transferred SOA timers, NOTIFY, AXFR, and IXFR paths above;
+  RFC 7314 is intentionally outside the current SRS scope.
 
 Shutdown and restart checks:
 
