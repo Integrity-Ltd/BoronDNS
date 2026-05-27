@@ -3437,7 +3437,7 @@ The PID establishes Alpha and MVP milestones. The acceptance criteria for each a
 - Interoperability per §7.2 with **at least one** of {NSD, Knot DNS, BIND 9} as primary; the specific primary version tested MUST be recorded per ODS-VER-013.
 - Zone Provisioning (§4.20): ODS-FR-PROV-001, -002, -003, -004 covering explicit `[[zones]]` (i.e., backward-compatible behaviour with v0.1 through v0.7) are required for Alpha; catalog-zone requirements ODS-FR-PROV-005 through ODS-FR-PROV-014 and the catalog-related security NFRs ODS-NFR-SEC-010 through ODS-NFR-SEC-015 are not required for Alpha but remain in scope for the formal SRS MVP release gate. ODS-NFR-SEC-008 (TSIG environment-variable loading) and ODS-NFR-SEC-009 (TSIG advisory and `require_tsig`) are required for Alpha as part of the Alpha SEC subset.
 
-Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XOT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extension ODS-NFR-OBS-008 (catalog metrics), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal SRS MVP release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
+Not required for Alpha, but required by the formal SRS MVP release gate: §4.7 (IXFR), §4.9 (full TSIG), §4.10 (XoT), §4.13 (DNSSEC serving), §4.17 (RRL), §4.19 (DNS Cookies), §4.14 expanded RR catalogue, all ODS-NFR-PERF performance targets (full conformance), full security/maintainability verification (ODS-NFR-SEC-006/-007, ODS-NFR-MAINT-002/-005/-006/-007/-008/-009), reliability NFRs ODS-NFR-REL-006/-007, observability extension ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics), resource extensions ODS-NFR-RES-002/-003/-004/-005/-006, second and third primary interop, ODS-IF-PROC-004 (`--example-config`), and §4.20 catalog-zone requirements and associated NFRs as enumerated above. Implementations may deliver any of these before the formal SRS MVP release gate; when they do, remaining work is tracked as evidence and acceptance coverage rather than as an automatic feature deferral.
 *Source.* PID §6.
 *Verification.* Acceptance review at the Alpha milestone gate per the cadence policy of ODS-VER-011 (Gate methods).
 
@@ -3627,7 +3627,7 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 
 **RFC 9103 — DNS Zone Transfer over TLS** (Toorop, Dickinson, Sahib, Aras, Mankin, 2022).
 *Scope.* Partial (client-side; this server is XoT client only per §4.10 scope statement).
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 *Key clauses.* §6 (port, ALPN) → XOT-003, XOT-004; §6.5 (connection persistence) → XOT-009; §7.1 (TLS versions) → XOT-001; §7.4 (ALPN) → XOT-004; §9.1 (Strict Profile, authentication) → XOT-005, XOT-006; §9.2 (Opportunistic Profile) → ODS-NEG-016 (prohibited); §9.3 (combined with TSIG) → XOT-008; §9.4 (mTLS) → XOT-007.
 *Out-of-scope clauses.* §6.4 (NOTIFY over TLS, receiver side) — ODS-NEG-017; XoT server-side requirements throughout — ODS-NEG-005 implicitly via secondary-only role.
 
@@ -3779,30 +3779,30 @@ The coarse-grained mapping is provided in A.3 below. Fine-grained mapping is ill
 
 **RFC 5246 — The Transport Layer Security (TLS) Protocol Version 1.2** (Dierks & Rescorla, 2008).
 *Scope.* Required-to-implement per XOT-001.
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 
 **RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3** (Rescorla, 2018).
 *Scope.* Recommended per XOT-001.
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 
 **RFC 9325 — Recommendations for Secure Use of Transport Layer Security (TLS) and Datagram Transport Layer Security (DTLS)** (Sheffer, Saint-Andre, Fossati, 2022) — BCP 195.
 *Scope.* Full (cipher suite and TLS-usage profile).
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 *Key clauses.* AEAD cipher requirements → XOT-002; prohibited cipher categories → XOT-002.
 
 **RFC 6066 — Transport Layer Security (TLS) Extensions: Extension Definitions** (Eastlake, 2011).
 *Scope.* Partial (SNI extension required for XoT).
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 *Key clauses.* SNI extension → XOT-005.
 
 **RFC 5280 — Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile** (Cooper et al., 2008).
 *Scope.* Full (PKIX validation for XoT).
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 *Key clauses.* Path validation algorithm → XOT-005.
 
 **RFC 7858 — Specification for DNS over Transport Layer Security (TLS)** (Hu, Zhu, Heidemann, Mankin, Wessels, Hoffman, 2016).
 *Scope.* Partial (ALPN identifier "dot" only; this server does not implement DoT for queries).
-*Implementing sections.* §4.10 (XOT).
+*Implementing sections.* §4.10 (XoT).
 *Key clauses.* ALPN identifier → XOT-004.
 
 ## A.4 Sample Fine-Grained Clause Mapping

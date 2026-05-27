@@ -60,6 +60,7 @@ FORBIDDEN_TEXT = {
     "Audit cycles of equivalent depth are not anticipated": "review cycles must remain open to corrective code/RFC alignment",
     "The SRS body is considered structurally stable from v0.7 onward": "identifier stability must not block corrective SRS restructuring",
     "catalog-specific Prometheus metrics catalogue": "SRS must not require unimplemented catalog-specific counter families",
+    "ODS-NFR-OBS-008 (catalog metrics)": "catalog observability wording must match implemented membership metric plus ordinary metrics",
     "oxidedns_secondary_catalog_member_zones": "SRS must align with implemented catalog membership metric",
     "oxidedns_secondary_catalog_last_transfer_timestamp_seconds": "SRS must align with implemented catalog membership metric",
     "oxidedns_secondary_catalog_transfer_failures_total": "SRS must align with implemented catalog membership metric",
@@ -114,6 +115,7 @@ REQUIRED_TEXT = [
     "Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope",
     "oxidedns_catalog_member_info{catalog_zone=\"<catalog-apex>\",zone=\"<member-apex>\",managed=\"<true|false>\"} 1",
     "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
+    "ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics)",
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
 ]
 
