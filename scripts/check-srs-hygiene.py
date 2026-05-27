@@ -65,6 +65,8 @@ FORBIDDEN_TEXT = {
     "Vixie / Schryver RRL design; BIND 9 RRL implementation": "avoid treating BIND behavior as the direct source for OxideDNS RRL semantics",
     "BIND 9 default RRL configuration": "OxideDNS RRL thresholds are project defaults, not BIND defaults",
     "consistent with operational practice in NSD, Knot, and BIND": "avoid broad implementation-practice claims without retained evidence",
+    "Operational RRL practice documented by BIND 9, Knot DNS, and NSD": "RRL semantics are OxideDNS project policy, not a vendor-derived standard",
+    "Similar response-rate-limiting mechanisms are documented by BIND 9, Knot DNS, and NSD": "avoid broad RRL vendor-practice claims in normative SRS text",
     "operational benchmarking against existing secondary-only authoritative servers (NSD, Knot DNS)": "performance targets must not be presented as existing cross-server benchmark evidence",
     "comparable to NSD and Knot on equivalent hardware": "performance targets require retained OxideDNS benchmark evidence before conformance claims",
     "performance is expected to scale roughly with available CPU and network resources": "avoid unsupported performance scaling claims",

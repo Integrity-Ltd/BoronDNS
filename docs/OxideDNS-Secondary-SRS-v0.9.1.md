@@ -2060,7 +2060,7 @@ The state machine MUST also enforce a configurable maximum effective interval fo
 
 This subsection specifies Response Rate Limiting (RRL), the mechanism by which the server constrains its utility as an amplification vector for reflection attacks. RRL accounts the rate of responses produced for each accounting key (typically a source-IP prefix and a response category), and applies a configurable action — silent drop or truncation-marker response — when the rate exceeds a configured threshold.
 
-RRL is not the subject of an IETF standard-track RFC. Similar response-rate-limiting mechanisms are documented by BIND 9, Knot DNS, and NSD, but their defaults and accounting models differ. This subsection therefore defines the OxideDNS project model explicitly: a process-wide, UDP-query-response limiter with configurable source-prefix aggregation, response-category buckets, slip behavior, key-count cap, allowlist, logs, and metrics. RRL is a project-required operational feature without RFC citation, on the basis of its operational maturity.
+RRL is not the subject of an IETF standard-track RFC. OxideDNS does not claim vendor-equivalent RRL semantics. This subsection therefore defines the OxideDNS project model explicitly: a process-wide, UDP-query-response limiter with configurable source-prefix aggregation, response-category buckets, slip behavior, key-count cap, allowlist, logs, and metrics. The default thresholds are project defaults recorded in `docs/rrl-release-thresholds.md`; formal acceptance requires retained operational review of those defaults.
 
 RRL is one of three complementary anti-amplification mechanisms in this server: the ANY-query minimisation policy of §4.2 (ODS-FR-QRY-005, ODS-FR-QRY-006) reduces the per-response amplification factor for ANY queries specifically; TCP fallback via TC=1 (§4.12) requires reflected clients to establish a TCP handshake to receive substantial data; and RRL itself bounds the rate at which the server contributes to any reflection campaign.
 
@@ -2081,7 +2081,7 @@ The area code **RRL** is allocated.
 - (d) referral responses (RCODE = NOERROR with non-empty NS authority and empty answer section);
 - (e) error responses (RCODE other than NOERROR or NXDOMAIN — SERVFAIL, REFUSED, FORMERR, NOTIMP, etc.).
 
-*Source.* Operational RRL practice documented by BIND 9, Knot DNS, and NSD; project-specific category model in this SRS.
+*Source.* OxideDNS project RRL accounting model; response categories are the code-owned bucket model for rate limiting, metrics, and tests.
 *Verification.* Tests confirming responses of each category are counted under the corresponding accounting key.
 
 ### Thresholds and bucket model
@@ -2108,7 +2108,7 @@ The area code **RRL** is allocated.
 - If N ≥ 1: of every N rate-limited responses for that accounting key, on average exactly one MUST be emitted as a truncated response (TC bit set, empty answer/authority/additional sections, retaining the question section and OPT RR if applicable), and the remaining MUST be silently dropped.
 
 The truncated response provides an escape path for legitimate clients (which can switch to TCP per §4.12 to receive the full response) while substantially reducing the amplification utility of the server to a spoofed-source attacker.
-*Source.* Operational RRL practice documented by BIND 9, Knot DNS, and NSD; project-specific slip policy in this SRS.
+*Source.* OxideDNS project slip policy. RFC 1035 §4.1.1 defines the TC bit; RFC 6891 §6.1.1 requires an OPT response when the request carried OPT, which is why the truncated response retains the request's parsed question and OPT RR when applicable.
 *Note.* The "on average exactly one of N" is implemented as a per-(accounting-key) counter that increments on each rate-limited response and emits the truncated variant when the counter modulo N equals zero, then resets. Over many rate-limited responses for a key, this yields the 1/N truncation ratio. The earlier wording "of every N consecutive" suggested a stricter sliding-window semantics that is not implementable under the token-bucket model and not necessary for the RRL design goal.
 *Verification.* Tests under sustained rate-limit pressure on a single accounting key; verify the empirical drop-to-truncate ratio approaches (N−1):1 as the sample size grows, and verify the counter resets correctly across long-running tests.
 
