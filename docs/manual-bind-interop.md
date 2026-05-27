@@ -152,13 +152,14 @@ sudo sysctl -w net.ipv4.conf.all.rp_filter=0
 
 The project currently keeps the short RRL harness in
 `scripts/interop-rrl-udp.sh` and the release-campaign handoff in
-`scripts/rrl-evidence-campaign.sh`. A larger Rust source-IP rotating harness is
-future work and should cover IPv4 and IPv6.
+`scripts/rrl-evidence-campaign.sh`. A larger source-IP rotating harness is not
+part of the Engineering MVP evidence boundary. If it is promoted for release
+acceptance, it should cover IPv4 and IPv6 and define its own artifact format.
 
-## Future Test Harness Direction
+## Additional Harness Candidates
 
-The intended next harness layer is a separate Rust test workspace, not more
-ad-hoc shell in the main server crates. The planned pieces are:
+Any broader harness layer should live outside the main server crates instead of
+adding more ad-hoc shell around runtime code. Candidate pieces are:
 
 - deterministic zone-profile generation, including DNSSEC and reverse zones;
 - BIND 9.20 LTS lifecycle helpers for AXFR, IXFR, NOTIFY, and TSIG;
@@ -166,5 +167,5 @@ ad-hoc shell in the main server crates. The planned pieces are:
 - source-IP rotating UDP/TCP load generation for RRL;
 - wrappers for `dnsperf` and `kxdpgun` on the later performance lab.
 
-Keep that larger harness out of the Engineering MVP claim until it has its own
+Keep that larger harness out of the Engineering MVP claim unless it has its own
 artifact formats, ownership, and runtime profile.

@@ -74,9 +74,10 @@ gaps are recorded in the owner documents named above.
 
 ## Ownership Rules
 
-This plan deliberately stays at feature-slice granularity. In particular, it is not the canonical inventory of every evidence script,
-artifact environment variable, release-gate command, test case, or
-requirement-range traceability row. When implementation status changes:
+This plan deliberately stays at feature-slice granularity. In particular, it is
+not the canonical inventory of every evidence script, artifact environment
+variable, release-gate command, test case, or requirement-range traceability
+row. When implementation status changes:
 
 - put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`;
 - put implementation structure and unsafe-boundary changes in

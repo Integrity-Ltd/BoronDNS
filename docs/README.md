@@ -125,7 +125,7 @@ and slowly diverging.
   including accepted protocol fixes, rejected scope-trim suggestions, and the
   current rationale for retained post-Alpha features.
 
-## Release Scaffolding
+## Release Templates
 
 - `release-notes-template.md`: release-note structure and acceptance checklist
   shape.

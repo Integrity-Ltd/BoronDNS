@@ -91,6 +91,9 @@ BANNED_PHRASES = [
     "0.1.2 Engineering Tuning Goal",
     "The 0.1.2 performance slice",
     "Hosted CI is intentionally deferred while the repository remains private",
+    "## Release Scaffolding",
+    "The planned pieces are:",
+    "future work and should cover",
 ]
 
 SOURCE_BANNED_PHRASES = [
@@ -147,6 +150,7 @@ REQUIRED_TEXT_BY_PATH = {
         "Avoid copying requirement text,",
         "evidence status, command inventories",
         "When a review finding exposes drift, edit the owner first",
+        "## Release Templates",
     ],
     "docs/rr-type-catalogue.md": [
         "# RR Type Catalogue Implementation Notes",
@@ -261,6 +265,7 @@ def main() -> int:
     violations: list[str] = []
     for path in current_doc_paths():
         text = path.read_text(encoding="utf-8")
+        normalized_text = " ".join(text.split())
         numbered_headings: dict[str, int] = {}
         relative = path.relative_to(ROOT)
         for line_number, line in enumerate(text.splitlines(), start=1):
@@ -281,12 +286,12 @@ def main() -> int:
                 violations.append(f"{relative}: stale phrase {phrase!r}")
         relative_string = path.relative_to(ROOT).as_posix()
         for phrase in REQUIRED_TEXT_BY_PATH.get(relative_string, []):
-            if phrase not in text:
+            if phrase not in normalized_text:
                 violations.append(
                     f"{relative_string}: missing required phrase {phrase!r}"
                 )
         for phrase in FORBIDDEN_TEXT_BY_PATH.get(relative_string, []):
-            if phrase in text:
+            if phrase in normalized_text:
                 violations.append(
                     f"{relative_string}: duplicated checklist phrase {phrase!r}"
                 )
