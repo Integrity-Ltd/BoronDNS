@@ -2052,7 +2052,7 @@ The state machine MUST also enforce a configurable maximum effective interval fo
 
 This subsection specifies Response Rate Limiting (RRL), the mechanism by which the server constrains its utility as an amplification vector for reflection attacks. RRL accounts the rate of responses produced for each accounting key (typically a source-IP prefix and a response category), and applies a configurable action — silent drop or truncation-marker response — when the rate exceeds a configured threshold.
 
-RRL is not the subject of an IETF standard track RFC. The design specified below follows the Vixie / Schryver model implemented in BIND 9 and adopted with variations by NSD and Knot DNS; it is established operational practice rather than formal standardisation. PID Appendix A lists RRL as a required feature without RFC citation, on the basis of its operational maturity.
+RRL is not the subject of an IETF standard-track RFC. Similar response-rate-limiting mechanisms are documented by BIND 9, Knot DNS, and NSD, but their defaults and accounting models differ. This subsection therefore defines the OxideDNS project model explicitly: a process-wide, UDP-query-response limiter with configurable source-prefix aggregation, response-category buckets, slip behavior, key-count cap, allowlist, logs, and metrics. PID Appendix A lists RRL as a required feature without RFC citation, on the basis of its operational maturity.
 
 RRL is one of three complementary anti-amplification mechanisms in this server: the ANY-query minimisation policy of §4.2 (ODS-FR-QRY-005, ODS-FR-QRY-006) reduces the per-response amplification factor for ANY queries specifically; TCP fallback via TC=1 (§4.12) requires reflected clients to establish a TCP handshake to receive substantial data; and RRL itself bounds the rate at which the server contributes to any reflection campaign.
 
@@ -2073,7 +2073,7 @@ The area code **RRL** is allocated.
 - (d) referral responses (RCODE = NOERROR with non-empty NS authority and empty answer section);
 - (e) error responses (RCODE other than NOERROR or NXDOMAIN — SERVFAIL, REFUSED, FORMERR, NOTIMP, etc.).
 
-*Source.* Vixie / Schryver RRL design; BIND 9 RRL implementation.
+*Source.* Operational RRL practice documented by BIND 9, Knot DNS, and NSD; project-specific category model in this SRS.
 *Verification.* Tests confirming responses of each category are counted under the corresponding accounting key.
 
 ### Thresholds and bucket model
@@ -2085,8 +2085,8 @@ The area code **RRL** is allocated.
 - referral responses: 10 responses per second;
 - error responses: 5 responses per second.
 
-*Source.* BIND 9 default RRL configuration.
-*Note.* These defaults are conservative for typical-traffic deployments. Operators serving high-traffic zones or anycast networks may need to tune upward; operators of low-traffic zones may benefit from tuning downward to detect anomalies faster.
+*Source.* OxideDNS project default baseline, recorded in `docs/rrl-release-thresholds.md`; operational review pending before formal SRS acceptance.
+*Note.* These defaults are project defaults, not inherited vendor defaults. Operators serving high-traffic zones or anycast networks may need to tune upward; operators of low-traffic zones may benefit from tuning downward to detect anomalies faster.
 *Verification.* Tests at and beyond the limit thresholds.
 
 **ODS-FR-RRL-004.** The rate-limit MUST be implemented as a token-bucket per accounting key: bucket capacity equal to the configured per-second rate, refilled at the configured per-second rate (one token per (1 / rate) seconds). Each response produced for the accounting key consumes one token. When the bucket is empty, the response is subject to the action of ODS-FR-RRL-005.
@@ -2100,7 +2100,7 @@ The area code **RRL** is allocated.
 - If N ≥ 1: of every N rate-limited responses for that accounting key, on average exactly one MUST be emitted as a truncated response (TC bit set, empty answer/authority/additional sections, retaining the question section and OPT RR if applicable), and the remaining MUST be silently dropped.
 
 The truncated response provides an escape path for legitimate clients (which can switch to TCP per §4.12 to receive the full response) while substantially reducing the amplification utility of the server to a spoofed-source attacker.
-*Source.* Vixie / Schryver RRL design; BIND 9 RRL implementation.
+*Source.* Operational RRL practice documented by BIND 9, Knot DNS, and NSD; project-specific slip policy in this SRS.
 *Note.* The "on average exactly one of N" is implemented as a per-(accounting-key) counter that increments on each rate-limited response and emits the truncated variant when the counter modulo N equals zero, then resets. Over many rate-limited responses for a key, this yields the 1/N truncation ratio. The earlier wording "of every N consecutive" suggested a stricter sliding-window semantics that is not implementable under the token-bucket model and not necessary for the RRL design goal.
 *Verification.* Tests under sustained rate-limit pressure on a single accounting key; verify the empirical drop-to-truncate ratio approaches (N−1):1 as the sample size grows, and verify the counter resets correctly across long-running tests.
 

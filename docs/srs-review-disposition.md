@@ -99,6 +99,7 @@ deferred unsafe-boundary track.
 | Catalog zones | RFC 9432 sections 3, 5, and 7 | Catalog zones remain in scope because OxideDNS implements catalog transfer/parsing/reconciliation/observability. The SRS now states observable behavior and keeps implementation shape in architecture docs. |
 | DNS Cookies | RFC 7873 sections 2, 3, 5.2, and 5.4; RFC 9018 section 4 | SRS treats DNS Cookies as limited UDP off-path spoofing resistance and source-address confirmation, not TSIG-equivalent client authentication. The `lenient` default is a project compatibility policy; `strict` BADCOOKIE enforcement is available for stronger anti-spoofing posture. |
 | XoT interop target selection | RFC 9103; BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS no longer hard-codes a permanent NSD XoT exemption or release-year support claim. ODS-VER-003 requires a current-version capability decision for each primary, with XoT evidence required where the tested version exposes XoT. |
+| RRL posture | BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS treats RRL as operational practice rather than an RFC standard, and records the OxideDNS thresholds as project defaults instead of BIND/Knot/NSD defaults. |
 
 Primary source links:
 

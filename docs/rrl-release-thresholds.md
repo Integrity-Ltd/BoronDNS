@@ -13,11 +13,11 @@ mirrored by `config/oxidedns.example.toml`.
 | RRL enabled | `true` | ODS-FR-RRL-001 | Implemented SRS body default |
 | IPv4 source prefix length | `24` | ODS-FR-RRL-002 | Implemented SRS body default |
 | IPv6 source prefix length | `56` | ODS-FR-RRL-002 | Implemented SRS body default |
-| Positive response rate | `20/s` | ODS-FR-RRL-003 | Implemented SRS body default |
-| NXDOMAIN response rate | `5/s` | ODS-FR-RRL-003 | Implemented SRS body default |
-| NODATA response rate | `10/s` | ODS-FR-RRL-003 | Implemented SRS body default |
-| Referral response rate | `10/s` | ODS-FR-RRL-003 | Implemented SRS body default |
-| Error response rate | `5/s` | ODS-FR-RRL-003 | Implemented SRS body default |
+| Positive response rate | `20/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
+| NXDOMAIN response rate | `5/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
+| NODATA response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
+| Referral response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
+| Error response rate | `5/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
 | Slip | `2` | ODS-FR-RRL-005 | Implemented SRS body default; C.5 confirmation pending |
 | Maximum tracked keys | `100000` | ODS-FR-RRL-010 | Implemented SRS body default |
 | Summary log interval | `60s` | ODS-FR-RRL-011 | Implemented SRS body default |

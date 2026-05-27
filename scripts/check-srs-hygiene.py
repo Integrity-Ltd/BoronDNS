@@ -47,6 +47,9 @@ FORBIDDEN_TEXT = {
     "As of 2026 this comprises Knot DNS": "avoid time-frozen XoT implementation claims",
     "NSD does not implement XoT server-side at the time of writing": "NSD XoT support is version/build dependent and must be tested",
     "stable XoT server support since": "avoid unsourced release-history claims in normative SRS text",
+    "The design specified below follows the Vixie / Schryver model implemented in BIND 9": "RRL implementation models differ; define the OxideDNS model directly",
+    "Vixie / Schryver RRL design; BIND 9 RRL implementation": "avoid treating BIND behavior as the direct source for OxideDNS RRL semantics",
+    "BIND 9 default RRL configuration": "OxideDNS RRL thresholds are project defaults, not BIND defaults",
 }
 
 REQUIRED_TEXT = [
@@ -79,6 +82,9 @@ REQUIRED_TEXT = [
     "XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT",
     "The tested primary version and the XoT capability decision MUST be recorded per ODS-VER-013",
     "SHOULD include NSD XoT evidence when the selected NSD version exposes TLS-protected `provide-xfr`/`request-xfr` configuration",
+    "This subsection therefore defines the OxideDNS project model explicitly",
+    "OxideDNS project default baseline, recorded in `docs/rrl-release-thresholds.md`",
+    "These defaults are project defaults, not inherited vendor defaults.",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
