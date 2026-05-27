@@ -4582,7 +4582,11 @@ The following items were specifically flagged during SRS drafting for explicit t
 | Verification category VER prefix (extends §1.4.3) | §7 | Confirm | **Resolved (v0.9.1 doc alignment): VER is registered in §1.4.3 and Appendix D.5.1 and checked by the identifier-registry audit** |
 | SLO publication as informative content in Operator Deployment Guide | ODS-NFR-MAINT-009 | Add SLO section to Deployment Guide | **Resolved (v0.9.1 doc alignment): informative SLO section added to the Operator Deployment Guide** |
 
-The Decision column is to be populated as the project's review process reaches each item. **Resolved** entries are recorded for audit trail; their decisions are normative within the SRS revision in which they were resolved.
+The Decision column records project decisions as the review process reaches each
+item. **Resolved** entries are retained for audit trail; their decisions are
+normative within the SRS revision in which they were resolved. **Pending**
+entries remain active review items until a later SRS revision resolves them or
+the associated requirement is revised.
 
 ## C.6 Post-MVP / v2 Scope Items
 

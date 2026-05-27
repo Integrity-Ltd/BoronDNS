@@ -21,6 +21,7 @@ BANNED_PHRASES = [
     "udns",
     "raw email intentionally",
     "Per VER-007 deferred",
+    "All C.5 entries remain active release-review risks",
     "first-pass Engineering MVP",
     "first-pass family matrix",
     "RFC 8914 EDE planned for v2",

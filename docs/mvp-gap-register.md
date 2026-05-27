@@ -62,10 +62,11 @@ release artifact, or a formal acceptance sign-off is still open.
 
 ## Pending SRS C.5 Decision Overlay
 
-SRS v0.9.1 Appendix C.5 is the canonical pending-decision list. All C.5
-entries remain active release-review risks, even where current code follows the
-body default or a document records current implementation evidence. Update
-release notes from the SRS C.5 table, not from this summary.
+SRS v0.9.1 Appendix C.5 is the canonical project-decision table. Rows whose
+Decision begins `Pending` remain active release-review risks, even where current
+code follows the body default or a document records current implementation
+evidence. Rows marked `Resolved` are retained as audit trail, not open risks.
+Update release notes from the SRS C.5 table, not from this summary.
 
 ## Current Verification Commands
 
