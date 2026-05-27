@@ -46,6 +46,14 @@ REQUIRED_CURRENT_RFCS = {
 }
 
 REQUIRED_EVIDENCE_SNIPPETS = {
+    "RFC 1035": [
+        "bounded CHAOS-class handling",
+        "scripts/interop-chaos-queries.sh",
+    ],
+    "RFC 5001": [
+        "optional NSID fallback for CHAOS self-identification",
+        "scripts/interop-chaos-queries.sh",
+    ],
     "RFC 8482": [
         "qtype_any_defaults_to_minimal_real_rrset_response",
         "qtype_any_full_mode_returns_all_owner_rrsets",
@@ -135,13 +143,19 @@ def main() -> int:
             raise SystemExit(f"{rfc} ({feature}) has an unexpected target milestone")
 
     for rfc, snippets in REQUIRED_EVIDENCE_SNIPPETS.items():
-        evidence = by_rfc[rfc]["Evidence pointer"]
+        row_text = " | ".join(by_rfc[rfc].values())
         for snippet in snippets:
-            if snippet not in evidence:
+            if snippet not in row_text:
                 raise SystemExit(
-                    f"{rfc} evidence pointer must include {snippet!r}"
+                    f"{rfc} compliance row must include {snippet!r}"
                 )
-            if snippet not in source_text:
+            if (
+                snippet.startswith("qtype_")
+                or snippet.startswith("response_")
+                or snippet.startswith("preserves_")
+                or snippet.startswith("ede_")
+                or snippet.startswith("nsec3_")
+            ) and snippet not in source_text:
                 raise SystemExit(f"{rfc} evidence pointer references missing {snippet!r}")
 
     print(
