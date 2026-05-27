@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
+SRS_CURRENT_PATH = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
 README_PATH = ROOT / "README.md"
@@ -17,6 +18,7 @@ GAP_REGISTER_PATH = ROOT / "docs" / "mvp-gap-register.md"
 VERIFICATION_LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
 
 SCOPE_DOCUMENTS = [
+    SRS_CURRENT_PATH,
     DISPOSITION_PATH,
     MVP_SCOPE_PATH,
     IMPLEMENTATION_PLAN_PATH,

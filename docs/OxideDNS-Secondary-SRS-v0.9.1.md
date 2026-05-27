@@ -263,7 +263,7 @@ At a behavioural level, OxideDNS-Secondary performs the following functions. Sec
 
 **Query answering.** Receives DNS queries over UDP and TCP, parses them, performs authoritative lookup, and returns responses including authority and additional sections per RFC 1034 and RFC 1035. Sets the AA bit appropriately. Returns NXDOMAIN, NODATA, and other error responses correctly per RFC 2308. Returns REFUSED for queries outside the served zones; never offers recursion.
 
-**Protocol extensions.** Honours EDNS0, including advertised buffer sizes, the padding option, and the TCP keepalive option. Performs TCP fallback on truncation. Serves DNSSEC records (DNSKEY, RRSIG, NSEC, NSEC3, DS, NSEC3PARAM) verbatim as received from the primary.
+**Protocol extensions.** Honours EDNS0, including advertised buffer sizes, the padding option, and the TCP keepalive option. Performs TCP fallback on truncation. Provides passive DNSSEC serving by serving DNSSEC records (DNSKEY, RRSIG, NSEC, NSEC3, DS, NSEC3PARAM) verbatim as received from the primary.
 
 **Operational integration.** Logs to standard output and standard error in a structured form. Exposes a health check interface suitable for orchestrator probes. Handles process signals for graceful shutdown, completing in-flight queries before exit.
 
