@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "operator-deployment-guide.md"
+CLI_MAIN = ROOT / "crates" / "oxidedns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
     "## Service Level Objectives",
@@ -56,6 +58,10 @@ def main() -> None:
     for needle in REQUIRED_TEXT + SLO_TEXT:
         if needle not in text:
             fail(f"{GUIDE} missing required text: {needle}")
+    cli_text = CLI_MAIN.read_text(encoding="utf-8")
+    for env_name in sorted(set(re.findall(r'"(ODS_[A-Z0-9_]+)"\s*=>', cli_text))):
+        if env_name not in text:
+            fail(f"{GUIDE} missing documented environment override: {env_name}")
     print(f"Operator guide check passed: {GUIDE}")
 
 
