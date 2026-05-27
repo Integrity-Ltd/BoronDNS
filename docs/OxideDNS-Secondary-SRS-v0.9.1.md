@@ -4536,8 +4536,8 @@ The following items were specifically flagged during SRS drafting for explicit t
 | CHAOS class self-identification | §4.21, ODS-FR-CHAS-001..006; §6.2, ODS-IF-CONF-018 | Add conservative, opt-in CH/TXT `version.bind` and `id.server` profile | **Resolved in specification (v0.9.1); implemented locally with config, metrics/logging, unit tests, and UDP/TCP client E2E coverage** |
 | Property-based testing in Alpha scope | §7.1 | Add `proptest`-based invariant rules to parser/zone-lookup paths | **Pending: non-normative quality-improvement candidate; tracked in Test Plan** |
 | Server module decomposition (server/lib.rs monolith) | §5.4, ODS-NFR-MAINT-002 | Decompose `server::health` and `server::transfer` from monolithic `server/lib.rs` | **Pending: non-normative maintainability candidate; module organisation per ODS-NFR-MAINT-002 to be tracked in Architecture Document** |
-| `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | Pending |
-| PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | Pending |
+| `regression.performance_threshold_pct` default 10% | §7.5, ODS-VER-012 | Confirm | **Resolved (v0.9.1 doc/tool alignment): default remains 10%, implemented by `scripts/check-perf-regression.py` and documented in the Test Plan and release-notes template** |
+| PowerDNS Authoritative in interop matrix | §7.2 | Consider adding | **Resolved (v0.9.1 doc alignment): not added to the mandatory ODS-VER-003 NSD/Knot/BIND matrix; retained as supplemental RFC 9432 catalog-producer interop evidence with PostgreSQL/gpgsql** |
 | External operator acceptance as MVP criterion | §7.4 | Confirm as MVP criterion | Pending |
 | Strict default for ANY-query mode ("minimal") | §4.2 | Confirm | **Resolved (v0.9.1 code alignment): `QuerySettings` defaults to minimal ANY responses per ODS-FR-QRY-006** |
 | Minimal-ANY deterministic selection algorithm | §4.2, ODS-FR-QRY-005 | Specify (CNAME-first, then lowest-type) | **Resolved (v0.3): specified in ODS-FR-QRY-005** |
@@ -4554,9 +4554,9 @@ The following items were specifically flagged during SRS drafting for explicit t
 | 5000 ms per-query processing timeout (default) | §5.2, ODS-NFR-REL-006 | Confirm | Pending |
 | 300 s TSIG fudge / 3600+300 s cookie tolerance (defaults) | §5.2, ODS-NFR-REL-007 | Confirm clock-skew defaults | **Resolved (v0.9.1 code alignment): TSIG fudge defaults to 300 seconds; DNS Cookie past/future timestamp tolerances default to 3600/300 seconds** |
 | 1000 ms `/livez` probe timeout (default) | §5.6, §6.4 | Confirm | Pending |
-| 70%/85% test coverage minimum (defaults) | §5.4, ODS-NFR-MAINT-007 | Confirm | Pending |
+| 70%/85% test coverage minimum (defaults) | §5.4, ODS-NFR-MAINT-007 | Confirm | **Resolved (v0.9.1 tool alignment): thresholds retained; `scripts/capture-coverage-evidence.sh` enforces 70% overall and 85% parser/XoT-file line coverage when release coverage evidence is captured** |
 | Sigstore/Cosign vs detached OpenPGP for release signing | §5.4, ODS-NFR-MAINT-008 | Confirm preferred mechanism | **Resolved (v0.9.1 doc alignment): Sigstore/Cosign preferred; detached OpenPGP allowed as fallback; recorded in the Architecture Document and Security Policy** |
-| 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | Pending |
+| 30-day / 90-day CVE response targets (defaults) | §5.3, ODS-NFR-SEC-007 | Confirm | **Resolved (v0.9.1 doc alignment): Security Policy records 30-day Critical/High and 90-day Medium/Low remediation targets, with release-specific exceptions recorded as evidence** |
 | 1% idle CPU bound for 1000 zones (default) | §5.7, ODS-NFR-RES-006 | Confirm | Pending |
 | Latency histogram bucket boundaries (defaults) | §5.6, ODS-NFR-OBS-007 | Confirm | **Resolved (v0.9.1 code alignment): default buckets are implemented in `MetricsConfig` and configurable via `[metrics].latency_histogram_buckets`** |
 | Multi-primary randomised initial selection | §4.6, ODS-FR-AXFR-016 | Confirm | Pending |
