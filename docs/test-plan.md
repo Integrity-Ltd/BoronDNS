@@ -56,8 +56,8 @@ until their corresponding retained runs exist.
 ## Continuous Execution
 
 `scripts/check.sh` enacts the current Continuous cadence. It is the local
-stand-in for CI until a hosted CI definition is added. The command must remain
-build-blocking for:
+stand-in for hosted continuous CI until a main-branch candidate workflow is
+enabled. The command must remain build-blocking for:
 
 - Test Plan shape validation: `scripts/check-test-plan.sh`;
 - verification ledger consistency: `python3 scripts/check-verification-ledger.py`;
@@ -71,10 +71,17 @@ build-blocking for:
 - transitive unsafe enumeration and first-party package unsafe-count checks
   through `scripts/capture-unsafe-dependency-evidence.sh`.
 
-Hosted CI is intentionally deferred while the repository remains private. This
-avoids spending GitHub Actions minutes on heavyweight evidence tooling before a
-public-release gate exists; `scripts/check.sh` is the current local continuous
-verification entry point.
+Hosted continuous CI for every main-branch candidate is intentionally deferred
+while the repository remains private. This avoids spending GitHub Actions
+minutes on heavyweight evidence tooling before a public-release gate exists;
+`scripts/check.sh` is the current local continuous verification entry point.
+
+This does not prohibit explicit release packaging automation. The repository
+contains a tag-push/workflow-dispatch release workflow. It acts as artifact publication automation for a named release by building and smoking the
+`x86_64-unknown-linux-musl` installer archive, raw static binary, and Docker
+image archive; it is not the standing Continuous gate unless the release
+process records its retained logs as the accepted release-gate automation
+evidence.
 
 Manual real-primary smoke evidence is intentionally outside `scripts/check.sh`
 because it depends on Docker or host BIND availability. For developer/operator

@@ -90,6 +90,7 @@ BANNED_PHRASES = [
     "per-zone warning/metric",
     "0.1.2 Engineering Tuning Goal",
     "The 0.1.2 performance slice",
+    "Hosted CI is intentionally deferred while the repository remains private",
 ]
 
 SOURCE_BANNED_PHRASES = [
@@ -177,6 +178,12 @@ REQUIRED_TEXT_BY_PATH = {
         "put evidence state by requirement family in `docs/verification-ledger.md`",
         "does not duplicate the acceptance",
         "may require additional retained evidence without narrowing the",
+    ],
+    "docs/test-plan.md": [
+        "Hosted continuous CI for every main-branch candidate is intentionally deferred",
+        "tag-push/workflow-dispatch release workflow",
+        "artifact publication automation",
+        "it is not the standing Continuous gate",
     ],
     "docs/engineering-mvp-scope.md": [
         "The retained post-Alpha slices are code-backed scope, not planning notes.",
