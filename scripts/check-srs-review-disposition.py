@@ -54,6 +54,9 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "MVP Trim Reconciliation",
     "not as a deletion list for already-implemented code",
     "mirrors the review's \"defer these\" list item by item",
+    "the governing test is current-code alignment",
+    "first-party source ownership, representative tests or interop evidence, and current SRS owner identifiers",
+    "move to a deferred or gap state in the same patch",
     "`docs/implemented-feature-scope.md`",
     "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
     "implementation-specific source and test markers",
@@ -491,7 +494,7 @@ def main() -> int:
                 f"{finding!r}"
             )
     for term in REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS:
-        if term not in disposition:
+        if term not in normalized_disposition:
             errors.append(
                 f"{DISPOSITION_PATH.relative_to(ROOT)} omits scope-trim "
                 f"boundary term {term!r}"

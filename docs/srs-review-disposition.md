@@ -51,6 +51,11 @@ not as a deletion list for already-implemented code. The current boundary is:
 The table below mirrors the review's "defer these" list item by item. "Retained"
 means current code and tests already own a bounded slice; it does not mean the
 feature has completed every formal ODS-VER-008 release-acceptance evidence item.
+For any retained item, the governing test is current-code alignment: the feature
+must have first-party source ownership, representative tests or interop
+evidence, and current SRS owner identifiers. If one of those disappears, the
+feature must move to a deferred or gap state in the same patch rather than
+remaining in this table as aspiration.
 
 | Review-suggested defer item | Current OxideDNS disposition | Code/doc alignment |
 | --- | --- | --- |
