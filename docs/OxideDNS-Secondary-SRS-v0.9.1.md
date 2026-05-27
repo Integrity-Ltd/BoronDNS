@@ -699,21 +699,21 @@ The area code **QRY** is allocated to this subsection.
 *Source.* RFC 8482.
 *Verification.* Configuration round-trip tests; behavioural tests with each setting active.
 
-**ODS-FR-QRY-004.** In "full" any-response mode, for QTYPE = 255 (ANY) queries against a name with at least one RRset present, the server MUST return all RRsets present at the QNAME in the answer section, applying the standard lookup semantics of §4.1.
-*Source.* RFC 1034 §3.7; RFC 1035 §3.2.5.
-*Verification.* Lookup tests in "full" mode against names with multiple RRsets.
+**ODS-FR-QRY-004.** In "full" any-response mode, for QTYPE = 255 (ANY) queries against a name with at least one first-class, non-DNSSEC-support RRset present, the server MUST return all such RRsets present at the QNAME in the answer section, applying the standard lookup semantics of §4.1. RRSIG, NSEC, and NSEC3 records are not returned merely because QTYPE = ANY; DNSSEC supporting material is added only by the DNSSEC response rules of §4.13, including the query DO-bit policy.
+*Source.* RFC 1034 §3.7; RFC 1035 §3.2.5; RFC 8482 §4.1.
+*Verification.* Lookup tests in "full" mode against names with multiple first-class RRsets and tests confirming QTYPE = ANY does not by itself select DNSSEC support RRsets.
 
 **ODS-FR-QRY-005.** In "minimal" any-response mode, for QTYPE = 255 (ANY) queries against a name with at least one RRset present, the server MUST return a single RRset selected from those present at the QNAME, per RFC 8482 §4.1. The selection algorithm MUST be the following deterministic procedure:
 
 - If an RRset with type CNAME is present at the QNAME, return that RRset (CNAME owner names by definition have no other types of co-located data per ODS-FR-RR-005, so this case is exclusive).
-- Otherwise, return the RRset whose type code is the numerically smallest among those present at the QNAME, with the exception that RRSIG, NSEC, and NSEC3 records — being DNSSEC supporting data, not first-class application data — are excluded from consideration unless they are the only types present at the QNAME.
+- Otherwise, return the first-class RRset whose type code is the numerically smallest among those present at the QNAME. RRSIG, NSEC, and NSEC3 records are DNSSEC supporting data and are excluded from the ANY selection set; they are served by explicit type queries or by the DNSSEC response rules of §4.13 when applicable.
 
 This procedure produces a stable, predictable selection for a given zone state, is independent of insertion order or in-memory representation, and aligns with the operational preference of returning the most fundamental data type at a name (A < AAAA < MX < ... by IANA numeric assignment) when present.
 *Source.* RFC 8482 §4.1.
-*Verification.* Repeated identical queries in "minimal" mode MUST produce identical selected RRsets given an unchanged zone; the selection MUST follow the algorithm above against a test corpus covering names with various type combinations including CNAME-only, A+AAAA+MX+TXT, and DNSSEC-only names.
+*Verification.* Repeated identical queries in "minimal" mode MUST produce identical selected RRsets given an unchanged zone; the selection MUST follow the algorithm above against a test corpus covering names with various type combinations including CNAME-only, A+AAAA+MX+TXT, and names with DNSSEC support RRsets co-located with ordinary data.
 
 **ODS-FR-QRY-006.** The default value of the "any-response" configuration option MUST be "minimal".
-*Rationale.* RFC 8482 was published in response to operational reality: ANY queries are predominantly used for amplification, with a small minority of legitimate uses. For a new secondary intended for anycast deployment, minimisation is the safer default and consistent with the project's reduced-attack-surface stance.
+*Rationale.* RFC 8482 records legitimate debugging uses for QTYPE = ANY while also identifying amplification and zone-data-mining concerns and standardising optional minimal responses for authoritative responders. For an internet-facing secondary, minimisation is the safer default and consistent with the project's reduced-attack-surface stance.
 *Verification.* Default-configuration tests.
 
 **ODS-FR-QRY-007.** The server MUST NOT use the synthesised HINFO response style described in RFC 8482 §4.2.
