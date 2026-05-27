@@ -20,6 +20,7 @@ BANNED_PHRASES = [
     "uDNS",
     "udns",
     "raw email intentionally",
+    "Per VER-007 deferred",
 ]
 
 

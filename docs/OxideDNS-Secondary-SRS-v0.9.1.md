@@ -3873,19 +3873,21 @@ Verification status is tracked per requirement per ODS-VER-009. The expected mec
 - **Deferred Target** — for status Deferred, the milestone (Alpha, MVP, post-MVP) at which verification is required.
 - **Notes** — free-text annotations.
 
-A representative initial state of the tracking table:
+The SRS deliberately does not embed live status rows. Earlier draft examples
+became misleading as IXFR, DNSSEC serving, XoT, and other post-Alpha protocol
+families gained Engineering MVP evidence before formal SRS release acceptance.
+Current status is maintained in the companion documents:
 
-| Requirement | Method | Status | Date | Evidence | Deferred Target | Notes |
-|---|---|---|---|---|---|---|
-| ODS-INV-001 | Inspection | Not Verified | — | — | Alpha | Foundational; verify at first build |
-| ODS-FR-CORE-001 | Conformance | Not Verified | — | — | Alpha | — |
-| ODS-FR-AXFR-001 | Inspection | Not Verified | — | — | Alpha | — |
-| ODS-FR-IXFR-001 | Conformance | Not Verified | — | — | MVP | Per VER-007 deferred |
-| ODS-FR-DNSSEC-001 | Conformance | Not Verified | — | — | MVP | Per VER-007 deferred |
-| ODS-FR-XOT-001 | Interop | Not Verified | — | — | MVP | Per VER-007 deferred |
-| ... | ... | ... | ... | ... | ... | ... |
+- `docs/verification-ledger.md` records the coarse evidence state by requirement
+  family.
+- `docs/appendix-a-traceability-matrix.md` records range-level and selected
+  per-requirement evidence mappings.
+- `docs/mvp-gap-register.md` records remaining implementation and
+  release-acceptance gaps.
 
-Population of this table is the responsibility of the test and review team; the SRS records the conventions and column definitions but does not include the live tracking content.
+Population of the live tracking table is the responsibility of the test and
+review team; the SRS records the conventions and column definitions but does
+not include the live tracking content.
 
 ## A.7 Cross-Reference Index
 
