@@ -436,7 +436,7 @@ If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
   active and the runtime is not draining, otherwise HTTP 503 with `not-ready`,
   `draining`, or `unhealthy` status details.
 - `GET /healthz`: readiness alias for `/readyz`.
-- `GET /metrics`: returns Prometheus-compatible text metrics.
+- `GET /metrics`: returns Prometheus text exposition format 0.0.4 metrics.
 
 The exact HTTP body, header, gzip, and rate-limit contract is maintained in
 [`health-metrics-interface.md`](health-metrics-interface.md). Use this operator

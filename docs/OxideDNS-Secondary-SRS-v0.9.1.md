@@ -3167,7 +3167,7 @@ When activated, the endpoint bind precedence MUST be: explicit `[health]` bind a
 | `/livez` | Liveness probe per ODS-NFR-OBS-004. HTTP status 200 whenever the process is able to respond to the probe at all, regardless of zone-load or draining state. OxideDNS does not expose a server-side liveness timeout parameter. Client, reverse proxy, and orchestrator timeout configuration is outside the OxideDNS configuration model. |
 | `/readyz` | Readiness probe per ODS-NFR-OBS-004. HTTP status 200 in the ready state, HTTP 503 in not-ready, draining, or unhealthy states. |
 | `/healthz` | Readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the formal SRS MVP. |
-| `/metrics` | Prometheus-compatible text metrics per ODS-NFR-OBS-003. |
+| `/metrics` | Prometheus text exposition format 0.0.4 metrics per ODS-NFR-OBS-003. |
 
 All other paths MUST return HTTP status 404 with a JSON body naming the requested path. Methods other than GET on known paths MUST receive HTTP status 405 with a JSON body naming the requested path. The concrete JSON body field names, stable readiness reasons, metrics content type, gzip headers, and rate-limit body are the external interface details owned by `docs/health-metrics-interface.md`.
 

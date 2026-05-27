@@ -96,6 +96,7 @@ BANNED_PHRASES = [
     "future work and should cover",
     "EDNS Refresh",
     "EDNS Expire",
+    "Prometheus-compatible text metrics",
 ]
 
 SOURCE_BANNED_PHRASES = [
