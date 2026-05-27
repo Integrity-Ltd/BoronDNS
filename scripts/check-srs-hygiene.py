@@ -56,6 +56,9 @@ FORBIDDEN_TEXT = {
     "operational benchmarking against existing secondary-only authoritative servers (NSD, Knot DNS)": "performance targets must not be presented as existing cross-server benchmark evidence",
     "comparable to NSD and Knot on equivalent hardware": "performance targets require retained OxideDNS benchmark evidence before conformance claims",
     "performance is expected to scale roughly with available CPU and network resources": "avoid unsupported performance scaling claims",
+    "final audit cycle revision": "review cycles must remain open to corrective code/RFC alignment",
+    "Audit cycles of equivalent depth are not anticipated": "review cycles must remain open to corrective code/RFC alignment",
+    "The SRS body is considered structurally stable from v0.7 onward": "identifier stability must not block corrective SRS restructuring",
 }
 
 REQUIRED_TEXT = [
@@ -98,6 +101,9 @@ REQUIRED_TEXT = [
     "not formal conformance evidence for the quantitative NFR targets",
     "Project reference-hardware throughput target; formal acceptance evidence required before asserting conformance.",
     "Conformance to the §5 numerical targets is asserted only against this Profile after the Appendix E.4 recordkeeping artifacts are retained.",
+    "The v0.7 audit pass is historical evidence, not a prohibition on later corrective review.",
+    "The requirement identifier and category framework remains stable for traceability",
+    "Implemented, tested protocol families that exceed a minimal static-secondary trim remain in current Engineering MVP scope",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")

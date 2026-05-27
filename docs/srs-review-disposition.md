@@ -134,6 +134,7 @@ Primary source links:
 | NSEC3 cap creates a DNSSEC authentication downgrade | Accepted. Current docs treat cap-triggered proof omission as an intentional availability policy with optional EDE diagnostics. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `docs/dnssec-conformance-matrix.tsv`; `docs/mvp-gap-register.md`. |
 | SRS mixed audit findings into normative requirements | Accepted and cleaned up. Implementation audit claims were removed from the current SRS revision text and C.5 decision table. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; verification/evidence documents. |
 | Requirements claimed absolute atomicity while grouping many operational cases | Accepted. Current SRS now treats atomicity as maintainability guidance and requires grouped operational cases to list observable verification sub-cases. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`. |
+| SRS claimed v0.7 structural finality | Accepted as stale process wording. Current cleanup may restructure wording, ownership, and review boundaries when code, RFC, or external-review evidence shows drift; requirement identifiers and category names remain stable for traceability. | `docs/OxideDNS-Secondary-SRS-v0.9.1.md`; `scripts/check-srs-hygiene.py`. |
 
 ## Current Intentional Code Alignment Gaps
 
