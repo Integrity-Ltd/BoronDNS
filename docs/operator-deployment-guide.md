@@ -973,10 +973,10 @@ current operator-relevant limitations are:
   `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`
   rather than repeated in this operator runbook.
 - Implemented Engineering MVP features that are broader than a minimal
-  static-zone secondary server include IXFR, XoT, passive DNSSEC serving, RRL,
-  DNS Cookies, catalog zones, EDNS behavior, EDE diagnostics, and CHAOS queries.
-  Their remaining gaps are release-evidence items or, when one exists, an
-  explicit implementation gap recorded in the documents above.
+  static-zone secondary server are bounded in
+  `docs/implemented-feature-scope.md`. Their remaining gaps are
+  release-evidence items or, when one exists, an explicit implementation gap
+  recorded in the documents above.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts, and external operator deployment evidence is still
   required before ODS-VER-008 acceptance.

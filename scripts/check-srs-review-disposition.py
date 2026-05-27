@@ -17,6 +17,7 @@ README_PATH = ROOT / "README.md"
 DOCS_README_PATH = ROOT / "docs" / "README.md"
 GAP_REGISTER_PATH = ROOT / "docs" / "mvp-gap-register.md"
 VERIFICATION_LEDGER_PATH = ROOT / "docs" / "verification-ledger.md"
+OPERATOR_GUIDE_PATH = ROOT / "docs" / "operator-deployment-guide.md"
 
 SCOPE_POINTER_DOCUMENTS = [
     MVP_SCOPE_PATH,
@@ -25,6 +26,7 @@ SCOPE_POINTER_DOCUMENTS = [
     DOCS_README_PATH,
     GAP_REGISTER_PATH,
     VERIFICATION_LEDGER_PATH,
+    OPERATOR_GUIDE_PATH,
 ]
 
 
