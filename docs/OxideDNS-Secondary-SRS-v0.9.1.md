@@ -2708,11 +2708,13 @@ The area code **PORT** is allocated.
 
 **ODS-NFR-PORT-001.** The server MUST build and run on current LTS releases of major Linux distributions: Ubuntu LTS, Debian stable, Red Hat Enterprise Linux / Rocky Linux / AlmaLinux current major version, and Alpine current release. No distribution-specific configuration MUST be required.
 *Source.* PID §2.4; operational requirement.
-*Verification.* Per-distribution smoke tests in CI.
+*Verification.* Per-distribution smoke tests in CI or retained release-gate
+automation evidence.
 
 **ODS-NFR-PORT-002.** The server MUST build and run on the x86_64 (amd64) and aarch64 (arm64) processor architectures. Additional architectures MAY be supported on a best-effort basis without commitment.
 *Source.* Operational requirement; modern Linux server architecture diversity.
-*Verification.* Per-architecture build and smoke-test CI pipelines.
+*Verification.* Per-architecture build and smoke-test CI pipelines or retained
+release-gate automation evidence.
 
 **ODS-NFR-PORT-003.** The server MUST be runnable in OCI-compatible container runtimes (Docker, Podman, containerd, CRI-O). The published container image MUST be runnable in Kubernetes without privileged mode, without host networking, and without escalated capabilities beyond `CAP_NET_BIND_SERVICE` (where required per ODS-NFR-SEC-004).
 *Source.* PID §2.4.
@@ -2903,7 +2905,9 @@ The area code **CONF** is allocated.
 
 **ODS-IF-CONF-002.** The configuration schema MUST be documented in a versioned schema specification maintained alongside the project. Schema changes between server versions MUST follow a backward-compatibility policy: addition of new optional fields is permitted at any release; removal or semantic change of existing fields requires a major-version increment per semantic versioning.
 *Source.* Operational stability for in-place upgrades.
-*Verification.* Schema documentation maintained per project release; version-compatibility tests in CI.
+*Verification.* Schema documentation maintained per project release;
+version-compatibility tests in the active continuous gate or retained
+release-gate automation evidence.
 
 **ODS-IF-CONF-003.** The configuration MUST be capable of expressing, at minimum:
 - the set of zones designated for service, each with zone name, class, and ordered list of primary servers (IP addresses with optional port);
@@ -3309,7 +3313,7 @@ The following methods are used, individually or in combination, to verify the re
 
 **Interoperability test.** Tests of the server running against real implementations of peer roles — primary servers (NSD, Knot DNS, BIND 9) for inbound zone transfer and NOTIFY, TSIG-capable peers for authenticated transfers, DNS clients (`dig`, `kdig`, `drill`) for query response semantics. Used for any requirement whose verification depends on real-world peer behaviour and not just specification reading.
 
-**Fuzz test.** Coverage-guided fuzzing using `cargo-fuzz`, AFL++, or equivalent, applied to wire-format parsers and any code path consuming untrusted input. Used for ODS-NFR-SEC-002 and as supporting evidence for parser-related functional requirements. Continuous fuzz runs (≤ 1 hour) are integrated in CI; long-cadence runs (≥ 24 hours per parser) are gated to release per ODS-NFR-SEC-002.
+**Fuzz test.** Coverage-guided fuzzing using `cargo-fuzz`, AFL++, or equivalent, applied to wire-format parsers and any code path consuming untrusted input. Used for ODS-NFR-SEC-002 and as supporting evidence for parser-related functional requirements. Short-cadence fuzz compile/smoke checks (≤ 1 hour per parser) run through the active continuous gate where enabled; long-cadence runs (≥ 24 hours per parser) are gated to release per ODS-NFR-SEC-002.
 
 **Performance test.** Sustained-load benchmarking, latency-distribution measurement, capacity-scaling tests. Used for §5.1 (PERF) and the capacity-related requirements of §5.7 (RES). Reproducibility requires execution on the Reference Hardware Profile of Appendix E.1 against the Reference Query Mix of Appendix E.3 for normative conformance assertions.
 
@@ -3460,8 +3464,8 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 *Verification.* Periodic Performance test per ODS-VER-011 captures rolling metrics; release-notes inspection at each release for regression triage documentation.
 
 **ODS-VER-015.** Verification execution roles are allocated as follows:
-- **Continuous methods** per ODS-VER-011 are executed by the project's CI infrastructure on every commit; results are visible to all project contributors via the CI dashboard.
-- **Periodic methods** per ODS-VER-011 are scheduled by the CI infrastructure (long-cadence Fuzz test, Performance test) or executed manually by the project's release engineer at the documented cadence (Differential test, Soak test snapshots).
+- **Continuous methods** per ODS-VER-011 are executed through the active continuous gate for the project stage. During the private-repository Engineering MVP profile this is local `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
+- **Periodic methods** per ODS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in release notes.
 - **Gate methods** per ODS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
 - **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through MVP, this role is held by DT.
 - **External operator acceptance** per ODS-VER-008 (formal SRS MVP release gate) introduces a third-party verifier; the acceptance signature, the identity of the accepting operator, and the operator's accepted scope statement are recorded in the MVP release notes.
