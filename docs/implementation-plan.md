@@ -68,21 +68,12 @@ backend is load-generator scope only.
 
 ## SRS Acceptance Execution Target
 
-The later ODS-VER-008 acceptance execution target remains:
-
-- all requirements in SRS sections 3 through 6 satisfied;
-- interoperability with NSD, Knot DNS, and BIND 9 primaries;
-- performance targets met on the Reference Hardware/Profile;
-- 30-day soak test completed without anomaly;
-- parser fuzzing run for at least 24 hours per parser without findings;
-- dependency security audit clean;
-- vulnerability disclosure policy published and release-reviewed;
-- implemented protocol families verified with release-grade retained evidence;
-- test coverage targets met;
-- signed release artifacts produced;
-- SRS, Architecture Document, Test Plan, and Operator Deployment Guide complete;
-- at least one production-representative external operator has independently
-  deployed and validated the server.
+The later ODS-VER-008 acceptance execution target is owned by the SRS,
+`docs/mvp-gap-register.md`, `docs/test-plan.md`, and
+`docs/release-evidence-guide.md`. This plan does not duplicate the acceptance
+checklist. At this level the implementation-plan rule is that formal
+acceptance work may require additional retained evidence without narrowing the
+Engineering MVP feature boundary unless the SRS or code changes.
 
 ## Historical Alpha Reference
 
@@ -178,11 +169,9 @@ implementation plan can remain at milestone level.
 
 ## Open Near-Term Work
 
-- broaden release-grade real-primary interop and retained evidence for the
-  implemented feature families named in `docs/implemented-feature-scope.md`;
-- execute and attach release-specific policy review records, signed-release
-  artifacts, and operator sign-off using the release handoff packages;
-- preserve the Appendix C.6 future-optimization boundaries for XDP/eBPF,
-  io_uring, packed arena storage, and response caching;
-- keep the long-run performance, fuzz, interop, and soak harnesses ready for
-  later SRS acceptance execution by release or operations owners.
+Active gaps are owned by `docs/mvp-gap-register.md`. This plan records only the
+implementation direction: keep implemented feature slices wired exactly as
+bounded in `docs/implemented-feature-scope.md`, preserve the Appendix C.6
+future-optimization boundaries for XDP/eBPF, io_uring, packed arena storage,
+and response caching, and update the owning evidence documents before changing
+status.

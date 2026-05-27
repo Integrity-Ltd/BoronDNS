@@ -130,6 +130,17 @@ REQUIRED_TEXT_BY_PATH = {
         "it is not the canonical inventory of every evidence script",
         "put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`",
         "put evidence state by requirement family in `docs/verification-ledger.md`",
+        "does not duplicate the acceptance",
+        "may require additional retained evidence without narrowing the",
+    ],
+}
+
+FORBIDDEN_TEXT_BY_PATH = {
+    "docs/implementation-plan.md": [
+        "30-day soak test completed without anomaly",
+        "signed release artifacts produced",
+        "at least one production-representative external operator has independently",
+        "interoperability with NSD, Knot DNS, and BIND 9 primaries",
     ],
 }
 
@@ -167,6 +178,11 @@ def main() -> int:
             if phrase not in text:
                 violations.append(
                     f"{relative_string}: missing required phrase {phrase!r}"
+                )
+        for phrase in FORBIDDEN_TEXT_BY_PATH.get(relative_string, []):
+            if phrase in text:
+                violations.append(
+                    f"{relative_string}: duplicated checklist phrase {phrase!r}"
                 )
 
     for path in current_source_paths():
