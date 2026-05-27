@@ -100,6 +100,14 @@ SOURCE_BANNED_PHRASES = [
 ]
 
 REQUIRED_TEXT_BY_PATH = {
+    "README.md": [
+        "The implemented Engineering MVP is wider than a minimal static-zone secondary",
+        "Retained feature slices stay in scope exactly as bounded in",
+        "IXFR with AXFR fallback, outbound XoT transfers",
+        "passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones",
+        "bounded EDE diagnostics, and opt-in CHAOS identification",
+        "Adjacent features are not implied unless that scope document names them.",
+    ],
     "docs/mvp-gap-register.md": [
         "kind of blocker",
         "Non-normative quality candidate",
@@ -154,6 +162,12 @@ REQUIRED_TEXT_BY_PATH = {
         "The retained post-Alpha slices are code-backed scope, not planning notes.",
         "source paths, implementation markers, representative test markers, evidence",
         "implemented-feature scope, review disposition, gap register, and this boundary",
+    ],
+    "docs/implemented-feature-scope.md": [
+        "The external review's suggested minimal MVP cut is treated as a floor for code",
+        "not a replacement for the current Engineering MVP",
+        "If code removes one of these slices, update this document",
+        "nearby behavior that is not claimed by the slice",
     ],
 }
 

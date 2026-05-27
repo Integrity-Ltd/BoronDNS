@@ -16,6 +16,11 @@ server. Retained feature slices stay in scope exactly as bounded in
 [Implemented feature scope](docs/implemented-feature-scope.md), with
 release-acceptance evidence gaps tracked separately.
 
+Those retained slices include IXFR with AXFR fallback, outbound XoT transfers,
+passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, broad EDNS
+response behavior, bounded EDE diagnostics, and opt-in CHAOS identification.
+Adjacent features are not implied unless that scope document names them.
+
 ## Start Here
 
 - New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
