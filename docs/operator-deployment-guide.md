@@ -260,7 +260,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   timestamp tolerance windows, and optional in-process server-secret rotation.
   A non-zero `secret_rotation_interval_secs` invalidates previously issued
   server cookies when rotation occurs, equivalent to the cookie effect of a
-  process restart.
+  process restart. The current Engineering MVP secret is process-local and
+  generated at startup; it is not a configured shared Server Secret. Do not use
+  strict-cookie behavior as an anycast or load-balanced consistency guarantee
+  until the formal RFC 9018 shared-secret and staged-rollover gap is closed.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration. The current
   release-review threshold baseline is documented in
   `docs/rrl-release-thresholds.md`; `summary_log_interval_secs` controls
