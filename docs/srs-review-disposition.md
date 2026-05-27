@@ -78,8 +78,8 @@ feature has completed every formal ODS-VER-008 release-acceptance evidence item.
 This scope-trim boundary is code-checked by
 `scripts/check-srs-review-disposition.py`, which requires each retained
 post-Alpha feature family to cite current source paths, retained evidence
-paths, and implementation-specific source markers. The same check also requires
-the reader-facing README, documentation index, Engineering MVP scope,
+paths, and implementation-specific source and test markers. The same check also
+requires the reader-facing README, documentation index, Engineering MVP scope,
 implementation plan, gap register, and verification ledger to continue naming
 those families as implemented Engineering MVP scope. If a feature is removed
 from code, the scope documents must change in the same patch.

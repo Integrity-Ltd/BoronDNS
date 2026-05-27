@@ -58,6 +58,7 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
     "Opt-in pipeline timing and response-cache candidate metrics are measurement aids, not a response-cache backend.",
     "It does not sign, validate, generate DNSSEC records, or synthesize new denial-proof material.",
     "Setup/runbooks may remain in Git, but completed evidence belongs to later SRS acceptance execution.",
+    "implementation-specific source and test markers",
 ]
 
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
@@ -107,6 +108,10 @@ FEATURES = {
             "build_ixfr_query",
             "IXFR failed; falling back to AXFR",
         ],
+        "test_needles": [
+            "parses_ixfr_mode1_incremental_diff_into_active_zone",
+            "transfer_ixfr_from_primary_applies_mode1_incremental_diff",
+        ],
     },
     "XoT": {
         "aliases": ["XoT"],
@@ -123,6 +128,10 @@ FEATURES = {
         "source_needles": [
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
+            "refresh_xot_uses_configured_client_certificate",
+        ],
+        "test_needles": [
+            "refresh_xot_handshake_failure_does_not_retry_cleartext",
             "refresh_xot_uses_configured_client_certificate",
         ],
     },
@@ -144,6 +153,10 @@ FEATURES = {
             "nsec3_max_iterations",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
+        "test_needles": [
+            "do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs",
+            "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+        ],
     },
     "RRL": {
         "aliases": ["RRL"],
@@ -161,6 +174,10 @@ FEATURES = {
             "rrl_truncated_response",
             "oxidedns_rrl_responses_dropped_total",
         ],
+        "test_needles": [
+            "rrl_response_categories_follow_srs_buckets",
+            "udp_rrl_slips_and_drops_limited_query_responses",
+        ],
     },
     "DNS Cookies": {
         "aliases": ["DNS Cookies"],
@@ -175,6 +192,10 @@ FEATURES = {
             "EDNS_COOKIE_OPTION",
             "compute_dns_server_cookie",
             "request_has_valid_dns_server_cookie",
+        ],
+        "test_needles": [
+            "edns_cookie_server_cookie_validates_for_same_client_ip",
+            "udp_valid_dns_cookie_bypasses_rrl_accounting",
         ],
     },
     "catalog zones": {
@@ -197,6 +218,10 @@ FEATURES = {
             "catalog_member_added",
             "oxidedns_catalog_member_info",
         ],
+        "test_needles": [
+            "catalog_snapshot_adds_member_transfer_plan_and_hides_catalog",
+            "catalog_snapshot_enforces_member_zone_cap",
+        ],
     },
     "EDNS response behavior": {
         "aliases": ["EDNS"],
@@ -212,6 +237,11 @@ FEATURES = {
             "parse_edns_options",
             "EDNS_TCP_KEEPALIVE_OPTION",
             "append_edns_padding_if_it_fits",
+            "response_opt_copies_query_do_bit_without_dnssec_augmentation",
+        ],
+        "test_needles": [
+            "tcp_edns_keepalive_request_gets_timeout_response",
+            "unsupported_edns_version_gets_badvers_opt_response",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
     },
@@ -231,6 +261,10 @@ FEATURES = {
             "EDE_NOT_READY",
             "UnsupportedNsec3Iterations",
         ],
+        "test_needles": [
+            "ede_not_ready_is_opt_in_for_loading_zones",
+            "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+        ],
     },
     "CHAOS": {
         "aliases": ["CHAOS"],
@@ -246,6 +280,10 @@ FEATURES = {
             "answer_chaos_query",
             "version.bind.",
             "oxidedns_chaos_queries_total",
+        ],
+        "test_needles": [
+            "chaos_version_txt_defaults_to_refused",
+            "chaos_query_observation_classifies_supported_cases",
         ],
     },
 }
@@ -288,6 +326,7 @@ def main() -> int:
         aliases = spec["aliases"]
         paths = spec["paths"]
         evidence_paths = spec["evidence_paths"]
+        test_needles = spec["test_needles"]
         source = "\n".join(
             (ROOT / relative_path).read_text(encoding="utf-8")
             for relative_path in paths
@@ -322,6 +361,12 @@ def main() -> int:
                 errors.append(
                     f"source cited for {feature} lacks implementation evidence "
                     f"needle {needle!r}"
+                )
+        for needle in test_needles:
+            if needle not in source:
+                errors.append(
+                    f"source cited for {feature} lacks representative test "
+                    f"marker {needle!r}"
                 )
 
     if errors:
