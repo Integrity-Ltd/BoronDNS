@@ -68,6 +68,11 @@ def main() -> None:
                 f"{matrix_path}:{row_number}: verification_method must be one of "
                 f"{sorted(VALID_METHODS)}"
             )
+        if "docs/implementation-plan.md" in row["local_evidence"]:
+            fail(
+                f"{matrix_path}:{row_number}: implementation-plan.md is a "
+                "milestone-direction document, not DNSSEC conformance evidence"
+            )
         for key in HEADER:
             if not row[key].strip():
                 fail(f"{matrix_path}:{row_number}: {key} is required")
