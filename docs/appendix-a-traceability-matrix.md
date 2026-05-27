@@ -1,6 +1,6 @@
 # Appendix A - Requirements Traceability Matrix
 
-Status: first-pass Engineering MVP and SRS acceptance evidence artifact
+Status: checked Engineering MVP and SRS acceptance traceability artifact
 
 This matrix is the working Appendix A traceability record for SRS requirements
 in `docs/OxideDNS-Secondary-SRS-v0.9.1.md` sections 3 through 6. It is derived
@@ -166,7 +166,7 @@ rows above and must not be read as verification completion.
 | ODS-VER-005..ODS-VER-006 | MVP / Partial | `docs/OxideDNS-Secondary-SRS-v0.9.1.md` Appendix A | Keep RFC clause mapping synchronized with requirement verification status and out-of-scope rationale. |
 | ODS-VER-007 | Alpha / Partial | `docs/verification-ledger.md`; interop scripts listed there | Alpha evidence exists as a working scaffold; release review must decide which partial rows are acceptable for Alpha signoff. |
 | ODS-VER-008 | MVP / Deferred | `docs/mvp-gap-register.md`; `docs/verification-ledger.md` | Local project MVP must provide runnable harnesses, artifact formats, and handoff for long-running acceptance activities. Later release/operations execution completes the full SRS acceptance protocol, non-functional, interop, operator-doc, retained-evidence, and external-operator deployment/validation/signature gaps before asserting ODS-VER-008. |
-| ODS-VER-009 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Expand this first-pass family matrix into the canonical per-requirement status table with date and evidence reference for every SRS section 3 through 6 requirement. |
+| ODS-VER-009 | MVP / Partial | `docs/verification-ledger.md`; this matrix | Promote the current checked family matrix into the canonical per-requirement status table with date and evidence reference for every SRS section 3 through 6 requirement. |
 | ODS-VER-010 | MVP / Partial | `docs/release-notes-template.md`; `scripts/check-release-notes.sh`; `scripts/release-evidence-snapshot.sh` | Release-note gate shape exists; each actual release still needs completed notes with verification counts, regression deltas, primary version/configuration records, and any failed-requirement decisions. |
 | ODS-VER-011..ODS-VER-012 | MVP / Partial | `docs/test-plan.md`; `scripts/check-test-plan.sh`; `scripts/check-perf-regression.py`; `scripts/check.sh`; `docs/mvp-gap-register.md` | Test Plan cadence mapping, regression policy, and smoke-metric comparison exist; local MVP needs setup and handoff for scheduler and baseline artifacts, while persisted full performance/resource baselines are produced by later release/operations execution. |
 | ODS-VER-013 | MVP / Partial | `scripts/interop-version-evidence.sh`; `scripts/evidence-artifacts.sh`; BIND, NSD, and Knot interop scripts listed in `docs/verification-ledger.md` | Real-primary interop scripts record primary version/configuration evidence, and evidence snapshot scripts retain successful-run artifacts; release notes must publish the recorded versions/configurations. |
