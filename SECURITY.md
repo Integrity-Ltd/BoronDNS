@@ -42,10 +42,15 @@ This policy must be reviewed for every release candidate.
 
 ## Release Signing
 
-MVP and later release artifacts must be signed. The preferred mechanism is
-Sigstore/Cosign with keyless OIDC signing where release infrastructure supports
-it. Detached OpenPGP signatures are an allowed fallback if Cosign cannot be used
-for a specific distribution channel.
+Formal SRS MVP and public release artifacts must be signed. The preferred
+mechanism is Sigstore/Cosign with keyless OIDC signing where release
+infrastructure supports it. Detached OpenPGP signatures are an allowed fallback
+if Cosign cannot be used for a specific distribution channel.
+
+Private Engineering MVP builds and test archives may be unsigned only when they
+are explicitly labelled as unsigned/internal. Those artifacts are useful for
+operator testing, but they are not evidence for `ODS-NFR-MAINT-008` and must
+not be presented as accepted formal SRS MVP or public release artifacts.
 
 A release must meet one of these conditions:
 
@@ -54,7 +59,7 @@ A release must meet one of these conditions:
   or key fingerprint is published in this policy or an equivalent release
   security document.
 - The release is explicitly marked as unsigned/internal and must not be treated
-  as an MVP or public release artifact.
+  as a formal SRS MVP or public release artifact.
 
 Cosign verification instructions for a signed release must be included in the
 release notes or release artifact manifest, for example:

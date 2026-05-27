@@ -177,6 +177,10 @@ FORBIDDEN_TEXT_BY_PATH = {
         "Historically deferred from Alpha to the formal SRS MVP release gate",
         "IXFR, full TSIG, XoT, DNSSEC serving, RRL,",
     ],
+    "SECURITY.md": [
+        "MVP and later release artifacts must be signed",
+        "must not be treated as an MVP or public release artifact",
+    ],
 }
 
 

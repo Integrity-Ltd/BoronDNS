@@ -36,6 +36,9 @@ for needle in \
     "MITRE direct" \
     "coordinated disclosure window" \
     "Sigstore/Cosign" \
+    "Formal SRS MVP and public release artifacts must be signed" \
+    "unsigned/internal" \
+    "not evidence for \`ODS-NFR-MAINT-008\`" \
     "cosign verify-blob" \
     "OpenPGP" \
     "public signing" \
