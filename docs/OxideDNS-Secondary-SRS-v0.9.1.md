@@ -2647,15 +2647,11 @@ The following requirements (ODS-NFR-SEC-008 through ODS-NFR-SEC-015) were introd
 *Source.* CIA-AX3 threat analysis; defence against TCP-slow-loris-style attacks adapted to zone transfer.
 *Verification.* Tests with a slow primary emulator (deliberately introducing delays in AXFR response stream); verify session abort at the configured timeout; verify the transfer slot is released for use by other transfers; verify state-machine accounting treats the timeout as a failure.
 
-**ODS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation.)* Every candidate member-zone name derived from a catalog zone's PTR records MUST be subjected to syntactic and semantic validation before being surfaced to the zone manager per ODS-FR-PROV-007:
-- structural member PTR validation per RFC 9432 §4.1 and ODS-FR-PROV-013;
-- the member-zone name MUST NOT be equal to, nor subordinate to, the catalog zone's own apex name (preventing pathological recursive provisioning);
-- the member-zone name MUST NOT be the root zone (`.`) nor any of the IANA-reserved zone names enumerated in the schema documentation;
-- the member-zone name MUST NOT contain wildcard labels (`*`).
+**ODS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation and clash handling.)* Every candidate member-zone name derived from a catalog zone's PTR records MUST pass the structural validation required by RFC 9432 §4.1 and ODS-FR-PROV-013 before being surfaced to the zone manager per ODS-FR-PROV-007. OxideDNS MUST NOT apply LDH host-name restrictions, blanket IANA Special-Use Domain Name exclusions, or wildcard-label exclusions to catalog member names merely because of their spelling: RFC 9432 §4.1 represents member zones in PTR RDATA so all valid DNS domain names can be represented, and its examples include `example.com.`, `example.net.`, and `example.org.`. IANA Special-Use names and their subdomains are special-purpose names, not malformed DNS names.
 
-Malformed structural catalog data covered by ODS-FR-PROV-013 is a broken catalog version and MUST NOT be partially applied. For semantic member-name policy exclusions in this requirement, the server MUST reject the offending candidate member with an error-level log entry identifying the rejection reason and the offending PTR record before the candidate member can reach the zone manager. The gap register records any current implementation gap between this formal SRS MVP policy and the Engineering MVP code evidence.
-*Source.* CIA-IX2 / IX3 threat analysis; defensive engineering against catalog-injection variants.
-*Verification.* Tests with catalogs containing each prohibited name pattern; verify rejection with appropriate diagnostic.
+If a structurally valid incoming member zone name clashes with an existing zone name from a configured catalog zone, another already-applied catalog member, or an otherwise configured zone, OxideDNS MUST ignore the incoming instance and SHOULD log an error per RFC 9432 §5.2. Existing configured zones and previously applied catalog-owned zones MUST NOT be replaced by the clashing incoming instance. Optional operator allow-lists or deny-lists for admissible catalog member names may be introduced as explicit future configuration, but no implicit special-use or wildcard rejection is part of the default RFC 9432 profile.
+*Source.* RFC 9432 §4.1, §5.2, §7; IANA Special-Use Domain Names registry; RFC 2606; RFC 6761.
+*Verification.* Tests with malformed member PTR structures/RDATA and duplicate PTR targets; tests proving RFC 9432 example member names and IANA Special-Use names are structurally accepted; tests proving configured-zone/catalog-zone name clashes are ignored with an operator-visible error. *Updated in v0.9.1.*
 
 ## 5.4 Maintainability
 

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use thiserror::Error;
 
@@ -46,7 +46,7 @@ pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMembe
     let catalog = &snapshot.origin;
     let zones_owner = DomainName::from_absolute_str(&format!("zones.{catalog}"))
         .expect("valid catalog origin builds valid zones owner");
-    let mut ptr_records_by_owner = HashMap::<String, Vec<_>>::new();
+    let mut ptr_records_by_owner = BTreeMap::<String, Vec<_>>::new();
 
     for record in snapshot.records() {
         if record.class != 1 || record.rr_type != RecordType::Ptr as u16 {
@@ -89,7 +89,7 @@ pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMembe
                 owner: record.owner.clone(),
             });
         }
-        if member == *catalog || !seen_members.insert(member.canonical_key()) {
+        if !seen_members.insert(member.canonical_key()) {
             return Err(CatalogError::DuplicateMember {
                 catalog: catalog.clone(),
                 member,
@@ -223,6 +223,68 @@ mod tests {
         assert_eq!(
             parse_catalog_members(&snapshot),
             Err(CatalogError::DuplicateMember { catalog, member })
+        );
+    }
+
+    #[test]
+    fn accepts_rfc9432_example_special_use_and_wildcard_member_names() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog.clone(),
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("example.com.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![DomainName::from_absolute_str("invalid.").unwrap().to_wire()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("c.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("*.wild.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(&snapshot).unwrap();
+
+        let member_zones = members
+            .iter()
+            .map(|member| member.zone.canonical_key())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            member_zones,
+            vec![
+                "*.wild.example.".to_owned(),
+                "example.com.".to_owned(),
+                "invalid.".to_owned(),
+            ]
         );
     }
 }

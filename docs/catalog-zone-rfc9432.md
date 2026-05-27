@@ -34,6 +34,13 @@ Implemented behavior in the current Engineering MVP:
 - Malformed member PTR RRsets and malformed member PTR RDATA make the candidate
   catalog version broken under RFC 9432; OxideDNS does not partially apply the
   remaining member list from that candidate version.
+- OxideDNS accepts structurally valid catalog member names by RFC 9432 §4.1,
+  including the RFC example names `example.com.`, `example.net.`, and
+  `example.org.` and other IANA Special-Use names. These names are not
+  malformed merely because they are special-use names.
+- Incoming member zones that clash with existing configured catalog zones,
+  already-applied catalog members, or static zones are ignored and logged per
+  RFC 9432 §5.2.
 
 Outside this Engineering MVP catalog slice:
 
@@ -42,13 +49,9 @@ Outside this Engineering MVP catalog slice:
   set for the configured catalog.
 - Persistent catalog or member-zone state across process restarts.
 - Primary-side catalog generation.
-- Completed formal SRS evidence for the `ODS-NFR-SEC-015`
-  per-offending-member semantic rejection profile. Current Engineering MVP
-  evidence covers structural member PTR parsing, duplicate members,
-  self-catalog member detection as whole-candidate catalog rejection, and
-  member-count caps. Per-member diagnostics for self-catalog members plus
-  subordinate-to-catalog, root-zone, reserved-zone, and wildcard-label
-  exclusions remain tracked in the gap register.
+- Optional product-specific member-name allow-list or deny-list policy. The
+  default catalog profile follows RFC 9432 member-name semantics rather than
+  silently rejecting IANA Special-Use names or wildcard labels.
 
 ## Configuration
 

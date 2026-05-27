@@ -796,15 +796,9 @@ def main() -> int:
         "rustls defaults with the Cargo `tls12` feature enabled",
         "Formal RFC 9103 evidence must either enforce TLS 1.3-or-later",
         "explicitly separated compatibility-mode evidence",
-        "NSEC3-cap metric/EDE coupling",
-        "affected responses are not counted",
-        "metric counting decoupled from EDE emission",
-        "Current metric evidence is narrower than the formal requirement",
-        "Catalog member-name semantic exclusions",
-        "whole-candidate catalog rejection",
-        "`ODS-NFR-SEC-015` per-offending-member semantic rejection profile",
-        "subordinate-to-catalog members, root-zone members, reserved-zone members, or wildcard-label members",
-        "Formal SRS acceptance needs the semantic member-name exclusions and retained tests recorded in the gap register",
+        "Section 4.1 owns the member-zone PTR structure",
+        "special-use or wildcard-looking names are not implicitly invalid",
+        "RFC 9432 §5.2 name clashes are ignored and logged",
     ]:
         if term not in disposition:
             errors.append(

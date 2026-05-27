@@ -6073,18 +6073,37 @@ impl CatalogManager {
         }
 
         let catalog_key = catalog.origin.canonical_key();
+        let (old_member_keys, other_catalog_member_keys) = {
+            let memberships = self
+                .memberships_by_catalog
+                .lock()
+                .expect("catalog membership lock poisoned");
+            let old_member_keys = memberships.get(&catalog_key).cloned().unwrap_or_default();
+            let other_catalog_member_keys = memberships
+                .iter()
+                .filter(|(known_catalog_key, _)| *known_catalog_key != &catalog_key)
+                .flat_map(|(_, member_keys)| member_keys.iter().cloned())
+                .collect::<HashSet<_>>();
+            (old_member_keys, other_catalog_member_keys)
+        };
         let mut members_by_key = HashMap::new();
         for member in members {
-            members_by_key.insert(member.zone.canonical_key(), member.zone);
+            let member_key = member.zone.canonical_key();
+            if self.catalogs_by_key.contains_key(&member_key)
+                || other_catalog_member_keys.contains(&member_key)
+            {
+                error!(
+                    category = "transfer",
+                    event = "catalog_member_name_clash",
+                    catalog_zone = %catalog.origin,
+                    zone = %member.zone,
+                    "catalog member zone clashes with an existing catalog zone; ignoring incoming member"
+                );
+                continue;
+            }
+            members_by_key.insert(member_key, member.zone);
         }
         let new_member_keys = members_by_key.keys().cloned().collect::<HashSet<_>>();
-        let old_member_keys = self
-            .memberships_by_catalog
-            .lock()
-            .expect("catalog membership lock poisoned")
-            .get(&catalog_key)
-            .cloned()
-            .unwrap_or_default();
 
         let Some(catalog_plan) = transfer_plan.get(&catalog.origin) else {
             warn!(
@@ -6106,12 +6125,12 @@ impl CatalogManager {
                 continue;
             };
             if self.static_zone_keys.contains(&member_key) {
-                warn!(
+                error!(
                     category = "transfer",
-                    event = "catalog_member_static_zone_clash",
+                    event = "catalog_member_name_clash",
                     catalog_zone = %catalog.origin,
                     zone = %member_origin,
-                    "catalog member zone already has static configuration; keeping static configuration"
+                    "catalog member zone already has static configuration; ignoring incoming member"
                 );
                 continue;
             }
@@ -8635,6 +8654,81 @@ mod tests {
         let request = rx.recv().await.expect("member refresh request");
         assert_eq!(request.zone, member_origin);
         assert_eq!(request.reason, super::RefreshReason::Catalog);
+    }
+
+    #[tokio::test]
+    async fn catalog_snapshot_ignores_existing_catalog_zone_name_clash() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                notify_sources = ["192.0.2.53"]
+                tsig_key = "catalog-key."
+            "#,
+        )
+        .expect("valid catalog config");
+        let captured = CapturedEvents::new();
+        let subscriber = CapturingSubscriber::new(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog_origin.clone(),
+            Some(7),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("clash.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![catalog_origin.to_wire()],
+                ),
+            ],
+        );
+        let zones = ZoneStore::new();
+        zones.insert_loading_hidden(catalog_origin.clone());
+        zones.insert_snapshot(snapshot.clone());
+        let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+        let catalog_manager = CatalogManager::from_config(&config);
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+        );
+        let notify_authority = NotifyAuthority::from_config(&config);
+        let (tx, mut rx) = mpsc::channel(1);
+
+        catalog_manager
+            .apply_snapshot(
+                &snapshot,
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &tx.downgrade(),
+            )
+            .await;
+
+        assert!(transfer_plan.get(&catalog_origin).is_some());
+        assert!(rx.try_recv().is_err());
+        assert_eq!(catalog_manager.member_metrics(), Vec::new());
+        assert!(captured.contains_all(&["catalog_member_name_clash", "zone=catalog.example.",]));
     }
 
     #[tokio::test]
