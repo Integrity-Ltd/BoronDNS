@@ -35,10 +35,10 @@ Terminology:
   Engineering MVP does not depend on those completed results.
 - **Current checked-in full SRS** is
   `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
-- **Pending C.5 decisions** in the current SRS remain open even when
-  implementation follows the current SRS body defaults. Release notes and
-  acceptance review must distinguish implemented defaults from confirmed
-  project decisions.
+- **Pending C.5 decisions** in the current SRS remain open until release review
+  resolves or explicitly defers them. Resolved C.5 rows are already project
+  decisions; release notes and acceptance review must not treat the pending
+  subset as confirmed only because implementation evidence exists.
 
 Rows below deliberately name current gaps only. A row being present here does
 not mean the feature is absent; it means either an implementation decision, a

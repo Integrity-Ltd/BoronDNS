@@ -143,14 +143,14 @@ SRS, or the verification ledger. When implementation status changes:
   `docs/appendix-a-traceability-matrix.md`;
 - put review-disposition rationale in `docs/srs-review-disposition.md`.
 
-## Pending C.5 Decision Overlay
+## Project Decision Ownership
 
-Appendix C.5 of SRS v0.9.1 still marks defaults, protocol choices, and policy
-choices as pending confirmation. Implementation may follow the current SRS body
-defaults so the server is testable, but release notes and acceptance review must
-not treat those values as final project decisions until C.5 is resolved. The
-canonical pending-decision list is SRS Appendix C.5; the active queue is
-summarized in `docs/mvp-gap-register.md`.
+Appendix C.5 of SRS v0.9.1 is the project-decision audit trail. This plan does
+not own or repeat that table. Resolved C.5 rows are current project decisions;
+rows still marked `Pending` require release-review action before formal SRS MVP
+acceptance. The active pending subset is summarized in
+`docs/mvp-gap-register.md` so this implementation plan can remain at milestone
+level.
 
 ## Evidence Ownership
 
