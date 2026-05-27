@@ -90,7 +90,7 @@ The later ODS-VER-008 acceptance execution target remains:
 
 The SRS Alpha gate remains useful as historical context, but it is no longer the
 active feature boundary. Engineering MVP includes implemented post-Alpha slices
-listed above and in `docs/mvp-gap-register.md`.
+listed in `docs/implemented-feature-scope.md`.
 
 Historically deferred from Alpha to the formal SRS MVP release gate
 (`ODS-VER-008`) per SRS ODS-VER-007: IXFR, full TSIG, XoT, DNSSEC serving, RRL,
@@ -107,22 +107,26 @@ a deferral list. Current status and remaining evidence gaps are recorded in
 v0.9 makes ODS-IF-PROC-004 a MAY-level command. It is therefore useful for the
 Engineering MVP workflow without being an acceptance blocker.
 
-## Implementation Slices
+## Implementation Slice Ownership
 
-| Slice | Engineering MVP posture | Evidence owner |
-| --- | --- | --- |
-| DNS wire core and query serving | Implemented for authoritative UDP/TCP serving, negative responses, unknown RR preservation, referrals, wildcard/CNAME/DNAME behavior, ANY policy, and response compression. | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md`; query interop scripts. |
-| Zone store and state machine | Implemented as memory-resident snapshots with atomic publication, LOADING/ACTIVE/EXPIRED behavior, SOA refresh/retry/expire scheduling, and NOTIFY-triggered refresh. | `docs/zsm-engineering-mvp-matrix.tsv`; `docs/verification-ledger.md`. |
-| AXFR, IXFR, and spoof resistance | Implemented for TCP AXFR, IXFR refresh/fallback, transfer parsing, primary-response validation, and anti-spoofing checks. | `docs/verification-ledger.md`; `scripts/audit-spoof-evidence.py`; AXFR/IXFR interop scripts. |
-| TSIG | Implemented for supported HMAC-SHA algorithms, transfer signing/verification, NOTIFY verification, ordinary signed-query handling, and HMAC-MD5 rejection. | `docs/appendix-a-traceability-matrix.md`; TSIG interop scripts. |
-| EDNS and EDE | Implemented for OPT parsing, BADVERS, payload ceilings, DO-bit copy semantics, NSID, padding, TCP keepalive, and bounded EDE diagnostics. | `docs/verification-ledger.md`; `scripts/interop-edns-behavior.sh`; DNSSEC/EDE scripts. |
-| Passive DNSSEC serving | Implemented for transferred DNSSEC data, selected denial proofs, explicit DNSSEC RRset queries, NSEC3 cap behavior, and no signing/validation/key-management posture. | `docs/dnssec-conformance-matrix.tsv`; `scripts/audit-dnssec-passive.sh`. |
-| RRL and DNS Cookies | Implemented as process-wide UDP abuse-resistance and source-address confirmation features, with remaining release-threshold review tracked separately. | `docs/rrl-release-thresholds.md`; `docs/verification-ledger.md`; RRL and cookie interop scripts. |
-| XoT | Implemented as outbound zone-transfer transport with rustls, ALPN `dot`, trust-anchor validation, optional client certs, TSIG-over-XoT, and no cleartext fallback after TLS failure. | `docs/verification-ledger.md`; XoT audit and interop scripts. |
-| RFC 9432 catalog zones | Implemented for configured catalog transfer, parsing, member add/remove, mandatory catalog TSIG, hidden catalog serving by default, and catalog membership metrics/logs. | `docs/catalog-zone-mvp-rfc9432.md`; `docs/mvp-gap-register.md`; catalog interop scripts. |
-| CHAOS diagnostics | Implemented as opt-in CH/TXT `version.bind.`, `version.server.`, `hostname.bind.`, and `id.server.` responses with conservative REFUSED defaults. | `docs/verification-ledger.md`; `scripts/interop-chaos-queries.sh`. |
-| Interfaces and operations | Implemented for DNS/transfer/management interface roles, config validation/dump modes, structured logs, health/readiness/metrics endpoints, signal handling, process hardening, and CLI metadata. | `docs/operator-deployment-guide.md`; `docs/verification-ledger.md`; capture scripts. |
-| Release and evidence scaffolding | Implemented as handoff scripts and checkers, but long-running evidence execution remains outside Engineering MVP. | `docs/test-plan.md`; `docs/evidence-command-catalog.md`; release handoff scripts. |
+This plan deliberately does not own the detailed inventory of implemented
+behavior. The current implementation slices and evidence owners are split by
+purpose:
+
+- `docs/verification-ledger.md` records broad evidence state by requirement
+  family.
+- `docs/appendix-a-traceability-matrix.md` records detailed requirement-range
+  traceability.
+- `docs/implemented-feature-scope.md` records retained post-Alpha feature
+  boundaries and nearby non-claims.
+- `docs/zsm-engineering-mvp-matrix.tsv`, `docs/dnssec-conformance-matrix.tsv`,
+  and `docs/rrl-release-thresholds.md` record focused feature evidence where a
+  compact matrix or threshold register is clearer than prose.
+- `docs/operator-deployment-guide.md` owns operator-facing commands and release
+  handoff procedures.
+
+When a feature moves between implemented, deferred, or accepted states, update
+the owning evidence document first and keep this plan at milestone level.
 
 ## Current Status Rules
 
@@ -174,8 +178,8 @@ summarized in `docs/mvp-gap-register.md`.
 
 ## Open Near-Term Work
 
-- broaden release-grade real-primary interop and retained evidence for IXFR,
-  XoT, passive DNSSEC, RRL, DNS Cookies, catalog zones, EDNS/EDE, and CHAOS;
+- broaden release-grade real-primary interop and retained evidence for the
+  implemented feature families named in `docs/implemented-feature-scope.md`;
 - execute and attach release-specific policy review records, signed-release
   artifacts, and operator sign-off using the handoff scaffolds;
 - preserve the Appendix C.6 future-optimization boundaries for XDP/eBPF,
