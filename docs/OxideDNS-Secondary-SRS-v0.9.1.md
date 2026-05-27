@@ -2893,14 +2893,14 @@ All three interface roles MAY be satisfied by the same address (wildcard or spec
 *Verification.* Configuration tests with separate bind addresses per role; network-layer inspection confirming DNS traffic reaches only the DNS interface, health/metrics traffic reaches only the management interface (modulo the optional `health.bind_address` override), and outbound transfer traffic uses the configured transfer interface; error-emission tests confirming the obsolete `interface.xot` key is rejected.
 
 **ODS-IF-NET-006.** The DNS query interface MUST NOT suppress ICMPv4 Fragmentation Needed messages (type 3, code 4) or ICMPv6 Packet Too Big messages (type 2) destined for addresses on that interface. In the current kernel-managed socket deployment model, these messages are generated and processed by the host operating system; the server has no application-level ICMP handling to implement. The server's Operator Deployment Guide MUST explicitly document this requirement so that operators configuring host-level or infrastructure firewalls on the DNS query interface do not inadvertently suppress these message types, which would break Path MTU Discovery and degrade or block large EDNS responses over UDP.
-*Source.* RFC 8900 (IP Fragmentation Considered Fragile); RFC 4821 (Packetisation Layer Path MTU Discovery); operational requirement for EDNS0 UDP response delivery. The requirement is documentation-enforcement, not application code, in the MVP; it preponderantly becomes implementation-level in any future kernel-bypass (XDP) variant — see Appendix C.6.
+*Source.* RFC 8900 (IP Fragmentation Considered Fragile); RFC 4821 (Packetisation Layer Path MTU Discovery); operational requirement for EDNS0 UDP response delivery. The requirement is documentation-enforcement, not application code, in the formal SRS MVP; it preponderantly becomes implementation-level in any future kernel-bypass (XDP) variant — see Appendix C.6.
 *Verification.* Deployment Guide review confirming explicit statement of the ICMP requirement for the DNS query interface; firewall-configuration checklist inspection.
 
 **ODS-IF-NET-007.** The configuration schema (§6.2) MUST provide an `[interfaces]` section with sub-keys `dns`, `mgmt`, and `transfer` — all optional, defaulting to wildcard / OS-selected as specified in ODS-IF-NET-005. Each key accepts a list of (address, port) pairs. The server MUST validate that addresses assigned to `dns` and `mgmt` do not overlap unless the operator explicitly sets them equal (signalling intentional co-location), emitting a warning at startup when overlap is detected. Overlapping `transfer` with `dns` or `mgmt` is permitted without warning, as the transfer interface is outbound-only and does not bind a listening socket.
 *Source.* ODS-IF-NET-005; ODS-IF-NET-008; ODS-IF-CONF-003 (configuration schema completeness).
 *Verification.* Schema validation tests covering disjoint, intentionally overlapping, and unintentionally overlapping address assignments; warning-log inspection for the overlap case; error-emission tests for the notify-vs-dns same-socket conflict.
 
-**ODS-IF-NET-008.** The MVP configuration MUST NOT expose a fourth active **NOTIFY interface** role. NOTIFY reception is part of the DNS query interface for this release, and accepted sources are restricted by the zone's configured primaries and `notify_sources`. If an operator supplies `interface.notify` or `interfaces.notify`, the configuration parser MUST reject it per ODS-IF-CONF-005 and direct the operator to receive NOTIFY on `interfaces.dns`.
+**ODS-IF-NET-008.** The formal SRS MVP configuration MUST NOT expose a fourth active **NOTIFY interface** role. NOTIFY reception is part of the DNS query interface for this release, and accepted sources are restricted by the zone's configured primaries and `notify_sources`. If an operator supplies `interface.notify` or `interfaces.notify`, the configuration parser MUST reject it per ODS-IF-CONF-005 and direct the operator to receive NOTIFY on `interfaces.dns`.
 
 A future revision MAY reintroduce a separate NOTIFY listener role if the project explicitly accepts the operational complexity and documents its firewalling, overlap, and query-handling semantics. That future work is not part of the current formal SRS MVP interface model.
 *Source.* Formal SRS MVP interface-scope decision; security isolation is provided by source authorization, TSIG where configured, and network firewalling around the DNS listener rather than by a fourth configured listener role.
@@ -2926,7 +2926,7 @@ release-gate automation evidence.
 - per-zone TSIG configuration: key reference and applicability (queries, transfers, NOTIFY);
 - per-(zone, primary) XoT configuration: trust anchors, expected SNI, optional client certificate;
 - TSIG key definitions: key name, algorithm, secret value (inline or by file reference per ODS-IF-CONF-004);
-- network bind configuration per ODS-IF-NET-001, ODS-IF-NET-002, and ODS-IF-NET-005 through ODS-IF-NET-008, including the `[interfaces]` section with `dns`, `mgmt`, and `transfer` sub-keys; the active MVP configuration MUST NOT expose a fourth `notify` role, because NOTIFY reception is part of `interfaces.dns` per ODS-IF-NET-008; network interface bindings MUST be expressed as IP addresses (literal IPv4 or IPv6), not as interface names (`eth0`, `ens192`, etc.); operators who want to bind to "whatever address is currently on eth0" SHOULD resolve the address at configuration-generation time via a template tool or wrapper script, avoiding the OS-portability concern of interface naming conventions;
+- network bind configuration per ODS-IF-NET-001, ODS-IF-NET-002, and ODS-IF-NET-005 through ODS-IF-NET-008, including the `[interfaces]` section with `dns`, `mgmt`, and `transfer` sub-keys; the active formal SRS MVP configuration MUST NOT expose a fourth `notify` role, because NOTIFY reception is part of `interfaces.dns` per ODS-IF-NET-008; network interface bindings MUST be expressed as IP addresses (literal IPv4 or IPv6), not as interface names (`eth0`, `ens192`, etc.); operators who want to bind to "whatever address is currently on eth0" SHOULD resolve the address at configuration-generation time via a template tool or wrapper script, avoiding the OS-portability concern of interface naming conventions;
 - logging configuration per §6.3;
 - health and metrics endpoint configuration per §6.4;
 - tunable parameters (timeouts, limits, RRL thresholds, jitter, keepalive intervals) with override of defaults.
@@ -3182,7 +3182,7 @@ HTTP status 503 with the following body when **draining** (SIGTERM received, gra
 {"status":"draining","version":"<version>","grace_period_remaining_seconds":15}
 ```
 
-**`/healthz`** — readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the MVP.
+**`/healthz`** — readiness alias. Behaviour, status codes, and body content are identical to `/readyz`. This endpoint is supported in the formal SRS MVP.
 
 **`/metrics`** — returns server metrics in the Prometheus / OpenMetrics text exposition format per ODS-NFR-OBS-003. HTTP status 200 with the metrics text body, MIME type `text/plain; version=0.0.4` (Prometheus exposition convention).
 
@@ -3480,7 +3480,7 @@ Regression baseline: the rolling window of the last 5 release measurements is us
 - **Continuous methods** per ODS-VER-011 are executed through the active continuous gate for the project stage. During the private-repository Engineering MVP profile this is local `scripts/check.sh`; for formal release acceptance the results are retained as CI or equivalent release-gate automation evidence.
 - **Periodic methods** per ODS-VER-011 are scheduled by CI where available or executed manually by the project's release engineer at the documented cadence (long-cadence Fuzz test, Performance test, Differential test, Soak test snapshots), with retained evidence paths recorded in release notes.
 - **Gate methods** per ODS-VER-011 are executed by the project's release engineer at release acceptance gates; the release engineer is a project role recorded in the Architecture Document.
-- **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through MVP, this role is held by DT.
+- **Verification result review at release time** is the responsibility of the project's Architecture Owner; for v0.1 through the formal SRS MVP release gate, this role is held by DT.
 - **External operator acceptance** per ODS-VER-008 (formal SRS MVP release gate) introduces a third-party verifier; the acceptance signature, the identity of the accepting operator, and the operator's accepted scope statement are recorded in the formal SRS MVP release notes.
 - **Security audit** per the §7.1 method definition is procured from a third-party security specialist firm; the engagement is recorded in the Architecture Document with the auditor identity, scope, and findings tracking process.
 
@@ -3505,9 +3505,9 @@ The SRS was subjected to a structured per-section audit cycle initiated in v0.2 
 
 | Audit cycle | SRS revision | Section | Principal outcomes |
 |---|---|---|---|
-| Functional | v0.3 | §4 | Closed specification gaps (non-EDNS UDP ceiling, AA bit completeness, CNAME chain semantics, TCP in-flight cap, AXFR/IXFR size cap, pseudo-RR rejection); new MVP-scope §4.19 DNS Cookies (RFC 7873/9018) and NSID (RFC 5001). |
+| Functional | v0.3 | §4 | Closed specification gaps (non-EDNS UDP ceiling, AA bit completeness, CNAME chain semantics, TCP in-flight cap, AXFR/IXFR size cap, pseudo-RR rejection); new formal SRS MVP scope §4.19 DNS Cookies (RFC 7873/9018) and NSID (RFC 5001). |
 | Non-functional | v0.4 | §5 | Reference Hardware Profile and Reference Query Mix introduced (Appendix E); 13 new NFRs covering TCP/TSIG/DNSSEC throughput targets, overload behaviour, clock-skew tolerance, CVE policy, test coverage, signed releases, Operator Deployment Guide deliverable, build_info and latency-histogram metrics, idle-CPU bound. |
-| Interface | v0.5 | §6 | `interface.xot` -> `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
+| Interface | v0.5 | §6 | `interface.xot` -> `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the formal SRS MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
 | Architectural invariants | v0.6 | §3 | Precision refinements to ODS-INV-001 through -006; three new foundational invariants (Authoritative-Only Response Composition, Single-Process Architecture, Static Composition). |
 | Verification | v0.7 | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; ODS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
 
@@ -4491,12 +4491,12 @@ The following items were specifically flagged during SRS drafting for explicit t
 | UDP IXFR support | §4.7, ODS-FR-IXFR-001 | Remove (TCP only) | **Resolved (v0.3): UDP IXFR removed; ODS-NEG-018** |
 | Non-root execution as MUST | §5.3 | Strengthen to MUST | **Resolved (v0.4): elevated to MUST; ODS-NFR-SEC-004** |
 | In-code requirement reference SHOULD → MUST | §5.4 | Elevate with CI enforcement | **Resolved (v0.4): elevated to MUST; ODS-NFR-MAINT-004** |
-| Per-record memory overhead target (500 bytes) | §5.7, ODS-NFR-RES-002 | SHOULD MVP, MUST post-MVP | **Resolved (v0.4): SHOULD in MVP, deferred MUST aligned with C.6.2** |
+| Per-record memory overhead target (500 bytes) | §5.7, ODS-NFR-RES-002 | SHOULD formal SRS MVP, MUST post-MVP | **Resolved (v0.4): SHOULD in formal SRS MVP, deferred MUST aligned with C.6.2** |
 | `/livez` and `/readyz` health-endpoint split | §5.6, §6.4 | Split per K8s convention | **Resolved (v0.4): split per ODS-NFR-OBS-004 and ODS-IF-HEALTH-002** |
 | Reference Hardware Profile (Dual Xeon Gold 6230R) | §5.1, §5.7, Appendix E | Confirm Profile | **Resolved (v0.4): confirmed; Appendix E** |
 | Reference Query Mix (Zipf 80/5; A/AAAA/MX/NS/TXT/SRV distribution) | §5.1, Appendix E | Confirm Mix | **Resolved (v0.4): confirmed; Appendix E.3** |
 | `interface.xot` rename to `interface.transfer` | §6.1, ODS-IF-NET-005 | Rename for accurate scope | **Resolved (v0.5): renamed; ODS-IF-NET-005** |
-| Separate inbound NOTIFY interface | §6.1, ODS-IF-NET-008 | Decide whether to expose a fourth NOTIFY role | **Resolved for MVP: not exposed; ODS-IF-NET-008 requires rejection of `interface.notify` / `interfaces.notify` and receives NOTIFY on `interfaces.dns`** |
+| Separate inbound NOTIFY interface | §6.1, ODS-IF-NET-008 | Decide whether to expose a fourth NOTIFY role | **Resolved for formal SRS MVP: not exposed; ODS-IF-NET-008 requires rejection of `interface.notify` / `interfaces.notify` and receives NOTIFY on `interfaces.dns`** |
 | Health endpoint default bind precedence (explicit > `interface.mgmt` > localhost) | §6.4, ODS-IF-HEALTH-001 | Layered default | **Resolved (v0.5): specified; ODS-IF-HEALTH-001** |
 | Exit code convention (sysexits.h-style) | §6.6, ODS-IF-PROC-001 | Adopt BSD sysexits convention | **Resolved (v0.5): adopted; ODS-IF-PROC-001** |
 | SIGPIPE ignore disposition exception | §6.5, ODS-IF-SIG-004 | Permit SIG_IGN for SIGPIPE | **Resolved (v0.5): permitted; ODS-IF-SIG-004** |
@@ -4637,7 +4637,7 @@ standard target.
 
 *Architectural constraints on any future implementation.*
 - The DNS query socket layer MUST be encapsulated behind a documented packet-I/O boundary so that an XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
-- The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the MVP.
+- The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the current Engineering MVP runtime.
 - When ODS-IF-NET-006 is re-evaluated for the XDP variant, packet-size and path-MTU behaviour that is currently delegated to the kernel socket path MUST be covered by explicit implementation and tests for the bypass path.
 - Runtime loading of operator-supplied eBPF programs remains prohibited by ODS-INV-009. Any future kernel-side program MUST be built as a versioned project artifact and attached only through the audited adapter path.
 - First-party `unsafe` and unsafe-prone dependencies for this backend MUST remain confined to the registry-listed packet-I/O adapter boundary and MUST carry `/// # Safety` / `// SAFETY:` rationale and backend fault evidence before production enablement.
@@ -4663,7 +4663,7 @@ before any packed-store work is justified. The packed-binary layout is a
 performance and memory-locality optimisation whose benefit must be demonstrated
 against measured bottlenecks.
 
-*Entry condition for re-evaluation.* MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
+*Entry condition for re-evaluation.* Engineering MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
 
 *Architectural constraints on any future implementation.*
 - The zone store MUST be accessed through a documented storage boundary so the packed-binary implementation can substitute without changes to the query-processing or zone-transfer layers.
@@ -4690,7 +4690,7 @@ benchmarking identifies response assembly as a bottleneck. The cache introduces
 complexity (invalidation logic, DO-bit interaction, DNSSEC TTL decay) that is
 unjustified before measured evidence of need.
 
-*Entry condition for re-evaluation.* MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
+*Entry condition for re-evaluation.* Engineering MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
 
 *Conditional architectural constraints on any future implementation.*
 - The response-assembly path MUST be cleanly separated from the send path, so that a cached pre-built buffer can be substituted for the assembled buffer transparently.
