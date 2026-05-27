@@ -230,6 +230,7 @@ REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
+SECTION_4_RE = re.compile(r"^## (4\.\d+) ", re.MULTILINE)
 
 
 def main() -> int:
@@ -289,6 +290,17 @@ def main() -> int:
             "suffixed current requirement identifiers found: "
             + ", ".join(suffixed_ids)
         )
+
+    cross_reference_index = text.split("## A.5 Cross-Reference Index", 1)[1].split(
+        "# Appendix B",
+        1,
+    )[0]
+    for section in SECTION_4_RE.findall(text):
+        if f"| {section} " not in cross_reference_index:
+            errors.append(
+                "Appendix A cross-reference index omits current functional "
+                f"section {section}"
+            )
 
     if errors:
         for error in errors:

@@ -3596,6 +3596,8 @@ For project navigation convenience, the following inverse index is provided. Eac
 | 4.17 RRL | RRL | (no IETF RFC; Vixie/Schryver operational design) |
 | 4.18 Negative Requirements | NEG | (cross-references to enforcing requirements) |
 | 4.19 DNS Cookies | COOKIE | 7873, 9018 |
+| 4.20 Zone Provisioning | PROV | 1035, 9432 |
+| 4.21 CHAOS Class Query Handling | CHAS | 1035, 5001 |
 
 # Appendix B — Resource Record Type Catalogue Boundary
 
