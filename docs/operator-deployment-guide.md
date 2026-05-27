@@ -659,61 +659,15 @@ scripts/engineering-mvp-evidence.sh
 ```
 
 Successful real-primary interop runs write `primary-version.txt` under their
-`target/interop/...` workdir. The evidence snapshot scripts copy new files into
-`interop-primary-versions/` with an index, binding each pass/fail result to the
-tested primary implementation version, OS or container package context,
-configuration artifacts, transport, and security mode. A script skip is missing
-evidence, not passing interop evidence.
-
-`scripts/engineering-mvp-evidence.sh` writes the narrow Engineering MVP evidence profile
-under `target/evidence/engineering-mvp/<timestamp>/`: repository checks, parser
-fuzz compile, invariant audit, portability inventory/probes, unused/dead-code
-audit, resource smoke evidence, coverage evidence, performance smoke, and BIND
-AXFR, TSIG AXFR, and NOTIFY refresh interop logs.
-
-`scripts/release-evidence-snapshot.sh` writes command logs under
-`target/evidence/<timestamp>/`. By default it captures the repo check, fuzz
-compile check, cargo-deny output, tool versions, git state, and the current
-verification command list, including the Test Plan shape check and portability
-evidence under `portability-evidence/`. It also retains unused/dead-code audit
-artifacts under `unused-code-audit/` and resource smoke artifacts under
-`resource-evidence/`, plus `cargo-llvm-cov` threshold artifacts under
-`coverage-evidence/`, `cargo geiger` unsafe dependency enumeration under
-`unsafe-dependency-evidence/`, the production-depth info verbosity profile
-setup under `info-verbosity-handoff/`, the interface compatibility baseline
-and optional release-diff output under `interface-compatibility/`, the
-Reference Hardware/Profile benchmark setup/report scaffold under
-`benchmark-handoff/`, the long-run soak setup/report scaffold under
-`soak-handoff/`, the reproducible-build setup under
-`reproducible-build-handoff/`, and the release-governance setup under
-`release-handoff/`. The unsafe dependency evidence records scanner caveats and
-must be reviewed before it is treated as complete. The info verbosity,
-interface-compatibility, benchmark, soak, reproducible-build, and
-release-governance handoffs are not completed profile, release-to-release
-compatibility-diff, benchmark, soak, bit-identical build, or release-acceptance
-evidence unless their release-specific inputs are supplied; they are
-release/operations template sets for the later delegated runs. Set
-`OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the snapshot
-and retain its `campaign-summary.tsv`,
-set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
-campaign under the snapshot, and set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the
-interop commands listed in `docs/evidence-command-catalog.md` as part of the
-snapshot. The RRL campaign uses `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
-`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
-duration mode.
-
-Set `OXIDEDNS_RELEASE_NOTES` to a completed release notes markdown file to run the
-release-note gate and verify that retained primary-version artifact paths are
-published in the notes.
-
-Set `OXIDEDNS_PERF_BASELINE` to a whitespace-delimited history file with rows shaped
-as `release metric value` to compare retained `perf-smoke-metrics.env` values
-against the rolling baseline. `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the
-default 10 percent regression threshold.
-
-For the formal SRS MVP release gate, release notes must also include the external operator
-acceptance signature, accepting operator identity, and accepted scope statement
-required by `ODS-VER-008` and `ODS-VER-015`.
+`target/interop/...` workdir. A script skip is missing evidence, not passing
+interop evidence. Release snapshot options, `OXIDEDNS_EVIDENCE_RUN_INTEROP`,
+`OXIDEDNS_EVIDENCE_RUN_FUZZ`, `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN`,
+`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS`,
+`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION`, `OXIDEDNS_RELEASE_NOTES`,
+`OXIDEDNS_PERF_BASELINE`, `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT`,
+`info-verbosity-handoff`, `benchmark-handoff`, `soak-handoff`, and
+`release-handoff` are documented in
+[`release-evidence-guide.md`](release-evidence-guide.md).
 
 Primary AXFR coverage:
 
@@ -894,35 +848,10 @@ Back up and version-control:
   campaign logs, dependency audit results, performance reports, and soak-test
   reports when those later release/operations runs are executed.
 
-Before release/operations benchmark execution begins, run
-`scripts/capture-benchmark-handoff.sh` or use the `benchmark-handoff/`
-directory created by `scripts/release-evidence-snapshot.sh`. The handoff
-directory contains the benchmark runbook, report template, metric/resource TSV
-schemas, baseline-history template, requirement traceability map, release-note
-snippet, and operator sign-off scaffold for the later Reference
-Hardware/Profile run.
-
-Before production-depth `info` verbosity profiling begins, run
-`scripts/capture-info-verbosity-handoff.sh` or use the
-`info-verbosity-handoff/` directory created by
-`scripts/release-evidence-snapshot.sh`. The handoff directory contains the
-profile runbook, report template, log-volume/structured-field/metrics TSV
-schemas, requirement traceability map, release-note snippet, and operator
-sign-off scaffold for later release-traffic profiling.
-
-Before a release/operations soak begins, run `scripts/capture-soak-handoff.sh`
-or use the `soak-handoff/` directory created by
-`scripts/release-evidence-snapshot.sh`. The handoff directory contains the
-required report template, RSS/file-descriptor/metrics/event TSV schemas, weekly
-summary template, requirement traceability map, and operator sign-off scaffold
-for the later 30-day ODS-NFR-REL-003 run.
-
-Before release governance sign-off begins, run
-`scripts/capture-release-handoff.sh` or use the `release-handoff/` directory
-created by `scripts/release-evidence-snapshot.sh`. The handoff directory
-contains the evidence attachment map, role ownership TSV, scheduled
-CI/manual-run plan, signing runbook, release-note fill plan,
-external-operator acceptance scaffold, and release-readiness checklist.
+Release/operations benchmark, info-verbosity, soak, reproducible-build, and
+release-governance handoff procedures are maintained in
+[`release-evidence-guide.md`](release-evidence-guide.md). Keep those artifacts
+with the release record; they are not runtime state backups.
 
 Upgrade procedure:
 

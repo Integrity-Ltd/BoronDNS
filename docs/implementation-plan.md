@@ -164,8 +164,10 @@ summarized in `docs/mvp-gap-register.md`.
 - `docs/mvp-gap-register.md` owns the short active queue of implementation gaps
   and remaining acceptance gaps, including per-feature release-evidence gaps.
 - `docs/operator-deployment-guide.md` owns operator-facing command sequences
-  for real-primary interop, release evidence snapshots, benchmarking handoff,
-  soak handoff, and deployment checks.
+  for deployment checks and real-primary interop smoke.
+- `docs/release-evidence-guide.md` owns release evidence snapshots and the
+  benchmark, info-verbosity, soak, reproducible-build, and release-governance
+  handoff mechanics.
 - Real-primary interop scripts must continue to emit `primary-version.txt`
   through `scripts/interop-version-evidence.sh`, and skipped scripts must not be
   counted as successful `ODS-VER-013` evidence.

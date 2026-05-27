@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "operator-deployment-guide.md"
+RELEASE_GUIDE = ROOT / "docs" / "release-evidence-guide.md"
 CLI_MAIN = ROOT / "crates" / "oxidedns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
@@ -29,13 +30,27 @@ REQUIRED_TEXT = [
     "firewall",
     "clock synchronisation",
     "long-LOADING",
+    "release-evidence-guide.md",
+    "privilege",
+    "security@integrity.hu",
+    "ODS-FR-XOT-012",
+]
+
+RELEASE_GUIDE_TEXT = [
+    "scripts/release-evidence-snapshot.sh",
+    "scripts/engineering-mvp-evidence.sh",
     "info-verbosity-handoff",
     "benchmark-handoff",
     "soak-handoff",
     "release-handoff",
-    "privilege",
-    "security@integrity.hu",
-    "ODS-FR-XOT-012",
+    "reproducible-build-handoff",
+    "OXIDEDNS_EVIDENCE_RUN_FUZZ",
+    "OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN",
+    "OXIDEDNS_EVIDENCE_RUN_INTEROP",
+    "OXIDEDNS_RELEASE_NOTES",
+    "OXIDEDNS_PERF_BASELINE",
+    "ODS-VER-008",
+    "ODS-VER-015",
 ]
 
 SLO_TEXT = [
@@ -63,12 +78,16 @@ def fail(message: str) -> None:
 
 def main() -> None:
     text = GUIDE.read_text(encoding="utf-8")
+    release_text = RELEASE_GUIDE.read_text(encoding="utf-8")
     for needle in FORBIDDEN_TEXT:
         if needle in text:
             fail(f"{GUIDE} contains stale wording: {needle}")
     for needle in REQUIRED_TEXT + SLO_TEXT:
         if needle not in text:
             fail(f"{GUIDE} missing required text: {needle}")
+    for needle in RELEASE_GUIDE_TEXT:
+        if needle not in release_text:
+            fail(f"{RELEASE_GUIDE} missing required text: {needle}")
     cli_text = CLI_MAIN.read_text(encoding="utf-8")
     for env_name in sorted(set(re.findall(r'"(ODS_[A-Z0-9_]+)"\s*=>', cli_text))):
         if env_name not in text:

@@ -38,6 +38,7 @@ and slowly diverging.
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
+| How is release evidence captured? | `release-evidence-guide.md` | Keep snapshot options and handoff mechanics here; link from operator docs instead of duplicating the runbook. |
 | What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
 | Which extra implemented features are retained? | `implemented-feature-scope.md` | Keep the exact retained slice and nearby non-claims here; summarize or link elsewhere. |
@@ -86,6 +87,8 @@ and slowly diverging.
   gaps.
 - `evidence-command-catalog.md`: command inventory consumed by release evidence
   snapshot tooling.
+- `release-evidence-guide.md`: release snapshot options, handoff directories,
+  and release/operations evidence runbook.
 - `verification-ledger.md`: lightweight Engineering MVP and SRS verification
   evidence ledger.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.

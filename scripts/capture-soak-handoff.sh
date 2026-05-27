@@ -38,7 +38,7 @@ ODS-NFR-REL-003	soak-report-template.md; rss-samples.tsv; weekly-summary-templat
 ODS-NFR-REL-006	soak-report-template.md; operational-events.tsv	setup-ready	record overload, recovery, restart, and primary-failure observations during soak
 ODS-NFR-RES-001	rss-samples.tsv; fd-samples.tsv	setup-ready	record process RSS and file-descriptor samples throughout the soak
 ODS-NFR-OBS-001	metrics-samples.tsv; weekly-summary-template.md	setup-ready	record readiness, zone-state, transfer, query, RCODE, and latency metrics
-ODS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach completed soak report to MVP release evidence before final SRS acceptance
+ODS-VER-008	soak-report-template.md; operator-signoff.md	setup-ready	attach completed soak report to formal SRS MVP release evidence before final SRS acceptance
 ODS-VER-010	soak-report-template.md	setup-ready	publish completed soak result and evidence paths in release notes
 ODS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature
 EOF

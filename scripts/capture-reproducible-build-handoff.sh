@@ -74,7 +74,7 @@ ODS-NFR-OBS-006	reproducible-build-env.env	setup-ready	build with fixed OXIDEDNS
 ODS-INV-009	reproducible-build-runbook.md; cargo-metadata.locked.json	setup-ready	confirm all executable release inputs come from the static source tree, lockfile, and build workflow
 ODS-VER-002	requirements-traceability.tsv	setup-ready	retain completed build evidence against the requirement IDs in release evidence
 ODS-VER-009	requirements-traceability.tsv	setup-ready	carry completed reproducible-build artifact paths into the traceability matrix or release ledger
-ODS-VER-008	release-engineer-signoff.md	setup-ready	attach completed reproducible-build comparison before final MVP acceptance
+ODS-VER-008	release-engineer-signoff.md	setup-ready	attach completed reproducible-build comparison before final formal SRS acceptance
 ODS-VER-010	release-notes-snippet.md	setup-ready	publish build command, artifact digests, comparison result, and evidence paths in release notes
 ODS-VER-015	release-engineer-signoff.md	setup-ready	record responsible release engineer and independent builder scopes/signatures
 EOF
@@ -171,7 +171,7 @@ cargo build --locked --release -p oxidedns-cli
    SHA256, size, builder, and evidence path.
 7. Compare matching artifact digests in \`comparison-template.tsv\`.
 8. A \`match=false\` row is not accepted reproducible-build evidence; retain
-   the row with root-cause notes and block MVP acceptance until resolved or
+   the row with root-cause notes and block formal SRS acceptance until resolved or
    explicitly deferred by the project.
 9. After bit-identical artifacts are accepted, sign the release artifact
    manifest through the release-signing process.

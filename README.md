@@ -60,6 +60,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 
 - [Architecture](docs/architecture.md)
 - [Test plan](docs/test-plan.md)
+- [Release evidence guide](docs/release-evidence-guide.md)
 - [Manual BIND interop smoke](docs/manual-bind-interop.md)
 - [DNS client benchmark](docs/dns-client-benchmark.md)
 - [OxideGun load generator](docs/oxide-gun.md)

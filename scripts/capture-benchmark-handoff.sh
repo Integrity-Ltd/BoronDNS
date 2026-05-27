@@ -47,7 +47,7 @@ ODS-NFR-RES-003	resource-results.tsv	setup-ready	record idle CPU and steady-stat
 ODS-NFR-RES-004	resource-results.tsv	setup-ready	record file-descriptor formula inputs, observed fd count, and OS limits
 ODS-NFR-RES-005	resource-results.tsv	setup-ready	record published OCI image size and binary size
 ODS-NFR-RES-006	resource-results.tsv	setup-ready	record capacity limit behavior and failure mode for configured resource caps
-ODS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	attach completed benchmark report to MVP release evidence before final SRS acceptance
+ODS-VER-008	benchmark-report-template.md; operator-signoff.md	setup-ready	attach completed benchmark report to formal SRS MVP release evidence before final SRS acceptance
 ODS-VER-010	release-notes-snippet.md	setup-ready	publish completed benchmark result and evidence paths in release notes
 ODS-VER-012	baseline-history-template.tsv	setup-ready	update rolling baseline and triage regressions above threshold
 ODS-VER-015	operator-signoff.md	setup-ready	record responsible release/operations owner and external operator scope/signature

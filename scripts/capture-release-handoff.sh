@@ -21,7 +21,7 @@ EOF
 
 cat >"$evidence_dir/evidence-attachment-map.tsv" <<'EOF'
 requirement_id	evidence_category	setup_artifact	completed_release_artifact	required_release_note_section	local_mvp_status	later_release_ops_action
-ODS-VER-008	MVP acceptance gate	release-readiness-checklist.md	completed release checklist and external operator acceptance	Verification Responsibility Sign-off	setup-ready	complete every gate row before claiming MVP acceptance
+ODS-VER-008	formal SRS MVP acceptance gate	release-readiness-checklist.md	completed release checklist and external operator acceptance	Verification Responsibility Sign-off	setup-ready	complete every gate row before claiming formal SRS acceptance
 ODS-VER-010	release publication	release-notes-fill-plan.md	completed release notes checked by scripts/check-release-notes.sh	all release-note sections	setup-ready	publish evidence pointers and requirement outcomes
 ODS-VER-011	cadence governance	scheduled-ci-plan.md	CI/scheduler run logs or release engineer manual run record	Release/Operations Handoff	setup-ready	record continuous, periodic, and gate execution ownership
 ODS-VER-012	regression policy	release-notes-fill-plan.md	regression delta table and perf/resource comparison output	Regression Delta	setup-ready	triage every functional or performance/resource regression
@@ -32,7 +32,7 @@ ODS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed int
 ODS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
 ODS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
 ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
-SRS-C5	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending C.5 item before claiming MVP acceptance
+SRS-C5	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending C.5 item before claiming formal SRS acceptance
 EOF
 
 python3 - "$repo_root/docs/OxideDNS-Secondary-SRS-v0.9.1.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
@@ -81,7 +81,7 @@ Architecture Owner	$architecture_owner	Release verification result review	yes	Ve
 Release engineer	$release_owner	Gate execution, evidence snapshot, release notes, signing handoff	yes	Verification Responsibility Sign-off
 Test/verification owner	$release_owner	Verification evidence completeness and regression triage	yes	Verification Responsibility Sign-off
 Operations owner	$release_owner	Long-running fuzz, benchmark, soak scheduling and completion	yes	Long-Running Evidence Handoff
-External operator	$external_operator	Production-representative MVP acceptance scope	yes	Verification Responsibility Sign-off
+External operator	$external_operator	Production-representative formal SRS MVP acceptance scope	yes	Verification Responsibility Sign-off
 Security reviewer	unassigned-security-reviewer	Security policy review, dependency audit review, vulnerability exceptions	yes	Security and Dependency Review
 EOF
 
@@ -241,7 +241,7 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 - [ ] Appendix C.5 pending decisions resolved or explicitly deferred with owner
       and target release.
 - [ ] Public/MVP artifacts signed, or internal builds labelled unsigned/internal.
-- [ ] External operator acceptance recorded for MVP acceptance.
+- [ ] External operator acceptance recorded for formal SRS acceptance.
 - [ ] Architecture Owner sign-off recorded.
 - [ ] Release engineer sign-off recorded.
 EOF
