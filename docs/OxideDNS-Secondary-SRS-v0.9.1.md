@@ -563,12 +563,12 @@ Requirements are grouped thematically for readability; the grouping has no norma
 ### Question section
 
 **ODS-FR-CORE-006.** The server MUST accept and process messages with QDCOUNT = 1. Messages with QDCOUNT = 0 or QDCOUNT > 1 MUST receive a response with RCODE = 1 (FORMERR).
-*Source.* RFC 1035 §4.1.2; current operational practice (no multi-question query semantics are defined).
+*Source.* RFC 1035 §4.1.2 defines QDCOUNT as the number of question-section entries and states that the question section usually contains one entry; OxideDNS defines semantics only for exactly one question.
 *Verification.* Conformance tests.
 
 **ODS-FR-CORE-029.** In any error response (FORMERR, NOTIMP, REFUSED, SERVFAIL), the server SHOULD echo the question section as received if it was successfully parsed, with QDCOUNT = 1 in the response header. Where the question section could not be parsed (parse failure before the question section was successfully extracted — for example, oversized labels per ODS-FR-CORE-007, compression-loop in QNAME per ODS-FR-CORE-008, or QDCOUNT > 1), the server MUST emit the response with QDCOUNT = 0 and no records in the question section.
 *Source.* RFC 1035 §4.1.1; defensive composition for malformed inputs where the question content cannot be safely reproduced.
-*Note.* This is the explicit specification of the case left implicit by RFC 1035 §4.1.1 (which presupposes a parseable question). Setting QDCOUNT = 0 in this case is the dominant operational practice among existing implementations and avoids the risk of returning a malformed echoed question to the client. Earlier draft snapshots used a suffixed CORE label for this requirement; that label is historical only and must not be used for new traceability.
+*Note.* This is the explicit project policy for the case left implicit by RFC 1035 §4.1.1, which defines the header counts but does not require echoing a question that could not be parsed. Setting QDCOUNT = 0 avoids returning a malformed echoed question to the client. Earlier draft snapshots used a suffixed CORE label for this requirement; that label is historical only and must not be used for new traceability.
 *Verification.* Conformance tests including queries that fail parsing at the question-section stage; the resulting FORMERR responses MUST exhibit QDCOUNT = 0 with an empty question section.
 
 **ODS-FR-CORE-007.** The server MUST parse the QNAME field as a sequence of length-prefixed labels terminating in a zero-length label, rejecting with FORMERR any message in which an individual label length exceeds 63 octets or the total uncompressed QNAME length exceeds 255 octets.
@@ -742,7 +742,7 @@ This procedure produces a stable, predictable selection for a given zone state, 
 *Verification.* Lookup tests with CNAME chains crossing the served-zone boundary.
 
 **ODS-FR-QRY-012.** The server MUST terminate CNAME chain resolution at a configurable maximum chain length, with a default of 8 CNAME records. Where this limit is reached before the chain terminates at a non-CNAME RRset within the served zones, the server MUST emit the response with RCODE = 2 (SERVFAIL), AA = 1 (the partial chain consists of authoritative records), an empty authority section (no SOA, as the failure is not an authoritative negative response), and the partial CNAME chain retained in the answer section up to the limit. The event MUST be logged at warning level recording at minimum the original QNAME, the zone, and the truncation reason.
-*Source.* Defence against pathological zone configurations; consistent with operational practice in NSD, Knot, and BIND.
+*Source.* RFC 1034 §3.6.2 and §4.3.2 define CNAME aliasing and server restart of lookup at the canonical name; the configured cap is an OxideDNS defensive policy for pathological zone configurations.
 *Note.* SERVFAIL is selected over partial NOERROR to make the failure unambiguous to the client resolver: a NOERROR response with an apparently complete chain might be cached as a partial result, whereas SERVFAIL signals that the response is unusable and triggers normal resolver retry/failover behaviour.
 *Verification.* Lookup tests against zones with CNAME chains longer than the configured limit; wire-format inspection confirming SERVFAIL, AA=1, and partial chain in answer; log inspection.
 
