@@ -207,6 +207,8 @@ REQUIRED_TEXT = [
     "The RFC compliance target is reproduced and maintained through Appendix A and the companion traceability matrix.",
     "## 7.4 Acceptance Criteria for Formal Milestones",
     "For each RFC listed in Appendix A and the companion traceability matrix",
+    "Current code alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`.",
+    "External MVP-trim reviews do not remove a type from the Engineering MVP scope unless the code, SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.",
 ]
 
 REQUIRED_RFC_TRACEABILITY_POLICY_TEXT = [

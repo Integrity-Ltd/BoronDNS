@@ -38,6 +38,7 @@ and slowly diverging.
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How are RFC traceability rules maintained? | `rfc-traceability-policy.md` | Keep RFC mapping conventions, status vocabulary, and out-of-scope clause handling here; keep current structured compliance rows in `rfc-compliance-assertions.md`. |
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
+| Where is RR catalogue implementation detail kept? | `rr-type-catalogue.md` | Keep code paths, tests, and out-of-catalogue examples here; let the SRS own the normative type list. |
 | Where are deferred optimization tracks detailed? | `future-optimization-tracks.md` | Keep future XDP, packed-store, and response-cache design constraints here; let SRS Appendix C.6 record the formal scope boundary. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
@@ -59,6 +60,8 @@ and slowly diverging.
   response-cache tracks referenced by SRS Appendix C.6.
 - `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
   header, gzip, and rate-limit contract for `ODS-IF-HEALTH`.
+- `rr-type-catalogue.md`: code-aligned RR catalogue implementation notes for
+  known-type validation, response compression, and unknown-RR boundaries.
 - `interface-compatibility-policy.md`: semantic-versioned interface compatibility
   policy.
 - `interface-stability-baseline.tsv`: current interface baseline checked by

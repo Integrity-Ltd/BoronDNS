@@ -3603,6 +3603,8 @@ For project navigation convenience, the following inverse index is provided. Eac
 
 This appendix is the implementer's reference for the resource record types listed in the catalogue of §4.14 (ODS-FR-RR-001). For each known type it provides the RDATA structure summary, the compression policy, owner-name conventions where they exist, and notes on parsing subtleties or cross-references to dependent SRS subsections. The catalogue table reproduced in B.2 below is identical in content to the table in §4.14; per-type expansion follows.
 
+Current code alignment for the catalogue is maintained in `docs/rr-type-catalogue.md`. That companion document records the source paths, short evidence pointers, and out-of-catalogue type boundary. External MVP-trim reviews do not remove a type from the Engineering MVP scope unless the code, SRS §4.14, this appendix, and `docs/rr-type-catalogue.md` are changed together.
+
 The §4.14 table is the *normative* source — it is part of the normative requirement ODS-FR-RR-001. This appendix is implementation-supporting documentation. Where the two are silently in conflict, §4.14 prevails; the Appendix should be updated to match.
 
 When a new known type is added to the server's type-aware repertoire, both the §4.14 catalogue table and the corresponding entry in this appendix must be updated in the same SRS revision.
@@ -3612,7 +3614,6 @@ When a new known type is added to the server's type-aware repertoire, both the �
 RDATA structures are described as a sequence of fields separated by `|`. Field types follow this convention:
 
 - **uint8, uint16, uint32** — unsigned integers of the indicated width, network byte order;
-- **int32** — signed integer, network byte order (used for SOA REFRESH/RETRY/EXPIRE which can in principle be negative, though such use is operationally pathological);
 - **domain name** — wire-format DNS name as defined by RFC 1035 §3.1, with compression status per the per-type compression policy;
 - **character-string** — length-octet-prefixed octet sequence, up to 255 octets, per RFC 1035 §3.3;
 - **variable octets** — opaque octet sequence whose length is implied by RDLENGTH minus the size of fixed-position fields.
@@ -3671,7 +3672,7 @@ The complete normative catalogue, reproduced from §4.14:
 ### B.2.4 SOA — Start of Authority (code 6)
 
 *RFC.* RFC 1035 §3.3.13.
-*RDATA.* `MNAME` (domain name, master server) `|` `RNAME` (domain name, responsible party mailbox, with `@` encoded as the first label boundary) `|` `SERIAL` (uint32) `|` `REFRESH` (int32, seconds) `|` `RETRY` (int32, seconds) `|` `EXPIRE` (int32, seconds) `|` `MINIMUM` (uint32, seconds).
+*RDATA.* `MNAME` (domain name, master server) `|` `RNAME` (domain name, responsible party mailbox, with `@` encoded as the first label boundary) `|` `SERIAL` (uint32) `|` `REFRESH` (uint32 timer field, seconds) `|` `RETRY` (uint32 timer field, seconds) `|` `EXPIRE` (uint32 timer field, seconds) `|` `MINIMUM` (uint32 timer field, seconds).
 *Compression.* Permitted in MNAME and RNAME.
 *Owner-name convention.* MUST be the zone apex per ODS-FR-RR-002. Exactly one SOA per zone.
 *Notes.*
@@ -4285,7 +4286,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **Cold start.** A process start in which no prior state is recovered. Per ODS-INV-004, every start of this server is a cold start.
 
-**Compression.** DNS name compression (RFC 1035 §4.1.4). The encoding of repeated domain names within a DNS message as 14-bit pointers into earlier in the message. The compression policy per RR type is specified in §4.14 and Appendix B.
+**Compression.** DNS name compression (RFC 1035 §4.1.4). The encoding of repeated domain names within a DNS message as 14-bit pointers into earlier in the message. The compression policy per RR type is specified in §4.14, Appendix B, and the companion implementation note `docs/rr-type-catalogue.md`.
 
 **Cookie, DNS Cookies.** The EDNS COOKIE option (option code 10, RFC 7873) carrying a Client Cookie (always 8 octets) and optionally a Server Cookie (16 octets per RFC 9018). Provides lightweight transaction-security and source-address confirmation against off-path UDP spoofing, without TSIG-equivalent client authorization. Implemented per §4.19. *See also.* Client Cookie, Server Cookie.
 
@@ -4397,7 +4398,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **Primary.** A DNS server that holds the authoritative master copy of a zone. The source from which this server (a secondary) transfers zone data.
 
-**Pseudo-RR.** A resource record carrying protocol metadata rather than zone content. OPT, TSIG, and TKEY are pseudo-RRs; they are never part of a zone transfer. *See also.* Appendix B.3.
+**Pseudo-RR.** A resource record carrying protocol metadata rather than zone content. OPT, TSIG, and TKEY are pseudo-RRs; they are never part of a zone transfer. *See also.* Appendix B.3 and `docs/rr-type-catalogue.md`.
 
 **QID.** Query Identifier — the 16-bit ID field in the DNS message header. Used to match responses to queries.
 
