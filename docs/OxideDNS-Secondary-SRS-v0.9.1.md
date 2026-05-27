@@ -4603,6 +4603,11 @@ architecture does not foreclose later packet-I/O, zone-store, or response-cache
 work, but they are not hidden MVP requirements. Current implementation status
 and unsafe-boundary ownership are maintained by the Architecture Document,
 `docs/unsafe-boundaries.tsv`, and `docs/unsafe-prone-dependencies.tsv`.
+Capitalized requirement keywords in this C.6 section are conditional promotion
+constraints: they apply only if a later SRS revision brings the named track into
+scope, unless another current requirement explicitly references the same
+constraint. They are not evaluated as current Engineering MVP conformance
+requirements.
 
 ### C.6.1 XDP/eBPF Kernel-Bypass on the DNS Query Interface
 
@@ -4687,7 +4692,7 @@ unjustified before measured evidence of need.
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that response assembly (name compression, RR serialisation, EDNS OPT construction) accounts for a significant fraction of per-query CPU time at target load.
 
-*Architectural constraints on the current implementation.*
+*Conditional architectural constraints on any future implementation.*
 - The response-assembly path MUST be cleanly separated from the send path, so that a cached pre-built buffer can be substituted for the assembled buffer transparently.
 - DNSSEC-signed responses cached in this layer MUST be subject to TTL decay: the cache MUST NOT serve a pre-built response whose minimum RRSIG expiration minus current time is less than a configurable floor (suggested: 60 seconds). Alternatively, the cache may be restricted to unsigned responses only in the initial implementation.
 - The cache MUST be keyed on the DO-bit value (DO=0 and DO=1 responses differ in the presence of DNSSEC records) and MUST treat them as separate entries.

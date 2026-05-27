@@ -117,6 +117,8 @@ REQUIRED_TEXT = [
     "Catalog zones and their member zones MUST also appear in the ordinary zone-state and transfer metrics where those generic metrics apply",
     "ODS-NFR-OBS-008 (catalog membership metric plus ordinary zone/transfer metrics)",
     "This SRS does not require a separate catalog-specific counter family for add/remove/rejection/transfer-failure events",
+    "Capitalized requirement keywords in this C.6 section are conditional promotion",
+    "Engineering MVP conformance",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
