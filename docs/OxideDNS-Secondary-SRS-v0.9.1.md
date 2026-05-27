@@ -2748,7 +2748,7 @@ The area code **OBS** is allocated.
 *Source.* Operational requirement.
 *Verification.* Configuration tests across all levels.
 
-**ODS-NFR-OBS-003.** The server MUST expose its in-memory counters — the query-handling counters of ODS-FR-QRY-024, the RRL counters of ODS-FR-RRL-012, the NOTIFY counters of §4.8, the TSIG counters per §4.9, the transfer-session counters per §4.6 and §4.7, the cookie counters of ODS-FR-COOKIE-011 — via a metrics endpoint per §6.4. The exposition format MUST be compatible with the Prometheus / OpenMetrics text format.
+**ODS-NFR-OBS-003.** The server MUST expose its in-memory counters — the query-handling counters of ODS-FR-QRY-024, the RRL counters of ODS-FR-RRL-012, the NOTIFY counters of §4.8, the TSIG counters per §4.9, the transfer-session counters per §4.6 and §4.7, the cookie counters of ODS-FR-COOKIE-011 — via a metrics endpoint per §6.4. The exposition format MUST be compatible with the Prometheus text exposition format 0.0.4 and MUST use `Content-Type: text/plain; version=0.0.4; charset=utf-8`.
 
 Metric names MUST follow Prometheus naming conventions:
 - the project prefix `oxidedns_secondary_` MUST be applied to every metric;
@@ -2759,8 +2759,8 @@ Metric names MUST follow Prometheus naming conventions:
 - the canonical help text MUST be provided via the `# HELP` directive.
 
 Label cardinality MUST be bounded: per-source-prefix labels use the same /24 (IPv4) / /56 (IPv6) granularity as RRL accounting (ODS-FR-RRL-002), capped per ODS-FR-RRL-010 (configurable, default 100,000 distinct prefixes).
-*Source.* Operational requirement; ecosystem compatibility; Prometheus naming conventions.
-*Verification.* Endpoint inspection; format-parsing tests against Prometheus and OpenMetrics scrapers; naming-convention conformance review.
+*Source.* Operational requirement; ecosystem compatibility; Prometheus text exposition format 0.0.4 and naming conventions.
+*Verification.* Endpoint inspection; format-parsing tests against Prometheus text-format consumers; naming-convention conformance review.
 
 **ODS-NFR-OBS-004.** The server MUST expose two separate health endpoints per §6.4, following Kubernetes liveness-vs-readiness conventions:
 
@@ -4155,7 +4155,7 @@ Where a term's primary definition is provided in a specific RFC, the entry below
 
 **NXDOMAIN.** Non-existent domain. RCODE = 3, returned when the queried name does not exist in the zone (ODS-FR-CORE-023). *See also.* RFC 8020 for the "no descendants either" cut semantic.
 
-**OpenMetrics.** Standardised metrics exposition format compatible with Prometheus; used for the metrics endpoint per ODS-NFR-OBS-003.
+**OpenMetrics.** Standardised metrics exposition format related to Prometheus text exposition. OxideDNS does not currently emit OpenMetrics framing or the `application/openmetrics-text` media type; ODS-NFR-OBS-003 specifies Prometheus text exposition format 0.0.4 instead.
 
 **OPCODE.** DNS operation code (RFC 1035 §4.1.1). This server handles OPCODE 0 (QUERY) and OPCODE 4 (NOTIFY).
 
