@@ -101,7 +101,12 @@ Periodic evidence is not yet fully automated. Until scheduled CI is added, the
 release engineer records each periodic run manually in the release evidence
 snapshot and release notes.
 
-| Periodic evidence | Required cadence | Current command or artifact | Open acceptance work |
+The cadence column below is a formal release-acceptance cadence, not an
+Engineering MVP execution requirement and not a standing calendar commitment
+until a release-acceptance cycle begins. In the private Engineering MVP profile,
+these rows remain handoff obligations unless completed artifacts are retained.
+
+| Periodic evidence | Release acceptance cadence | Current command or artifact | Open acceptance work |
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
 | Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off template; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
