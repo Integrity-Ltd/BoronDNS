@@ -13,11 +13,12 @@ proof, and signed release artifacts remain tracked as MVP gaps in
 
 ## Module Organisation
 
-The current first-party Rust source is organised into 14 release-reviewed
-modules at the crate/file boundary. This satisfies the `ODS-NFR-MAINT-002`
+The current first-party Rust source is organised into 16 release-reviewed
+modules at the crate/file boundary: 14 OxideDNS server/CLI modules plus two
+OxideGun support-tool modules. This satisfies the `ODS-NFR-MAINT-002`
 module-count target shape for the current implementation; `crates/oxidedns-server/src/lib.rs`
-remains the broadest module and is the primary future refactor candidate if
-runtime growth continues.
+remains the broadest server-runtime module and is the primary future refactor
+candidate if runtime growth continues.
 
 `scripts/audit-maintainability.sh` records this module map and checks that the
 architecture table stays synchronized before release evidence snapshots are
@@ -39,12 +40,17 @@ accepted.
 | `crates/oxidedns-server/src/resource_limits.rs` | `ODS-NFR-RES-004`, OS startup validation, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for `RLIMIT_NOFILE` inspection; feeds runtime startup validation. |
 | `crates/oxidedns-server/build.rs` | Build metadata for `ODS-IF-PROC-002`, `ODS-NFR-OBS-006`, release traceability, and metrics labels | Embeds commit, Rust compiler version, and build timestamp labels without changing runtime behavior. |
 | `crates/oxidedns-cli/src/main.rs` | `ODS-IF-PROC`, CLI mode handling, bootstrap logging, config validation/dump/example output, release evidence entrypoints | Clap-derived CLI, SRS exit-code mapping, startup logging, config mode dispatch, and runtime invocation. |
+| `crates/oxide-gun/src/main.rs` | Support tooling outside OxideDNS server runtime requirements | OxideGun load-generator CLI, portable UDP backend, packet generation, response classification, and self-test path. |
+| `crates/oxide-gun/src/xdp_backend.rs` | Support tooling unsafe boundary for OxideGun lab-only AF_XDP backend | Linux AF_XDP UMEM and ring adapter used only when OxideGun is built with the explicit `xdp` feature; not part of the OxideDNS server runtime. |
 
 The module count is intentionally measured at the first-party Rust file/module
-boundary, including `build.rs` and excluding test-only code from the line-count
-measurement. Tests remain colocated with implementation code for review
-locality, but they are not counted toward the `ODS-NFR-MAINT-001` production
-source-line target.
+boundary, including `build.rs` and support-tool modules, while excluding
+test-only files from the release module map. `ODS-NFR-MAINT-002` still maps the
+major SRS §4 server functional areas to the OxideDNS server/CLI modules above;
+OxideGun entries are listed so first-party workspace code remains visible
+without expanding the server protocol scope. Tests remain colocated with
+implementation code for review locality, but they are not counted toward the
+`ODS-NFR-MAINT-001` production source-line target.
 
 ## Current Implementation Decisions
 
@@ -97,6 +103,10 @@ lines, excluding `#[cfg(test)]` test modules in accordance with
 `ODS-NFR-MAINT-001`. If the count is below 5,000 or above 15,000, the audit
 prints a release-review warning and can be made build-blocking with
 `OXIDEDNS_MAINT_ENFORCE=1`.
+
+The measurement includes OxideGun because it is first-party Rust code in this
+workspace. OxideGun remains support-tool scope; it does not expand the
+OxideDNS server runtime or the externally observable DNS protocol requirements.
 
 The current primary maintainability risk is not raw production LOC but module
 shape: runtime integration in `crates/oxidedns-server/src/lib.rs` is broad. Future

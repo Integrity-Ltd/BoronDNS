@@ -96,6 +96,8 @@ module_map = [
     ("crates/oxidedns-server/src/resource_limits.rs", "audited POSIX file-descriptor limit FFI boundary"),
     ("crates/oxidedns-server/build.rs", "build metadata embedding for version and metrics labels"),
     ("crates/oxidedns-cli/src/main.rs", "command-line entrypoints"),
+    ("crates/oxide-gun/src/main.rs", "OxideGun load-generator CLI and portable UDP backend"),
+    ("crates/oxide-gun/src/xdp_backend.rs", "OxideGun lab-only AF_XDP backend"),
 ]
 for path, purpose in module_map:
     print(f"  {path}: {purpose}")
