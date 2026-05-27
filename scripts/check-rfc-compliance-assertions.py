@@ -43,6 +43,21 @@ REQUIRED_CURRENT_RFCS = {
     "RFC 9432": "catalog zones",
 }
 
+REQUIRED_EVIDENCE_SNIPPETS = {
+    "RFC 8482": [
+        "qtype_any_defaults_to_minimal_real_rrset_response",
+        "qtype_any_full_mode_returns_all_owner_rrsets",
+    ],
+    "RFC 6840": [
+        "response_opt_copies_query_do_bit_without_dnssec_augmentation",
+        "preserves_rd_and_clears_ra_z_ad_cd_bits",
+    ],
+    "RFC 8914": [
+        "ede_not_ready_is_opt_in_for_loading_zones",
+        "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
+    ],
+}
+
 VALID_STATUSES = {
     "Fully Compliant",
     "Partially Compliant",
@@ -83,6 +98,9 @@ def parse_rows() -> list[dict[str, str]]:
 def main() -> int:
     rows = parse_rows()
     by_rfc = {row["RFC number"]: row for row in rows}
+    source_text = (REPO_ROOT / "crates" / "oxidedns-core" / "src" / "dns.rs").read_text(
+        encoding="utf-8"
+    )
 
     missing = sorted(set(REQUIRED_CURRENT_RFCS) - set(by_rfc))
     if missing:
@@ -101,6 +119,16 @@ def main() -> int:
             raise SystemExit(f"{rfc} ({feature}) lacks an evidence pointer")
         if row["Target resolution release"] not in {"MVP", "N/A"}:
             raise SystemExit(f"{rfc} ({feature}) has an unexpected target release")
+
+    for rfc, snippets in REQUIRED_EVIDENCE_SNIPPETS.items():
+        evidence = by_rfc[rfc]["Evidence pointer"]
+        for snippet in snippets:
+            if snippet not in evidence:
+                raise SystemExit(
+                    f"{rfc} evidence pointer must include {snippet!r}"
+                )
+            if snippet not in source_text:
+                raise SystemExit(f"{rfc} evidence pointer references missing {snippet!r}")
 
     print(
         "RFC compliance assertion check passed: "
