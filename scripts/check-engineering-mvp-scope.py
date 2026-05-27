@@ -9,6 +9,13 @@ PLAN = ROOT / "docs" / "implementation-plan.md"
 GAPS = ROOT / "docs" / "mvp-gap-register.md"
 LEDGER = ROOT / "docs" / "verification-ledger.md"
 READINESS = ROOT / "docs" / "engineering-mvp-readiness.md"
+HANDOFF_SCRIPTS = [
+    ROOT / "scripts" / "capture-benchmark-handoff.sh",
+    ROOT / "scripts" / "capture-info-verbosity-handoff.sh",
+    ROOT / "scripts" / "capture-release-handoff.sh",
+    ROOT / "scripts" / "capture-reproducible-build-handoff.sh",
+    ROOT / "scripts" / "capture-soak-handoff.sh",
+]
 
 REQUIRED_SCOPE_PHRASES = [
     "not the SRS",
@@ -72,6 +79,11 @@ FORBIDDEN_EVIDENCE_RUN_COMMANDS = [
     "scripts/interop-bind-axfr.sh",
     "scripts/interop-bind-tsig-axfr.sh",
     "scripts/interop-bind-notify-refresh.sh",
+]
+
+FORBIDDEN_HANDOFF_PHRASES = [
+    "local project MVP",
+    "project MVP in this repository",
 ]
 
 
@@ -158,6 +170,18 @@ def main() -> None:
                 command not in line,
                 f"{EVIDENCE}: Engineering MVP evidence profile must not run {command}",
             )
+
+    for path in HANDOFF_SCRIPTS:
+        script = path.read_text(encoding="utf-8")
+        for phrase in FORBIDDEN_HANDOFF_PHRASES:
+            require(
+                phrase not in script,
+                f"{path}: stale Engineering MVP handoff phrase: {phrase}",
+            )
+        require(
+            "Engineering MVP setup artifact" in script,
+            f"{path}: generated handoff README must name Engineering MVP setup",
+        )
 
     print("engineering_mvp_scope_check=passed")
 

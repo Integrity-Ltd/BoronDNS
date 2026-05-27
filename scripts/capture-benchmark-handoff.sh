@@ -217,7 +217,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the local project MVP setup artifact for later
+This directory is the Engineering MVP setup artifact for later
 release/operations execution of Reference Hardware/Profile benchmarks. It does
 not claim that production benchmarks have run. It provides the runbook, report
 template, metric/resource TSV schemas, baseline-history format, requirement

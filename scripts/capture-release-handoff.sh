@@ -251,7 +251,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the local project MVP setup artifact for release-governance
+This directory is the Engineering MVP setup artifact for release-governance
 handoff. It does not claim that release acceptance has completed. It provides
 the attachment map, scheduled CI/manual-run plan, signing runbook,
 release-notes fill plan, external-operator acceptance scaffold, and readiness

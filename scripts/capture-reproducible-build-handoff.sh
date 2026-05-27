@@ -195,7 +195,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the local project MVP setup artifact for later
+This directory is the Engineering MVP setup artifact for later
 release/operations execution of reproducible-build verification. It does not
 claim that two independent bit-identical builds have completed.
 

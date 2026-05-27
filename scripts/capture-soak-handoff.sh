@@ -183,7 +183,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the local project MVP setup artifact for later
+This directory is the Engineering MVP setup artifact for later
 release/operations execution of the long-duration soak. It does not claim that
 the 30-day soak has run. It provides the report template, sample TSV schemas,
 requirement traceability, environment values, and sign-off scaffold needed for
