@@ -962,17 +962,19 @@ current operator-relevant limitations are:
   shape, and generated example-config validation; retained release artifacts
   and rarer runtime sysexits coverage are still
   pending.
-- DNS Cookies are now partially implemented for RFC 9018 version-1 learning,
-  validation, disabled/lenient/strict policy, strict BADCOOKIE responses, and
-  valid-cookie RRL exemption. Startup, rotation, and BADCOOKIE logs plus
-  bounded global and per-source-prefix cookie counters are implemented.
+- DNS Cookies are implemented for the Engineering MVP RFC 9018 version-1
+  profile: learning, validation, disabled/lenient/strict policy, strict
+  BADCOOKIE responses, valid-cookie RRL exemption, startup/rotation/BADCOOKIE
+  logs, and bounded global and per-source-prefix cookie counters.
   `scripts/interop-dns-cookie-dig.sh` verifies BIND `dig +cookie` client
-  behavior; broader deployment interop artifacts remain open before MVP
+  behavior; broader deployment interop artifacts remain open before formal SRS
   acceptance.
 - The Operator Deployment Guide itself is one of the required SRS acceptance
   evidence artifacts; external operator deployment evidence is still required
   before ODS-VER-008 acceptance.
-- Full per-requirement traceability against the SRS is still pending.
+- Full release-specific per-requirement evidence against the SRS is still
+  pending; checked traceability scaffolding exists in Appendix A, the
+  verification ledger, and the gap register.
 - IXFR has BIND true incremental interop and fallback coverage, but broader
   real-primary IXFR behavior matrix evidence remains pending.
 - XoT has in-process TLS success, fault, structured logging, and revocation
