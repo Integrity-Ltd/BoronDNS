@@ -19,6 +19,9 @@ ID_RE = re.compile(ID_PATTERN)
 RANGE_RE = re.compile(rf"({ID_PATTERN})\.\.({ID_PATTERN})")
 SRS_DEF_RE = re.compile(rf"^\*\*({ID_PATTERN})\b", re.MULTILINE)
 VALID_STATES = {"Not Verified", "Partial", "Verified", "Deferred"}
+MAX_LEDGER_ROWS = 15
+MAX_EVIDENCE_POINTER_CHARS = 320
+MAX_NOTE_CHARS = 300
 STALE_COUNT_RE = re.compile(
     r"\ball\s+[0-9]+\s+SRS v0\.9\.1 requirement IDs\b"
 )
@@ -96,6 +99,12 @@ def main() -> int:
     rows = ledger_rows(ledger_text)
     if not rows:
         errors.append("ledger table has no data rows")
+    if len(rows) > MAX_LEDGER_ROWS:
+        errors.append(
+            f"ledger table has {len(rows)} rows; keep it coarse-grained "
+            f"with at most {MAX_LEDGER_ROWS} rows and put detail in Appendix A "
+            "or the gap register"
+        )
 
     for match in STALE_COUNT_RE.finditer(ledger_text):
         line_number = ledger_text.count("\n", 0, match.start()) + 1
@@ -110,6 +119,19 @@ def main() -> int:
             errors.append(
                 f"line {line_number}: invalid evidence state {state!r}; "
                 f"expected one of {', '.join(sorted(VALID_STATES))}"
+            )
+        evidence_pointers = columns[4]
+        if len(evidence_pointers) > MAX_EVIDENCE_POINTER_CHARS:
+            errors.append(
+                f"line {line_number}: evidence pointer cell is "
+                f"{len(evidence_pointers)} characters; keep the ledger "
+                f"summary below {MAX_EVIDENCE_POINTER_CHARS} characters"
+            )
+        notes = columns[5]
+        if len(notes) > MAX_NOTE_CHARS:
+            errors.append(
+                f"line {line_number}: notes cell is {len(notes)} characters; "
+                f"keep the ledger summary below {MAX_NOTE_CHARS} characters"
             )
 
     if errors:
