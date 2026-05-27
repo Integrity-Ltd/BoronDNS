@@ -106,6 +106,14 @@ REQUIRED_SUPPORT_TOOLING_BOUNDARIES = [
     "not expand the secondary-server protocol requirements",
 ]
 
+REQUIRED_PRIMARY_SOURCE_BOUNDARY_TERMS = [
+    "test-version capability selection only",
+    "Vendor documentation is a release-test planning input, not a normative source for OxideDNS behavior.",
+    "Current implementation and OxideDNS project policy",
+    "Vendor RRL documentation may inform later release review, but it is not a conformance target",
+    "must not be used to imply vendor-equivalent semantics",
+]
+
 REVIEW_SUGGESTED_DEFER_ITEMS = [
     "Catalog zones",
     "XoT",
@@ -696,6 +704,12 @@ def main() -> int:
             errors.append(
                 "support-tooling scope omits boundary term "
                 f"{term!r} from feature scope and review disposition"
+            )
+    for term in REQUIRED_PRIMARY_SOURCE_BOUNDARY_TERMS:
+        if term not in disposition:
+            errors.append(
+                f"{DISPOSITION_PATH.relative_to(ROOT)} omits primary-source "
+                f"boundary term {term!r}"
             )
     for item in REVIEW_SUGGESTED_DEFER_ITEMS:
         if item not in disposition:

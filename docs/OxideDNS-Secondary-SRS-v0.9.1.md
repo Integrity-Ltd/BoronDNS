@@ -3596,7 +3596,7 @@ For project navigation convenience, the following inverse index is provided. Eac
 | 4.14 RR Type Catalogue | RR | 1035, 1982, 2782, 3403, 3596, 3597, 6604, 6672, 6698, 7553, 9460 |
 | 4.15 Zone Store | ZONE | 1034, 4592 |
 | 4.16 Zone State Machine | ZSM | 1034, 1996, 1982 |
-| 4.17 RRL | RRL | (no IETF RFC; Vixie/Schryver operational design) |
+| 4.17 RRL | RRL | (no IETF RFC; OxideDNS project RRL policy) |
 | 4.18 Negative Requirements | NEG | (cross-references to enforcing requirements) |
 | 4.19 DNS Cookies | COOKIE | 7873, 9018 |
 | 4.20 Zone Provisioning | PROV | 1035, 9432 |

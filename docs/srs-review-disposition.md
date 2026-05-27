@@ -113,8 +113,8 @@ deferred unsafe-boundary track.
 | NSEC3 iteration cap | RFC 9276 section 2.4 | SRS treats proof omission above the cap as an availability/CPU-protection downgrade with optional diagnostic EDE, not normal authenticated denial. |
 | Catalog zones | RFC 9432 sections 3, 5, and 7 | Catalog zones remain in scope because OxideDNS implements catalog transfer/parsing/reconciliation/observability. The SRS now states observable behavior and keeps implementation shape in architecture docs. |
 | DNS Cookies | RFC 7873 sections 2, 3, 5.2, and 5.4; RFC 9018 section 4 | SRS treats DNS Cookies as limited UDP off-path spoofing resistance and source-address confirmation, not TSIG-equivalent client authentication. The `lenient` default is a project compatibility policy; `strict` BADCOOKIE enforcement is available for stronger anti-spoofing posture. |
-| XoT interop target selection and TLS profile | RFC 9103; BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS no longer hard-codes a permanent NSD XoT exemption or release-year support claim. ODS-VER-003 requires a current-version capability decision for each primary, with XoT evidence required where the tested version exposes XoT. RFC 9103 conformance requires TLS 1.3 or later; current TLS 1.2 negotiation is retained only as compatibility evidence until a release profile explicitly disables it for XoT or separates compatibility-mode runs from conformance runs. |
-| RRL posture | BIND 9 ARM; Knot DNS documentation; NSD documentation | SRS treats RRL as operational practice rather than an RFC standard, and records the OxideDNS thresholds as project defaults instead of BIND/Knot/NSD defaults. |
+| XoT interop target selection and TLS profile | RFC 9103; current BIND 9, Knot DNS, and NSD operator documentation for test-version capability selection only | SRS no longer hard-codes a permanent NSD XoT exemption or release-year support claim. ODS-VER-003 requires a current-version capability decision for each primary, with XoT evidence required where the tested version exposes XoT. RFC 9103 conformance requires TLS 1.3 or later; current TLS 1.2 negotiation is retained only as compatibility evidence until a release profile explicitly disables it for XoT or separates compatibility-mode runs from conformance runs. Vendor documentation is a release-test planning input, not a normative source for OxideDNS behavior. |
+| RRL posture | Current implementation and OxideDNS project policy; BIND 9, Knot DNS, and NSD operator documentation for comparative review only | SRS treats RRL as a non-RFC OxideDNS project policy and records the OxideDNS thresholds as project defaults instead of BIND/Knot/NSD defaults. Vendor RRL documentation may inform later release review, but it is not a conformance target and must not be used to imply vendor-equivalent semantics. |
 | Performance target posture | Current code and benchmark harnesses | SRS treats §5 quantitative values as formal reference-hardware acceptance targets. Engineering MVP smoke and large-catalog benchmark artifacts guide tuning but do not by themselves prove conformance or equivalence to NSD, Knot DNS, BIND, or another server. |
 | Deferred optimization ownership | Current SRS Appendix C.6; Architecture Document; `docs/future-optimization-tracks.md`; unsafe-boundary registries | Future XDP/eBPF, packed-zone-store, and response-cache design constraints are no longer expanded in the SRS body. Appendix C.6 records scope and re-entry pointers, while the companion document owns detailed adapter and benchmark constraints. |
 
@@ -128,9 +128,9 @@ Primary source links:
 - <https://www.rfc-editor.org/rfc/rfc7873>
 - <https://www.rfc-editor.org/rfc/rfc9018>
 - <https://www.rfc-editor.org/rfc/rfc9103>
-- <https://bind9.readthedocs.io/>
-- <https://www.knot-dns.cz/docs/>
-- <https://nsd.docs.nlnetlabs.nl/>
+- <https://bind9.readthedocs.io/en/v9.21.9/reference.html#response-rate-limiting>
+- <https://www.knot-dns.cz/docs/latest/html/modules.html#rrl-response-rate-limiting>
+- <https://nsd.docs.nlnetlabs.nl/en/latest/manpages/nsd.conf.html>
 
 ## Finding Disposition
 
