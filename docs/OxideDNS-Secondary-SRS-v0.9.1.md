@@ -393,7 +393,7 @@ Configuration file reading and secret-file reading per ODS-IF-CONF-004 occur onl
 
 *Rationale.* Partial visibility of an in-progress zone transfer produces inconsistent answers — the canonical pathology being a stale CNAME pointing at a removed target. Atomic refresh guarantees consistency from the client's perspective and is a precondition for the secondary's correctness as an authoritative source. The multi-transition allowance for multi-delta IXFR aligns with RFC 1995 semantics, where each difference sequence represents one SOA generation in the primary's history.
 
-*Implications.* The zone store must support a publish-after-load model: a new zone version is fully constructed before it is made visible to query handlers, and the transition from old version to new version is observed atomically by all handlers. The implementation mechanism — atomic pointer swap (`Arc::swap` style), RCU, generational versioning, seqlock, or another approach — is an architectural choice recorded in the Architecture Document, but the property must hold. For multi-delta IXFR, the implementation MAY perform N sequential atomic transitions for N difference sequences, OR MAY accumulate the deltas and perform a single atomic transition to the final state; both are conformant.
+*Implications.* The zone store must support a publish-after-load model: a new zone version is fully constructed before it is made visible to query handlers, and the transition from old version to new version is observed atomically by all handlers. The implementation mechanism is an architectural choice recorded in the Architecture Document, but the property must hold. For multi-delta IXFR, the implementation MAY perform N sequential atomic transitions for N difference sequences, OR MAY accumulate the deltas and perform a single atomic transition to the final state; both are conformant.
 
 *Verification.* Concurrent test harnesses shall issue queries continuously during simulated zone refresh (AXFR and IXFR, single-delta and multi-delta) and shall confirm that no response contains records from two SOA generations of the zone. Stress tests under load shall confirm the absence of torn reads. The multi-delta IXFR semantics — observable as monotonically increasing SOA serials in successive query responses during the transfer — shall be confirmed in dedicated tests.
 
@@ -2822,14 +2822,13 @@ The area code **RES** is allocated.
 
 **ODS-NFR-RES-002.** Memory consumption per zone SHOULD scale approximately linearly with the number of records in the zone, with a target per-record overhead (including indices and metadata) of less than 500 bytes.
 *Source.* Operational requirement; informed by typical secondary deployment sizing.
-*Note.* For the current straightforward in-memory implementation (the
-`HashMap`-indexed `Arc<ZoneSnapshot>` store recorded in the Architecture
-Document), the 500-byte target is aspirational and may not be met; verification
-at the formal SRS MVP release gate is performed against the actual measured
-value, with the value recorded in release notes. The post-MVP packed-binary
-zone store of Appendix C.6.2, once introduced, is expected to meet or
-substantially exceed this target. Operators sizing memory for large zone-count
-deployments should consult the actual per-release figure.
+*Note.* For the current straightforward in-memory implementation recorded in
+the Architecture Document, the 500-byte target is aspirational and may not be
+met; verification at the formal SRS MVP release gate is performed against the
+actual measured value, with the value recorded in release notes. The post-MVP
+packed-binary zone store of Appendix C.6.2, once introduced, is expected to meet
+or substantially exceed this target. Operators sizing memory for large
+zone-count deployments should consult the actual per-release figure.
 *Verification.* Memory profiling with zones of varying record counts on the Reference Hardware Profile.
 
 **ODS-NFR-RES-003.** The server MUST support concurrent service of at least 10,000 zones with a combined record count up to 10 million records on a host with 16 GiB of available memory.
@@ -4620,8 +4619,8 @@ prevents the server from meeting the relevant performance target, or a
 deployment profile with dedicated XDP-capable network hardware becomes a
 standard target.
 
-*Architectural constraints on the current implementation.*
-- The DNS query socket layer MUST be encapsulated behind a trait abstraction (e.g., `trait PacketIo`) so that the XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
+*Architectural constraints on any future implementation.*
+- The DNS query socket layer MUST be encapsulated behind a documented packet-I/O boundary so that an XDP/AF_XDP implementation can replace the standard UDP socket implementation without changes to the query-processing layers above it.
 - The DNS query interface bind addresses (ODS-IF-NET-005, `interface.dns`) MUST be expressed as (address, interface-name) pairs in the configuration schema so that a future XDP implementation can attach to the correct NIC by name; the interface-name sub-field MAY be optional and ignored in the MVP.
 - When ODS-IF-NET-006 is re-evaluated for the XDP variant, packet-size and path-MTU behaviour that is currently delegated to the kernel socket path MUST be covered by explicit implementation and tests for the bypass path.
 - Runtime loading of operator-supplied eBPF programs remains prohibited by ODS-INV-009. Any future kernel-side program MUST be built as a versioned project artifact and attached only through the audited adapter path.
@@ -4642,16 +4641,16 @@ Zone replacement on refresh would remain atomic by publishing a complete arena
 plus index snapshot.
 
 *Rationale for deferral.* The current implementation uses a simple
-memory-resident `HashMap` snapshot store protected by `RwLock` and publishes
-complete `Arc<ZoneSnapshot>` values. This is easy to inspect, has direct
-functional coverage, and is already benchmarked before any packed-store work is
-justified. The packed-binary layout is a performance and memory-locality
-optimisation whose benefit must be demonstrated against measured bottlenecks.
+memory-resident snapshot store that publishes complete zone versions. This is
+easy to inspect, has direct functional coverage, and is already benchmarked
+before any packed-store work is justified. The packed-binary layout is a
+performance and memory-locality optimisation whose benefit must be demonstrated
+against measured bottlenecks.
 
 *Entry condition for re-evaluation.* MVP benchmarking shows that cache-miss rate on the zone store is a significant fraction of query latency at target load, or that per-record memory overhead exceeds the 500-byte target of ODS-NFR-RES-002.
 
-*Architectural constraints on the current implementation.*
-- The zone store MUST be accessed exclusively through a trait interface (e.g., `trait ZoneStore`) so the packed-binary implementation can substitute without changes to the query-processing or zone-transfer layers.
+*Architectural constraints on any future implementation.*
+- The zone store MUST be accessed through a documented storage boundary so the packed-binary implementation can substitute without changes to the query-processing or zone-transfer layers.
 - The AXFR ingestion path MUST be clearly separated from the query-serving path; ingestion builds a new store instance which is atomically published, never modified in place.
 - The current implementation MUST record per-record memory overhead in benchmarking output so that the entry condition above can be evaluated against measured data.
 

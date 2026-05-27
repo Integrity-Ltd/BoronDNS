@@ -55,6 +55,12 @@ paths, and implementation-specific source markers. If a feature is removed from
 code, the review disposition and Engineering MVP scope must change in the same
 patch.
 
+The main SRS hygiene regressions from this review are also checked by
+`scripts/check-srs-hygiene.py`: old namespace artifacts, suffixed requirement
+IDs, implementation-internal type names in requirement text, the response DO-bit
+rule, CD-bit project-policy wording, RRSIG RRset exceptions, and the
+release-artifact static-linking boundary.
+
 Support tooling follows the same boundary. The installer, release archive
 scripts, Docker image archive workflow, large-zone benchmark harnesses, and
 OxideGun load generator are repository tooling for deployment or evidence
