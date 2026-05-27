@@ -47,6 +47,7 @@ REQUIRED_REVIEW_DISPOSITIONS = [
     "Performance numbers should be targets rather than immediate local MVP blockers",
     "NSEC3 cap creates a DNSSEC authentication downgrade",
     "SRS mixed audit findings into normative requirements",
+    "Panic isolation wording prescribed `catch_unwind` internals",
     "Requirements claimed absolute atomicity while grouping many operational cases",
 ]
 
