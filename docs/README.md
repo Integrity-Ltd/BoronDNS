@@ -9,8 +9,8 @@ The current normative Software Requirements Specification is
 The documentation set intentionally separates three things:
 
 - **Normative requirements** in the current SRS.
-- **Current Engineering MVP scope** in the scope, readiness, implementation, and
-  gap documents.
+- **Current Engineering MVP scope** in the scope and readiness documents, with
+  retained feature slices and remaining gaps in their own owner documents.
 - **Later release-acceptance evidence** such as long fuzz campaigns, reference
   hardware benchmarks, soak execution, signed release evidence, and external
   operator acceptance.
@@ -97,9 +97,9 @@ and slowly diverging.
   post-Alpha features.
 - `engineering-mvp-readiness.md`: local Engineering MVP readiness review entry
   point and stop-condition checklist.
-- `implementation-plan.md`: milestone boundary and implementation direction,
-  without duplicating the detailed feature inventory or release-acceptance
-  checklist.
+- `implementation-plan.md`: milestone direction and ownership pointers, without
+  duplicating the detailed feature inventory, current status, or
+  release-acceptance checklist.
 - `mvp-gap-register.md`: short active queue of release blockers and evidence
   gaps.
 - `evidence-command-catalog.md`: command inventory consumed by release evidence

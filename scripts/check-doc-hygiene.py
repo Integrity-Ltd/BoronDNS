@@ -161,6 +161,8 @@ FORBIDDEN_TEXT_BY_PATH = {
     "docs/README.md": [
         "Current implementation and evidence status is recorded in\n`implementation-plan.md`",
         "Engineering MVP and SRS acceptance implementation\n  plan",
+        "Current Engineering MVP scope** in the scope, readiness, implementation, and",
+        "`implementation-plan.md`: milestone boundary and implementation direction",
     ],
     "docs/appendix-a-traceability-matrix.md": [
         "docs/implementation-plan.md",
@@ -169,6 +171,8 @@ FORBIDDEN_TEXT_BY_PATH = {
         "docs/implementation-plan.md",
     ],
     "docs/implementation-plan.md": [
+        "This plan records implementation direction and milestone boundaries",
+        "This plan records implementation direction and the current feature boundary",
         "30-day soak test completed without anomaly",
         "signed release artifacts produced",
         "at least one production-representative external operator has independently",

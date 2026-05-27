@@ -1,8 +1,9 @@
 # OxideDNS Implementation Plan
 
-This plan records implementation direction and milestone boundaries for the
-current OxideDNS SRS v0.9.1. It is intentionally not the detailed evidence
-ledger, not the operator runbook, and not a substitute for the normative SRS.
+This plan records implementation direction and points to the milestone
+boundaries for the current OxideDNS SRS v0.9.1. It is intentionally not the
+detailed evidence ledger, not the operator runbook, and not a substitute for
+the normative SRS.
 
 ## Milestone Boundary
 
@@ -130,9 +131,9 @@ implementation plan can remain at milestone level.
 
 ## Evidence Ownership
 
-- This plan records implementation direction and the current feature boundary;
-  it is not the canonical inventory of every evidence script, artifact
-  environment variable, or release-gate command.
+- This plan records implementation direction and points to the current feature
+  boundary; it is not the canonical inventory of every evidence script,
+  artifact environment variable, or release-gate command.
 - `docs/test-plan.md` owns verification cadence, release-gate execution, fuzz
   campaign setup, and handoff/runbook status.
 - `docs/verification-ledger.md` owns current evidence pointers and remaining
