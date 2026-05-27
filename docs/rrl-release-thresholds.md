@@ -1,9 +1,10 @@
 # RRL Release Threshold Baseline
 
 This document records the current RRL threshold baseline for Engineering MVP
-release review. It is not final approval of the SRS Appendix C.5 pending
-decision for `Slip = 2`; release notes must continue to list that item as
-pending until the project decision is closed.
+release review. SRS Appendix C.5 resolves the `Slip = 2` default in v0.9.1;
+release notes still need retained operational evidence before formal SRS
+acceptance can claim that the whole RRL threshold profile has been reviewed for
+the accepted release.
 
 The baseline follows `docs/OxideDNS-Secondary-SRS-v0.9.1.md` section 4.17 and is
 mirrored by `config/oxidedns.example.toml`.
@@ -18,7 +19,7 @@ mirrored by `config/oxidedns.example.toml`.
 | NODATA response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
 | Referral response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
 | Error response rate | `5/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
-| Slip | `2` | ODS-FR-RRL-005 | Implemented SRS body default; C.5 confirmation pending |
+| Slip | `2` | ODS-FR-RRL-005 | Resolved SRS v0.9.1 default; retain operational evidence before formal acceptance |
 | Maximum tracked keys | `100000` | ODS-FR-RRL-010 | Implemented SRS body default |
 | Summary log interval | `60s` | ODS-FR-RRL-011 | Implemented SRS body default |
 

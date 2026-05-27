@@ -50,8 +50,19 @@ SRS_NEEDLES = {
     "slip": "default value 2",
     "max_keys": "default of 100000",
     "summary_log_interval_secs": "default 60 seconds",
-    "c5_pending": "| Slip = 2 (RRL default) |",
+    "c5_resolved_slip": "Resolved (v0.9.1): `rrl.slip` default is 2",
 }
+
+DOC_STATUS_NEEDLES = [
+    "SRS Appendix C.5 resolves the `Slip = 2` default in v0.9.1",
+    "Resolved SRS v0.9.1 default; retain operational evidence before formal acceptance",
+]
+
+STALE_DOC_NEEDLES = [
+    "C.5 confirmation pending",
+    "Appendix C.5 pending decision for `Slip = 2`",
+    "release notes must continue to list that item as pending",
+]
 
 
 def fail(message: str) -> None:
@@ -79,6 +90,14 @@ def main() -> None:
     for key, needle in DOC_NEEDLES.items():
         if needle not in doc:
             fail(f"{DOC} missing baseline row for {key}: {needle}")
+
+    for needle in DOC_STATUS_NEEDLES:
+        if needle not in doc:
+            fail(f"{DOC} missing current RRL decision status text: {needle}")
+
+    for needle in STALE_DOC_NEEDLES:
+        if needle in doc:
+            fail(f"{DOC} contains stale RRL decision status text: {needle}")
 
     for key, needle in SRS_NEEDLES.items():
         if needle not in srs:

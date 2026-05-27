@@ -181,8 +181,9 @@ review can inspect per-run and campaign-total RRL evidence without opening each
 raw artifact directory.
 
 threshold-decision.tsv records the current SRS v0.9.1 RRL baseline used for
-release review. The slip value follows the SRS body default, but Appendix C.5
-confirmation remains pending and must be handled in release notes.
+release review. Appendix C.5 resolves the slip default in v0.9.1; release notes
+still need retained operational evidence before formal SRS acceptance can claim
+the whole RRL threshold profile has been reviewed for the accepted release.
 EOF
 }
 
@@ -199,7 +200,7 @@ write_threshold_decision() {
         printf 'nodata_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tNODATA response rate limit\n'
         printf 'referral_per_second\t10\tODS-FR-RRL-003\timplemented-srs-body-default\tReferral response rate limit\n'
         printf 'error_per_second\t5\tODS-FR-RRL-003\timplemented-srs-body-default\tError response rate limit\n'
-        printf 'slip\t2\tODS-FR-RRL-005\timplemented-srs-body-default-c5-pending\tAppendix C.5 confirmation remains pending\n'
+        printf 'slip\t2\tODS-FR-RRL-005\tresolved-srs-v0.9.1-default\tretain operational evidence before formal acceptance\n'
         printf 'max_keys\t100000\tODS-FR-RRL-010\timplemented-srs-body-default\tMaximum tracked accounting keys\n'
         printf 'summary_log_interval_secs\t60\tODS-FR-RRL-011\timplemented-srs-body-default\tAggregate RRL summary interval\n'
     } >"$decision_file"
