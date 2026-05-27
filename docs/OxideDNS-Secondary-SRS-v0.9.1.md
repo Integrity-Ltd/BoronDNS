@@ -2322,7 +2322,7 @@ The cookie secret value MUST NOT appear in any log entry at any level.
 - BADCOOKIE responses emitted (strict policy).
 
 These counters MUST be exposable globally and per-source-prefix per §5.6 and §6.4.
-*Source.* Operational visibility; RFC 8906.
+*Source.* Operational visibility for the RFC 7873 §5.2 cookie processing cases and RFC 9018 server-cookie validation profile.
 *Verification.* Counter inspection under controlled cookie traffic.
 
 ## 4.20 Zone Provisioning

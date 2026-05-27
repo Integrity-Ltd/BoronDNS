@@ -33,6 +33,7 @@ FORBIDDEN_TEXT = {
     "concrete, atomic, testable requirements": "SRS no longer claims strict atomicity",
     "decomposed into atomic requirements": "SRS no longer claims strict atomicity",
     "the Test Plan's CI configuration MUST enact the classification": "private Engineering MVP does not claim hosted CI enacts every cadence",
+    "*Source.* Operational visibility; RFC 8906.\n*Verification.* Counter inspection under controlled cookie traffic.": "DNS Cookie counters should cite DNS Cookie RFCs, not RFC 8906 alone",
 }
 
 REQUIRED_TEXT = [
@@ -55,6 +56,7 @@ REQUIRED_TEXT = [
     "MUST NOT be described as scratch-compatible unless binary inspection proves the claim",
     "The active verification automation for the current project stage MUST enact the Continuous classification",
     "Periodic and Gate rows are release/operations handoff obligations until hosted CI, scheduled jobs, or formal release-gate automation are enabled",
+    "*Source.* Operational visibility for the RFC 7873 §5.2 cookie processing cases and RFC 9018 server-cookie validation profile.",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
