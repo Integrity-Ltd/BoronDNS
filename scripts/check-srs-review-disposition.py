@@ -64,6 +64,7 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
 
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
     "## Retained Slices",
+    "every code-backed slice that exceeds a static AXFR-only secondary-server cut",
     "Not claimed by this slice",
     "Normative SRS owner",
     "Current source ownership",
@@ -500,7 +501,7 @@ def main() -> int:
                 f"boundary term {term!r}"
             )
     for term in REQUIRED_CODE_ALIGNMENT_BOUNDARIES:
-        if term not in feature_scope:
+        if term not in normalized_feature_scope:
             errors.append(
                 f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} omits code-alignment "
                 f"boundary term {term!r}"

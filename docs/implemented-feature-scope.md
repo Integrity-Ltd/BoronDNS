@@ -33,6 +33,12 @@ claims, and what adjacent behavior it does not claim.
 
 ## Retained Slices
 
+The table covers every code-backed slice that exceeds a static AXFR-only
+secondary-server cut, not only the feature names explicitly called out by the
+external review. That is why IXFR/AXFR fallback and broad EDNS response behavior
+are retained here alongside catalog zones, XoT, DNS Cookies, RRL, bounded EDE,
+passive DNSSEC serving, and opt-in CHAOS diagnostics.
+
 | Feature family | Retained implementation slice | Not claimed by this slice | Normative SRS owner | Current source ownership | Representative evidence ownership |
 | --- | --- | --- | --- | --- | --- |
 | IXFR and AXFR fallback | The transfer client can build an IXFR query from the held SOA, parse valid IXFR responses, apply accepted deltas, and fall back to AXFR when IXFR is unavailable or unsuitable. | Primary-server behavior, dynamic UPDATE, UDP IXFR, or serving IXFR to downstream secondaries. | `ODS-FR-IXFR-001..019`; `ODS-FR-AXFR-001..026` | `crates/oxidedns-core/src/axfr.rs`; `crates/oxidedns-server/src/lib.rs` | `scripts/interop-bind-ixfr-refresh.sh`; `scripts/interop-knot-ixfr-refresh-docker.sh`; `scripts/interop-ixfr-notimp-fallback.sh` |
