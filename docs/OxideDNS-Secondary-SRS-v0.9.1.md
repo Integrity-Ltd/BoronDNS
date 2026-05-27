@@ -517,7 +517,7 @@ The published Linux binary target is `x86_64-unknown-linux-musl` and MUST be ver
 
 # 4. Functional Requirements
 
-This section specifies the server's functional behaviour. Requirements are grouped into eighteen subsections by protocol concern; each subsection allocates an area code per the scheme of §1.4.3.
+This section specifies the server's functional behaviour. Requirements are grouped by protocol concern. Functional requirement subsections allocate an area code per the scheme of §1.4.3; §4.18 is the negative-requirement subsection and uses the `ODS-NEG-NNN` category without an AREA component.
 
 
 ## 4.1 DNS Protocol Core
@@ -3484,7 +3484,7 @@ The separation prevents the SRS from accumulating test-case detail that does not
 
 ## 7.7 Audit Cycle Closure
 
-The SRS has been subjected to a structured per-section audit cycle initiated in v0.2 and concluding with the present revision. Each section's audit closure resulted in precision refinements, gap closures, and (where appropriate) new requirements:
+The SRS was subjected to a structured per-section audit cycle initiated in v0.2 and concluded in v0.7. Each section's audit closure resulted in precision refinements, gap closures, and (where appropriate) new requirements:
 
 | Audit cycle | SRS revision | Section | Principal outcomes |
 |---|---|---|---|
@@ -3492,9 +3492,9 @@ The SRS has been subjected to a structured per-section audit cycle initiated in 
 | Non-functional | v0.4 | §5 | Reference Hardware Profile and Reference Query Mix introduced (Appendix E); 13 new NFRs covering TCP/TSIG/DNSSEC throughput targets, overload behaviour, clock-skew tolerance, CVE policy, test coverage, signed releases, Operator Deployment Guide deliverable, build_info and latency-histogram metrics, idle-CPU bound. |
 | Interface | v0.5 | §6 | `interface.xot` -> `interface.transfer` rename; explicit rejection of a fourth active NOTIFY interface role for the MVP; CLI helper modes (`--dump-config`, `--validate-config`, `--version`, `--help`); canonical logging field names; new PROC area code (§6.6) with exit-code convention. |
 | Architectural invariants | v0.6 | §3 | Precision refinements to ODS-INV-001 through -006; three new foundational invariants (Authoritative-Only Response Composition, Single-Process Architecture, Static Composition). |
-| Verification | v0.7 (this revision) | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; ODS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
+| Verification | v0.7 | §7 | Method catalogue expanded with Property-based test, Differential test, Static analysis (distinct), Security audit; ODS-VER-001 reformulated; six new VER requirements (gate verification, cadence classification, regression policy, interop version recording, compliance publication, responsibility allocation). |
 
-The audit cycle is complete with v0.7. Future revisions to this SRS are expected to address: (a) Pending items in Appendix C.5 as project decisions are made; (b) C.6 post-MVP scope items as they are promoted into scope; (c) operational learnings from Alpha and formal SRS MVP release-gate executions; (d) RFC errata published after this revision's date. Audit cycles of equivalent depth are not anticipated unless triggered by substantive architectural change.
+The audit cycle is complete with v0.7. Future revisions to this SRS are expected to address: (a) Pending items in Appendix C.5 as project decisions are made; (b) C.6 post-MVP scope items as they are promoted into scope; (c) operational learnings from Alpha and formal SRS MVP release-gate executions; (d) RFC errata published after the active revision's publication date. Audit cycles of equivalent depth are not anticipated unless triggered by substantive architectural change.
 
 The SRS body is considered structurally stable from v0.7 onward; subsequent revisions are expected to be additive (new requirements within the established framework) or corrective (defect fixes), not structurally transformative.
 
@@ -4945,7 +4945,7 @@ VER is the only category added beyond the §1.4.3 original enumeration; the next
 
 ### D.5.2 Area code registry (normative)
 
-Area codes are short uppercase mnemonics (3–6 characters) registered in the table below. Each area code is unique across the SRS and is associated with one subsection. New area codes are allocated only by SRS revision; per the identifier-stability rule of §1.4.4, area codes are never reused for different concerns.
+Area codes are short uppercase mnemonics (3–6 characters) registered in the table below. Each area code is unique across the SRS and is associated with one subsection. New area codes are allocated only by SRS revision; per the identifier-stability rule of §1.4.4, area codes are never reused for different concerns. Categories with omitted AREA components, such as `ODS-NEG-NNN`, are registered in D.5.1 rather than in the area-code tables below.
 
 #### Functional area codes (ODS-FR-`AREA`-NNN)
 
