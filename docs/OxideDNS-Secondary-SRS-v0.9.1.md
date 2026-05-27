@@ -3370,9 +3370,9 @@ For each (server, primary) pair, the test matrix MUST cover:
 - IXFR incremental refresh including IXFR-to-AXFR fallback per §4.7;
 - NOTIFY receipt and refresh triggering per §4.8;
 - TSIG-authenticated transfers per §4.9 with at least the HMAC-SHA256 algorithm;
-- XoT-secured transfers per §4.10, against each primary in the list that supports XoT at the time of testing. As of 2026 this comprises Knot DNS (stable XoT server support since 3.1) and BIND 9 (stable XoT server support since 9.18); the matrix MUST cover both. NSD does not implement XoT server-side at the time of writing and is therefore exempt from the XoT row.
+- XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT. The tested primary version and the XoT capability decision MUST be recorded per ODS-VER-013; a primary is exempt from the XoT row only when the retained version evidence shows that the tested version lacks server-side XoT support or the relevant package build disables it. Current release planning MUST NOT treat BIND 9 or Knot DNS XoT as optional when the selected test versions expose XoT configuration, and SHOULD include NSD XoT evidence when the selected NSD version exposes TLS-protected `provide-xfr`/`request-xfr` configuration.
 
-*Source.* PID §6; operational requirement for production interoperability; resolution of Alpha audit finding regarding XoT coverage gap against BIND 9. *XoT-against-BIND-9 coverage added in v0.9.*
+*Source.* PID §6; operational requirement for production interoperability; RFC 9103; BIND 9, Knot DNS, and NSD operator documentation for XoT-capable test-version selection. *XoT-against-BIND-9 coverage added in v0.9; NSD XoT exemption wording corrected in v0.9.1 documentation alignment.*
 *Verification.* Interop test pipeline execution per the matrix.
 
 **ODS-VER-004.** The interoperability matrix MUST exercise zones of operationally representative complexity:

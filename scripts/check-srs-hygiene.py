@@ -44,6 +44,9 @@ FORBIDDEN_TEXT = {
     "strongest improvement-per-codebase-octet": "avoid marketing-style rationale in the SRS",
     "RFC 9018 §2 (Server Cookie timestamp)": "RFC 9018 server-cookie timestamp is section 4.3",
     "RFC 9018 §3.2": "RFC 9018 server-cookie construction is section 4",
+    "As of 2026 this comprises Knot DNS": "avoid time-frozen XoT implementation claims",
+    "NSD does not implement XoT server-side at the time of writing": "NSD XoT support is version/build dependent and must be tested",
+    "stable XoT server support since": "avoid unsourced release-history claims in normative SRS text",
 }
 
 REQUIRED_TEXT = [
@@ -73,6 +76,9 @@ REQUIRED_TEXT = [
     "RFC 9018 §4, §4.3, §4.4",
     "OxideDNS defaults to the lenient project policy because it preserves interoperability with clients that do not yet have a Server Cookie",
     "DNS Cookies add useful UDP off-path spoofing resistance with modest operational complexity",
+    "XoT-secured transfers per §4.10, against each primary in the list whose tested version supports XoT",
+    "The tested primary version and the XoT capability decision MUST be recorded per ODS-VER-013",
+    "SHOULD include NSD XoT evidence when the selected NSD version exposes TLS-protected `provide-xfr`/`request-xfr` configuration",
 ]
 
 SUFFIXED_ID_RE = re.compile(r"\bODS-(?:FR|NFR|IF)-[A-Z0-9]{3,6}-[0-9]{3}[a-z]\b")
