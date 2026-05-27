@@ -683,7 +683,8 @@ Refresh checks:
   authoritative data.
 - Do not expect EDNS Expire (RFC 7314) signalling in SOA/AXFR/IXFR exchanges.
   OxideDNS uses the transferred SOA timers, NOTIFY, AXFR, and IXFR paths above;
-  RFC 7314 is intentionally outside the current SRS scope.
+  RFC 7314 is Experimental and intentionally outside the current SRS scope, so
+  OxideDNS does not claim RFC 7314 compliance for indirect secondary chains.
 
 Shutdown and restart checks:
 

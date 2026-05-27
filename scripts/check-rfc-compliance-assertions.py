@@ -66,6 +66,11 @@ REQUIRED_EVIDENCE_SNIPPETS = {
         "ede_not_ready_is_opt_in_for_loading_zones",
         "nsec3_iterations_over_cap_omits_proofs_and_emits_ede_when_enabled",
     ],
+    "RFC 7314": [
+        "Informative Only",
+        "explicitly excluded Experimental EDNS zone-expire signalling",
+        "does not claim RFC 7314 compliance",
+    ],
 }
 
 VALID_STATUSES = {

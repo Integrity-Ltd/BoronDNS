@@ -3857,7 +3857,7 @@ The entry is preserved in this register, with this updated status, per the ident
 
 *Description.* An experimental EDNS option for zone maintenance queries (typically SOA, AXFR, and IXFR) that lets a primary or intermediate secondary convey remaining expire-timer information to a secondary. RFC 7314 is intended to preserve SOA EXPIRE semantics across indirect secondary-to-secondary transfer graphs; it is not a replacement for ordinary SOA refresh polling, NOTIFY, AXFR, or IXFR.
 
-*Rationale for exclusion.* Minor operational optimisation for indirect transfer topologies; outside current SRS scope.
+*Rationale for exclusion.* RFC 7314 is Experimental and primarily improves indirect secondary-to-secondary transfer topologies by carrying the upstream remaining expire timer. RFC 7314 §§2–4 specify that a secondary using this option adds EDNS EXPIRE to zone-transfer and refresh queries and consumes EDNS EXPIRE responses. OxideDNS does not implement that option in the current scope, so it does not claim RFC 7314 compliance. Operators using indirect secondary chains should account for that explicitly; OxideDNS uses transferred SOA timers plus the ordinary SOA refresh, NOTIFY, AXFR, and IXFR paths specified in §4.6, §4.7, §4.8, and §4.16.
 
 *Enforcement.* Not implemented.
 
