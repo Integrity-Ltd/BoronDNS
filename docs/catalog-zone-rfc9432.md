@@ -31,6 +31,9 @@ Implemented behavior in the current Engineering MVP:
   member zone.
 - Duplicate member zones or malformed required catalog data cause OxideDNS to
   leave the previous applied catalog membership unchanged.
+- Malformed member PTR RRsets and malformed member PTR RDATA make the candidate
+  catalog version broken under RFC 9432; OxideDNS does not partially apply the
+  remaining member list from that candidate version.
 
 Outside this Engineering MVP catalog slice:
 
@@ -39,6 +42,10 @@ Outside this Engineering MVP catalog slice:
   set for the configured catalog.
 - Persistent catalog or member-zone state across process restarts.
 - Primary-side catalog generation.
+- Completed formal SRS evidence for every semantic member-name exclusion in
+  `ODS-NFR-SEC-015`; the current Engineering MVP evidence covers structural
+  member PTR parsing, duplicate members, self-catalog members, and member-count
+  caps, with the remaining semantic exclusions tracked in the gap register.
 
 ## Configuration
 

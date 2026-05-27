@@ -2399,9 +2399,9 @@ The area code **PROV** is allocated.
 
 ### Catalog content constraints
 
-**ODS-FR-PROV-013.** The catalog zone provider MUST validate each candidate member-zone name from the catalog's PTR records per the syntactic rules of RFC 1035 §2.3.1 (allowed character set, label length 1–63 octets, total name length not exceeding 255 octets). Names failing validation MUST be rejected with a warning-level log entry identifying the offending PTR record; the rest of the catalog's contents MUST be processed normally. The validation requirements of ODS-NFR-SEC-015 (catalog-apex containment exclusion) apply additionally.
-*Source.* RFC 1035 §2.3.1; defensive engineering against malformed catalog contents.
-*Verification.* Tests with catalog zones containing syntactically invalid PTR targets; verify rejection-with-warning behaviour and continued processing of the remainder.
+**ODS-FR-PROV-013.** The catalog zone provider MUST validate the structural member-zone PTR data required by RFC 9432 §4.1 before applying a catalog version. Each member node directly below `zones.<catalog-apex>` MUST have exactly one PTR record, and the PTR RDATA MUST parse as a complete DNS domain name in wire format, including RFC 1035 label-length and total-name-length bounds. OxideDNS MUST NOT apply LDH host-name restrictions to member-zone names merely because RFC 1035 §2.3.1 describes a preferred host-name syntax; RFC 9432 §4.1 uses PTR RDATA so all valid domain names can be represented. A malformed member PTR RRset or malformed PTR RDATA makes the candidate catalog version broken; that catalog version MUST NOT be processed or partially applied, and the previously applied catalog membership MUST remain unchanged per ODS-FR-PROV-010 and RFC 9432 §5.1. The validation requirements of ODS-NFR-SEC-015 apply after structural catalog parsing succeeds.
+*Source.* RFC 9432 §4.1 and §5.1; RFC 1035 domain-name wire-format bounds; defensive engineering against malformed catalog contents.
+*Verification.* Tests with catalog zones containing invalid PTR record structures and malformed PTR targets; verify the candidate catalog version is rejected, an operator-visible diagnostic is emitted, and the previously applied membership remains unchanged.
 
 **ODS-FR-PROV-014.** The catalog zone MAY contain per-member property records permitted by RFC 9432 §5 (e.g., `primaries.<unique-id>.zones.<catalog-apex>`, `coo.<unique-id>.zones.<catalog-apex>`, `group.<unique-id>.zones.<catalog-apex>`). In this version of the server, **all such per-member property records MUST be ignored** — specifically, the `primaries` property (RFC 9432 §5.1) MUST NOT alter the primary coordinates used for member-zone transfer, per the security constraint of ODS-NFR-SEC-011. Encountered property records MUST be logged at debug level for operator awareness; their presence MUST NOT cause the catalog to be rejected. Support for selected properties may be added in a future revision subject to security review.
 *Source.* RFC 9432 §5; ODS-NFR-SEC-011.
@@ -2639,12 +2639,12 @@ The following requirements (ODS-NFR-SEC-008 through ODS-NFR-SEC-015) were introd
 *Verification.* Tests with a slow primary emulator (deliberately introducing delays in AXFR response stream); verify session abort at the configured timeout; verify the transfer slot is released for use by other transfers; verify state-machine accounting treats the timeout as a failure.
 
 **ODS-NFR-SEC-015.** *(Integrity — catalog member-zone name validation.)* Every candidate member-zone name derived from a catalog zone's PTR records MUST be subjected to syntactic and semantic validation before being surfaced to the zone manager per ODS-FR-PROV-007:
-- syntactic validation per RFC 1035 §2.3.1 (per ODS-FR-PROV-013);
+- structural member PTR validation per RFC 9432 §4.1 and ODS-FR-PROV-013;
 - the member-zone name MUST NOT be equal to, nor subordinate to, the catalog zone's own apex name (preventing pathological recursive provisioning);
 - the member-zone name MUST NOT be the root zone (`.`) nor any of the IANA-reserved zone names enumerated in the schema documentation;
 - the member-zone name MUST NOT contain wildcard labels (`*`).
 
-Names failing any of these checks MUST be rejected with an error-level log entry identifying the rejection reason and the offending PTR record. The remainder of the catalog's contents MUST continue to be processed normally; one bad PTR MUST NOT cause the whole catalog to be rejected.
+Malformed structural catalog data covered by ODS-FR-PROV-013 is a broken catalog version and MUST NOT be partially applied. For semantic member-name policy exclusions in this requirement, the server MUST reject the offending candidate member with an error-level log entry identifying the rejection reason and the offending PTR record before the candidate member can reach the zone manager. The gap register records any current implementation gap between this formal SRS MVP policy and the Engineering MVP code evidence.
 *Source.* CIA-IX2 / IX3 threat analysis; defensive engineering against catalog-injection variants.
 *Verification.* Tests with catalogs containing each prohibited name pattern; verify rejection with appropriate diagnostic.
 
