@@ -1,6 +1,6 @@
-# Catalog Zone MVP Based on RFC 9432
+# Catalog Zone Engineering MVP Based on RFC 9432
 
-Status: new MVP target
+Status: implemented Engineering MVP scope with explicit release-acceptance gaps
 
 OxideDNS supports an Engineering MVP subset of DNS Catalog Zones as described
 by RFC 9432. A configured catalog zone is transferred from trusted primaries in
@@ -8,9 +8,12 @@ the same way as ordinary secondary zones. OxideDNS then reads member-zone PTR
 records under `zones.<catalog-zone>` and creates in-memory secondary service for
 those member zones.
 
-This feature changes the previous static-zone-only scope: `[[zones]]` remains
-supported for explicit zones, and `[[catalog_zones]]` is now the preferred way
-to let a trusted primary publish the served zone set.
+This feature has moved beyond the earlier static-zone-only scope: `[[zones]]`
+remains supported for explicit zones, and `[[catalog_zones]]` is the supported
+way to let a trusted primary publish the served zone set. The remaining
+implementation gap is the catalog member-zone resource bound tracked as
+`ODS-NFR-SEC-013` in `docs/mvp-gap-register.md`; broader retained evidence is a
+formal SRS acceptance concern.
 
 ## RFC 9432 Scope
 
@@ -77,7 +80,7 @@ be used where catalog confidentiality is also required; TSIG authenticates the
 transfer but does not encrypt the catalog contents.
 
 For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
-startup validation for missing `tsig_key` references. The v0.9 SRS draft used
+startup validation for missing `tsig_key` references. Earlier SRS drafts used
 the illustrative name `zones.require_tsig`; the implemented schema keeps this
 as process-wide transfer policy under `[transfer]` because TOML reserves
 `[[zones]]` for the zone array itself.

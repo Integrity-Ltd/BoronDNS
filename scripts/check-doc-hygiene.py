@@ -26,6 +26,8 @@ BANNED_PHRASES = [
     "first-pass family matrix",
     "preliminary AXFR-backed",
     "current MVP scaffold",
+    "Status: new MVP target",
+    "The v0.9 SRS draft used",
     "RFC 8914 EDE planned for v2",
     "`BTreeMap`-backed zone store",
     "Architecture Document will choose the initial implementation",
