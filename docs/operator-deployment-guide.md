@@ -524,7 +524,7 @@ external operator acceptance can review them.
 ## Service Level Objectives
 
 `docs/operational-slos.md` is the informative SLO publication required by the
-current Appendix C.5 decision list for `ODS-NFR-MAINT-009`. Treat those SLOs as
+current project decision register for `ODS-NFR-MAINT-009`. Treat those SLOs as
 an operator starting point, not a full SRS acceptance claim. Engineering MVP
 sets up the evidence commands and handoff path; release acceptance still
 depends on later performance, reliability, soak, and external-operator evidence

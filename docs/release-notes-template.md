@@ -60,9 +60,10 @@ TBD
 ## Appendix C.5 Decision Review
 
 Copy the pending-decision register from
-`release-handoff/appendix-c5-decision-register.tsv`. Every `Pending` item must
-be resolved for this release or explicitly deferred with an owner and target
-release before formal SRS MVP acceptance is claimed.
+`release-handoff/appendix-c5-decision-register.tsv`, which is generated from
+`docs/project-decision-register.md`. Every `Pending` item must be resolved for
+this release or explicitly deferred with an owner and target release before
+formal SRS MVP acceptance is claimed.
 
 | Item | Flagged at | Recommendation | Decision for this release | Owner | Target release | Evidence or rationale |
 | --- | --- | --- | --- | --- | --- | --- |

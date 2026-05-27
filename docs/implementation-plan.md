@@ -145,12 +145,12 @@ SRS, or the verification ledger. When implementation status changes:
 
 ## Project Decision Ownership
 
-Appendix C.5 of SRS v0.9.1 is the project-decision audit trail. This plan does
-not own or repeat that table. Resolved C.5 rows are current project decisions;
-rows still marked `Pending` require release-review action before formal SRS MVP
-acceptance. The active pending subset is summarized in
-`docs/mvp-gap-register.md` so this implementation plan can remain at milestone
-level.
+`docs/project-decision-register.md` is the project-decision audit trail, and
+SRS Appendix C.5 points to it. This plan does not own or repeat that table.
+Resolved rows are current project decisions; rows still marked `Pending`
+require release-review action before formal SRS MVP acceptance. The active
+pending subset is summarized in `docs/mvp-gap-register.md` so this
+implementation plan can remain at milestone level.
 
 ## Evidence Ownership
 

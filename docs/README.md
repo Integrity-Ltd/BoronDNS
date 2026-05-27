@@ -43,6 +43,7 @@ and slowly diverging.
 | What is the formal benchmark environment? | `reference-verification-profile.md` | Keep hardware, query-mix, and benchmark-artifact details here; keep only requirement targets and ownership pointers in the SRS. |
 | How was the external review handled? | `srs-review-disposition.md` | Record review disposition here; promote only checked protocol or scope changes into the owning docs. |
 | Which extra implemented features are retained? | `implemented-feature-scope.md` | Keep the exact retained slice and nearby non-claims here; summarize or link elsewhere. |
+| Where are project decisions recorded? | `project-decision-register.md` | Keep the decision audit trail here; let SRS Appendix C.5 point to it instead of embedding the full table. |
 
 ## Current Requirements and Design
 
@@ -103,6 +104,8 @@ and slowly diverging.
   Machine requirements.
 - `rfc-compliance-assertions.md`: ODS-VER-014 structured RFC compliance
   assertion register.
+- `project-decision-register.md`: project decision audit trail consumed by
+  release handoff for Appendix C.5 decision review.
 - `rrl-release-thresholds.md`: RRL threshold baseline and release-review
   notes.
 - `srs-review-disposition.md`: disposition register for the external SRS review,

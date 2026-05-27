@@ -106,6 +106,7 @@ REQUIRED_TEXT_BY_PATH = {
         "How does an operator run it?",
         "What is the formal benchmark environment?",
         "How was the external review handled?",
+        "Where are project decisions recorded?",
     ],
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",

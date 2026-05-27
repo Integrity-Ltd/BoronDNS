@@ -16,6 +16,8 @@ Detailed evidence ownership:
   accepted protocol fixes, and rejected scope-trim suggestions.
 - `docs/implemented-feature-scope.md` records the retained post-Alpha feature
   slices and nearby behavior that is not claimed by those slices.
+- `docs/project-decision-register.md` records resolved and pending project
+  decisions formerly embedded in SRS Appendix C.5.
 - Feature-specific documents such as `docs/catalog-zone-rfc9432.md`,
   `docs/dnssec-conformance-matrix.tsv`, and
   `docs/rrl-release-thresholds.md` hold focused evidence detail.
@@ -35,10 +37,10 @@ Terminology:
   Engineering MVP does not depend on those completed results.
 - **Current checked-in full SRS** is
   `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
-- **Pending C.5 decisions** in the current SRS remain open until release review
-  resolves or explicitly defers them. Resolved C.5 rows are already project
-  decisions; release notes and acceptance review must not treat the pending
-  subset as confirmed only because implementation evidence exists.
+- **Pending project-decision rows** remain open until release review resolves
+  or explicitly defers them. Resolved rows are already project decisions;
+  release notes and acceptance review must not treat the pending subset as
+  confirmed only because implementation evidence exists.
 
 Rows below deliberately name current gaps only. A row being present here does
 not mean the feature is absent; it means either an implementation decision, a
@@ -59,19 +61,21 @@ No open Engineering MVP implementation decisions are currently tracked here.
 | Portability and deployment matrix | `docs/operator-deployment-guide.md`; `scripts/capture-portability-evidence.sh`; package and Docker scripts | Add per-distribution/per-architecture smoke evidence, Kubernetes/container deployment evidence, and dual-stack operational evidence before full acceptance. |
 | Operator documentation and release notes | `docs/operator-deployment-guide.md`; `docs/release-notes-template.md`; `docs/rfc-compliance-assertions.md` | Populate release notes with concrete evidence pointers, RFC compliance assertions, Appendix C.5 dispositions, interface compatibility state, signed-artifact manifest, and role sign-off. |
 
-## Pending SRS C.5 Decision Overlay
+## Pending Project Decision Overlay
 
-SRS v0.9.1 Appendix C.5 is the canonical project-decision table. Rows marked
-`Resolved` are retained as audit trail, not open risks. Rows whose Decision
-begins `Pending` need release-review attention, but they are not all the same
-kind of blocker: some are non-normative quality candidates, some require an
-implementation-or-SRS decision, and some require later formal release evidence.
-Update release notes from the SRS C.5 table, not from this summary.
+`docs/project-decision-register.md` is the canonical project-decision table;
+SRS Appendix C.5 points to that owner and summarizes only the pending subset.
+Rows marked `Resolved` are retained as audit trail, not open risks. Rows whose
+Decision begins `Pending` need release-review attention, but they are not all
+the same kind of blocker: some are non-normative quality candidates, some
+require an implementation-or-SRS decision, and some require later formal
+release evidence. Update release notes from the project decision register, not
+from this summary.
 
-Current C.5 pending rows are classified here only to make the active queue
+Current pending rows are classified here only to make the active queue
 readable:
 
-| C.5 item | Current classification | Handling |
+| Decision item | Current classification | Handling |
 | --- | --- | --- |
 | Property-based testing in Alpha scope | Non-normative quality candidate | Tracked in the Test Plan; not an Engineering MVP blocker unless promoted to a requirement. |
 | Server module decomposition (`server/lib.rs` monolith) | Non-normative maintainability candidate | Tracked in the Architecture Document; not an Engineering MVP blocker unless module growth makes `ODS-NFR-MAINT-002` evidence weak. |

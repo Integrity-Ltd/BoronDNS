@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "oxidedns.example.toml"
 SRS = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
+DECISION_REGISTER = ROOT / "docs" / "project-decision-register.md"
 DOC = ROOT / "docs" / "rrl-release-thresholds.md"
 
 EXPECTED = {
@@ -50,6 +51,9 @@ SRS_NEEDLES = {
     "slip": "default value 2",
     "max_keys": "default of 100000",
     "summary_log_interval_secs": "default 60 seconds",
+}
+
+DECISION_REGISTER_NEEDLES = {
     "c5_resolved_slip": "Resolved (v0.9.1): `rrl.slip` default is 2",
 }
 
@@ -80,6 +84,7 @@ def extract_toml_scalar(text: str, key: str) -> str:
 def main() -> None:
     config = CONFIG.read_text(encoding="utf-8")
     srs = SRS.read_text(encoding="utf-8")
+    decision_register = DECISION_REGISTER.read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")
 
     for key, expected in EXPECTED.items():
@@ -102,6 +107,10 @@ def main() -> None:
     for key, needle in SRS_NEEDLES.items():
         if needle not in srs:
             fail(f"{SRS} missing expected SRS text for {key}: {needle}")
+
+    for key, needle in DECISION_REGISTER_NEEDLES.items():
+        if needle not in decision_register:
+            fail(f"{DECISION_REGISTER} missing expected decision text for {key}: {needle}")
 
     print(f"RRL threshold baseline check passed: {DOC}")
 

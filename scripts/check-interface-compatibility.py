@@ -149,6 +149,12 @@ def check_three_role_docs(repo_root: Path) -> None:
     if "MUST NOT expose a fourth `notify` role" not in srs:
         fail("SRS v0.9.1 must preserve the ODS-IF-NET-008 three-role clarification")
 
+    decision_register = (repo_root / "docs" / "project-decision-register.md").read_text(
+        encoding="utf-8"
+    )
+    if "Add optional `interface.notify`" in decision_register:
+        fail("project decision register still asks to add optional interface.notify")
+
 
 def check_previous_diff(
     previous_path: Path,

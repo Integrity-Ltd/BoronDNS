@@ -17,9 +17,10 @@ Engineering MVP requirement. The boundary is defined in
 retained for later release/operations work, but they are not Engineering MVP
 deliverables and are not treated as Engineering MVP evidence.
 
-Where SRS Appendix C.5 marks a decision `Pending`, rows may record implemented
-defaults before final project confirmation. Such evidence is implementation
-evidence only; it is not release-decision approval for the pending C.5 item.
+Where SRS Appendix C.5 and the project decision register mark a decision
+`Pending`, rows may record implemented defaults before final project
+confirmation. Such evidence is implementation evidence only; it is not
+release-decision approval for the pending decision item.
 
 ## Engineering MVP Interpretation
 

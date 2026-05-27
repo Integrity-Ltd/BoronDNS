@@ -16,9 +16,10 @@ bounded local evidence for already implemented slices. Requirement IDs are kept
 as exact SRS IDs or same-prefix ranges so the table can be checked
 mechanically for identifier drift.
 
-Where SRS Appendix C.5 marks a decision `Pending`, rows may record implemented
-defaults before final project confirmation. Such evidence is implementation
-evidence only; it is not release-decision approval for the pending C.5 item.
+Where SRS Appendix C.5 and the project decision register mark a decision
+`Pending`, rows may record implemented defaults before final project
+confirmation. Such evidence is implementation evidence only; it is not
+release-decision approval for the pending decision item.
 
 ## Status Values
 

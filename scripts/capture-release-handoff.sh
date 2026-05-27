@@ -32,22 +32,21 @@ ODS-NFR-MAINT-006	interface compatibility	interface-compatibility/	completed int
 ODS-NFR-MAINT-005	reproducible build	reproducible-build-handoff/	completed independent build comparison and artifact digest manifest	Maintainability Measurements	setup-ready	run two clean independent builds from the same commit/toolchain and record bit-identical comparison before claiming reproducible-build evidence
 ODS-NFR-MAINT-008	release signing	signing-runbook.md	signed artifact manifest and verification commands	Security and Dependency Review	setup-ready	sign public/MVP artifacts or label internal unsigned builds
 ODS-NFR-SEC-007	security release review	release-readiness-checklist.md	security policy review and audit/remediation records	Security and Dependency Review	setup-ready	record policy review, vulnerability exceptions, and security audit outcome
-SRS-C5	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending C.5 item before claiming formal SRS acceptance
+PROJECT-DECISIONS	pending project decisions	appendix-c5-decision-register.tsv	completed C.5 decision/deferral review	Appendix C.5 Decision Review	setup-ready	resolve or explicitly defer every Pending project-decision item before claiming formal SRS acceptance
 EOF
 
-python3 - "$repo_root/docs/OxideDNS-Secondary-SRS-v0.9.1.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
+python3 - "$repo_root/docs/project-decision-register.md" "$evidence_dir/appendix-c5-decision-register.tsv" <<'PY'
 import sys
 from pathlib import Path
 
-srs_path = Path(sys.argv[1])
+register_path = Path(sys.argv[1])
 out_path = Path(sys.argv[2])
-text = srs_path.read_text(encoding="utf-8")
+text = register_path.read_text(encoding="utf-8")
 
 try:
-    section = text.split("## C.5 Items Flagged for Project Decision", 1)[1]
-    section = section.split("## C.6 Post-MVP / v2 Scope Items", 1)[0]
+    section = text.split("## Decision Register", 1)[1]
 except IndexError as exc:
-    raise SystemExit("failed to locate SRS Appendix C.5 decision table") from exc
+    raise SystemExit("failed to locate project decision register table") from exc
 
 rows: list[list[str]] = []
 for line in section.splitlines():
@@ -67,7 +66,7 @@ for line in section.splitlines():
     rows.append([*cells, action])
 
 if not rows:
-    raise SystemExit("no SRS Appendix C.5 decision rows parsed")
+    raise SystemExit("no project decision rows parsed")
 
 with out_path.open("w", encoding="utf-8") as handle:
     handle.write("item\tflagged_at\trecommendation\tdecision\trelease_action\n")
