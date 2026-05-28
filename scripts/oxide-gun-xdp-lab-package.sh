@@ -80,9 +80,9 @@ manifest="$evidence_dir/artifact-manifest.sha256"
     find . -type f \
         ! -name artifact-manifest.sha256 \
         ! -name '*.tar.gz' \
-        -print0 \
-        | sort -z \
-        | xargs -0 sha256sum
+        -print0 |
+        sort -z |
+        xargs -0 sha256sum
 ) >"$manifest"
 
 package_dir="$repo_root/target/oxide-gun-xdp-evidence-packages"

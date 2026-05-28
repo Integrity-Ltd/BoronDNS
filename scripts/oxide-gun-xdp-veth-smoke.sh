@@ -75,26 +75,26 @@ sleep 0.5
 
 cmd=(
     ip netns exec "$src_ns" timeout 8 "$binary"
-    --config "$config" \
-    --backend xdp \
-    --interface "$src_if" \
-    --tx-queue 0 \
-    --rx-queue 0 \
-    --xdp-zerocopy copy \
-    --source-ip "$src_ip" \
-    --source-port 53000 \
-    --source-range-start "$src_range_start" \
-    --source-range-count "$packet_count" \
-    --source-port-range 53000-53003 \
-    --source-port-select sequential \
-    --source-mac "$src_mac" \
-    --target "$dst_ip:53" \
-    --target-mac "$dst_mac" \
-    --qname smoke.oxide.test. \
-    --qtype A \
-    --recv-mode drop \
-    --max-packets "$packet_count" \
-    --target-qps 0 \
+    --config "$config"
+    --backend xdp
+    --interface "$src_if"
+    --tx-queue 0
+    --rx-queue 0
+    --xdp-zerocopy copy
+    --source-ip "$src_ip"
+    --source-port 53000
+    --source-range-start "$src_range_start"
+    --source-range-count "$packet_count"
+    --source-port-range 53000-53003
+    --source-port-select sequential
+    --source-mac "$src_mac"
+    --target "$dst_ip:53"
+    --target-mac "$dst_mac"
+    --qname smoke.oxide.test.
+    --qtype A
+    --recv-mode drop
+    --max-packets "$packet_count"
+    --target-qps 0
     --flush-interval-ms 0
 )
 if [[ -n "$drop_object" ]]; then

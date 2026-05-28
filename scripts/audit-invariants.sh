@@ -15,6 +15,7 @@ runtime_files = sorted(
     path
     for path in (repo_root / "crates").glob("*/src/**/*.rs")
     if "crates/oxide-gun/" not in path.relative_to(repo_root).as_posix()
+    and "crates/oxide-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
 )
 
 def runtime_text(path: Path) -> str:
