@@ -62,12 +62,36 @@ struct Cli {
     /// XDP copy policy.
     #[arg(long, value_enum)]
     xdp_zerocopy: Option<XdpZeroCopyMode>,
+    /// Compiled Aya eBPF object for kernel reply drop mode.
+    #[arg(long)]
+    xdp_drop_object: Option<PathBuf>,
     /// Source IP address placed into generated XDP packets.
     #[arg(long)]
     source_ip: Option<IpAddr>,
     /// Source UDP port placed into generated XDP packets.
     #[arg(long)]
     source_port: Option<u16>,
+    /// Random IPv4 CIDR source strategy, for example 198.18.0.0/24.
+    #[arg(long)]
+    source_cidr: Option<String>,
+    /// Comma-separated round-robin source IP list.
+    #[arg(long, value_delimiter = ',')]
+    source_list: Vec<IpAddr>,
+    /// First source IP for sequential source strategy.
+    #[arg(long)]
+    source_range_start: Option<IpAddr>,
+    /// Number of IPs in sequential source strategy.
+    #[arg(long)]
+    source_range_count: Option<u64>,
+    /// Sequential source IP stride.
+    #[arg(long)]
+    source_range_stride: Option<u64>,
+    /// UDP source port range, for example 53000-53100.
+    #[arg(long)]
+    source_port_range: Option<String>,
+    /// UDP source port selection strategy for --source-port-range.
+    #[arg(long, value_enum)]
+    source_port_select: Option<PortSelect>,
     /// Source Ethernet MAC for XDP packets, for example 02:00:00:00:00:01.
     #[arg(long)]
     source_mac: Option<MacAddr>,
@@ -80,6 +104,18 @@ struct Cli {
     /// Query type, for example A, AAAA, MX, ANY, or TYPE65400.
     #[arg(long)]
     qtype: Option<String>,
+    /// Query list file. Each non-comment line is: qname QTYPE.
+    #[arg(long)]
+    query_list: Option<PathBuf>,
+    /// Query-name template containing {}, for example host{}.example.test.
+    #[arg(long)]
+    qname_template: Option<String>,
+    /// Number of query names generated from --qname-template.
+    #[arg(long)]
+    qname_count: Option<usize>,
+    /// Query selection strategy when a pool has more than one entry.
+    #[arg(long, value_enum)]
+    query_select: Option<QuerySelect>,
     /// Maximum packet count. The first reached run limit wins.
     #[arg(long)]
     max_packets: Option<u64>,
@@ -113,6 +149,14 @@ enum RecvMode {
     Drop,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DropImplementation {
+    None,
+    UserspaceSuppression,
+    KernelXdpDrop,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 enum LogFormat {
@@ -141,6 +185,22 @@ enum XdpZeroCopyMode {
     Auto,
     Force,
     Copy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum QuerySelect {
+    #[default]
+    Sequential,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum PortSelect {
+    #[default]
+    Sequential,
+    Random,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -203,6 +263,20 @@ struct SourceConfig {
     ip: IpAddr,
     port: u16,
     mac: Option<MacAddr>,
+    #[serde(default)]
+    cidr: Option<String>,
+    #[serde(default)]
+    list: Vec<IpAddr>,
+    #[serde(default)]
+    range_start: Option<IpAddr>,
+    #[serde(default)]
+    range_count: Option<u64>,
+    #[serde(default = "default_source_range_stride")]
+    range_stride: u64,
+    #[serde(default)]
+    port_range: Option<String>,
+    #[serde(default)]
+    port_select: PortSelect,
 }
 
 impl Default for SourceConfig {
@@ -211,8 +285,19 @@ impl Default for SourceConfig {
             ip: DEFAULT_SOURCE_IPV4,
             port: DEFAULT_SOURCE_PORT,
             mac: None,
+            cidr: None,
+            list: Vec::new(),
+            range_start: None,
+            range_count: None,
+            range_stride: default_source_range_stride(),
+            port_range: None,
+            port_select: PortSelect::default(),
         }
     }
+}
+
+fn default_source_range_stride() -> u64 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -220,6 +305,14 @@ impl Default for SourceConfig {
 struct QueryConfig {
     qname: String,
     qtype: String,
+    #[serde(default)]
+    list_file: Option<PathBuf>,
+    #[serde(default)]
+    qname_template: Option<String>,
+    #[serde(default)]
+    qname_count: Option<usize>,
+    #[serde(default)]
+    select: QuerySelect,
     edns_enabled: bool,
     edns_payload_size: u16,
     dnssec_ok: bool,
@@ -231,6 +324,10 @@ impl Default for QueryConfig {
         Self {
             qname: DEFAULT_QNAME.to_owned(),
             qtype: DEFAULT_QTYPE.to_owned(),
+            list_file: None,
+            qname_template: None,
+            qname_count: None,
+            select: QuerySelect::default(),
             edns_enabled: true,
             edns_payload_size: DEFAULT_EDNS_PAYLOAD_SIZE,
             dnssec_ok: false,
@@ -300,6 +397,8 @@ impl Default for LogConfig {
 struct XdpConfig {
     mode: XdpMode,
     zerocopy: XdpZeroCopyMode,
+    drop_object: Option<PathBuf>,
+    batch_size: usize,
     umem_frame_count: u32,
     tx_ring_size: u32,
     rx_ring_size: u32,
@@ -312,6 +411,8 @@ impl Default for XdpConfig {
         Self {
             mode: XdpMode::Drv,
             zerocopy: XdpZeroCopyMode::Auto,
+            drop_object: None,
+            batch_size: 64,
             umem_frame_count: 8192,
             tx_ring_size: 4096,
             rx_ring_size: 4096,
@@ -370,9 +471,15 @@ struct OutputRecord<'a> {
     summary: bool,
     backend: &'a str,
     recv_mode: RecvMode,
+    drop_implementation: DropImplementation,
     target: SocketAddr,
     qname: &'a str,
     qtype: &'a str,
+    query_pool_size: usize,
+    query_select: QuerySelect,
+    source_strategy: &'a str,
+    source_port_strategy: &'a str,
+    requested_qps: Option<u64>,
     tx_packets_total: u64,
     tx_bytes_total: u64,
     rx_packets_total: u64,
@@ -386,10 +493,18 @@ struct OutputRecord<'a> {
     servfail_total: u64,
     refused_total: u64,
     other_rcode_total: u64,
+    queries_unanswered_total: u64,
+    rx_kernel_dropped_total: u64,
     errors_total: u64,
     duration_seconds: f64,
     tx_qps: f64,
     rx_qps: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_p50_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_p99_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_p999_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<&'a str>,
 }
@@ -409,7 +524,81 @@ struct Stats {
     servfail: u64,
     refused: u64,
     other_rcode: u64,
+    queries_unanswered: u64,
+    rx_kernel_dropped: u64,
     errors: u64,
+    latency: LatencyHistogram,
+}
+
+const LATENCY_BUCKETS_US: [u64; 16] = [
+    10,
+    50,
+    100,
+    250,
+    500,
+    1_000,
+    2_500,
+    5_000,
+    10_000,
+    25_000,
+    50_000,
+    100_000,
+    250_000,
+    500_000,
+    1_000_000,
+    u64::MAX,
+];
+
+#[derive(Debug, Clone, Copy)]
+struct LatencyHistogram {
+    counts: [u64; LATENCY_BUCKETS_US.len()],
+}
+
+impl Default for LatencyHistogram {
+    fn default() -> Self {
+        Self {
+            counts: [0; LATENCY_BUCKETS_US.len()],
+        }
+    }
+}
+
+impl LatencyHistogram {
+    fn record(&mut self, latency: Duration) {
+        let micros = latency.as_micros().min(u128::from(u64::MAX)) as u64;
+        let bucket = LATENCY_BUCKETS_US
+            .iter()
+            .position(|edge| micros <= *edge)
+            .unwrap_or(LATENCY_BUCKETS_US.len() - 1);
+        self.counts[bucket] += 1;
+    }
+
+    fn total(&self) -> u64 {
+        self.counts.iter().sum()
+    }
+
+    fn percentile(&self, numerator: u64, denominator: u64) -> Option<u64> {
+        let total = self.total();
+        if total == 0 {
+            return None;
+        }
+        let rank = total.saturating_mul(numerator).div_ceil(denominator).max(1);
+        let mut seen = 0_u64;
+        for (count, edge) in self.counts.iter().zip(LATENCY_BUCKETS_US) {
+            seen += *count;
+            if seen >= rank {
+                return Some(edge);
+            }
+        }
+        Some(u64::MAX)
+    }
+
+    fn percentiles(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
+        (
+            self.percentile(50, 100),
+            self.percentile(99, 100),
+            self.percentile(999, 1000),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -426,15 +615,218 @@ enum ResponseClass {
     Timeout,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct QueryTemplate {
     qname: String,
+    encoded_qname: Vec<u8>,
     qtype_name: String,
     qtype: u16,
     edns_enabled: bool,
     edns_payload_size: u16,
     dnssec_ok: bool,
     recursion_desired: bool,
+}
+
+#[derive(Debug)]
+struct QueryPool {
+    templates: Vec<QueryTemplate>,
+    select: QuerySelect,
+}
+
+impl QueryPool {
+    fn len(&self) -> usize {
+        self.templates.len()
+    }
+
+    fn select(&self, rng: &mut XorShift64, index: u64) -> &QueryTemplate {
+        &self.templates[self.select_index(rng, index)]
+    }
+
+    fn select_index(&self, rng: &mut XorShift64, index: u64) -> usize {
+        match self.select {
+            QuerySelect::Sequential => index as usize % self.templates.len(),
+            QuerySelect::Random => rng.next_index(self.templates.len()),
+        }
+    }
+
+    fn first(&self) -> &QueryTemplate {
+        &self.templates[0]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+struct SourceEndpoint {
+    ip: IpAddr,
+    port: u16,
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+enum SourceIpSelector {
+    Fixed(IpAddr),
+    RoundRobin(Vec<IpAddr>),
+    RandomIpv4Cidr { network: u32, host_mask: u32 },
+    SequentialIpv4 { start: u32, count: u64, stride: u64 },
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+struct PortSelector {
+    first: u16,
+    count: u16,
+    select: PortSelect,
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+struct SourceSelector {
+    ip: SourceIpSelector,
+    port: PortSelector,
+    rng: XorShift64,
+    counter: u64,
+    ip_description: String,
+    port_description: String,
+}
+
+impl SourceSelector {
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn portable_udp() -> Self {
+        Self {
+            ip: SourceIpSelector::Fixed(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            port: PortSelector {
+                first: 0,
+                count: 1,
+                select: PortSelect::Sequential,
+            },
+            rng: XorShift64::new(1),
+            counter: 0,
+            ip_description: "os_assigned_udp_socket".to_owned(),
+            port_description: "os_assigned_udp_socket".to_owned(),
+        }
+    }
+
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn new(config: &SourceConfig, seed: u64) -> Result<Self> {
+        let strategy_count = usize::from(config.cidr.is_some())
+            + usize::from(!config.list.is_empty())
+            + usize::from(config.range_start.is_some() || config.range_count.is_some());
+        if strategy_count > 1 {
+            bail!("configure only one source strategy: cidr, list, or range");
+        }
+        let (ip, ip_description) = if let Some(cidr) = &config.cidr {
+            let (network, host_mask, prefix) = parse_ipv4_cidr(cidr)?;
+            (
+                SourceIpSelector::RandomIpv4Cidr { network, host_mask },
+                format!("random_cidr:{}/{}", Ipv4Addr::from(network), prefix),
+            )
+        } else if !config.list.is_empty() {
+            (
+                SourceIpSelector::RoundRobin(config.list.clone()),
+                format!("round_robin:{}addrs", config.list.len()),
+            )
+        } else if config.range_start.is_some() || config.range_count.is_some() {
+            let Some(IpAddr::V4(start)) = config.range_start else {
+                bail!("source.range_start must be an IPv4 address for MVP sequential ranges");
+            };
+            let count = config
+                .range_count
+                .ok_or_else(|| anyhow!("source.range_count is required with source.range_start"))?;
+            if count == 0 {
+                bail!("source.range_count must be non-zero");
+            }
+            let stride = config.range_stride.max(1);
+            (
+                SourceIpSelector::SequentialIpv4 {
+                    start: u32::from(start),
+                    count,
+                    stride,
+                },
+                format!("sequential:{start}/count={count}/stride={stride}"),
+            )
+        } else {
+            (
+                SourceIpSelector::Fixed(config.ip),
+                format!("fixed:{}", config.ip),
+            )
+        };
+
+        let (first_port, last_port) = if let Some(port_range) = &config.port_range {
+            parse_port_range(port_range)?
+        } else {
+            (config.port, config.port)
+        };
+        let port_count = last_port
+            .checked_sub(first_port)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| anyhow!("invalid source port range"))?;
+        let port_description = if config.port_range.is_some() {
+            format!("{:?}:{}-{}", config.port_select, first_port, last_port).to_ascii_lowercase()
+        } else {
+            format!("fixed:{first_port}")
+        };
+
+        Ok(Self {
+            ip,
+            port: PortSelector {
+                first: first_port,
+                count: port_count,
+                select: config.port_select,
+            },
+            rng: XorShift64::new(seed ^ 0xa5a5_5a5a_0123_9876),
+            counter: 0,
+            ip_description,
+            port_description,
+        })
+    }
+
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn next(&mut self) -> SourceEndpoint {
+        let counter = self.counter;
+        self.counter = self.counter.wrapping_add(1);
+        SourceEndpoint {
+            ip: self.next_ip(counter),
+            port: self.next_port(counter),
+        }
+    }
+
+    fn ip_description(&self) -> &str {
+        &self.ip_description
+    }
+
+    fn port_description(&self) -> &str {
+        &self.port_description
+    }
+
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn next_ip(&mut self, counter: u64) -> IpAddr {
+        match &self.ip {
+            SourceIpSelector::Fixed(ip) => *ip,
+            SourceIpSelector::RoundRobin(list) => list[counter as usize % list.len()],
+            SourceIpSelector::RandomIpv4Cidr { network, host_mask } => IpAddr::V4(Ipv4Addr::from(
+                *network | (self.rng.next_u32() & *host_mask),
+            )),
+            SourceIpSelector::SequentialIpv4 {
+                start,
+                count,
+                stride,
+            } => IpAddr::V4(Ipv4Addr::from(
+                start.wrapping_add(((counter % *count).saturating_mul(*stride)) as u32),
+            )),
+        }
+    }
+
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn next_port(&mut self, counter: u64) -> u16 {
+        if self.port.count == 1 {
+            return self.port.first;
+        }
+        let offset = match self.port.select {
+            PortSelect::Sequential => counter as u16 % self.port.count,
+            PortSelect::Random => self.rng.next_bounded(u64::from(self.port.count)) as u16,
+        };
+        self.port.first + offset
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -448,12 +840,32 @@ impl XorShift64 {
     }
 
     fn next_u16(&mut self) -> u16 {
+        (self.next_u64() >> 16) as u16
+    }
+
+    #[cfg_attr(not(any(feature = "xdp", test)), allow(dead_code))]
+    fn next_u32(&mut self) -> u32 {
+        (self.next_u64() >> 16) as u32
+    }
+
+    fn next_index(&mut self, len: usize) -> usize {
+        self.next_bounded(len as u64) as usize
+    }
+
+    fn next_bounded(&mut self, upper_exclusive: u64) -> u64 {
+        if upper_exclusive <= 1 {
+            return 0;
+        }
+        self.next_u64() % upper_exclusive
+    }
+
+    fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
         self.state = x;
-        (x >> 16) as u16
+        x
     }
 }
 
@@ -509,11 +921,35 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(xdp_zerocopy) = cli.xdp_zerocopy {
         config.xdp.zerocopy = xdp_zerocopy;
     }
+    if let Some(xdp_drop_object) = &cli.xdp_drop_object {
+        config.xdp.drop_object = Some(xdp_drop_object.clone());
+    }
     if let Some(source_ip) = cli.source_ip {
         config.source.ip = source_ip;
     }
     if let Some(source_port) = cli.source_port {
         config.source.port = source_port;
+    }
+    if let Some(source_cidr) = &cli.source_cidr {
+        config.source.cidr = Some(source_cidr.clone());
+    }
+    if !cli.source_list.is_empty() {
+        config.source.list = cli.source_list.clone();
+    }
+    if let Some(source_range_start) = cli.source_range_start {
+        config.source.range_start = Some(source_range_start);
+    }
+    if let Some(source_range_count) = cli.source_range_count {
+        config.source.range_count = Some(source_range_count);
+    }
+    if let Some(source_range_stride) = cli.source_range_stride {
+        config.source.range_stride = source_range_stride;
+    }
+    if let Some(source_port_range) = &cli.source_port_range {
+        config.source.port_range = Some(source_port_range.clone());
+    }
+    if let Some(source_port_select) = cli.source_port_select {
+        config.source.port_select = source_port_select;
     }
     if let Some(source_mac) = cli.source_mac {
         config.source.mac = Some(source_mac);
@@ -526,6 +962,18 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     }
     if let Some(qtype) = &cli.qtype {
         config.query.qtype = qtype.clone();
+    }
+    if let Some(query_list) = &cli.query_list {
+        config.query.list_file = Some(query_list.clone());
+    }
+    if let Some(qname_template) = &cli.qname_template {
+        config.query.qname_template = Some(qname_template.clone());
+    }
+    if let Some(qname_count) = cli.qname_count {
+        config.query.qname_count = Some(qname_count);
+    }
+    if let Some(query_select) = cli.query_select {
+        config.query.select = query_select;
     }
     if let Some(max_packets) = cli.max_packets {
         config.run.max_packets = max_packets;
@@ -568,11 +1016,69 @@ fn validate_config(config: &FileConfig) -> Result<()> {
     if config.source.port == 0 {
         bail!("source.port must be non-zero");
     }
+    validate_query_config(&config.query)?;
+    validate_source_config(&config.source)?;
+    if config.backend.kind == Backend::StdUdpSocket
+        && (config.source.cidr.is_some()
+            || !config.source.list.is_empty()
+            || config.source.range_start.is_some()
+            || config.source.range_count.is_some()
+            || config.source.port_range.is_some())
+    {
+        bail!("source IP/port strategies require --backend xdp; std-udp uses the OS socket source");
+    }
     if config.backend.kind == Backend::Xdp {
         validate_xdp_config(config)?;
     }
-    parse_qtype(&config.query.qtype)?;
-    encode_qname(&config.query.qname)?;
+    Ok(())
+}
+
+fn validate_query_config(config: &QueryConfig) -> Result<()> {
+    let pool_modes = usize::from(config.list_file.is_some())
+        + usize::from(config.qname_template.is_some() || config.qname_count.is_some());
+    if pool_modes > 1 {
+        bail!("configure only one query pool mode: list_file or qname_template/qname_count");
+    }
+    if config.qname_template.is_some() || config.qname_count.is_some() {
+        let Some(template) = &config.qname_template else {
+            bail!("query.qname_template is required with query.qname_count");
+        };
+        if !template.contains("{}") {
+            bail!("query.qname_template must contain {{}}");
+        }
+        if config.qname_count.unwrap_or(0) == 0 {
+            bail!("query.qname_count must be non-zero with query.qname_template");
+        }
+    }
+    parse_qtype(&config.qtype)?;
+    encode_qname(&config.qname)?;
+    Ok(())
+}
+
+fn validate_source_config(config: &SourceConfig) -> Result<()> {
+    let strategy_count = usize::from(config.cidr.is_some())
+        + usize::from(!config.list.is_empty())
+        + usize::from(config.range_start.is_some() || config.range_count.is_some());
+    if strategy_count > 1 {
+        bail!("configure only one source strategy: cidr, list, or range");
+    }
+    if let Some(cidr) = &config.cidr {
+        parse_ipv4_cidr(cidr)?;
+    }
+    if config.range_start.is_some() || config.range_count.is_some() {
+        if !matches!(config.range_start, Some(IpAddr::V4(_))) {
+            bail!("source.range_start must be IPv4 for MVP sequential ranges");
+        }
+        if config.range_count.unwrap_or(0) == 0 {
+            bail!("source.range_count must be non-zero with source.range_start");
+        }
+        if config.range_stride == 0 {
+            bail!("source.range_stride must be non-zero");
+        }
+    }
+    if let Some(range) = &config.port_range {
+        parse_port_range(range)?;
+    }
     Ok(())
 }
 
@@ -592,6 +1098,9 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     if !config.xdp.umem_frame_count.is_power_of_two() {
         bail!("xdp.umem_frame_count must be a power of two");
     }
+    if config.xdp.batch_size == 0 {
+        bail!("xdp.batch_size must be non-zero");
+    }
     for (name, value) in [
         ("xdp.tx_ring_size", config.xdp.tx_ring_size),
         ("xdp.rx_ring_size", config.xdp.rx_ring_size),
@@ -603,10 +1112,25 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
         }
     }
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
-    match (config.source.ip, target.ip()) {
-        (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_)) => Ok(()),
-        _ => bail!("backend xdp requires source.ip and target.address to use the same IP family"),
+    if config.source.ip.is_ipv4() != target.ip().is_ipv4() {
+        bail!("backend xdp requires source.ip and target.address to use the same IP family");
     }
+    if target.ip().is_ipv6()
+        && (config.source.cidr.is_some()
+            || config.source.range_start.is_some()
+            || config.source.range_count.is_some())
+    {
+        bail!("MVP source CIDR and range strategies are IPv4-only");
+    }
+    if config
+        .source
+        .list
+        .iter()
+        .any(|source| source.is_ipv4() != target.ip().is_ipv4())
+    {
+        bail!("all source.list entries must use the same IP family as target.address");
+    }
+    Ok(())
 }
 
 fn run_self_test(mut config: FileConfig) -> Result<()> {
@@ -706,7 +1230,7 @@ fn run_probe(config: &FileConfig) -> Result<()> {
         return run_load(config);
     }
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
-    let query = query_template(config)?;
+    let query = query_pool(config)?.first().clone();
     let mut rng = XorShift64::new(config.run.seed);
     let id = rng.next_u16();
     let packet = build_dns_query(&query, id)?;
@@ -759,7 +1283,8 @@ fn run_xdp_load(config: &FileConfig) -> Result<()> {
 
 fn run_std_udp_load(config: &FileConfig) -> Result<()> {
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
-    let query = query_template(config)?;
+    let query_pool = query_pool(config)?;
+    let source_selector = SourceSelector::portable_udp();
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind UDP socket")?;
     socket.set_read_timeout(Some(Duration::from_millis(config.recv.response_timeout_ms)))?;
     let mut rng = XorShift64::new(config.run.seed);
@@ -785,7 +1310,9 @@ fn run_std_udp_load(config: &FileConfig) -> Result<()> {
             break;
         }
         let id = rng.next_u16();
-        let packet = build_dns_query(&query, id)?;
+        let query = query_pool.select(&mut rng, stats.tx_packets);
+        let packet = build_dns_query(query, id)?;
+        let sent_at = Instant::now();
         socket.send_to(&packet, target).inspect_err(|_error| {
             stats.errors += 1;
         })?;
@@ -793,13 +1320,22 @@ fn run_std_udp_load(config: &FileConfig) -> Result<()> {
         stats.tx_bytes += packet.len() as u64;
 
         if config.recv.mode == RecvMode::Process {
-            receive_one(&socket, id, &mut stats)?;
+            receive_one(&socket, id, sent_at, &mut stats)?;
         }
 
         if config.log.flush_interval_ms > 0
             && last_flush.elapsed() >= Duration::from_millis(config.log.flush_interval_ms)
         {
-            emit_record(config, target, &query, &stats, start, false)?;
+            emit_record(
+                config,
+                target,
+                query_pool.first(),
+                &query_pool,
+                &source_selector,
+                &stats,
+                start,
+                false,
+            )?;
             last_flush = Instant::now();
         }
 
@@ -808,16 +1344,31 @@ fn run_std_udp_load(config: &FileConfig) -> Result<()> {
         }
     }
 
-    emit_record(config, target, &query, &stats, start, true)
+    emit_record(
+        config,
+        target,
+        query_pool.first(),
+        &query_pool,
+        &source_selector,
+        &stats,
+        start,
+        true,
+    )
 }
 
-fn receive_one(socket: &UdpSocket, expected_id: u16, stats: &mut Stats) -> Result<()> {
+fn receive_one(
+    socket: &UdpSocket,
+    expected_id: u16,
+    sent_at: Instant,
+    stats: &mut Stats,
+) -> Result<()> {
     let mut buf = [0_u8; 4096];
     match socket.recv_from(&mut buf) {
         Ok((len, _)) => {
             stats.rx_packets += 1;
             stats.rx_bytes += len as u64;
-            match classify_response(&buf[..len], expected_id) {
+            let response_class = classify_response(&buf[..len], expected_id);
+            match response_class {
                 ResponseClass::Positive => {
                     stats.rx_dns_responses += 1;
                     stats.positive += 1;
@@ -849,6 +1400,12 @@ fn receive_one(socket: &UdpSocket, expected_id: u16, stats: &mut Stats) -> Resul
                 ResponseClass::Unmatched => stats.rx_dns_unmatched += 1,
                 ResponseClass::Timeout => {}
             }
+            if !matches!(
+                response_class,
+                ResponseClass::Unmatched | ResponseClass::Timeout
+            ) {
+                stats.latency.record(sent_at.elapsed());
+            }
             Ok(())
         }
         Err(error)
@@ -857,6 +1414,7 @@ fn receive_one(socket: &UdpSocket, expected_id: u16, stats: &mut Stats) -> Resul
                 io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
             ) =>
         {
+            stats.queries_unanswered += 1;
             Ok(())
         }
         Err(error) => {
@@ -866,15 +1424,19 @@ fn receive_one(socket: &UdpSocket, expected_id: u16, stats: &mut Stats) -> Resul
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_record(
     config: &FileConfig,
     target: SocketAddr,
     query: &QueryTemplate,
+    query_pool: &QueryPool,
+    source_selector: &SourceSelector,
     stats: &Stats,
     start: Instant,
     summary: bool,
 ) -> Result<()> {
     let elapsed = start.elapsed().as_secs_f64().max(0.000_001);
+    let (latency_p50_us, latency_p99_us, latency_p999_us) = stats.latency.percentiles();
     let record = OutputRecord {
         record_type: if summary { "summary" } else { "interval" },
         timestamp: OffsetDateTime::now_utc()
@@ -882,9 +1444,15 @@ fn emit_record(
         summary,
         backend: "std_udp_socket",
         recv_mode: config.recv.mode,
+        drop_implementation: drop_implementation(config.recv.mode, false),
         target,
         qname: &query.qname,
         qtype: &query.qtype_name,
+        query_pool_size: query_pool.len(),
+        query_select: query_pool.select,
+        source_strategy: source_selector.ip_description(),
+        source_port_strategy: source_selector.port_description(),
+        requested_qps: config.rate.target_qps,
         tx_packets_total: stats.tx_packets,
         tx_bytes_total: stats.tx_bytes,
         rx_packets_total: stats.rx_packets,
@@ -898,10 +1466,15 @@ fn emit_record(
         servfail_total: stats.servfail,
         refused_total: stats.refused,
         other_rcode_total: stats.other_rcode,
+        queries_unanswered_total: stats.queries_unanswered,
+        rx_kernel_dropped_total: stats.rx_kernel_dropped,
         errors_total: stats.errors,
         duration_seconds: elapsed,
         tx_qps: stats.tx_packets as f64 / elapsed,
         rx_qps: stats.rx_packets as f64 / elapsed,
+        latency_p50_us,
+        latency_p99_us,
+        latency_p999_us,
         note: (config.recv.mode == RecvMode::Drop)
             .then_some("drop mode sends without userspace response classification in this backend"),
     };
@@ -913,7 +1486,7 @@ fn emit_record(
         }
         LogFormat::Human => {
             println!(
-                "{} tx={:.0}qps rx={:.0}qps tx_total={} rx_total={} positive={} errors={}{}",
+                "{} tx={:.0}qps rx={:.0}qps tx_total={} rx_total={} positive={} errors={} drop={}{}",
                 record.timestamp,
                 record.tx_qps,
                 record.rx_qps,
@@ -921,6 +1494,7 @@ fn emit_record(
                 record.rx_packets_total,
                 record.positive_total,
                 record.errors_total,
+                serde_plain_drop_implementation(record.drop_implementation),
                 if summary { " summary=true" } else { "" }
             );
         }
@@ -929,15 +1503,97 @@ fn emit_record(
     Ok(())
 }
 
+fn drop_implementation(mode: RecvMode, kernel_xdp_drop: bool) -> DropImplementation {
+    match (mode, kernel_xdp_drop) {
+        (RecvMode::Process, _) => DropImplementation::None,
+        (RecvMode::Drop, true) => DropImplementation::KernelXdpDrop,
+        (RecvMode::Drop, false) => DropImplementation::UserspaceSuppression,
+    }
+}
+
+fn serde_plain_drop_implementation(value: DropImplementation) -> &'static str {
+    match value {
+        DropImplementation::None => "none",
+        DropImplementation::UserspaceSuppression => "userspace_suppression",
+        DropImplementation::KernelXdpDrop => "kernel_xdp_drop",
+    }
+}
+
 fn query_template(config: &FileConfig) -> Result<QueryTemplate> {
+    template_from_parts(&config.query.qname, &config.query.qtype, &config.query)
+}
+
+fn query_pool(config: &FileConfig) -> Result<QueryPool> {
+    let mut templates = Vec::new();
+    if let Some(path) = &config.query.list_file {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read query list {}", path.display()))?;
+        for (line_index, raw_line) in text.lines().enumerate() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let qname = fields.next().ok_or_else(|| {
+                anyhow!(
+                    "query list {}:{} is missing qname",
+                    path.display(),
+                    line_index + 1
+                )
+            })?;
+            let qtype = fields.next().ok_or_else(|| {
+                anyhow!(
+                    "query list {}:{} is missing qtype",
+                    path.display(),
+                    line_index + 1
+                )
+            })?;
+            if fields.next().is_some() {
+                bail!(
+                    "query list {}:{} must contain exactly qname and qtype",
+                    path.display(),
+                    line_index + 1
+                );
+            }
+            templates.push(template_from_parts(qname, qtype, &config.query)?);
+        }
+        if templates.is_empty() {
+            bail!("query list {} did not contain any queries", path.display());
+        }
+    } else if let Some(template) = &config.query.qname_template {
+        let count = config
+            .query
+            .qname_count
+            .ok_or_else(|| anyhow!("query.qname_count is required with query.qname_template"))?;
+        for index in 0..count {
+            let qname = template.replace("{}", &index.to_string());
+            templates.push(template_from_parts(
+                &qname,
+                &config.query.qtype,
+                &config.query,
+            )?);
+        }
+    } else {
+        templates.push(query_template(config)?);
+    }
+    Ok(QueryPool {
+        templates,
+        select: config.query.select,
+    })
+}
+
+fn template_from_parts(qname: &str, qtype: &str, config: &QueryConfig) -> Result<QueryTemplate> {
+    let qname = normalize_qname(qname)?;
+    let encoded_qname = encode_qname(&qname)?;
     Ok(QueryTemplate {
-        qname: normalize_qname(&config.query.qname)?,
-        qtype_name: config.query.qtype.to_ascii_uppercase(),
-        qtype: parse_qtype(&config.query.qtype)?,
-        edns_enabled: config.query.edns_enabled,
-        edns_payload_size: config.query.edns_payload_size,
-        dnssec_ok: config.query.dnssec_ok,
-        recursion_desired: config.query.recursion_desired,
+        qname,
+        encoded_qname,
+        qtype_name: qtype.to_ascii_uppercase(),
+        qtype: parse_qtype(qtype)?,
+        edns_enabled: config.edns_enabled,
+        edns_payload_size: config.edns_payload_size,
+        dnssec_ok: config.dnssec_ok,
+        recursion_desired: config.recursion_desired,
     })
 }
 
@@ -957,6 +1613,12 @@ fn normalize_qname(qname: &str) -> Result<String> {
 
 fn build_dns_query(query: &QueryTemplate, id: u16) -> Result<Vec<u8>> {
     let mut packet = Vec::with_capacity(128);
+    build_dns_query_into(&mut packet, query, id)?;
+    Ok(packet)
+}
+
+fn build_dns_query_into(packet: &mut Vec<u8>, query: &QueryTemplate, id: u16) -> Result<()> {
+    packet.clear();
     packet.extend_from_slice(&id.to_be_bytes());
     let flags = if query.recursion_desired {
         0x0100_u16
@@ -968,7 +1630,7 @@ fn build_dns_query(query: &QueryTemplate, id: u16) -> Result<Vec<u8>> {
     packet.extend_from_slice(&0_u16.to_be_bytes());
     packet.extend_from_slice(&0_u16.to_be_bytes());
     packet.extend_from_slice(&(query.edns_enabled as u16).to_be_bytes());
-    packet.extend_from_slice(&encode_qname(&query.qname)?);
+    packet.extend_from_slice(&query.encoded_qname);
     packet.extend_from_slice(&query.qtype.to_be_bytes());
     packet.extend_from_slice(&1_u16.to_be_bytes());
 
@@ -980,7 +1642,7 @@ fn build_dns_query(query: &QueryTemplate, id: u16) -> Result<Vec<u8>> {
         packet.extend_from_slice(&ttl.to_be_bytes());
         packet.extend_from_slice(&0_u16.to_be_bytes());
     }
-    Ok(packet)
+    Ok(())
 }
 
 fn encode_qname(qname: &str) -> Result<Vec<u8>> {
@@ -1030,6 +1692,43 @@ fn parse_qtype(qtype: &str) -> Result<u16> {
     Ok(code)
 }
 
+fn parse_ipv4_cidr(cidr: &str) -> Result<(u32, u32, u8)> {
+    let (addr, prefix) = cidr
+        .split_once('/')
+        .ok_or_else(|| anyhow!("source CIDR must be address/prefix: {cidr}"))?;
+    let addr: Ipv4Addr = addr
+        .parse()
+        .with_context(|| format!("invalid IPv4 CIDR address {cidr}"))?;
+    let prefix: u8 = prefix
+        .parse()
+        .with_context(|| format!("invalid IPv4 CIDR prefix {cidr}"))?;
+    if prefix > 32 {
+        bail!("IPv4 CIDR prefix must be <= 32: {cidr}");
+    }
+    let host_mask = if prefix == 32 { 0 } else { u32::MAX >> prefix };
+    let network = u32::from(addr) & !host_mask;
+    Ok((network, host_mask, prefix))
+}
+
+fn parse_port_range(range: &str) -> Result<(u16, u16)> {
+    let (first, last) = range
+        .split_once('-')
+        .ok_or_else(|| anyhow!("source port range must be min-max: {range}"))?;
+    let first: u16 = first
+        .parse()
+        .with_context(|| format!("invalid source port range start {range}"))?;
+    let last: u16 = last
+        .parse()
+        .with_context(|| format!("invalid source port range end {range}"))?;
+    if first == 0 || last == 0 {
+        bail!("source port range cannot include port 0");
+    }
+    if first > last {
+        bail!("source port range start must be <= end: {range}");
+    }
+    Ok((first, last))
+}
+
 fn classify_response(packet: &[u8], expected_id: u16) -> ResponseClass {
     if packet.len() < 12 {
         return ResponseClass::Unmatched;
@@ -1058,6 +1757,11 @@ fn classify_response(packet: &[u8], expected_id: u16) -> ResponseClass {
     }
 }
 
+#[cfg_attr(not(feature = "xdp"), allow(dead_code))]
+fn response_id(packet: &[u8]) -> Option<u16> {
+    (packet.len() >= 2).then(|| u16::from_be_bytes([packet[0], packet[1]]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,6 +1770,7 @@ mod tests {
     fn builds_edns_query_with_do_bit() {
         let query = QueryTemplate {
             qname: "www.example.test.".to_owned(),
+            encoded_qname: encode_qname("www.example.test.").expect("qname encodes"),
             qtype_name: "AAAA".to_owned(),
             qtype: 28,
             edns_enabled: true,
@@ -1084,6 +1789,7 @@ mod tests {
         let query = build_dns_query(
             &QueryTemplate {
                 qname: "example.test.".to_owned(),
+                encoded_qname: encode_qname("example.test.").expect("qname encodes"),
                 qtype_name: "A".to_owned(),
                 qtype: 1,
                 edns_enabled: false,
@@ -1103,5 +1809,55 @@ mod tests {
     fn rejects_invalid_qnames() {
         assert!(encode_qname("bad..example.").is_err());
         assert!(encode_qname(&format!("{}.example.", "a".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn query_pool_loads_file_and_selects_deterministically() {
+        let path = std::env::temp_dir().join(format!(
+            "oxide-gun-query-pool-{}-{}.txt",
+            std::process::id(),
+            1
+        ));
+        std::fs::write(
+            &path,
+            "# comment\nwww.example.test. A\nmail.example.test. MX\n",
+        )
+        .expect("query list written");
+        let mut config = FileConfig::default();
+        config.query.list_file = Some(path.clone());
+        config.query.select = QuerySelect::Sequential;
+
+        let pool = query_pool(&config).expect("query pool loads");
+        assert_eq!(pool.len(), 2);
+        let mut rng = XorShift64::new(1);
+        assert_eq!(pool.select(&mut rng, 0).qname, "www.example.test.");
+        assert_eq!(pool.select(&mut rng, 1).qname, "mail.example.test.");
+        assert_eq!(pool.select(&mut rng, 2).qname, "www.example.test.");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn source_selector_generates_ipv4_cidr_and_ports() {
+        let config = SourceConfig {
+            cidr: Some("198.18.7.0/30".to_owned()),
+            port_range: Some("53000-53003".to_owned()),
+            port_select: PortSelect::Sequential,
+            ..SourceConfig::default()
+        };
+        let mut selector = SourceSelector::new(&config, 7).expect("source selector builds");
+        let first = selector.next();
+        let second = selector.next();
+        assert!(matches!(first.ip, IpAddr::V4(ip) if ip.octets()[0..3] == [198, 18, 7]));
+        assert!(matches!(second.ip, IpAddr::V4(ip) if ip.octets()[0..3] == [198, 18, 7]));
+        assert_eq!(first.port, 53000);
+        assert_eq!(second.port, 53001);
+        assert_eq!(selector.ip_description(), "random_cidr:198.18.7.0/30");
+    }
+
+    #[test]
+    fn std_udp_rejects_xdp_only_source_strategy() {
+        let mut config = FileConfig::default();
+        config.source.cidr = Some("198.18.0.0/24".to_owned());
+        assert!(validate_config(&config).is_err());
     }
 }

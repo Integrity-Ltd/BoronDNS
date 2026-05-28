@@ -83,7 +83,11 @@ and slowly diverging.
   benchmark guide.
 - `reference-verification-profile.md`: formal release benchmark hardware,
   query-mix, and artifact-retention profile referenced by SRS Appendix E.
-- `oxide-gun.md`: OxideGun load-generator and XDP lab notes.
+- `OxideGun-SRS-v0.1.md`: normative requirements for the OxideGun support
+  tool (RRL-focused load generator with AF_XDP backend).
+- `oxide-gun-mvp-plan.md`: phased path from the current prototype toward a
+  useful MVP aligned with the SRS.
+- `oxide-gun.md`: OxideGun load-generator and XDP lab notes (operational usage).
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
   Engineering MVP boundary, and E2E test shape.
 

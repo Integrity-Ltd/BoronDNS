@@ -30,10 +30,14 @@ fn self_test_outputs_summary_json() {
     assert_eq!(summary["summary"], true);
     assert_eq!(summary["backend"], "std_udp_socket");
     assert_eq!(summary["recv_mode"], "process");
+    assert_eq!(summary["drop_implementation"], "none");
     assert_eq!(summary["tx_packets_total"], 4);
     assert_eq!(summary["rx_dns_responses_total"], 4);
     assert_eq!(summary["positive_total"], 4);
     assert_eq!(summary["errors_total"], 0);
+    assert_eq!(summary["query_pool_size"], 1);
+    assert_eq!(summary["source_strategy"], "os_assigned_udp_socket");
+    assert!(summary["latency_p50_us"].is_number());
 }
 
 #[test]
@@ -47,6 +51,12 @@ fn print_config_accepts_cli_overrides() {
             "www.example.test.",
             "--qtype",
             "TYPE65400",
+            "--qname-template",
+            "host{}.example.test.",
+            "--qname-count",
+            "3",
+            "--query-select",
+            "sequential",
             "--recv-mode",
             "drop",
             "--max-packets",
@@ -64,6 +74,9 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("address = \"127.0.0.1:5300\""));
     assert!(stdout.contains("qname = \"www.example.test.\""));
     assert!(stdout.contains("qtype = \"TYPE65400\""));
+    assert!(stdout.contains("qname_template = \"host{}.example.test.\""));
+    assert!(stdout.contains("qname_count = 3"));
+    assert!(stdout.contains("select = \"sequential\""));
     assert!(stdout.contains("mode = \"drop\""));
     assert!(stdout.contains("max_packets = 9"));
 }
