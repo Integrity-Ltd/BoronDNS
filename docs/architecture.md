@@ -13,8 +13,8 @@ as formal SRS acceptance gaps in `docs/mvp-gap-register.md`.
 
 ## Module Organisation
 
-The current first-party Rust source is organised into 16 release-reviewed
-modules at the crate/file boundary: 14 OxideDNS server/CLI modules plus two
+The current first-party Rust source is organised into 17 release-reviewed
+modules at the crate/file boundary: 15 OxideDNS server/CLI modules plus two
 OxideGun support-tool modules. This satisfies the `ODS-NFR-MAINT-002`
 module-count target shape for the current implementation; `crates/oxidedns-server/src/lib.rs`
 remains the broadest server-runtime module and is the primary future refactor
@@ -32,6 +32,7 @@ accepted.
 | `crates/oxidedns-core/src/config.rs` | `ODS-IF-CONF`, configuration surfaces for protocol families, interface roles, limits, TSIG, XoT, DNS Cookies, RRL, metrics, and health | Static TOML configuration schema, validation, warning catalogue inputs, redacted dump support, and environment-override targets. |
 | `crates/oxidedns-core/src/tsig.rs` | `ODS-FR-TSIG`, TSIG-dependent clauses of AXFR, IXFR, NOTIFY, ordinary query signing, and TSIG error response handling | TSIG key material handling, MAC verification/signing, TCP response-stream verification, truncation handling, and TSIG error construction. |
 | `crates/oxidedns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
+| `crates/oxidedns-core/src/zone_image.rs` | Experimental post-Engineering-MVP data-plane optimization track for `ODS-FR-ZONE` and direct `ODS-FR-QRY` lookup behavior | Immutable `ZoneImage` prototype compiled from `ZoneSnapshot`, packed name graph scaffolding, exact and semantic lookup plans, pre-encoded RRset wire chunks, direct RR-section emission, and shape statistics. |
 | `crates/oxidedns-core/src/lib.rs` | Core crate public API boundary | Re-exports the core configuration and protocol modules for the server and CLI crates. |
 | `crates/oxidedns-server/src/lib.rs` | Runtime integration for all functional protocol areas; `ODS-FR-TCP`, `ODS-FR-NOTIFY`, `ODS-FR-ZSM`, XoT transport, health, metrics, logging, refresh scheduling, and resource limits | Tokio runtime listeners, UDP/TCP serving, transfer workers, refresh scheduling, runtime metrics, health endpoints, RRL application, XoT TLS sessions, and graceful shutdown. |
 | `crates/oxidedns-server/src/privilege.rs` | `ODS-NFR-SEC-004`, root-startup privilege drop, and the audited `ODS-INV-006` unsafe boundary | Minimal Linux/POSIX FFI wrapper for user lookup, supplementary-group setup, and irrevocable uid/gid drop before network workers process input. |
@@ -107,21 +108,26 @@ lines, excluding `#[cfg(test)]` test modules in accordance with
 prints a release-review warning and can be made build-blocking with
 `OXIDEDNS_MAINT_ENFORCE=1`.
 
-The measurement includes OxideGun because it is first-party Rust code in this
-workspace. OxideGun remains support-tool scope; it does not expand the
-OxideDNS server runtime or the externally observable DNS protocol requirements.
+The measurement includes OxideGun and its Rust eBPF companion because they are
+first-party Rust code in this workspace. OxideGun remains support-tool scope; it
+does not expand the OxideDNS server runtime or the externally observable DNS
+protocol requirements.
 
-Current `scripts/audit-maintainability.sh` output reports 19,961 first-party
+Current `scripts/audit-maintainability.sh` output reports 24,028 first-party
 production Rust source lines, which is above the 15,000-line `SHOULD` target.
 Current ODS-NFR-MAINT-001 over-target rationale: the count reflects the
 implemented Engineering MVP scope now retained after external review, including
 IXFR with AXFR fallback, XoT, passive DNSSEC serving, RRL, DNS Cookies,
 RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE diagnostics,
-CHAOS diagnostics, installer/Docker release tooling, and the OxideGun support
-tool. These slices are bounded in `docs/implemented-feature-scope.md` and are
-kept because code and tests already own them; the line-count target remains a
-scope-discipline warning rather than a reason to remove implemented protocol
-behavior.
+CHAOS diagnostics, installer/Docker release tooling, OxideGun support tooling,
+the initial safe `ZoneImage` data-plane prototype, the opt-in runtime
+shadow-validation hook for that prototype, and the gated serving path for
+supported non-DNSSEC `ZoneImage` responses. These slices are bounded in
+`docs/implemented-feature-scope.md` and
+`docs/memory-io-data-plane-design.md`; they are kept because code and tests
+already own them or because the next data-plane track needs a safe differential
+baseline. The line-count target remains a scope-discipline warning rather than
+a reason to remove implemented protocol behavior.
 
 The current primary maintainability risk is not raw production LOC but module
 shape: runtime integration in `crates/oxidedns-server/src/lib.rs` is broad. Future

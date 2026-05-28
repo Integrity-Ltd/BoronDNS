@@ -3945,6 +3945,8 @@ C.5 Decision Review section of release notes.
 The current pending subset is summarized in `docs/mvp-gap-register.md` so
 release-readiness review has a short active queue without making the SRS a
 second project-decision table.
+The gap register records any current implementation gap between this formal SRS
+MVP policy and the Engineering MVP code evidence.
 
 ## C.6 Post-MVP / v2 Scope Items
 

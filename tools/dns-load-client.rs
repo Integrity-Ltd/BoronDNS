@@ -1,7 +1,10 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::env;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +14,7 @@ struct Config {
     transport: Transport,
     server: String,
     port: u16,
+    bind: String,
     threads: usize,
     duration: Duration,
     window: usize,
@@ -21,6 +25,7 @@ struct Config {
     small_names: usize,
     timeout: Duration,
     randomize: bool,
+    trace_queries: Option<Arc<Vec<TraceQuery>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -38,12 +43,36 @@ impl Transport {
     }
 }
 
+#[derive(Clone)]
+struct TraceQuery {
+    qname: String,
+    qtype: u16,
+    qclass: u16,
+    edns: EdnsMode,
+    expected_rcode: u8,
+    min_answers: u16,
+}
+
+#[derive(Clone, Copy)]
+enum EdnsMode {
+    None,
+    Edns,
+    Do,
+}
+
 #[derive(Default)]
 struct WorkerStats {
     sent: u64,
     received: u64,
     errors: u64,
     latencies_ns: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingQuery {
+    sent: Instant,
+    expected_rcode: u8,
+    min_answers: u16,
 }
 
 fn main() {
@@ -92,15 +121,25 @@ fn main() {
     let received_per_second = total.received as f64 / elapsed;
     let sent_per_second = total.sent as f64 / elapsed;
     let dropped = total.sent.saturating_sub(total.received + total.errors);
+    let trace_queries = config
+        .trace_queries
+        .as_ref()
+        .map_or(0, |queries| queries.len());
+    let query_mode = if trace_queries == 0 {
+        "generated"
+    } else {
+        "trace"
+    };
 
     println!(
         concat!(
             "dns_load_client_summary ",
             "transport={transport} ",
             "duration_seconds={elapsed:.3} ",
-            "server={server} port={port} ",
+            "server={server} port={port} bind={bind} ",
             "threads={threads} window={window} names={names} ",
             "zones={zones} big_zones={big_zones} big_names={big_names} small_names={small_names} randomize={randomize} ",
+            "query_mode={query_mode} trace_queries={trace_queries} ",
             "sent={sent} received={received} errors={errors} dropped={dropped} ",
             "sent_per_second={sent_per_second:.0} ",
             "responses_per_second={received_per_second:.0} ",
@@ -115,6 +154,7 @@ fn main() {
         elapsed = elapsed,
         server = config.server,
         port = config.port,
+        bind = config.bind,
         threads = config.threads,
         window = config.window,
         names = config.names,
@@ -123,6 +163,8 @@ fn main() {
         big_names = config.big_names,
         small_names = config.small_names,
         randomize = config.randomize,
+        query_mode = query_mode,
+        trace_queries = trace_queries,
         sent = total.sent,
         received = total.received,
         errors = total.errors,
@@ -146,7 +188,7 @@ fn run_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStat
 }
 
 fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
-    let socket = UdpSocket::bind("127.0.0.1:0").expect("bind UDP client socket");
+    let socket = UdpSocket::bind(&config.bind).expect("bind UDP client socket");
     socket
         .connect((config.server.as_str(), config.port))
         .expect("connect UDP client socket");
@@ -158,7 +200,7 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
     let mut qid = (worker_id as u16).wrapping_mul(997);
     let mut next_name = worker_id;
     let mut rng = XorShift64::new(worker_id as u64 + 0x9e3779b97f4a7c15);
-    let mut sent_at: Vec<Option<Instant>> = vec![None; 65536];
+    let mut sent_at: Vec<Option<PendingQuery>> = vec![None; 65536];
     let mut in_flight = 0usize;
     let mut receive_buffer = [0u8; 2048];
 
@@ -168,10 +210,14 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 qid = qid.wrapping_add(1);
                 continue;
             }
-            let packet = query_packet(qid, next_name, &config, &mut rng);
-            match socket.send(&packet) {
+            let query = query_packet(qid, next_name, &config, &mut rng);
+            match socket.send(&query.bytes) {
                 Ok(_) => {
-                    sent_at[qid as usize] = Some(Instant::now());
+                    sent_at[qid as usize] = Some(PendingQuery {
+                        sent: Instant::now(),
+                        expected_rcode: query.expected_rcode,
+                        min_answers: query.min_answers,
+                    });
                     stats.sent += 1;
                     in_flight += 1;
                     qid = qid.wrapping_add(1);
@@ -194,19 +240,12 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                         stats.errors += 1;
                         continue;
                     }
-                    let response_qid = u16::from_be_bytes([receive_buffer[0], receive_buffer[1]]);
-                    let flags = u16::from_be_bytes([receive_buffer[2], receive_buffer[3]]);
-                    let ancount = u16::from_be_bytes([receive_buffer[6], receive_buffer[7]]);
-                    if flags & 0x000f != 0 || ancount == 0 {
-                        stats.errors += 1;
-                    }
-                    if let Some(sent) = sent_at[response_qid as usize].take() {
-                        in_flight = in_flight.saturating_sub(1);
-                        stats.received += 1;
-                        stats.latencies_ns.push(sent.elapsed().as_nanos() as u64);
-                    } else {
-                        stats.errors += 1;
-                    }
+                    handle_response(
+                        &receive_buffer[..len],
+                        &mut sent_at,
+                        &mut in_flight,
+                        &mut stats,
+                    );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => {
@@ -226,14 +265,12 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
     while in_flight > 0 && Instant::now() < drain_until {
         match socket.recv(&mut receive_buffer) {
             Ok(len) if len >= 12 => {
-                let response_qid = u16::from_be_bytes([receive_buffer[0], receive_buffer[1]]);
-                if let Some(sent) = sent_at[response_qid as usize].take() {
-                    in_flight = in_flight.saturating_sub(1);
-                    stats.received += 1;
-                    stats.latencies_ns.push(sent.elapsed().as_nanos() as u64);
-                } else {
-                    stats.errors += 1;
-                }
+                handle_response(
+                    &receive_buffer[..len],
+                    &mut sent_at,
+                    &mut in_flight,
+                    &mut stats,
+                );
             }
             Ok(_) => stats.errors += 1,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::yield_now(),
@@ -260,7 +297,7 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
     let mut qid = (worker_id as u16).wrapping_mul(997);
     let mut next_name = worker_id;
     let mut rng = XorShift64::new(worker_id as u64 + 0xd1b54a32d192ed03);
-    let mut sent_at: Vec<Option<Instant>> = vec![None; 65536];
+    let mut sent_at: Vec<Option<PendingQuery>> = vec![None; 65536];
     let mut in_flight = 0usize;
     let mut write_queue = VecDeque::new();
     let mut read_buffer = Vec::new();
@@ -272,11 +309,15 @@ fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 qid = qid.wrapping_add(1);
                 continue;
             }
-            let packet = query_packet(qid, next_name, &config, &mut rng);
-            let length = u16::try_from(packet.len()).expect("query fits DNS-over-TCP frame");
+            let query = query_packet(qid, next_name, &config, &mut rng);
+            let length = u16::try_from(query.bytes.len()).expect("query fits DNS-over-TCP frame");
             write_queue.extend(length.to_be_bytes());
-            write_queue.extend(packet);
-            sent_at[qid as usize] = Some(Instant::now());
+            write_queue.extend(query.bytes);
+            sent_at[qid as usize] = Some(PendingQuery {
+                sent: Instant::now(),
+                expected_rcode: query.expected_rcode,
+                min_answers: query.min_answers,
+            });
             stats.sent += 1;
             in_flight += 1;
             qid = qid.wrapping_add(1);
@@ -348,7 +389,7 @@ fn read_tcp_responses(
     stream: &mut TcpStream,
     read_buffer: &mut Vec<u8>,
     scratch: &mut [u8; 8192],
-    sent_at: &mut [Option<Instant>],
+    sent_at: &mut [Option<PendingQuery>],
     in_flight: &mut usize,
     stats: &mut WorkerStats,
 ) -> bool {
@@ -391,7 +432,7 @@ fn read_tcp_responses(
 
 fn handle_response(
     packet: &[u8],
-    sent_at: &mut [Option<Instant>],
+    sent_at: &mut [Option<PendingQuery>],
     in_flight: &mut usize,
     stats: &mut WorkerStats,
 ) {
@@ -400,44 +441,113 @@ fn handle_response(
         return;
     }
     let response_qid = u16::from_be_bytes([packet[0], packet[1]]);
-    let flags = u16::from_be_bytes([packet[2], packet[3]]);
-    let ancount = u16::from_be_bytes([packet[6], packet[7]]);
-    if flags & 0x000f != 0 || ancount == 0 {
-        stats.errors += 1;
-    }
-    if let Some(sent) = sent_at[response_qid as usize].take() {
+    if let Some(pending) = sent_at[response_qid as usize].take() {
+        let flags = u16::from_be_bytes([packet[2], packet[3]]);
+        let rcode = (flags & 0x000f) as u8;
+        let ancount = u16::from_be_bytes([packet[6], packet[7]]);
+        if rcode != pending.expected_rcode || ancount < pending.min_answers {
+            stats.errors += 1;
+        }
         *in_flight = in_flight.saturating_sub(1);
         stats.received += 1;
-        stats.latencies_ns.push(sent.elapsed().as_nanos() as u64);
+        stats
+            .latencies_ns
+            .push(pending.sent.elapsed().as_nanos() as u64);
     } else {
         stats.errors += 1;
     }
 }
 
-fn expire_old(sent_at: &mut [Option<Instant>], in_flight: &mut usize, timeout: Duration) {
+fn expire_old(sent_at: &mut [Option<PendingQuery>], in_flight: &mut usize, timeout: Duration) {
     let now = Instant::now();
     for slot in sent_at.iter_mut().filter(|slot| {
         slot.as_ref()
-            .is_some_and(|sent| now.duration_since(*sent) > timeout)
+            .is_some_and(|pending| now.duration_since(pending.sent) > timeout)
     }) {
         *slot = None;
         *in_flight = in_flight.saturating_sub(1);
     }
 }
 
-fn query_packet(qid: u16, sequence: usize, config: &Config, rng: &mut XorShift64) -> Vec<u8> {
-    let qname = query_name(sequence, config, rng);
+struct QueryPacket {
+    bytes: Vec<u8>,
+    expected_rcode: u8,
+    min_answers: u16,
+}
+
+fn query_packet(qid: u16, sequence: usize, config: &Config, rng: &mut XorShift64) -> QueryPacket {
+    let query = trace_or_generated_query(sequence, config, rng);
     let mut packet = Vec::with_capacity(64);
     packet.extend_from_slice(&qid.to_be_bytes());
     packet.extend_from_slice(&0x0100u16.to_be_bytes());
     packet.extend_from_slice(&1u16.to_be_bytes());
     packet.extend_from_slice(&0u16.to_be_bytes());
     packet.extend_from_slice(&0u16.to_be_bytes());
+    let arcount_offset = packet.len();
     packet.extend_from_slice(&0u16.to_be_bytes());
-    packet.extend_from_slice(&name_wire(&qname));
-    packet.extend_from_slice(&1u16.to_be_bytes());
-    packet.extend_from_slice(&1u16.to_be_bytes());
-    packet
+    packet.extend_from_slice(&name_wire(&query.qname));
+    packet.extend_from_slice(&query.qtype.to_be_bytes());
+    packet.extend_from_slice(&query.qclass.to_be_bytes());
+    if !matches!(query.edns, EdnsMode::None) {
+        packet[arcount_offset..arcount_offset + 2].copy_from_slice(&1u16.to_be_bytes());
+        packet.push(0);
+        packet.extend_from_slice(&41u16.to_be_bytes());
+        packet.extend_from_slice(&1232u16.to_be_bytes());
+        packet.push(0);
+        packet.push(0);
+        let flags = match query.edns {
+            EdnsMode::None | EdnsMode::Edns => 0u16,
+            EdnsMode::Do => 0x8000u16,
+        };
+        packet.extend_from_slice(&flags.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+    }
+    QueryPacket {
+        bytes: packet,
+        expected_rcode: query.expected_rcode,
+        min_answers: query.min_answers,
+    }
+}
+
+struct PacketQuery<'a> {
+    qname: Cow<'a, str>,
+    qtype: u16,
+    qclass: u16,
+    edns: EdnsMode,
+    expected_rcode: u8,
+    min_answers: u16,
+}
+
+fn trace_or_generated_query<'a>(
+    sequence: usize,
+    config: &'a Config,
+    rng: &mut XorShift64,
+) -> PacketQuery<'a> {
+    if let Some(trace_queries) = &config.trace_queries {
+        let index = if config.randomize {
+            rng.next_usize(trace_queries.len())
+        } else {
+            sequence % trace_queries.len()
+        };
+        let query = &trace_queries[index];
+        return PacketQuery {
+            qname: Cow::Borrowed(&query.qname),
+            qtype: query.qtype,
+            qclass: query.qclass,
+            edns: query.edns,
+            expected_rcode: query.expected_rcode,
+            min_answers: query.min_answers,
+        };
+    }
+
+    PacketQuery {
+        qname: Cow::Owned(query_name(sequence, config, rng)),
+        qtype: 1,
+        qclass: 1,
+        edns: EdnsMode::None,
+        expected_rcode: 0,
+        min_answers: 1,
+    }
 }
 
 fn query_name(sequence: usize, config: &Config, rng: &mut XorShift64) -> String {
@@ -521,6 +631,7 @@ fn parse_args() -> Result<Config, String> {
         transport: Transport::Udp,
         server: "127.0.0.1".to_owned(),
         port: 5300,
+        bind: "127.0.0.1:0".to_owned(),
         threads: 8,
         duration: Duration::from_secs(10),
         window: 64,
@@ -531,6 +642,7 @@ fn parse_args() -> Result<Config, String> {
         small_names: 10_000,
         timeout: Duration::from_millis(250),
         randomize: false,
+        trace_queries: None,
     };
 
     let mut args = env::args().skip(1);
@@ -549,6 +661,7 @@ fn parse_args() -> Result<Config, String> {
             }
             "--server" => config.server = value()?,
             "--port" => config.port = parse_value("--port", &value()?)?,
+            "--bind" => config.bind = value()?,
             "--threads" => config.threads = parse_value("--threads", &value()?)?,
             "--duration" => {
                 let seconds: u64 = parse_value("--duration", &value()?)?;
@@ -565,6 +678,7 @@ fn parse_args() -> Result<Config, String> {
                 config.timeout = Duration::from_millis(timeout_ms);
             }
             "--random" => config.randomize = true,
+            "--trace" => config.trace_queries = Some(Arc::new(load_trace(&value()?)?)),
             "--help" | "-h" => {
                 usage();
                 std::process::exit(0);
@@ -595,6 +709,157 @@ fn parse_args() -> Result<Config, String> {
     Ok(config)
 }
 
+fn load_trace(path: &str) -> Result<Vec<TraceQuery>, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("failed to read --trace {path}: {error}"))?;
+    let mut queries = Vec::new();
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line_number = line_index + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 3 {
+            return Err(format!(
+                "{path}:{line_number}: expected qname qtype qclass [options...]"
+            ));
+        }
+        let qname = canonical_trace_name(fields[0])
+            .ok_or_else(|| format!("{path}:{line_number}: invalid qname {}", fields[0]))?;
+        let qtype = parse_rr_type(fields[1])
+            .ok_or_else(|| format!("{path}:{line_number}: invalid qtype {}", fields[1]))?;
+        let qclass = parse_rr_class(fields[2])
+            .ok_or_else(|| format!("{path}:{line_number}: invalid qclass {}", fields[2]))?;
+        let mut edns = EdnsMode::None;
+        let mut expected_rcode = 0;
+        let mut min_answers = 1;
+        for field in &fields[3..] {
+            if let Some(mode) = parse_edns_mode(field) {
+                edns = mode;
+                continue;
+            }
+            if let Some(value) = field.strip_prefix("rcode=") {
+                expected_rcode = parse_rcode(value)
+                    .ok_or_else(|| format!("{path}:{line_number}: invalid rcode {value}"))?;
+                if expected_rcode != 0 && min_answers == 1 {
+                    min_answers = 0;
+                }
+                continue;
+            }
+            if let Some(value) = field
+                .strip_prefix("answers=")
+                .or_else(|| field.strip_prefix("min_answers="))
+            {
+                min_answers = parse_value("answers", value)
+                    .map_err(|_| format!("{path}:{line_number}: invalid answers {value}"))?;
+                continue;
+            }
+            if field.contains('=') {
+                return Err(format!(
+                    "{path}:{line_number}: unsupported trace option {field}"
+                ));
+            }
+        }
+        queries.push(TraceQuery {
+            qname,
+            qtype,
+            qclass,
+            edns,
+            expected_rcode,
+            min_answers,
+        });
+    }
+    if queries.is_empty() {
+        return Err(format!("{path}: trace did not contain any query rows"));
+    }
+    Ok(queries)
+}
+
+fn canonical_trace_name(value: &str) -> Option<String> {
+    let name = if value == "." {
+        ".".to_owned()
+    } else {
+        format!("{}.", value.trim_end_matches('.'))
+    };
+    let wire_len = if name == "." {
+        1
+    } else {
+        name.trim_end_matches('.')
+            .split('.')
+            .try_fold(1usize, |total, label| {
+                if label.is_empty() || label.len() > 63 || !label.is_ascii() {
+                    None
+                } else {
+                    Some(total + 1 + label.len())
+                }
+            })?
+    };
+    if wire_len <= 255 { Some(name) } else { None }
+}
+
+fn parse_rr_type(value: &str) -> Option<u16> {
+    match value.to_ascii_uppercase().as_str() {
+        "A" => Some(1),
+        "NS" => Some(2),
+        "CNAME" => Some(5),
+        "SOA" => Some(6),
+        "PTR" => Some(12),
+        "MX" => Some(15),
+        "TXT" => Some(16),
+        "AAAA" => Some(28),
+        "SRV" => Some(33),
+        "NAPTR" => Some(35),
+        "DNAME" => Some(39),
+        "SVCB" => Some(64),
+        "HTTPS" => Some(65),
+        "AXFR" => Some(252),
+        "ANY" => Some(255),
+        _ => parse_numeric_code(value),
+    }
+}
+
+fn parse_rr_class(value: &str) -> Option<u16> {
+    match value.to_ascii_uppercase().as_str() {
+        "IN" => Some(1),
+        "CH" => Some(3),
+        "HS" => Some(4),
+        "ANY" => Some(255),
+        _ => parse_numeric_code(value),
+    }
+}
+
+fn parse_numeric_code(value: &str) -> Option<u16> {
+    value.parse::<u16>().ok()
+}
+
+fn parse_edns_mode(value: &str) -> Option<EdnsMode> {
+    match value.to_ascii_lowercase().as_str() {
+        "none" | "-" => Some(EdnsMode::None),
+        "edns" => Some(EdnsMode::Edns),
+        "do" | "dnssec" => Some(EdnsMode::Do),
+        _ => None,
+    }
+}
+
+fn parse_rcode(value: &str) -> Option<u8> {
+    let rcode = match value.to_ascii_uppercase().as_str() {
+        "NOERROR" => 0,
+        "FORMERR" => 1,
+        "SERVFAIL" => 2,
+        "NXDOMAIN" => 3,
+        "NOTIMP" => 4,
+        "REFUSED" => 5,
+        "YXDOMAIN" => 6,
+        "YXRRSET" => 7,
+        "NXRRSET" => 8,
+        "NOTAUTH" => 9,
+        "NOTZONE" => 10,
+        _ => return value.parse::<u8>().ok().filter(|rcode| *rcode <= 15),
+    };
+    Some(rcode)
+}
+
 fn parse_value<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, String> {
     value
         .parse()
@@ -608,6 +873,7 @@ fn usage() {
         "  --transport <udp|tcp>  DNS transport, default udp\n",
         "  --server <IP>       DNS server IP, default 127.0.0.1\n",
         "  --port <PORT>       DNS server UDP port, default 5300\n",
+        "  --bind <ADDR:PORT>  UDP client source bind address, default 127.0.0.1:0\n",
         "  --threads <N>       client worker threads, default 8\n",
         "  --duration <SEC>    benchmark duration, default 10\n",
         "  --window <N>        outstanding queries per worker, default 64\n",
@@ -618,5 +884,6 @@ fn usage() {
         "  --small-names <N>   names in each small zone, default 10000\n",
         "  --timeout-ms <MS>   response timeout before a query is considered dropped, default 250\n",
         "  --random            choose queried zones and names with deterministic worker-local RNG\n",
+        "  --trace <PATH>      replay qname qtype qclass [edns] [rcode=...] [answers=N] rows\n",
     ));
 }

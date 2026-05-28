@@ -174,9 +174,9 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/health-metrics-interface.md": [
         "`ODS-NFR-OBS-003..009`",
         "current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is",
-        "coupled to emitted EDE INFO-CODE 27",
+        "driven by lookup-time NSEC3 proof-omission observation",
         "with `edns.extended_dns_errors = \"off\"",
-        "owned by `docs/mvp-gap-register.md`",
+        "EDE INFO-CODE 27 is absent",
     ],
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",

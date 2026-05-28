@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+export OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS="${OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS:-10000}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES="${OXIDEDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES:-2000}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_ITERATIONS="${OXIDEDNS_ZONE_IMAGE_BENCH_ITERATIONS:-200000}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_BUILD_PROFILE="${OXIDEDNS_ZONE_IMAGE_BENCH_BUILD_PROFILE:-profiling}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_REVISION="${OXIDEDNS_ZONE_IMAGE_BENCH_GIT_REVISION:-$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')}"
+if [[ -n "${OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY:-}" ]]; then
+    export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY
+elif [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="true"
+else
+    export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="false"
+fi
+export OXIDEDNS_ZONE_IMAGE_BENCH_KERNEL="${OXIDEDNS_ZONE_IMAGE_BENCH_KERNEL:-$(uname -srmo)}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_RUSTC="${OXIDEDNS_ZONE_IMAGE_BENCH_RUSTC:-$(rustc -V)}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_RUST_TARGET="${OXIDEDNS_ZONE_IMAGE_BENCH_RUST_TARGET:-$(rustc -Vv | awk -F': ' '/^host: / { print $2; exit }')}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_CPU_MODEL="${OXIDEDNS_ZONE_IMAGE_BENCH_CPU_MODEL:-$(awk -F': ' '/^model name[[:space:]]*: / { print $2; exit }' /proc/cpuinfo 2>/dev/null || uname -m)}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_NETWORK_DEVICE="${OXIDEDNS_ZONE_IMAGE_BENCH_NETWORK_DEVICE:-not-applicable-in-process-benchmark}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_OUTPUT="${OXIDEDNS_ZONE_IMAGE_BENCH_OUTPUT:-target/zone-image-bench/prototype-latest.tsv}"
+export OXIDEDNS_ZONE_IMAGE_BENCH_TRACE="${OXIDEDNS_ZONE_IMAGE_BENCH_TRACE:-crates/oxidedns-core/examples/zone_image_reference_trace.tsv}"
+
+mkdir -p "$(dirname "$OXIDEDNS_ZONE_IMAGE_BENCH_OUTPUT")"
+
+cargo run --profile "$OXIDEDNS_ZONE_IMAGE_BENCH_BUILD_PROFILE" -p oxidedns-core --example zone_image_bench -- \
+    --records "$OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS" \
+    --stress-candidates "$OXIDEDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES" \
+    --iterations "$OXIDEDNS_ZONE_IMAGE_BENCH_ITERATIONS" \
+    --build-profile "$OXIDEDNS_ZONE_IMAGE_BENCH_BUILD_PROFILE" \
+    --git-revision "$OXIDEDNS_ZONE_IMAGE_BENCH_GIT_REVISION" \
+    --git-dirty "$OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY" \
+    --kernel "$OXIDEDNS_ZONE_IMAGE_BENCH_KERNEL" \
+    --rustc "$OXIDEDNS_ZONE_IMAGE_BENCH_RUSTC" \
+    --rust-target "$OXIDEDNS_ZONE_IMAGE_BENCH_RUST_TARGET" \
+    --cpu-model "$OXIDEDNS_ZONE_IMAGE_BENCH_CPU_MODEL" \
+    --network-device "$OXIDEDNS_ZONE_IMAGE_BENCH_NETWORK_DEVICE" \
+    --artifact "$OXIDEDNS_ZONE_IMAGE_BENCH_OUTPUT" \
+    --trace "$OXIDEDNS_ZONE_IMAGE_BENCH_TRACE" |
+    tee "$OXIDEDNS_ZONE_IMAGE_BENCH_OUTPUT"

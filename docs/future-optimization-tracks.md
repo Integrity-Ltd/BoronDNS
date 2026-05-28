@@ -6,6 +6,11 @@ SRS Appendix C.6 records the formal scope exclusion and re-entry pointers; this
 companion records the engineering detail, unsafe-boundary expectations, and
 benchmark entry conditions.
 
+The implementation-level plan for the combined memory-layout, response
+composition, benchmark, tuning, and packet-I/O data-plane track is
+`docs/memory-io-data-plane-design.md`. This document keeps only the formal
+deferred-track boundary and promotion constraints.
+
 These tracks are not hidden Engineering MVP requirements. They become current
 requirements only when a later SRS revision explicitly promotes the track and
 the relevant unsafe-boundary/dependency rows are moved from `deferred` to

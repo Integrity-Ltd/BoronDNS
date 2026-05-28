@@ -8,7 +8,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,10 +38,10 @@ use oxidedns_core::{
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, ChaosQueryOutcome,
         DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS, DatagramAction, DnsCookieContext, DnsCookiePolicy,
-        DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode, Header, LookupResult,
-        LookupTermination, Opcode, Question, Rcode, RecordType, Transport,
-        answer_message_with_notify_hooks_and_query_observer, chaos_query_observation,
-        dns_cookie_request_status, request_has_valid_dns_server_cookie,
+        DnsCookieRequestStatus, DomainName, ExtendedDnsErrorsMode, Header, LookupMetrics,
+        LookupTermination, Opcode, Question, Rcode, RecordType, Transport, ZoneImageProvider,
+        answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
+        chaos_query_observation, dns_cookie_request_status, request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -50,6 +50,7 @@ use oxidedns_core::{
         sign_tsig_error_response,
     },
     zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
+    zone_image::ZoneImage,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -362,6 +363,8 @@ impl Runtime {
         let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
         let dns_cookie_secrets =
             DnsCookieSecretStore::new(dns_cookie_secret, dns_cookie.secret_rotation_interval);
+        let zone_image_shadow =
+            ZoneImageShadowValidator::new(self.config.metrics.zone_image_shadow_enabled);
         if dns_cookie.policy.is_some() {
             info!(
                 category = "cookie",
@@ -506,6 +509,7 @@ impl Runtime {
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
+            let zone_image_serve_enabled = self.config.query.zone_image_serve_enabled;
             let nsid = self.config.server.nsid.as_bytes().to_vec();
             let chaos_version = self.config.chaos.version.clone();
             let chaos_hostname = self.config.chaos.hostname.clone();
@@ -522,6 +526,7 @@ impl Runtime {
                 edns_padding_block_size,
                 extended_dns_errors,
                 any_response,
+                zone_image_serve_enabled,
                 nsid,
                 chaos_version,
                 chaos_hostname,
@@ -534,6 +539,7 @@ impl Runtime {
                 notify_log_limiter,
                 metrics,
                 rrl,
+                zone_image_shadow: zone_image_shadow.clone(),
             };
             listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
         }
@@ -558,6 +564,7 @@ impl Runtime {
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
             let extended_dns_errors = self.config.edns.extended_dns_errors_mode();
             let any_response = self.config.query.any_response_mode();
+            let zone_image_serve_enabled = self.config.query.zone_image_serve_enabled;
             let nsid = self.config.server.nsid.as_bytes().to_vec();
             let chaos_version = self.config.chaos.version.clone();
             let chaos_hostname = self.config.chaos.hostname.clone();
@@ -577,6 +584,7 @@ impl Runtime {
                 edns_padding_block_size,
                 extended_dns_errors,
                 any_response,
+                zone_image_serve_enabled,
                 nsid,
                 chaos_version,
                 chaos_hostname,
@@ -588,6 +596,7 @@ impl Runtime {
                 notify_refresh_tx: notify_refresh_tx.clone(),
                 notify_log_limiter: notify_log_limiter.clone(),
                 metrics: metrics.clone(),
+                zone_image_shadow: zone_image_shadow.clone(),
                 active_connections: tcp_connections,
                 active_connections_by_source: tcp_source_connections,
             };
@@ -2852,9 +2861,15 @@ async fn serve_udp(
             &prepared.packet,
             &zones,
             &settings.metrics,
-            Transport::Udp,
-            cookie_validated,
-            parse_duration,
+            QueryObservationOptions {
+                transport: Transport::Udp,
+                cookie_validated,
+                parse_duration,
+                max_cname_chain: settings.max_cname_chain,
+                any_response: settings.any_response,
+                zone_image_serve_enabled: settings.zone_image_serve_enabled,
+                zone_image_shadow: &settings.zone_image_shadow,
+            },
         );
         let query_tsig_authenticated =
             prepared.tsig_authenticated || prepared.response_tsig.is_some();
@@ -2877,7 +2892,12 @@ async fn serve_udp(
         };
         let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
         let compose_started = settings.metrics.start_pipeline_timer();
-        let action = answer_message_with_notify_hooks_and_query_observer(
+        let zone_image_provider = |zone: &Arc<ZoneSnapshot>| {
+            settings
+                .zone_image_shadow
+                .image_for(zone, &settings.metrics)
+        };
+        let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
             &prepared.packet,
             &zones,
             AnswerOptions {
@@ -2913,9 +2933,12 @@ async fn serve_udp(
                     serial,
                 )
             },
-            |lookup| {
-                record_query_termination_metric(&query_metrics, lookup, &settings.metrics);
+            |lookup_metrics| {
+                record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
             },
+            settings
+                .zone_image_serve_enabled
+                .then_some(&zone_image_provider as ZoneImageProvider<'_>),
         );
         let mut query_metrics = query_metrics;
         query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
@@ -2999,38 +3022,50 @@ struct QueryMetricObservation {
     started_at: Instant,
     cookie_validated: bool,
     zone_key: Option<String>,
+    zone_image_serve_enabled: bool,
     parse_duration: Option<Duration>,
     lookup_duration: Option<Duration>,
     compose_duration: Option<Duration>,
+}
+
+#[derive(Clone, Copy)]
+struct QueryObservationOptions<'a> {
+    transport: Transport,
+    cookie_validated: bool,
+    parse_duration: Option<Duration>,
+    max_cname_chain: usize,
+    any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
+    zone_image_shadow: &'a ZoneImageShadowValidator,
 }
 
 fn observe_query_metrics(
     packet: &[u8],
     zones: &ZoneStore,
     metrics: &RuntimeMetrics,
-    transport: Transport,
-    cookie_validated: bool,
-    parse_duration: Option<Duration>,
+    options: QueryObservationOptions<'_>,
 ) -> QueryMetricObservation {
     let started_at = Instant::now();
     let lookup_started = metrics.start_pipeline_timer();
     let not_query = || QueryMetricObservation {
         is_query: false,
-        transport,
+        transport: options.transport,
         started_at,
         cookie_validated: false,
         zone_key: None,
-        parse_duration,
+        zone_image_serve_enabled: options.zone_image_serve_enabled,
+        parse_duration: options.parse_duration,
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
     };
     let observed_query = |zone_key| QueryMetricObservation {
         is_query: true,
-        transport,
+        transport: options.transport,
         started_at,
-        cookie_validated,
+        cookie_validated: options.cookie_validated,
         zone_key,
-        parse_duration,
+        zone_image_serve_enabled: options.zone_image_serve_enabled,
+        parse_duration: options.parse_duration,
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
     };
@@ -3050,6 +3085,15 @@ fn observe_query_metrics(
     };
     if let Some(zone) = zones.find_zone(&question.qname) {
         metrics.record_zone_query(&zone.origin);
+        if zone.state == ZoneState::Active {
+            options.zone_image_shadow.validate_query(
+                &zone,
+                &question,
+                options.max_cname_chain,
+                options.any_response,
+                metrics,
+            );
+        }
         return observed_query(Some(zone.origin.canonical_key()));
     }
     observed_query(None)
@@ -3324,13 +3368,34 @@ fn response_contains_type(response: &[u8], header: &Header, types: &[u16]) -> bo
     false
 }
 
+#[cfg(test)]
 fn record_query_termination_metric(
     observation: &QueryMetricObservation,
-    lookup: &LookupResult,
+    lookup: &oxidedns_core::dns::LookupResult,
+    metrics: &RuntimeMetrics,
+) {
+    record_query_lookup_metrics(observation, LookupMetrics::from(lookup), metrics);
+}
+
+fn record_query_lookup_metrics(
+    observation: &QueryMetricObservation,
+    lookup: LookupMetrics,
     metrics: &RuntimeMetrics,
 ) {
     if !observation.is_query {
         return;
+    }
+    if observation.zone_image_serve_enabled {
+        if lookup.zone_image_used {
+            metrics.record_zone_image_serve_hit();
+            if lookup.zone_image_direct_answer {
+                metrics.record_zone_image_serve_direct_hit();
+            } else {
+                metrics.record_zone_image_serve_semantic_hit();
+            }
+        } else {
+            metrics.record_zone_image_serve_fallback();
+        }
     }
     match lookup.termination {
         Some(LookupTermination::CnameChainLimit) => metrics.record_query_cname_chain_limit(),
@@ -3406,6 +3471,7 @@ struct UdpServerSettings {
     edns_padding_block_size: u16,
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
     nsid: Vec<u8>,
     chaos_version: String,
     chaos_hostname: String,
@@ -3418,6 +3484,187 @@ struct UdpServerSettings {
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
     rrl: RrlLimiter,
+    zone_image_shadow: ZoneImageShadowValidator,
+}
+
+#[derive(Clone, Debug)]
+struct ZoneImageShadowValidator {
+    enabled: bool,
+    last_hit: Arc<Mutex<Option<ZoneImageCacheEntry>>>,
+    cache: Arc<Mutex<HashMap<String, ZoneImageCacheEntry>>>,
+}
+
+#[derive(Clone, Debug)]
+struct ZoneImageCacheEntry {
+    snapshot: Weak<ZoneSnapshot>,
+    image: Arc<ZoneImage>,
+}
+
+impl ZoneImageShadowValidator {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            last_hit: Arc::new(Mutex::new(None)),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn validate_query(
+        &self,
+        zone: &Arc<ZoneSnapshot>,
+        question: &Question,
+        max_cname_chain: usize,
+        any_response: AnyResponseMode,
+        metrics: &RuntimeMetrics,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if !zone_image_shadow_supports_query(question) {
+            metrics.record_zone_image_shadow_unsupported();
+            return;
+        }
+
+        let Some(image) = self.image_for(zone, metrics) else {
+            return;
+        };
+
+        let snapshot_lookup = zone.lookup_with_options(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            max_cname_chain,
+            any_response,
+        );
+        let image_lookup = match image.lookup_response_with_options(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            max_cname_chain,
+        ) {
+            Ok(lookup) => lookup,
+            Err(error) => {
+                metrics.record_zone_image_shadow_error();
+                warn!(
+                    category = "query",
+                    zone = %zone.origin,
+                    serial = ?zone.serial,
+                    qname = %question.qname,
+                    qtype = question.qtype,
+                    qclass = question.qclass,
+                    %error,
+                    "zone image shadow lookup failed"
+                );
+                return;
+            }
+        };
+
+        metrics.record_zone_image_shadow_query();
+        if snapshot_lookup == image_lookup {
+            metrics.record_zone_image_shadow_match();
+        } else {
+            metrics.record_zone_image_shadow_mismatch();
+            warn!(
+                category = "query",
+                zone = %zone.origin,
+                serial = ?zone.serial,
+                qname = %question.qname,
+                qtype = question.qtype,
+                qclass = question.qclass,
+                snapshot_rcode = ?snapshot_lookup.rcode,
+                image_rcode = ?image_lookup.rcode,
+                snapshot_answers = snapshot_lookup.answers.len(),
+                image_answers = image_lookup.answers.len(),
+                snapshot_authorities = snapshot_lookup.authorities.len(),
+                image_authorities = image_lookup.authorities.len(),
+                snapshot_additionals = snapshot_lookup.additionals.len(),
+                image_additionals = image_lookup.additionals.len(),
+                "zone image shadow mismatch"
+            );
+        }
+    }
+
+    fn image_for(
+        &self,
+        snapshot: &Arc<ZoneSnapshot>,
+        metrics: &RuntimeMetrics,
+    ) -> Option<Arc<ZoneImage>> {
+        if let Some(image) = cached_zone_image_for_snapshot(&self.last_hit, snapshot) {
+            return Some(image);
+        }
+
+        let zone_key = snapshot.origin.canonical_key();
+        {
+            let cache = self
+                .cache
+                .lock()
+                .expect("zone image shadow cache lock poisoned");
+            if let Some(entry) = cache.get(&zone_key)
+                && entry
+                    .snapshot
+                    .upgrade()
+                    .is_some_and(|cached| Arc::ptr_eq(&cached, snapshot))
+            {
+                *self
+                    .last_hit
+                    .lock()
+                    .expect("zone image shadow last-hit lock poisoned") = Some(entry.clone());
+                return Some(entry.image.clone());
+            }
+        }
+
+        let image = match ZoneImage::compile(snapshot) {
+            Ok(image) => Arc::new(image),
+            Err(error) => {
+                metrics.record_zone_image_shadow_error();
+                warn!(
+                    category = "query",
+                    zone = %snapshot.origin,
+                    serial = ?snapshot.serial,
+                    %error,
+                    "zone image shadow compile failed"
+                );
+                return None;
+            }
+        };
+
+        let entry = ZoneImageCacheEntry {
+            snapshot: Arc::downgrade(snapshot),
+            image: image.clone(),
+        };
+        self.cache
+            .lock()
+            .expect("zone image shadow cache lock poisoned")
+            .insert(zone_key, entry.clone());
+        *self
+            .last_hit
+            .lock()
+            .expect("zone image shadow last-hit lock poisoned") = Some(entry);
+        Some(image)
+    }
+}
+
+fn cached_zone_image_for_snapshot(
+    cache: &Mutex<Option<ZoneImageCacheEntry>>,
+    snapshot: &Arc<ZoneSnapshot>,
+) -> Option<Arc<ZoneImage>> {
+    let cache = cache
+        .lock()
+        .expect("zone image shadow last-hit lock poisoned");
+    let entry = cache.as_ref()?;
+    entry
+        .snapshot
+        .upgrade()
+        .is_some_and(|cached| Arc::ptr_eq(&cached, snapshot))
+        .then(|| entry.image.clone())
+}
+
+fn zone_image_shadow_supports_query(question: &Question) -> bool {
+    matches!(question.qclass, 1 | 255)
+        && !matches!(
+            question.qtype,
+            0 | 41 | 249 | 250 | 251 | 252 | 253 | 254 | 255 | 65_535
+        )
 }
 
 async fn serve_tcp(
@@ -3482,6 +3729,7 @@ async fn serve_tcp(
                 settings.edns_padding_block_size,
                 settings.extended_dns_errors,
                 settings.any_response,
+                settings.zone_image_serve_enabled,
                 settings.nsid,
                 settings.chaos_version,
                 settings.chaos_hostname,
@@ -3493,6 +3741,7 @@ async fn serve_tcp(
                 settings.notify_refresh_tx,
                 settings.notify_log_limiter,
                 settings.metrics,
+                settings.zone_image_shadow,
                 peer.ip(),
             )
             .await
@@ -3782,6 +4031,8 @@ fn metrics_body(
     append_dns_cookie_prefix_metrics(&mut body, metrics);
     append_configuration_warning_metrics(&mut body, snapshot);
     append_dnssec_metrics(&mut body, snapshot);
+    append_zone_image_serve_metrics(&mut body, snapshot);
+    append_zone_image_shadow_metrics(&mut body, snapshot);
     append_chaos_metrics(&mut body, snapshot);
     append_notify_metrics(&mut body, snapshot);
     append_tsig_metrics(&mut body, snapshot);
@@ -3980,6 +4231,56 @@ fn append_dnssec_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
     body.push_str(&format!(
         "oxidedns_dnssec_nsec3_iterations_exceed_cap_total {}\n",
         snapshot.nsec3_iterations_exceed_cap
+    ));
+}
+
+fn append_zone_image_serve_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_zone_image_serve_hits_total Query responses served by the experimental immutable zone image path.\n\
+         # TYPE oxidedns_zone_image_serve_hits_total counter\n\
+         # HELP oxidedns_zone_image_serve_direct_hits_total Query responses served by the experimental direct-answer immutable zone image path.\n\
+         # TYPE oxidedns_zone_image_serve_direct_hits_total counter\n\
+         # HELP oxidedns_zone_image_serve_semantic_hits_total Query responses served by the experimental semantic immutable zone image path.\n\
+         # TYPE oxidedns_zone_image_serve_semantic_hits_total counter\n\
+         # HELP oxidedns_zone_image_serve_fallbacks_total Queries that fell back to the current ZoneSnapshot path while experimental zone image serving was enabled.\n\
+         # TYPE oxidedns_zone_image_serve_fallbacks_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_zone_image_serve_hits_total {}\n\
+         oxidedns_zone_image_serve_direct_hits_total {}\n\
+         oxidedns_zone_image_serve_semantic_hits_total {}\n\
+         oxidedns_zone_image_serve_fallbacks_total {}\n",
+        snapshot.zone_image_serve_hits,
+        snapshot.zone_image_serve_direct_hits,
+        snapshot.zone_image_serve_semantic_hits,
+        snapshot.zone_image_serve_fallbacks,
+    ));
+}
+
+fn append_zone_image_shadow_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_zone_image_shadow_queries_total Comparable live queries checked against the immutable zone image shadow path.\n\
+         # TYPE oxidedns_zone_image_shadow_queries_total counter\n\
+         # HELP oxidedns_zone_image_shadow_matches_total Shadow checks whose immutable zone image result matched the active zone snapshot result.\n\
+         # TYPE oxidedns_zone_image_shadow_matches_total counter\n\
+         # HELP oxidedns_zone_image_shadow_mismatches_total Shadow checks whose immutable zone image result differed from the active zone snapshot result.\n\
+         # TYPE oxidedns_zone_image_shadow_mismatches_total counter\n\
+         # HELP oxidedns_zone_image_shadow_unsupported_total Live queries skipped because the shadow path does not support the query shape yet.\n\
+         # TYPE oxidedns_zone_image_shadow_unsupported_total counter\n\
+         # HELP oxidedns_zone_image_shadow_errors_total Zone image compile or lookup errors observed by shadow validation.\n\
+         # TYPE oxidedns_zone_image_shadow_errors_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_zone_image_shadow_queries_total {}\n\
+         oxidedns_zone_image_shadow_matches_total {}\n\
+         oxidedns_zone_image_shadow_mismatches_total {}\n\
+         oxidedns_zone_image_shadow_unsupported_total {}\n\
+         oxidedns_zone_image_shadow_errors_total {}\n",
+        snapshot.zone_image_shadow_queries,
+        snapshot.zone_image_shadow_matches,
+        snapshot.zone_image_shadow_mismatches,
+        snapshot.zone_image_shadow_unsupported,
+        snapshot.zone_image_shadow_errors,
     ));
 }
 
@@ -4883,6 +5184,15 @@ struct RuntimeMetricsInner {
     dns_cookie_badcookie: AtomicU64,
     configuration_warnings: AtomicU64,
     nsec3_iterations_exceed_cap: AtomicU64,
+    zone_image_serve_hits: AtomicU64,
+    zone_image_serve_direct_hits: AtomicU64,
+    zone_image_serve_semantic_hits: AtomicU64,
+    zone_image_serve_fallbacks: AtomicU64,
+    zone_image_shadow_queries: AtomicU64,
+    zone_image_shadow_matches: AtomicU64,
+    zone_image_shadow_mismatches: AtomicU64,
+    zone_image_shadow_unsupported: AtomicU64,
+    zone_image_shadow_errors: AtomicU64,
     chaos_answered: AtomicU64,
     chaos_missing_value: AtomicU64,
     chaos_unrecognized_name: AtomicU64,
@@ -4933,6 +5243,15 @@ struct RuntimeMetricsSnapshot {
     dns_cookie_badcookie: u64,
     configuration_warnings: u64,
     nsec3_iterations_exceed_cap: u64,
+    zone_image_serve_hits: u64,
+    zone_image_serve_direct_hits: u64,
+    zone_image_serve_semantic_hits: u64,
+    zone_image_serve_fallbacks: u64,
+    zone_image_shadow_queries: u64,
+    zone_image_shadow_matches: u64,
+    zone_image_shadow_mismatches: u64,
+    zone_image_shadow_unsupported: u64,
+    zone_image_shadow_errors: u64,
     chaos_answered: u64,
     chaos_missing_value: u64,
     chaos_unrecognized_name: u64,
@@ -5352,6 +5671,60 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_zone_image_serve_hit(&self) {
+        self.inner
+            .zone_image_serve_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_serve_direct_hit(&self) {
+        self.inner
+            .zone_image_serve_direct_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_serve_semantic_hit(&self) {
+        self.inner
+            .zone_image_serve_semantic_hits
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_serve_fallback(&self) {
+        self.inner
+            .zone_image_serve_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_shadow_query(&self) {
+        self.inner
+            .zone_image_shadow_queries
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_shadow_match(&self) {
+        self.inner
+            .zone_image_shadow_matches
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_shadow_mismatch(&self) {
+        self.inner
+            .zone_image_shadow_mismatches
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_shadow_unsupported(&self) {
+        self.inner
+            .zone_image_shadow_unsupported
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_zone_image_shadow_error(&self) {
+        self.inner
+            .zone_image_shadow_errors
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_chaos_query(&self, outcome: ChaosQueryOutcome) {
         let counter = match outcome {
             ChaosQueryOutcome::Answered => &self.inner.chaos_answered,
@@ -5582,6 +5955,30 @@ impl RuntimeMetrics {
                 .inner
                 .nsec3_iterations_exceed_cap
                 .load(Ordering::Relaxed),
+            zone_image_serve_hits: self.inner.zone_image_serve_hits.load(Ordering::Relaxed),
+            zone_image_serve_direct_hits: self
+                .inner
+                .zone_image_serve_direct_hits
+                .load(Ordering::Relaxed),
+            zone_image_serve_semantic_hits: self
+                .inner
+                .zone_image_serve_semantic_hits
+                .load(Ordering::Relaxed),
+            zone_image_serve_fallbacks: self
+                .inner
+                .zone_image_serve_fallbacks
+                .load(Ordering::Relaxed),
+            zone_image_shadow_queries: self.inner.zone_image_shadow_queries.load(Ordering::Relaxed),
+            zone_image_shadow_matches: self.inner.zone_image_shadow_matches.load(Ordering::Relaxed),
+            zone_image_shadow_mismatches: self
+                .inner
+                .zone_image_shadow_mismatches
+                .load(Ordering::Relaxed),
+            zone_image_shadow_unsupported: self
+                .inner
+                .zone_image_shadow_unsupported
+                .load(Ordering::Relaxed),
+            zone_image_shadow_errors: self.inner.zone_image_shadow_errors.load(Ordering::Relaxed),
             chaos_answered: self.inner.chaos_answered.load(Ordering::Relaxed),
             chaos_missing_value: self.inner.chaos_missing_value.load(Ordering::Relaxed),
             chaos_unrecognized_name: self.inner.chaos_unrecognized_name.load(Ordering::Relaxed),
@@ -5615,6 +6012,7 @@ struct TcpServerSettings {
     edns_padding_block_size: u16,
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
     nsid: Vec<u8>,
     chaos_version: String,
     chaos_hostname: String,
@@ -5626,6 +6024,7 @@ struct TcpServerSettings {
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
+    zone_image_shadow: ZoneImageShadowValidator,
     active_connections: Arc<AtomicUsize>,
     active_connections_by_source: TcpSourceConnectionCounts,
 }
@@ -8039,6 +8438,7 @@ async fn handle_tcp_connection(
     edns_padding_block_size: u16,
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
     nsid: Vec<u8>,
     chaos_version: String,
     chaos_hostname: String,
@@ -8050,6 +8450,7 @@ async fn handle_tcp_connection(
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
+    zone_image_shadow: ZoneImageShadowValidator,
     peer_ip: IpAddr,
 ) -> Result<(), RuntimeError> {
     handle_tcp_connection_with_query_hook(
@@ -8066,6 +8467,7 @@ async fn handle_tcp_connection(
         edns_padding_block_size,
         extended_dns_errors,
         any_response,
+        zone_image_serve_enabled,
         nsid,
         chaos_version,
         chaos_hostname,
@@ -8077,6 +8479,7 @@ async fn handle_tcp_connection(
         notify_refresh_tx,
         notify_log_limiter,
         metrics,
+        zone_image_shadow,
         peer_ip,
         None,
     )
@@ -8098,6 +8501,7 @@ async fn handle_tcp_connection_with_query_hook(
     edns_padding_block_size: u16,
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
     nsid: Vec<u8>,
     chaos_version: String,
     chaos_hostname: String,
@@ -8109,6 +8513,7 @@ async fn handle_tcp_connection_with_query_hook(
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
+    zone_image_shadow: ZoneImageShadowValidator,
     peer_ip: IpAddr,
     query_hook: Option<TcpQueryHook>,
 ) -> Result<(), RuntimeError> {
@@ -8157,6 +8562,7 @@ async fn handle_tcp_connection_with_query_hook(
             edns_padding_block_size,
             extended_dns_errors,
             any_response,
+            zone_image_serve_enabled,
             nsid.clone(),
             chaos_version.clone(),
             chaos_hostname.clone(),
@@ -8168,6 +8574,7 @@ async fn handle_tcp_connection_with_query_hook(
             notify_refresh_tx.clone(),
             notify_log_limiter.clone(),
             metrics.clone(),
+            zone_image_shadow.clone(),
             peer_ip,
             response_tx.clone(),
             permit,
@@ -8236,6 +8643,7 @@ async fn handle_tcp_packet(
     edns_padding_block_size: u16,
     extended_dns_errors: ExtendedDnsErrorsMode,
     any_response: AnyResponseMode,
+    zone_image_serve_enabled: bool,
     nsid: Vec<u8>,
     chaos_version: String,
     chaos_hostname: String,
@@ -8247,6 +8655,7 @@ async fn handle_tcp_packet(
     notify_refresh_tx: mpsc::Sender<RefreshRequest>,
     notify_log_limiter: NotifyLogLimiter,
     metrics: RuntimeMetrics,
+    zone_image_shadow: ZoneImageShadowValidator,
     peer_ip: IpAddr,
     response_tx: mpsc::Sender<TcpResponse>,
     permit: OwnedSemaphorePermit,
@@ -8293,9 +8702,15 @@ async fn handle_tcp_packet(
         &prepared.packet,
         &zones,
         &metrics,
-        Transport::Tcp,
-        cookie_validated,
-        parse_duration,
+        QueryObservationOptions {
+            transport: Transport::Tcp,
+            cookie_validated,
+            parse_duration,
+            max_cname_chain,
+            any_response,
+            zone_image_serve_enabled,
+            zone_image_shadow: &zone_image_shadow,
+        },
     );
     let query_tsig_authenticated = prepared.tsig_authenticated || prepared.response_tsig.is_some();
     let query_cache_ineligible = response_cache_ineligible_reason(
@@ -8317,7 +8732,9 @@ async fn handle_tcp_packet(
     };
     let chaos_observation = chaos_query_observation(&prepared.packet, &nsid, chaos);
     let compose_started = metrics.start_pipeline_timer();
-    let action = answer_message_with_notify_hooks_and_query_observer(
+    let zone_image_provider =
+        |zone: &Arc<ZoneSnapshot>| zone_image_shadow.image_for(zone, &metrics);
+    let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         &prepared.packet,
         &zones,
         AnswerOptions {
@@ -8351,7 +8768,8 @@ async fn handle_tcp_packet(
                 serial,
             )
         },
-        |lookup| record_query_termination_metric(&query_metrics, lookup, &metrics),
+        |lookup_metrics| record_query_lookup_metrics(&query_metrics, lookup_metrics, &metrics),
+        zone_image_serve_enabled.then_some(&zone_image_provider as ZoneImageProvider<'_>),
     );
     let mut query_metrics = query_metrics;
     query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
@@ -8502,8 +8920,8 @@ mod tests {
         config::{HealthConfig, RrlConfig, TransferPrimaryConfig, TransferTransportConfig},
         dns::{
             AnyResponseMode, ChaosQueryOutcome, DnsCookiePolicy, DnsCookieRequestStatus,
-            DomainName, ExtendedDnsErrorsMode, Header, LookupTermination, Opcode, Rcode,
-            RecordType, Transport,
+            DomainName, ExtendedDnsErrorsMode, Header, LookupMetrics, LookupTermination, Opcode,
+            Rcode, RecordType, Transport,
         },
         tsig::{
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -8530,25 +8948,27 @@ mod tests {
         DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
         LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
         NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage,
-        QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation, QueryPipelineStage,
-        RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-        ResponseCacheCandidateCategory, ResponseCacheIneligibleReason, RrlCategory, RrlDecision,
-        RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus,
-        TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig,
-        UdpServerSettings, ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set,
-        drain_tcp_connections, handle_tcp_connection, handle_tcp_connection_with_query_hook,
-        jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
+        QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
+        QueryObservationOptions, QueryPipelineStage, RefreshAttemptContext, RefreshRequest,
+        RefreshWorkerSettings, ResponseCacheCandidateCategory, ResponseCacheIneligibleReason,
+        RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
+        RuntimeStatus, TcpServerSettings, TransferError, TransferPlan, TransferSession,
+        TransferTsig, UdpServerSettings, ZoneImageShadowValidator, ZoneRefreshRegistry,
+        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
+        load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
         log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
         observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
         prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
-        query_id_from_random_bytes, record_query_response_metric, record_query_termination_metric,
-        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
-        response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
-        rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
-        serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
-        sign_tsig_response, signal_notify_refresh, transfer_axfr_from_primary,
-        transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
-        validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
+        query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
+        record_query_termination_metric, refresh_zone_from_primaries,
+        required_file_descriptor_limit, response_category, response_opt_record,
+        response_question_end, response_rcode, rotate_transfer_targets, rrl_truncated_response,
+        runtime_config_warnings_at, serial_after, serve_health, serve_refresh_requests,
+        serve_scheduled_refreshes, serve_tcp, serve_udp, sign_tsig_response, signal_notify_refresh,
+        transfer_axfr_from_primary, transfer_ixfr_from_primary, transfer_query_id,
+        uniform_index_from_u64, validate_file_descriptor_limit_value, validate_runtime_config,
+        write_tcp_message,
     };
 
     #[test]
@@ -11061,37 +11481,37 @@ mod tests {
         zones.insert_snapshot(ZoneSnapshot::active(active_origin, Some(1), Vec::new()));
         zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
         let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(false);
 
         observe_query_metrics(
             &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
         observe_query_metrics(
             &query(b"\x03www\x07loading\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
         observe_query_metrics(
             &query(b"\x07outside\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
         let response = {
             let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
             packet[2] |= 0x80;
             packet
         };
-        observe_query_metrics(&response, &zones, &metrics, Transport::Udp, false, None);
+        observe_query_metrics(
+            &response,
+            &zones,
+            &metrics,
+            query_observation_options(&zone_image_shadow),
+        );
 
         assert_eq!(metrics.snapshot().queries_received, 3);
         let counts = metrics.zone_query_counts();
@@ -11104,16 +11524,19 @@ mod tests {
     fn query_metrics_count_response_rcodes_for_queries_only() {
         let zones = ZoneStore::new();
         let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(false);
         let observation = observe_query_metrics(
             &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
-        let non_query_observation =
-            observe_query_metrics(&[0, 1, 2], &zones, &metrics, Transport::Udp, false, None);
+        let non_query_observation = observe_query_metrics(
+            &[0, 1, 2],
+            &zones,
+            &metrics,
+            query_observation_options(&zone_image_shadow),
+        );
         let mut noerror = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         noerror[2] |= 0x80;
         let mut nxdomain = noerror.clone();
@@ -11151,21 +11574,18 @@ mod tests {
         let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
         zones.insert_snapshot(ZoneSnapshot::active(active_origin, Some(1), Vec::new()));
         let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(false);
         let in_zone = observe_query_metrics(
             &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
         let outside = observe_query_metrics(
             &query(b"\x07outside\x04test\x00", RecordType::A as u16, 1),
             &zones,
             &metrics,
-            Transport::Udp,
-            false,
-            None,
+            query_observation_options(&zone_image_shadow),
         );
         let mut noerror = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         noerror[2] |= 0x80;
@@ -11183,6 +11603,131 @@ mod tests {
         assert_eq!(zone_rcodes.get(&(zone_key.clone(), 0)), Some(&1));
         assert_eq!(zone_rcodes.get(&(zone_key.clone(), 3)), Some(&1));
         assert!(!zone_rcodes.contains_key(&("outside.test.".to_owned(), 0)));
+    }
+
+    #[test]
+    fn zone_image_shadow_validation_records_live_query_match() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(true);
+
+        observe_query_metrics(
+            &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+            query_observation_options(&zone_image_shadow),
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.zone_image_shadow_queries, 1);
+        assert_eq!(snapshot.zone_image_shadow_matches, 1);
+        assert_eq!(snapshot.zone_image_shadow_mismatches, 0);
+        assert_eq!(snapshot.zone_image_shadow_unsupported, 0);
+        assert_eq!(snapshot.zone_image_shadow_errors, 0);
+    }
+
+    #[test]
+    fn zone_image_shadow_image_cache_reuses_last_hit_for_repeated_snapshot() {
+        let snapshot = Arc::new(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(true);
+
+        let first = zone_image_shadow
+            .image_for(&snapshot, &metrics)
+            .expect("zone image compiles");
+        let second = zone_image_shadow
+            .image_for(&snapshot, &metrics)
+            .expect("zone image is cached");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn zone_image_shadow_image_cache_replaces_last_hit_for_new_snapshot() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let old_snapshot = Arc::new(ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let new_snapshot = Arc::new(ZoneSnapshot::active(
+            origin,
+            Some(2),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 11].to_vec()],
+            )],
+        ));
+        let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(true);
+
+        let old_image = zone_image_shadow
+            .image_for(&old_snapshot, &metrics)
+            .expect("old zone image compiles");
+        let new_image = zone_image_shadow
+            .image_for(&new_snapshot, &metrics)
+            .expect("new zone image compiles");
+        let new_image_again = zone_image_shadow
+            .image_for(&new_snapshot, &metrics)
+            .expect("new zone image is cached");
+
+        assert!(!Arc::ptr_eq(&old_image, &new_image));
+        assert!(Arc::ptr_eq(&new_image, &new_image_again));
+    }
+
+    #[test]
+    fn zone_image_shadow_validation_counts_unsupported_query_shapes() {
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            Vec::new(),
+        ));
+        let metrics = RuntimeMetrics::new();
+        let zone_image_shadow = ZoneImageShadowValidator::new(true);
+
+        observe_query_metrics(
+            &query(b"\x03www\x07example\x04test\x00", 255, 1),
+            &zones,
+            &metrics,
+            query_observation_options(&zone_image_shadow),
+        );
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.zone_image_shadow_queries, 0);
+        assert_eq!(snapshot.zone_image_shadow_matches, 0);
+        assert_eq!(snapshot.zone_image_shadow_unsupported, 1);
+        assert_eq!(snapshot.zone_image_shadow_errors, 0);
     }
 
     #[test]
@@ -11219,6 +11764,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             cookie_validated: false,
             zone_key: None,
+            zone_image_serve_enabled: false,
             parse_duration: None,
             lookup_duration: None,
             compose_duration: None,
@@ -11229,6 +11775,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             cookie_validated: false,
             zone_key: None,
+            zone_image_serve_enabled: false,
             parse_duration: None,
             lookup_duration: None,
             compose_duration: None,
@@ -11260,6 +11807,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             cookie_validated: false,
             zone_key: None,
+            zone_image_serve_enabled: false,
             parse_duration: None,
             lookup_duration: None,
             compose_duration: None,
@@ -11270,6 +11818,7 @@ mod tests {
             started_at: std::time::Instant::now(),
             cookie_validated: false,
             zone_key: None,
+            zone_image_serve_enabled: false,
             parse_duration: None,
             lookup_duration: None,
             compose_duration: None,
@@ -11281,6 +11830,50 @@ mod tests {
         record_query_termination_metric(&non_query_observation, &over_cap, &metrics);
 
         assert_eq!(metrics.snapshot().nsec3_iterations_exceed_cap, 1);
+    }
+
+    #[test]
+    fn query_metrics_count_zone_image_serve_hits_and_fallbacks() {
+        let metrics = RuntimeMetrics::new();
+        let observation = QueryMetricObservation {
+            is_query: true,
+            transport: Transport::Udp,
+            started_at: std::time::Instant::now(),
+            cookie_validated: false,
+            zone_key: None,
+            zone_image_serve_enabled: true,
+            parse_duration: None,
+            lookup_duration: None,
+            compose_duration: None,
+        };
+        let zone_image_hit = LookupMetrics {
+            termination: None,
+            nsec3_iterations_exceeded: false,
+            zone_image_used: true,
+            zone_image_direct_answer: true,
+        };
+        let zone_image_semantic_hit = LookupMetrics {
+            termination: None,
+            nsec3_iterations_exceeded: false,
+            zone_image_used: true,
+            zone_image_direct_answer: false,
+        };
+        let fallback = LookupMetrics {
+            termination: None,
+            nsec3_iterations_exceeded: false,
+            zone_image_used: false,
+            zone_image_direct_answer: false,
+        };
+
+        record_query_lookup_metrics(&observation, zone_image_hit, &metrics);
+        record_query_lookup_metrics(&observation, zone_image_semantic_hit, &metrics);
+        record_query_lookup_metrics(&observation, fallback, &metrics);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.zone_image_serve_hits, 2);
+        assert_eq!(snapshot.zone_image_serve_direct_hits, 1);
+        assert_eq!(snapshot.zone_image_serve_semantic_hits, 1);
+        assert_eq!(snapshot.zone_image_serve_fallbacks, 1);
     }
 
     #[test]
@@ -11676,6 +12269,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
+                zone_image_serve_enabled: false,
                 nsid: Vec::new(),
                 chaos_version: String::new(),
                 chaos_hostname: String::new(),
@@ -11688,6 +12282,7 @@ mod tests {
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: server_metrics,
                 rrl: RrlLimiter::from_config(&RrlConfig::default(), metrics.clone()),
+                zone_image_shadow: ZoneImageShadowValidator::new(false),
             },
         ));
 
@@ -11814,6 +12409,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
+                zone_image_serve_enabled: false,
                 nsid: Vec::new(),
                 chaos_version: String::new(),
                 chaos_hostname: String::new(),
@@ -11826,6 +12422,7 @@ mod tests {
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: server_metrics,
                 rrl: RrlLimiter::from_config(&rrl_config, metrics.clone()),
+                zone_image_shadow: ZoneImageShadowValidator::new(false),
             },
         ));
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -11903,6 +12500,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
+                zone_image_serve_enabled: false,
                 nsid: Vec::new(),
                 chaos_version: String::new(),
                 chaos_hostname: String::new(),
@@ -11915,6 +12513,7 @@ mod tests {
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: server_metrics,
                 rrl: RrlLimiter::from_config(&rrl_config, metrics.clone()),
+                zone_image_shadow: ZoneImageShadowValidator::new(false),
             },
         ));
 
@@ -13996,6 +14595,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14007,6 +14607,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -14084,6 +14685,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14095,6 +14697,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -14164,6 +14767,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14175,6 +14779,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
                 Some(query_hook),
             )
@@ -14251,6 +14856,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14262,6 +14868,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
                 Some(query_hook),
             )
@@ -14317,6 +14924,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14328,6 +14936,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -14366,6 +14975,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14377,6 +14987,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -14429,6 +15040,7 @@ mod tests {
                 0,
                 ExtendedDnsErrorsMode::Off,
                 AnyResponseMode::Minimal,
+                false,
                 Vec::new(),
                 String::new(),
                 String::new(),
@@ -14440,6 +15052,7 @@ mod tests {
                 notify_refresh_tx(),
                 notify_log_limiter_for_test(),
                 RuntimeMetrics::new(),
+                ZoneImageShadowValidator::new(false),
                 "127.0.0.1".parse().unwrap(),
             )
             .await
@@ -14482,6 +15095,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
+                zone_image_serve_enabled: false,
                 nsid: Vec::new(),
                 chaos_version: String::new(),
                 chaos_hostname: String::new(),
@@ -14493,6 +15107,7 @@ mod tests {
                 notify_refresh_tx: notify_refresh_tx(),
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: RuntimeMetrics::new(),
+                zone_image_shadow: ZoneImageShadowValidator::new(false),
                 active_connections: active.clone(),
                 active_connections_by_source: source_counts.clone(),
             },
@@ -14544,6 +15159,7 @@ mod tests {
                 edns_padding_block_size: 0,
                 extended_dns_errors: ExtendedDnsErrorsMode::Off,
                 any_response: AnyResponseMode::Minimal,
+                zone_image_serve_enabled: false,
                 nsid: Vec::new(),
                 chaos_version: String::new(),
                 chaos_hostname: String::new(),
@@ -14555,6 +15171,7 @@ mod tests {
                 notify_refresh_tx: notify_refresh_tx(),
                 notify_log_limiter: notify_log_limiter_for_test(),
                 metrics: RuntimeMetrics::new(),
+                zone_image_shadow: ZoneImageShadowValidator::new(false),
                 active_connections: active.clone(),
                 active_connections_by_source: source_counts.clone(),
             },
@@ -15839,6 +16456,20 @@ mod tests {
         packet
     }
 
+    fn query_observation_options(
+        zone_image_shadow: &ZoneImageShadowValidator,
+    ) -> QueryObservationOptions<'_> {
+        QueryObservationOptions {
+            transport: Transport::Udp,
+            cookie_validated: false,
+            parse_duration: None,
+            max_cname_chain: 8,
+            any_response: AnyResponseMode::Minimal,
+            zone_image_serve_enabled: false,
+            zone_image_shadow,
+        }
+    }
+
     fn active_example_zone() -> ZoneStore {
         let zones = ZoneStore::new();
         zones.insert_snapshot(ZoneSnapshot::active(
@@ -15863,6 +16494,7 @@ mod tests {
             edns_padding_block_size: 0,
             extended_dns_errors: ExtendedDnsErrorsMode::Off,
             any_response: AnyResponseMode::Minimal,
+            zone_image_serve_enabled: false,
             nsid: Vec::new(),
             chaos_version: String::new(),
             chaos_hostname: String::new(),
@@ -15875,6 +16507,7 @@ mod tests {
             notify_log_limiter: notify_log_limiter_for_test(),
             metrics: metrics.clone(),
             rrl: RrlLimiter::from_config(&rrl_config, metrics),
+            zone_image_shadow: ZoneImageShadowValidator::new(false),
         }
     }
 

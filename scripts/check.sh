@@ -22,6 +22,9 @@ python3 -m py_compile scripts/check-srs-identifier-registry.py
 python3 -m py_compile scripts/check-doc-hygiene.py
 python3 -m py_compile scripts/check-srs-hygiene.py
 python3 -m py_compile scripts/check-srs-review-disposition.py
+python3 -m py_compile scripts/check-zone-image-prototype-benchmark.py
+python3 -m py_compile scripts/compare-zone-image-benchmarks.py
+python3 -m py_compile scripts/check-zone-image-evidence-tools.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
@@ -38,6 +41,7 @@ python3 scripts/check-srs-identifier-registry.py
 python3 scripts/check-doc-hygiene.py
 python3 scripts/check-srs-hygiene.py
 python3 scripts/check-srs-review-disposition.py
+python3 scripts/check-zone-image-evidence-tools.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
@@ -53,6 +57,9 @@ bash -n scripts/capture-resource-evidence.sh
 bash -n scripts/capture-coverage-evidence.sh
 bash -n scripts/capture-unsafe-dependency-evidence.sh
 bash -n scripts/capture-interface-compatibility-evidence.sh
+bash -n scripts/benchmark-dns-clients.sh
+bash -n scripts/benchmark-zone-image-prototype.sh
+bash -n scripts/zone-image-evidence-gate.sh
 bash -n scripts/fuzz-campaign.sh
 bash -n scripts/engineering-mvp-evidence.sh
 bash -n scripts/package-docker-image.sh

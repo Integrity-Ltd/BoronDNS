@@ -1,10 +1,14 @@
-use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr};
+use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr, sync::Arc};
 
 use siphasher::sip::SipHasher24;
+use smallvec::SmallVec;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
-use crate::zone::{ResourceRecord, Rrset, ZoneState, ZoneStore};
+use crate::{
+    zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
+    zone_image::{ZoneImage, ZoneImageLookupPlan, ZoneImageWireRecord},
+};
 
 // ODS-NFR-MAINT-004 principal functional requirement references for DNS
 // message parsing, authoritative response construction, EDNS, DNSSEC serving,
@@ -290,6 +294,10 @@ impl DomainName {
         self.labels.len()
     }
 
+    pub(crate) fn labels(&self) -> &[Vec<u8>] {
+        &self.labels
+    }
+
     pub fn parent(&self) -> Option<Self> {
         if self.labels.is_empty() {
             return None;
@@ -410,6 +418,8 @@ pub enum DatagramAction {
     Discard,
     Respond(Vec<u8>),
 }
+
+pub type ZoneImageProvider<'a> = &'a dyn Fn(&Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnyResponseMode {
@@ -601,6 +611,75 @@ pub fn answer_message_with_notify_hooks_and_query_observer(
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
     query_answered: impl Fn(&LookupResult),
 ) -> DatagramAction {
+    answer_message_with_notify_hooks_query_observer_and_zone_image(
+        packet,
+        zone_store,
+        options,
+        notify_authorized,
+        notify_accepted,
+        query_answered,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn answer_message_with_notify_hooks_query_observer_and_zone_image(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    query_answered: impl Fn(&LookupResult),
+    zone_image_provider: Option<ZoneImageProvider<'_>>,
+) -> DatagramAction {
+    let observer = FullLookupObserver {
+        callback: query_answered,
+    };
+    answer_message_with_notify_hooks_observer_and_zone_image(
+        packet,
+        zone_store,
+        options,
+        notify_authorized,
+        notify_accepted,
+        &observer,
+        zone_image_provider,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    lookup_observed: impl Fn(LookupMetrics),
+    zone_image_provider: Option<ZoneImageProvider<'_>>,
+) -> DatagramAction {
+    let observer = LookupMetricsObserver {
+        callback: lookup_observed,
+    };
+    answer_message_with_notify_hooks_observer_and_zone_image(
+        packet,
+        zone_store,
+        options,
+        notify_authorized,
+        notify_accepted,
+        &observer,
+        zone_image_provider,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn answer_message_with_notify_hooks_observer_and_zone_image(
+    packet: &[u8],
+    zone_store: &ZoneStore,
+    options: AnswerOptions,
+    notify_authorized: impl Fn(&DomainName, u16) -> bool,
+    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
+    query_observer: &impl AnswerQueryObserver,
+    zone_image_provider: Option<ZoneImageProvider<'_>>,
+) -> DatagramAction {
     let header = match Header::parse(packet) {
         Ok(header) => header,
         Err(DnsParseError::ShortHeader) => return DatagramAction::Discard,
@@ -639,7 +718,73 @@ pub fn answer_message_with_notify_hooks_and_query_observer(
         }
     }
 
-    answer_query_message(&header, packet, zone_store, options, &query_answered)
+    answer_query_message(
+        &header,
+        packet,
+        zone_store,
+        options,
+        query_observer,
+        zone_image_provider,
+    )
+}
+
+trait AnswerQueryObserver {
+    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()>;
+    fn observe_zone_image_plan(
+        &self,
+        image: &ZoneImage,
+        plan: &ZoneImageLookupPlan,
+        direct_answer: bool,
+    ) -> Option<()>;
+}
+
+struct FullLookupObserver<F> {
+    callback: F,
+}
+
+impl<F> AnswerQueryObserver for FullLookupObserver<F>
+where
+    F: Fn(&LookupResult),
+{
+    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()> {
+        (self.callback)(lookup);
+        Some(())
+    }
+
+    fn observe_zone_image_plan(
+        &self,
+        image: &ZoneImage,
+        plan: &ZoneImageLookupPlan,
+        _direct_answer: bool,
+    ) -> Option<()> {
+        let lookup = image.materialize_lookup_result(plan).ok()?;
+        (self.callback)(&lookup);
+        Some(())
+    }
+}
+
+struct LookupMetricsObserver<F> {
+    callback: F,
+}
+
+impl<F> AnswerQueryObserver for LookupMetricsObserver<F>
+where
+    F: Fn(LookupMetrics),
+{
+    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()> {
+        (self.callback)(LookupMetrics::from(lookup));
+        Some(())
+    }
+
+    fn observe_zone_image_plan(
+        &self,
+        _image: &ZoneImage,
+        plan: &ZoneImageLookupPlan,
+        direct_answer: bool,
+    ) -> Option<()> {
+        (self.callback)(LookupMetrics::from_zone_image_plan(plan, direct_answer));
+        Some(())
+    }
 }
 
 fn answer_query_message(
@@ -647,7 +792,8 @@ fn answer_query_message(
     packet: &[u8],
     zone_store: &ZoneStore,
     options: AnswerOptions,
-    query_answered: &impl Fn(&LookupResult),
+    query_observer: &impl AnswerQueryObserver,
+    zone_image_provider: Option<ZoneImageProvider<'_>>,
 ) -> DatagramAction {
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -785,6 +931,18 @@ fn answer_query_message(
         ));
     }
 
+    if let Some(response) = try_answer_with_zone_image(
+        header,
+        &question,
+        &zone,
+        metadata,
+        options,
+        query_observer,
+        zone_image_provider,
+    ) {
+        return DatagramAction::Respond(response);
+    }
+
     let lookup = zone.lookup_with_options(
         &question.qname,
         question.qtype,
@@ -808,7 +966,7 @@ fn answer_query_message(
     } else {
         metadata
     };
-    query_answered(&lookup);
+    query_observer.observe_lookup(&lookup);
     DatagramAction::Respond(build_response(
         header,
         lookup.rcode,
@@ -820,6 +978,47 @@ fn answer_query_message(
         metadata.with_dnssec_augmented(dnssec_augmented),
         options,
     ))
+}
+
+fn try_answer_with_zone_image(
+    header: &Header,
+    question: &Question,
+    zone: &Arc<ZoneSnapshot>,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+    query_observer: &impl AnswerQueryObserver,
+    zone_image_provider: Option<ZoneImageProvider<'_>>,
+) -> Option<Vec<u8>> {
+    if metadata.dnssec_requested() || options.any_response != AnyResponseMode::Minimal {
+        return None;
+    }
+
+    let image = zone_image_provider?(zone)?;
+    if let Some(plan) =
+        image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
+        && let Some(response) = build_direct_zone_image_answer_response(
+            header, question, &image, &plan, metadata, options,
+        )
+    {
+        query_observer.observe_zone_image_plan(&image, &plan, true)?;
+        return Some(response);
+    }
+
+    let plan = image
+        .lookup_response_plan(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            options.max_cname_chain,
+        )
+        .ok()?;
+    if plan.is_unsupported() {
+        return None;
+    }
+
+    let response = build_zone_image_response(header, question, &image, &plan, metadata, options)?;
+    query_observer.observe_zone_image_plan(&image, &plan, false)?;
+    Some(response)
 }
 
 pub fn chaos_query_observation(
@@ -1182,6 +1381,175 @@ fn build_response(
     response
 }
 
+fn build_zone_image_response(
+    header: &Header,
+    question: &Question,
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Option<Vec<u8>> {
+    if let Some(response) =
+        build_direct_zone_image_answer_response(header, question, image, plan, metadata, options)
+    {
+        return Some(response);
+    }
+
+    let (answer_count, authority_count, additional_count) =
+        image.plan_section_record_counts(plan).ok()?;
+    let edns_count = usize::from(metadata.edns.is_some());
+    let answer_count = u16::try_from(answer_count).ok()?;
+    let authority_count = u16::try_from(authority_count).ok()?;
+    let additional_count = u16::try_from(additional_count.checked_add(edns_count)?).ok()?;
+
+    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question_wire_len(question) + 256);
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags(plan.rcode(), plan.authoritative(), false)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&answer_count.to_be_bytes());
+    response.extend_from_slice(&authority_count.to_be_bytes());
+    response.extend_from_slice(&additional_count.to_be_bytes());
+    let mut compressor = WireNameCompressor::default();
+    let question_name_len = name_wire_len(question.qname.labels());
+    encode_question(question, &mut response);
+    compressor.register_wire_name_at_offset(
+        &response[DNS_HEADER_LEN..DNS_HEADER_LEN + question_name_len],
+        DNS_HEADER_LEN,
+    );
+
+    image.visit_plan_records(plan, |record| {
+        encode_zone_image_wire_record(record, &mut response, &mut compressor);
+    });
+
+    if let Some(edns) = metadata.edns {
+        encode_opt_record(
+            edns,
+            metadata.extended_rcode,
+            metadata.extended_dns_error,
+            options,
+            metadata.udp_ceiling(options),
+            &mut response,
+        );
+    }
+
+    if options.transport == Transport::Udp && response.len() > metadata.udp_ceiling(options) {
+        return None;
+    }
+    Some(response)
+}
+
+fn build_direct_zone_image_answer_response(
+    header: &Header,
+    question: &Question,
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Option<Vec<u8>> {
+    if plan.rcode() != Rcode::NoError
+        || !plan.authoritative()
+        || metadata.dnssec_requested()
+        || !plan.authority_rrsets().is_empty()
+        || !plan.additional_rrsets().is_empty()
+        || plan.answer_rrsets().len() != 1
+    {
+        return None;
+    }
+
+    let rrset_id = plan.answer_rrsets()[0];
+    let rr_type = image.rrset_type(rrset_id)?;
+    if !zone_image_fast_direct_copy_rdata_type(rr_type) {
+        return None;
+    }
+
+    let rrset_wire = image.rrset_wire(rrset_id)?;
+    let rrset_owner_wire = image.rrset_owner_wire(rrset_id)?;
+    let question_name_len = name_wire_len(question.qname.labels());
+    let mut response =
+        Vec::with_capacity(DNS_HEADER_LEN + question_name_len + 4 + rrset_wire.len() + 64);
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags(plan.rcode(), plan.authoritative(), false)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    let answer_count_offset = response.len();
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&0u16.to_be_bytes());
+    response.extend_from_slice(&u16::from(metadata.edns.is_some()).to_be_bytes());
+    let question_name_offset = response.len();
+    encode_question(question, &mut response);
+    let question_name_end = question_name_offset.checked_add(question_name_len)?;
+    if !wire_names_equal_ignore_ascii_case(
+        rrset_owner_wire,
+        &response[question_name_offset..question_name_end],
+    ) {
+        return None;
+    }
+
+    let mut cursor = 0usize;
+    let mut appended = 0u16;
+    while cursor < rrset_wire.len() {
+        let owner_end = cursor.checked_add(rrset_owner_wire.len())?;
+        let header_end = owner_end.checked_add(10)?;
+        if header_end > rrset_wire.len() {
+            return None;
+        }
+        let rdlength =
+            u16::from_be_bytes([rrset_wire[header_end - 2], rrset_wire[header_end - 1]]) as usize;
+        let record_end = header_end.checked_add(rdlength)?;
+        if record_end > rrset_wire.len() {
+            return None;
+        }
+        response.extend_from_slice(&0xc00cu16.to_be_bytes());
+        response.extend_from_slice(&rrset_wire[owner_end..record_end]);
+        appended = appended.checked_add(1)?;
+        cursor = record_end;
+    }
+    if appended == 0 {
+        return None;
+    }
+    response[answer_count_offset..answer_count_offset + 2].copy_from_slice(&appended.to_be_bytes());
+
+    if let Some(edns) = metadata.edns {
+        encode_opt_record(
+            edns,
+            metadata.extended_rcode,
+            metadata.extended_dns_error,
+            options,
+            metadata.udp_ceiling(options),
+            &mut response,
+        );
+    }
+
+    if options.transport == Transport::Udp && response.len() > metadata.udp_ceiling(options) {
+        return None;
+    }
+    Some(response)
+}
+
+fn zone_image_fast_direct_copy_rdata_type(rr_type: u16) -> bool {
+    rr_type != RecordType::Ns as u16
+        && rr_type != RecordType::Cname as u16
+        && rr_type != RecordType::Ptr as u16
+        && rr_type != RecordType::Soa as u16
+        && rr_type != RecordType::Mx as u16
+        && rr_type != RecordType::Opt as u16
+        && rr_type != RecordType::Tkey as u16
+        && rr_type != RecordType::Tsig as u16
+        && rr_type != RecordType::Ixfr as u16
+        && rr_type != RecordType::Axfr as u16
+}
+
+fn wire_names_equal_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len() && left.eq_ignore_ascii_case(right)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_response_inner(
     header: &Header,
@@ -1382,14 +1750,140 @@ impl NameCompressor {
     }
 }
 
+#[derive(Debug, Default)]
+struct WireNameCompressor {
+    suffix_offsets: HashMap<Vec<u8>, u16>,
+}
+
+impl WireNameCompressor {
+    fn register_wire_name_at_offset(&mut self, wire_name: &[u8], start_offset: usize) {
+        let Some(label_offsets) = wire_label_offsets(wire_name) else {
+            return;
+        };
+        for label_offset in label_offsets {
+            let offset = start_offset + label_offset;
+            if offset <= 0x3fff && wire_name.len().saturating_sub(label_offset) > 2 {
+                self.suffix_offsets
+                    .entry(wire_suffix_key(&wire_name[label_offset..]))
+                    .or_insert(offset as u16);
+            }
+        }
+    }
+
+    fn write_wire_name(&mut self, wire_name: &[u8], response: &mut Vec<u8>) {
+        let Some(label_offsets) = wire_label_offsets(wire_name) else {
+            response.extend_from_slice(wire_name);
+            return;
+        };
+        let pointer_suffix = label_offsets.iter().find_map(|label_offset| {
+            let suffix = &wire_name[*label_offset..];
+            if suffix.len() <= 2 {
+                return None;
+            }
+            self.suffix_offsets
+                .get(&wire_suffix_key(suffix))
+                .copied()
+                .map(|offset| (*label_offset, offset))
+        });
+        let pointer_label_offset = pointer_suffix.map(|(label_offset, _)| label_offset);
+        let write_end = pointer_label_offset.unwrap_or(wire_name.len() - 1);
+        let response_start = response.len();
+        for label_offset in label_offsets
+            .iter()
+            .copied()
+            .take_while(|label_offset| *label_offset < write_end)
+        {
+            let response_offset = response_start + label_offset;
+            if response_offset <= 0x3fff && wire_name.len().saturating_sub(label_offset) > 2 {
+                self.suffix_offsets
+                    .entry(wire_suffix_key(&wire_name[label_offset..]))
+                    .or_insert(response_offset as u16);
+            }
+        }
+        response.extend_from_slice(&wire_name[..write_end]);
+        if let Some((_, offset)) = pointer_suffix {
+            response.extend_from_slice(&(0xc000 | offset).to_be_bytes());
+        } else {
+            response.push(0);
+        }
+    }
+}
+
+type WireLabelOffsets = SmallVec<[usize; 8]>;
+
+fn wire_label_offsets(wire_name: &[u8]) -> Option<WireLabelOffsets> {
+    let mut offsets = SmallVec::new();
+    let mut cursor = 0usize;
+    loop {
+        let len = *wire_name.get(cursor)? as usize;
+        if len & 0xc0 != 0 || len > 63 {
+            return None;
+        }
+        if len == 0 {
+            return (cursor + 1 == wire_name.len()).then_some(offsets);
+        }
+        offsets.push(cursor);
+        cursor = cursor.checked_add(1)?.checked_add(len)?;
+        if cursor >= wire_name.len() {
+            return None;
+        }
+    }
+}
+
+fn wire_name_len_at(bytes: &[u8], offset: usize) -> Option<usize> {
+    let mut cursor = offset;
+    loop {
+        let len = *bytes.get(cursor)? as usize;
+        if len & 0xc0 != 0 || len > 63 {
+            return None;
+        }
+        cursor += 1;
+        if len == 0 {
+            return Some(cursor - offset);
+        }
+        cursor = cursor.checked_add(len)?;
+        if cursor > bytes.len() {
+            return None;
+        }
+    }
+}
+
+fn wire_suffix_key(wire_suffix: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(wire_suffix.len());
+    let mut cursor = 0usize;
+    while cursor < wire_suffix.len() {
+        let len = wire_suffix[cursor] as usize;
+        key.push(wire_suffix[cursor]);
+        cursor += 1;
+        if len == 0 {
+            break;
+        }
+        key.extend(
+            wire_suffix[cursor..cursor + len]
+                .iter()
+                .map(u8::to_ascii_lowercase),
+        );
+        cursor += len;
+    }
+    key
+}
+
 fn question_wire_len(question: &Question) -> usize {
-    question.qname.to_wire().len() + 4
+    name_wire_len(question.qname.labels()) + 4
 }
 
 fn encode_question(question: &Question, response: &mut Vec<u8>) {
-    response.extend_from_slice(&question.qname.to_wire());
+    encode_name_labels(question.qname.labels(), response);
     response.extend_from_slice(&question.qtype.to_be_bytes());
     response.extend_from_slice(&question.qclass.to_be_bytes());
+}
+
+fn encode_name_labels(labels: &[Vec<u8>], response: &mut Vec<u8>) {
+    for label in labels {
+        response.push(label.len() as u8);
+        response.extend_from_slice(label);
+    }
+    response.push(0);
 }
 
 fn name_suffix_key(labels: &[Vec<u8>]) -> Vec<Vec<u8>> {
@@ -1417,26 +1911,127 @@ fn encode_record(record: &ResourceRecord, response: &mut Vec<u8>, compressor: &m
         .copy_from_slice(&(rdlength as u16).to_be_bytes());
 }
 
-fn encode_record_rdata(
-    record: &ResourceRecord,
+fn encode_zone_image_wire_record(
+    record: ZoneImageWireRecord<'_>,
     response: &mut Vec<u8>,
-    compressor: &mut NameCompressor,
+    compressor: &mut WireNameCompressor,
 ) {
-    match record.rr_type {
+    compressor.write_wire_name(record.owner_wire, response);
+    response.extend_from_slice(&record.rr_type.to_be_bytes());
+    response.extend_from_slice(&record.class.to_be_bytes());
+    response.extend_from_slice(&record.ttl.to_be_bytes());
+    let rdlength_offset = response.len();
+    response.extend_from_slice(&0u16.to_be_bytes());
+    let rdata_offset = response.len();
+    encode_zone_image_wire_record_rdata(record.rr_type, record.rdata, response, compressor);
+    let rdlength = response.len() - rdata_offset;
+    response[rdlength_offset..rdlength_offset + 2]
+        .copy_from_slice(&(rdlength as u16).to_be_bytes());
+}
+
+fn encode_zone_image_wire_record_rdata(
+    rr_type: u16,
+    rdata: &[u8],
+    response: &mut Vec<u8>,
+    compressor: &mut WireNameCompressor,
+) {
+    match rr_type {
         rr_type
             if rr_type == RecordType::Ns as u16
                 || rr_type == RecordType::Cname as u16
                 || rr_type == RecordType::Ptr as u16 =>
         {
-            encode_single_name_rdata(&record.rdata, response, compressor)
+            encode_wire_single_name_rdata(rdata, response, compressor)
         }
         rr_type if rr_type == RecordType::Soa as u16 => {
-            encode_soa_rdata(&record.rdata, response, compressor)
+            encode_wire_soa_rdata(rdata, response, compressor)
         }
         rr_type if rr_type == RecordType::Mx as u16 => {
-            encode_mx_rdata(&record.rdata, response, compressor)
+            encode_wire_mx_rdata(rdata, response, compressor)
         }
-        _ => response.extend_from_slice(&record.rdata),
+        _ => response.extend_from_slice(rdata),
+    }
+}
+
+fn encode_wire_single_name_rdata(
+    rdata: &[u8],
+    response: &mut Vec<u8>,
+    compressor: &mut WireNameCompressor,
+) {
+    if wire_name_len_at(rdata, 0) == Some(rdata.len()) {
+        compressor.write_wire_name(rdata, response);
+    } else {
+        response.extend_from_slice(rdata);
+    }
+}
+
+fn encode_wire_soa_rdata(
+    rdata: &[u8],
+    response: &mut Vec<u8>,
+    compressor: &mut WireNameCompressor,
+) {
+    let Some(mname_len) = wire_name_len_at(rdata, 0) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    let Some(rname_len) = wire_name_len_at(rdata, mname_len) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    let timers_offset = mname_len + rname_len;
+    if timers_offset + 20 != rdata.len() {
+        response.extend_from_slice(rdata);
+        return;
+    }
+    compressor.write_wire_name(&rdata[..mname_len], response);
+    compressor.write_wire_name(&rdata[mname_len..timers_offset], response);
+    response.extend_from_slice(&rdata[timers_offset..]);
+}
+
+fn encode_wire_mx_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut WireNameCompressor) {
+    if rdata.len() < 3 {
+        response.extend_from_slice(rdata);
+        return;
+    }
+    let Some(exchange_len) = wire_name_len_at(rdata, 2) else {
+        response.extend_from_slice(rdata);
+        return;
+    };
+    if 2 + exchange_len == rdata.len() {
+        response.extend_from_slice(&rdata[..2]);
+        compressor.write_wire_name(&rdata[2..], response);
+    } else {
+        response.extend_from_slice(rdata);
+    }
+}
+
+fn encode_record_rdata(
+    record: &ResourceRecord,
+    response: &mut Vec<u8>,
+    compressor: &mut NameCompressor,
+) {
+    encode_record_rdata_parts(record.rr_type, &record.rdata, response, compressor);
+}
+
+fn encode_record_rdata_parts(
+    rr_type: u16,
+    rdata: &[u8],
+    response: &mut Vec<u8>,
+    compressor: &mut NameCompressor,
+) {
+    match rr_type {
+        rr_type
+            if rr_type == RecordType::Ns as u16
+                || rr_type == RecordType::Cname as u16
+                || rr_type == RecordType::Ptr as u16 =>
+        {
+            encode_single_name_rdata(rdata, response, compressor)
+        }
+        rr_type if rr_type == RecordType::Soa as u16 => {
+            encode_soa_rdata(rdata, response, compressor)
+        }
+        rr_type if rr_type == RecordType::Mx as u16 => encode_mx_rdata(rdata, response, compressor),
+        _ => response.extend_from_slice(rdata),
     }
 }
 
@@ -2018,6 +2613,42 @@ pub enum LookupTermination {
     MalformedDname,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LookupMetrics {
+    pub termination: Option<LookupTermination>,
+    pub nsec3_iterations_exceeded: bool,
+    pub zone_image_used: bool,
+    pub zone_image_direct_answer: bool,
+}
+
+impl From<&LookupResult> for LookupMetrics {
+    fn from(lookup: &LookupResult) -> Self {
+        Self {
+            termination: lookup.termination,
+            nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
+            zone_image_used: false,
+            zone_image_direct_answer: false,
+        }
+    }
+}
+
+impl From<&ZoneImageLookupPlan> for LookupMetrics {
+    fn from(plan: &ZoneImageLookupPlan) -> Self {
+        Self::from_zone_image_plan(plan, false)
+    }
+}
+
+impl LookupMetrics {
+    fn from_zone_image_plan(plan: &ZoneImageLookupPlan, direct_answer: bool) -> Self {
+        Self {
+            termination: plan.termination(),
+            nsec3_iterations_exceeded: false,
+            zone_image_used: true,
+            zone_image_direct_answer: direct_answer,
+        }
+    }
+}
+
 impl LookupResult {
     pub fn positive(rrset: &Rrset) -> Self {
         Self::positive_records(rrset.records())
@@ -2249,6 +2880,45 @@ mod tests {
         }
     }
 
+    fn store_response_with_zone_image(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
+        let provider = |zone: &Arc<ZoneSnapshot>| ZoneImage::compile(zone).ok().map(Arc::new);
+        store_response_with_zone_image_provider(packet, store, AnswerOptions::default(), &provider)
+    }
+
+    fn store_response_with_zone_image_provider(
+        packet: &[u8],
+        store: &ZoneStore,
+        options: AnswerOptions,
+        provider: ZoneImageProvider<'_>,
+    ) -> Vec<u8> {
+        match answer_message_with_notify_hooks_query_observer_and_zone_image(
+            packet,
+            store,
+            options,
+            |_, _| true,
+            |_, _, _| {},
+            |_| {},
+            Some(provider),
+        ) {
+            DatagramAction::Discard => panic!("expected response"),
+            DatagramAction::Respond(response) => response,
+        }
+    }
+
+    fn direct_zone_image_response_for_packet(
+        packet: &[u8],
+        image: &ZoneImage,
+        options: AnswerOptions,
+    ) -> Option<Vec<u8>> {
+        let header = Header::parse(packet).ok()?;
+        let question = Question::parse(packet).ok()?;
+        let metadata = RequestMetadata::parse(&header, packet, &question).ok()?;
+        let plan = image
+            .lookup_response_plan(&question.qname, question.qtype, question.qclass, 8)
+            .ok()?;
+        build_direct_zone_image_answer_response(&header, &question, image, &plan, metadata, options)
+    }
+
     fn response_answer_types(response: &[u8]) -> Vec<u16> {
         response_answers(response)
             .into_iter()
@@ -2406,6 +3076,17 @@ mod tests {
         let authorities = parse_response_records(response, &mut offset, header.nscount);
         let additionals = parse_response_records(response, &mut offset, header.arcount);
         (answers, authorities, additionals)
+    }
+
+    fn assert_semantic_response_eq(left: &[u8], right: &[u8]) {
+        let left_header = Header::parse(left).unwrap();
+        let right_header = Header::parse(right).unwrap();
+        assert_eq!(left_header.flags & 0x800f, right_header.flags & 0x800f);
+        assert_eq!(left_header.qdcount, right_header.qdcount);
+        assert_eq!(left_header.ancount, right_header.ancount);
+        assert_eq!(left_header.nscount, right_header.nscount);
+        assert_eq!(left_header.arcount, right_header.arcount);
+        assert_eq!(response_sections(left), response_sections(right));
     }
 
     fn parse_response_records(response: &[u8], offset: &mut usize, count: u16) -> ParsedSection {
@@ -3361,6 +4042,876 @@ mod tests {
     }
 
     #[test]
+    fn zone_image_serving_matches_snapshot_positive_response() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let snapshot_response = store_response(&packet, &store);
+        let zone_image_response = store_response_with_zone_image(&packet, &store);
+
+        assert_semantic_response_eq(&snapshot_response, &zone_image_response);
+        let answer_offset = first_answer_offset(&zone_image_response);
+        assert_eq!(zone_image_response[answer_offset] & 0xc0, 0xc0);
+    }
+
+    #[test]
+    fn zone_image_direct_answer_fast_path_handles_edns_positive_rrset() {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec(), [192, 0, 2, 11].to_vec()],
+            )],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot);
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &edns_option(EDNS_NSID_OPTION, &[]));
+        let options = AnswerOptions {
+            nsid: b"dns-bud-1",
+            ..AnswerOptions::default()
+        };
+
+        let direct = direct_zone_image_response_for_packet(&packet, &image, options)
+            .expect("direct fast path should accept direct A+EDNS response");
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+
+        assert_eq!(direct, snapshot_response);
+        assert_eq!(u16::from_be_bytes([direct[6], direct[7]]), 2);
+        assert_eq!(u16::from_be_bytes([direct[10], direct[11]]), 1);
+        assert_eq!(direct[first_answer_offset(&direct)..][0] & 0xc0, 0xc0);
+        assert_eq!(
+            response_opt_option(&direct, EDNS_NSID_OPTION),
+            Some(b"dns-bud-1".to_vec())
+        );
+    }
+
+    #[test]
+    fn zone_image_direct_answer_fast_path_handles_opaque_unknown_rrsets() {
+        const UNKNOWN_TYPE: u16 = 65_280;
+        let pointer_like_rdata = vec![0xc0, 0x0c, 0, 255];
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("opaque.example.test.").unwrap(),
+                    UNKNOWN_TYPE,
+                    1,
+                    300,
+                    vec![Vec::new(), pointer_like_rdata.clone()],
+                ),
+            ],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot);
+        let packet = query(b"\x06opaque\x07example\x04test\x00", UNKNOWN_TYPE, 1);
+
+        let direct =
+            direct_zone_image_response_for_packet(&packet, &image, AnswerOptions::default())
+                .expect("direct fast path should accept opaque unknown RRsets");
+        let snapshot_response = store_response(&packet, &store);
+
+        assert_eq!(direct, snapshot_response);
+        assert_eq!(
+            response_answer_types(&direct),
+            vec![UNKNOWN_TYPE, UNKNOWN_TYPE]
+        );
+        assert_eq!(
+            response_answer_rdatas(&direct, UNKNOWN_TYPE),
+            vec![Vec::new(), pointer_like_rdata]
+        );
+    }
+
+    #[test]
+    fn zone_image_direct_answer_fast_path_rejects_unsupported_shapes() {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("ns.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 53].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("mx.example.test.").unwrap(),
+                    RecordType::Mx as u16,
+                    1,
+                    300,
+                    vec![mx_rdata(10, "mail.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let cname = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::Cname as u16,
+            1,
+        );
+        let ns_with_additional = query(b"\x07example\x04test\x00", RecordType::Ns as u16, 1);
+        let missing = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let tiny_udp = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let mut do_bit = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut do_bit, 4096, 0x8000, &[]);
+        let soa_with_compressible_rdata =
+            query(b"\x07example\x04test\x00", RecordType::Soa as u16, 1);
+        let mx_with_compressible_rdata =
+            query(b"\x02mx\x07example\x04test\x00", RecordType::Mx as u16, 1);
+
+        for (packet, options) in [
+            (&cname, AnswerOptions::default()),
+            (&ns_with_additional, AnswerOptions::default()),
+            (&missing, AnswerOptions::default()),
+            (&tiny_udp, AnswerOptions::udp(32)),
+            (&do_bit, AnswerOptions::default()),
+            (&soa_with_compressible_rdata, AnswerOptions::default()),
+            (&mx_with_compressible_rdata, AnswerOptions::default()),
+        ] {
+            assert!(
+                direct_zone_image_response_for_packet(packet, &image, options).is_none(),
+                "direct fast path accepted unsupported packet {packet:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zone_image_serving_matches_snapshot_negative_response() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        let packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        let snapshot_response = store_response(&packet, &store);
+        let zone_image_response = store_response_with_zone_image(&packet, &store);
+
+        assert_semantic_response_eq(&snapshot_response, &zone_image_response);
+        assert_eq!(zone_image_response[3] & 0x0f, Rcode::NxDomain as u8);
+    }
+
+    #[test]
+    fn zone_image_serving_compresses_known_name_rdata() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        ));
+
+        let packet = query(b"\x05alias\x07example\x04test\x00", RecordType::A as u16, 1);
+        let response = store_response_with_zone_image(&packet, &store);
+        let cname_rdatas = response_answer_rdatas(&response, RecordType::Cname as u16);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(cname_rdatas.len(), 1);
+        assert_ne!(cname_rdatas[0], cname_rdata("target.example.test."));
+        assert_eq!(
+            response_answer_single_name_rdatas(&response, RecordType::Cname as u16),
+            vec![cname_rdata("target.example.test.")]
+        );
+    }
+
+    #[test]
+    fn zone_image_serving_matches_snapshot_mixed_packet_corpus() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("ns.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 53].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 14].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("*.wild.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 11].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("child.example.test.").unwrap(),
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("ns.child.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("ns.child.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 12].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("text.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![character_string(b"present")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("dname.example.test.").unwrap(),
+                    RecordType::Dname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("host.target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 13].to_vec()],
+                ),
+            ],
+        ));
+
+        for (qname, qtype) in [
+            (
+                b"\x03www\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x05alias\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x05alpha\x04wild\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x03www\x05child\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x04text\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x06absent\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+            (
+                b"\x04host\x05dname\x07example\x04test\x00".as_slice(),
+                RecordType::A as u16,
+            ),
+        ] {
+            let packet = query(qname, qtype, 1);
+            let snapshot_response = store_response(&packet, &store);
+            let zone_image_response = store_response_with_zone_image(&packet, &store);
+
+            assert_semantic_response_eq(&snapshot_response, &zone_image_response);
+            assert_eq!(
+                snapshot_response.len(),
+                zone_image_response.len(),
+                "response length mismatch for {:?}",
+                qname
+            );
+        }
+    }
+
+    #[test]
+    fn zone_image_serving_bypasses_provider_for_dnssec_do_queries() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A)],
+                ),
+            ],
+        ));
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let snapshot_response =
+            store_response_with_options(&packet, &store, AnswerOptions::default());
+        let zone_image_response = store_response_with_zone_image_provider(
+            &packet,
+            &store,
+            AnswerOptions::default(),
+            &provider,
+        );
+
+        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            response_answer_types(&zone_image_response),
+            vec![RecordType::A as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(response_opt_ttl(&zone_image_response), Some(0x8000));
+    }
+
+    #[test]
+    fn zone_image_serving_bypasses_provider_for_dnssec_proof_selection_corpus() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("a.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("z.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::Nsec)],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![nsec_rdata("zzz.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![rrsig_rdata(RecordType::A), rrsig_rdata(RecordType::Nsec)],
+                ),
+            ],
+        ));
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let mut positive = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut positive, 4096, 0x8000, &[]);
+        let mut nodata = query(
+            b"\x03www\x07example\x04test\x00",
+            RecordType::Aaaa as u16,
+            1,
+        );
+        append_opt(&mut nodata, 4096, 0x8000, &[]);
+        let mut nxdomain = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut nxdomain, 4096, 0x8000, &[]);
+
+        for packet in [&positive, &nodata, &nxdomain] {
+            let snapshot_response =
+                store_response_with_options(packet, &store, AnswerOptions::default());
+            let zone_image_response = store_response_with_zone_image_provider(
+                packet,
+                &store,
+                AnswerOptions::default(),
+                &provider,
+            );
+
+            assert_eq!(zone_image_response, snapshot_response);
+            assert_eq!(response_opt_ttl(&zone_image_response), Some(0x8000));
+        }
+
+        assert_eq!(
+            response_answer_types(&store_response_with_options(
+                &positive,
+                &store,
+                AnswerOptions::default(),
+            )),
+            vec![RecordType::A as u16, RecordType::Rrsig as u16]
+        );
+        assert_eq!(
+            response_authority_types(&store_response_with_options(
+                &nodata,
+                &store,
+                AnswerOptions::default(),
+            )),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(
+            response_authority_types(&store_response_with_options(
+                &nxdomain,
+                &store,
+                AnswerOptions::default(),
+            )),
+            vec![
+                RecordType::Soa as u16,
+                RecordType::Nsec as u16,
+                RecordType::Nsec as u16,
+                RecordType::Rrsig as u16,
+                RecordType::Rrsig as u16,
+            ]
+        );
+        assert_eq!(provider_calls.get(), 0);
+    }
+
+    #[test]
+    fn zone_image_serving_bypasses_provider_for_full_any_mode() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![character_string(b"present")],
+                ),
+            ],
+        ));
+        let packet = query(b"\x05alias\x07example\x04test\x00", DNS_CLASS_ANY, 1);
+        let options = AnswerOptions {
+            any_response: AnyResponseMode::Full,
+            ..AnswerOptions::default()
+        };
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+        let zone_image_response =
+            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+
+        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            response_answer_types(&zone_image_response),
+            vec![RecordType::Cname as u16, RecordType::Txt as u16]
+        );
+    }
+
+    #[test]
+    fn zone_image_serving_falls_back_when_udp_ceiling_requires_truncation() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                300,
+                (0..20).map(|_| vec![60; 50]).collect(),
+            )],
+        ));
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::Txt as u16, 1);
+        let options = AnswerOptions::udp(128);
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+        let zone_image_response =
+            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+        let flags = u16::from_be_bytes([zone_image_response[2], zone_image_response[3]]);
+
+        assert_eq!(provider_calls.get(), 1);
+        assert_eq!(zone_image_response, snapshot_response);
+        assert!(zone_image_response.len() <= 128);
+        assert_eq!(flags & 0x0200, 0x0200);
+    }
+
+    #[test]
+    fn zone_image_serving_matches_snapshot_with_edns_options() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let mut nsid_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(
+            &mut nsid_packet,
+            4096,
+            0,
+            &edns_option(EDNS_NSID_OPTION, &[]),
+        );
+        let nsid_options = AnswerOptions {
+            nsid: b"dns-bud-1",
+            ..AnswerOptions::default()
+        };
+        assert_eq!(
+            store_response_with_zone_image_provider(&nsid_packet, &store, nsid_options, &provider),
+            store_response_with_options(&nsid_packet, &store, nsid_options)
+        );
+
+        let secret = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &secret, 1_559_731_985);
+        let client_cookie = hex_to_vec("2464c4abcf10c957");
+        let mut cookie_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(
+            &mut cookie_packet,
+            4096,
+            0,
+            &edns_option(EDNS_COOKIE_OPTION, &client_cookie),
+        );
+        let cookie_options = AnswerOptions {
+            dns_cookie: Some(context),
+            ..AnswerOptions::default()
+        };
+        let cookie_response = store_response_with_zone_image_provider(
+            &cookie_packet,
+            &store,
+            cookie_options,
+            &provider,
+        );
+        assert_eq!(
+            cookie_response,
+            store_response_with_options(&cookie_packet, &store, cookie_options)
+        );
+        assert_eq!(
+            response_opt_option(&cookie_response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
+        );
+
+        let mut padding_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(
+            &mut padding_packet,
+            4096,
+            0,
+            &edns_option(EDNS_PADDING_OPTION, &[0, 0, 0, 0]),
+        );
+        let padding_options = AnswerOptions {
+            edns_padding_block_size: 32,
+            ..AnswerOptions::default()
+        };
+        let padding_response = store_response_with_zone_image_provider(
+            &padding_packet,
+            &store,
+            padding_options,
+            &provider,
+        );
+        assert_eq!(
+            padding_response,
+            store_response_with_options(&padding_packet, &store, padding_options)
+        );
+        assert_eq!(padding_response.len() % 32, 0);
+        assert_eq!(provider_calls.get(), 3);
+    }
+
+    #[test]
+    fn zone_image_serving_preserves_ede_not_ready_fallback() {
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[]);
+        let options = AnswerOptions {
+            extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+            ..AnswerOptions::default()
+        };
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+        let zone_image_response =
+            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+
+        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(zone_image_response[3] & 0x0f, Rcode::ServFail as u8);
+        assert_eq!(
+            response_ede_info_codes(&zone_image_response),
+            vec![EDE_NOT_READY]
+        );
+    }
+
+    #[test]
+    fn zone_image_serving_matches_snapshot_across_udp_ceiling_cases() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("big.example.test.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    (0..20).map(|_| vec![60; 50]).collect(),
+                ),
+            ],
+        ));
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+
+        let mut small_edns_512 = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut small_edns_512, 512, 0, &[]);
+        let mut big_edns_1232 = query(b"\x03big\x07example\x04test\x00", RecordType::Txt as u16, 1);
+        append_opt(&mut big_edns_1232, 4096, 0, &[]);
+        let mut big_edns_4096 = query(b"\x03big\x07example\x04test\x00", RecordType::Txt as u16, 1);
+        append_opt(&mut big_edns_4096, 4096, 0, &[]);
+
+        for (packet, options, expect_truncated) in [
+            (
+                query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+                AnswerOptions::udp(512),
+                false,
+            ),
+            (small_edns_512, AnswerOptions::udp(1232), false),
+            (
+                query(b"\x03big\x07example\x04test\x00", RecordType::Txt as u16, 1),
+                AnswerOptions::udp(1232),
+                true,
+            ),
+            (big_edns_1232, AnswerOptions::udp(1232), true),
+            (big_edns_4096, AnswerOptions::udp(4096), false),
+        ] {
+            let snapshot_response = store_response_with_options(&packet, &store, options);
+            let zone_image_response =
+                store_response_with_zone_image_provider(&packet, &store, options, &provider);
+            let flags = u16::from_be_bytes([zone_image_response[2], zone_image_response[3]]);
+
+            assert_eq!(zone_image_response, snapshot_response);
+            assert_eq!(flags & 0x0200 != 0, expect_truncated);
+            if options.transport == Transport::Udp {
+                assert!(zone_image_response.len() <= options.max_udp_payload as usize);
+            }
+        }
+
+        assert_eq!(provider_calls.get(), 5);
+    }
+
+    #[test]
     fn direct_soa_answer_keeps_rrset_ttl() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -4172,6 +5723,86 @@ mod tests {
         assert_eq!(response_opt_ttl(&response), Some(0x8000));
         assert_eq!(
             response_ede_info_codes(&response),
+            vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
+        );
+    }
+
+    #[test]
+    fn zone_image_serving_bypasses_provider_for_dnssec_nsec3_ede_cap() {
+        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
+        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    missing_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 4096, 0x8000, &[]);
+        let options = AnswerOptions {
+            nsec3_max_iterations: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+            ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
+        };
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |zone: &Arc<ZoneSnapshot>| {
+            provider_calls.set(provider_calls.get() + 1);
+            ZoneImage::compile(zone).ok().map(Arc::new)
+        };
+        let nsec3_iterations_exceeded = std::cell::Cell::new(false);
+
+        let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+            &packet,
+            &store,
+            options,
+            |_, _| true,
+            |_, _, _| {},
+            |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
+            Some(&provider),
+        );
+        let zone_image_response = match action {
+            DatagramAction::Discard => panic!("expected response"),
+            DatagramAction::Respond(response) => response,
+        };
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+
+        assert_eq!(provider_calls.get(), 0);
+        assert!(nsec3_iterations_exceeded.get());
+        assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(zone_image_response[3] & 0x0f, Rcode::NxDomain as u8);
+        assert_eq!(
+            response_authority_types(&zone_image_response),
+            vec![RecordType::Soa as u16]
+        );
+        assert_eq!(response_opt_ttl(&zone_image_response), Some(0x8000));
+        assert_eq!(
+            response_ede_info_codes(&zone_image_response),
             vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
         );
     }

@@ -40,6 +40,8 @@ and slowly diverging.
 | How is the implementation structured? | `architecture.md` | Keep internal module and unsafe-boundary detail out of the SRS unless it is observable behavior. |
 | Where is RR catalogue implementation detail kept? | `rr-type-catalogue.md` | Keep code paths, tests, and out-of-catalogue examples here; let the SRS own the normative type list. |
 | Where are deferred optimization tracks detailed? | `future-optimization-tracks.md` | Keep future XDP, packed-store, and response-cache design constraints here; let SRS Appendix C.6 record the formal scope boundary. |
+| Where is the next data-plane design detailed? | `memory-io-data-plane-design.md` | Keep packed `ZoneImage`, packet-I/O, metric, benchmark, and tuning details here; summarize only the deferred-track boundary elsewhere. |
+| Where is ZoneImage implementation status tracked? | `zone-image-implementation-status.md` | Keep checklist state, remaining layout work, and old query-layout retirement status here; keep detailed design rationale in `memory-io-data-plane-design.md`. |
 | What is the health and metrics HTTP contract? | `health-metrics-interface.md` | Keep concrete paths, bodies, headers, and rate-limit behavior here; let the SRS own requirement IDs and stable behavior. |
 | How does an operator run it? | `operator-deployment-guide.md` | Keep deployment commands and operational examples here, not in the SRS. |
 | Where are operator SLOs published? | `operational-slos.md` | Keep informative SLO targets here and link from the operator guide; do not duplicate the SLO table in the SRS. |
@@ -58,6 +60,12 @@ and slowly diverging.
   posture.
 - `future-optimization-tracks.md`: deferred XDP/eBPF, packed-zone-store, and
   response-cache tracks referenced by SRS Appendix C.6.
+- `memory-io-data-plane-design.md`: implementation-ready design for the
+  deferred packed `ZoneImage`, response-composition, metric, comparison,
+  tuning, and packet-I/O optimization track.
+- `zone-image-implementation-status.md`: checklist tracker for implemented,
+  partial, and remaining `ZoneImage` work, including retirement of the old
+  query-time memory layout.
 - `health-metrics-interface.md`: concrete health and metrics HTTP path, body,
   header, gzip, and rate-limit contract for `ODS-IF-HEALTH`.
 - `rr-type-catalogue.md`: code-aligned RR catalogue implementation notes for

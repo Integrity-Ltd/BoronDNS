@@ -50,7 +50,7 @@ REQUIRED_STABILITY = {
     ("health", "/healthz"): "stable",
     ("health", "/metrics"): "stable",
 }
-ALLOWED_STABILITY = {"stable", "deprecated", "additive"}
+ALLOWED_STABILITY = {"stable", "deprecated", "additive", "experimental"}
 ALLOWED_CHANGE_POLICY = {"major", "minor-additive", "patch-compatible"}
 
 
@@ -79,6 +79,10 @@ def read_baseline(path: Path) -> dict[tuple[str, str], dict[str, str]]:
             fail(f"{path}:{row_number}: invalid stability {row['stability']}")
         if row["change_policy"] not in ALLOWED_CHANGE_POLICY:
             fail(f"{path}:{row_number}: invalid change_policy {row['change_policy']}")
+        if row["stability"] == "experimental" and row["change_policy"] != "minor-additive":
+            fail(f"{path}:{row_number}: experimental interfaces must use minor-additive policy")
+        if row["stability"] == "experimental" and "disabled by default" not in row["notes"]:
+            fail(f"{path}:{row_number}: experimental interfaces must document disabled-by-default status")
         baseline[key] = row
     return baseline
 

@@ -1,0 +1,217 @@
+# ZoneImage Implementation Status
+
+Status legend:
+
+- `[x]`: implemented and locally validated.
+- `[~]`: partially implemented, implemented behind a fallback, or validated only
+  on local/loopback evidence.
+- `[ ]`: not implemented.
+
+Owner: this document tracks implementation status for the NSD-style immutable
+`ZoneImage` data-plane track described in
+`docs/memory-io-data-plane-design.md`. It also tracks the eventual retirement
+of the old query-time `ZoneSnapshot` memory layout after `ZoneImage` becomes
+the complete production query data plane.
+
+This is an implementation tracker, not a normative DNS behavior source. DNS
+requirements remain owned by `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
+
+## Current Summary
+
+- [x] Local immutable `ZoneImage` MVP exists.
+- [x] The gated runtime path can serve supported non-DNSSEC query shapes.
+- [x] Local differential, unit, prototype, and loopback evidence exists.
+- [~] `ZoneImage` is still experimental and disabled by default.
+- [~] The old `ZoneSnapshot` query layout remains the correctness oracle and
+  fallback.
+- [ ] Physical NIC promotion evidence is not complete.
+- [ ] The old query-time memory layout is not retired.
+
+Working position: the first useful local data-plane slice is implemented. The
+next work is to broaden correctness coverage, collect physical evidence, then
+promote `ZoneImage` from opt-in serving path to default query layout. Only after
+that should the old query-time layout be phased out.
+
+## Phase 0: Baseline And Evidence Harness
+
+- [x] Retain current-path benchmark artifacts for comparison.
+- [x] Separate parse, lookup, compose, and send timing in retained evidence.
+- [x] Retain build and host provenance in benchmark artifacts.
+- [x] Retain query trace input for replayed live-runtime comparisons.
+- [x] Add comparator for current path versus `ZoneImage`.
+- [x] Add served-path counters proving whether `ZoneImage` served or fell back.
+- [x] Add direct-answer and semantic-plan served-hit counters.
+- [x] Add network snapshot and `/proc/net/dev` delta artifacts.
+- [x] Add physical-promotion comparator checks for non-loopback device, packet
+  counters, drops, errors, provenance, client mode, remote SSH target, and
+  remote binary digest.
+- [~] Physical-gate preflight exists, but same-host SSH identity rejection still
+  needs to be added before using it as strong physical evidence.
+- [ ] Run the physical gate from a separate client host over a real non-loopback
+  NIC.
+- [ ] Retain 10G/25G/40G-class multi-queue NIC evidence.
+
+## Phase 1: Handle-Based Lookup
+
+- [x] Introduce handle/plan style lookup through `ZoneImageLookupPlan`.
+- [x] Avoid ordinary direct-positive `ResourceRecord` materialization on the
+  fastest supported direct-answer path.
+- [x] Add metrics that distinguish current lookup from `ZoneImage` lookup.
+- [~] The old `ZoneSnapshot` lookup path still materializes owned response
+  records and remains the fallback.
+- [ ] Remove the old query-time materialization path after `ZoneImage` is the
+  complete default query data plane.
+
+## Phase 2: Exact ZoneImage Prototype
+
+- [x] Compile an immutable `ZoneImage` from the existing safe `ZoneSnapshot`.
+- [x] Build canonical packed name nodes and sorted child edges.
+- [x] Store RRset metadata by integer IDs.
+- [x] Store label, owner-name, RDATA, and RRset-wire arenas.
+- [x] Use checked offsets and lengths instead of unsafe pointer arithmetic.
+- [x] Implement exact positive lookup.
+- [x] Support ANY-class direct answers where current semantics allow it.
+- [x] Add exact-lookup differential tests against the current snapshot model.
+- [x] Emit shape and byte statistics for the prototype benchmark.
+- [x] Keep packed lookup in safe Rust.
+
+## Phase 3: Full Name Semantics
+
+- [x] Wildcard lookup.
+- [x] Empty non-terminal behavior through closest-encloser style lookup.
+- [x] CNAME handling.
+- [x] DNAME synthesis and target resolution.
+- [x] Delegation and referral handling.
+- [x] Glue selection for delegated NS targets.
+- [x] Additional A/AAAA selection for answer-section address targets.
+- [x] NODATA and NXDOMAIN behavior for supported unsigned paths.
+- [x] Parent-chain indexes for delegation and DNAME discovery.
+- [x] Stress benchmark for delegation/DNAME candidate scans.
+- [x] Opt-in `zone_image_shadow_enabled`.
+- [x] Opt-in `zone_image_serve_enabled`.
+- [x] Fallback for unsupported or risky query shapes.
+- [~] Full DNSSEC negative-proof behavior is not implemented in `ZoneImage`;
+  DNSSEC query shapes intentionally bypass or fall back to the current path.
+- [~] Full QTYPE ANY behavior falls back unless the configured minimal mode is
+  compatible with the `ZoneImage` path.
+- [~] UDP truncation edge cases fall back to the current composer.
+
+## Phase 4: Wire Composition
+
+- [x] Pre-encode immutable RRset wire chunks.
+- [x] Direct hot answer emitter copies validated RRset wire bodies.
+- [x] Direct emitter patches answer counts without a generic section-counting
+  pass.
+- [x] Direct emitter avoids repeated owner parsing for copied direct answers.
+- [x] Generic `ZoneImage` composer writes question names directly from parsed
+  labels.
+- [x] Generic composer registers question-name compression state.
+- [x] Known-name RDATA compression is preserved for supported generic paths.
+- [x] Opaque and unknown RR types can use the direct-copy path after validation.
+- [~] The full response composer is not yet a pure immutable template/WireArena
+  pipeline.
+- [~] Some semantic paths still rebuild temporary `ResourceRecord` values.
+- [ ] Precompute negative SOA variants for the `ZoneImage` composer.
+- [ ] Add response-template cache experiments.
+- [ ] Add composer fuzz and bounds tests targeted specifically at the final
+  WireArena writer.
+
+## Phase 5: DNSSEC Denial And Signed Zones
+
+- [x] DNSSEC-sensitive query shapes are guarded so the current path remains the
+  correctness source.
+- [x] Tests cover bypass behavior for DO, NSEC proof selection, NSEC3 cap/EDE,
+  and DNSSEC fallback cases.
+- [ ] Add RRSIG covered-type indexes to `ZoneImage`.
+- [ ] Add NSEC indexes to `ZoneImage`.
+- [ ] Add NSEC3 indexes to `ZoneImage`.
+- [ ] Implement bounded dynamic NSEC3 work in the `ZoneImage` path.
+- [ ] Add packet-level signed-zone differential corpus for `ZoneImage`.
+- [ ] Promote DNSSEC-capable `ZoneImage` serving after signed-zone evidence.
+
+## Phase 6: Runtime Integration And Promotion
+
+- [x] Runtime can compile and cache `ZoneImage` from a published snapshot.
+- [x] Last-hit cache avoids repeated zone-key map lookup for repeated queries.
+- [x] Shadow validation can compare `ZoneImage` and current snapshot answers.
+- [x] Serving path records hits, direct hits, semantic hits, and fallbacks.
+- [~] Runtime serving remains opt-in and experimental.
+- [~] The current snapshot path remains the default query path.
+- [ ] Make `ZoneImage` default for unsigned supported query traffic.
+- [ ] Keep a short rollback window where the old path can still be enabled.
+- [ ] Remove fallback reliance for query shapes after equivalent `ZoneImage`
+  behavior and evidence exist.
+- [ ] Retire `ZoneSnapshot` as the query-time data plane.
+- [ ] Keep `ZoneSnapshot` or an equivalent safe builder model only for ingestion,
+  validation, transfer, catalog reconciliation, and `ZoneImage` compilation.
+
+## Phase 7: Packet I/O And NIC Evidence
+
+- [x] Existing standard socket path continues to work as the baseline.
+- [x] Benchmark harness can run local and SSH-client modes.
+- [x] Benchmark artifacts retain enough network evidence for physical review.
+- [~] Physical preflight exists but still needs same-host SSH rejection.
+- [ ] Implement standard UDP batch adapter.
+- [ ] Compare standard UDP batch adapter against the current socket path.
+- [ ] Add packet-capture evidence for the promoted UDP path.
+- [ ] Run separate-client non-loopback physical gate.
+- [ ] Run multi-queue NIC profile with CPU/RSS/IRQ affinity recorded.
+- [ ] Decide whether io_uring is worth implementing.
+- [ ] Decide whether AF_XDP is worth implementing for the server.
+
+## Phase 8: Layout Tuning Experiments
+
+- [x] Current layout uses simple packed arrays, integer IDs, and segmented
+  arenas.
+- [x] Current lookup avoids global delegation/DNAME scans with compact indexes.
+- [x] Current benchmark records node, edge, RRset, record, hot-byte, and
+  cold-byte counts.
+- [ ] Add zone-shape histograms for high fan-out nodes and RRset distribution.
+- [ ] Compare current sorted-edge lookup against adaptive radix on measured
+  high-fanout corpora.
+- [ ] Compare current sorted-edge lookup against generated perfect hash tables
+  where fan-out justifies it.
+- [ ] Evaluate software prefetch only after CPU profiles show lookup-memory
+  stalls.
+- [ ] Evaluate huge pages only after retained evidence shows TLB pressure.
+- [ ] Evaluate NUMA-local or replicated images only on suitable multi-socket or
+  NUMA-relevant hosts.
+
+## Old Query Layout Retirement Checklist
+
+The old query-time memory layout should not be removed just because `ZoneImage`
+is faster locally. Retire it only after these are true:
+
+- [ ] `ZoneImage` supports all authoritative query semantics currently served
+  by the old query path, including signed-zone denial behavior.
+- [ ] Shadow validation over representative operator traces records zero
+  mismatches/errors.
+- [ ] Packet-level differential tests cover positive, negative, wildcard,
+  delegation, CNAME, DNAME, additional-data, EDNS, truncation, DNSSEC, and
+  unknown-RR cases.
+- [ ] Physical benchmark evidence shows `ZoneImage` is not slower on real NIC
+  profiles.
+- [ ] Operational metrics expose enough fallback/mismatch detail for rollback
+  during the promotion window.
+- [ ] Configuration defaults switch to `ZoneImage` serving.
+- [ ] The old query path remains available for one explicit rollback period.
+- [ ] After the rollback period, query-serving code no longer materializes the
+  old layout on the hot path.
+- [ ] Transfer ingestion and validation still use a clear safe builder model.
+- [ ] Documentation no longer describes the old layout as the primary serving
+  data plane.
+
+## Recommended Order
+
+1. Finish physical-evidence hardening by rejecting same-host SSH clients.
+2. Commit the current local MVP and evidence tooling as the experimental
+   `ZoneImage` data-plane slice.
+3. Run the physical promotion gate on a separate client host and real NIC.
+4. Fill DNSSEC denial indexes and signed-zone differential tests.
+5. Complete the pure WireArena composer and remove remaining temporary
+   `ResourceRecord` materialization from served `ZoneImage` paths.
+6. Promote `ZoneImage` to default for unsigned supported traffic.
+7. Add the standard UDP batch adapter and measure whether packet I/O is the next
+   bottleneck.
+8. Start the old query layout retirement checklist only after full semantic and
+   physical evidence exists.

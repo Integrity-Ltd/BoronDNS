@@ -107,19 +107,30 @@ The metrics endpoint exposes these implemented metric families:
 - `oxidedns_secondary_query_duration_seconds` query latency histogram, with
   buckets configured by `[metrics].latency_histogram_buckets`;
 - opt-in active-zone shape gauges under `oxidedns_zone_shape_*`;
+- experimental immutable-zone-image serving counters under
+  `oxidedns_zone_image_serve_*` and opt-in shadow counters under
+  `oxidedns_zone_image_shadow_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
 
 The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
-coupled to emitted EDE INFO-CODE 27: with `edns.extended_dns_errors = "off"`,
-over-cap NSEC3 proof omissions are not counted yet. The formal acceptance gap is
-owned by `docs/mvp-gap-register.md`.
+driven by lookup-time NSEC3 proof-omission observation rather than serialized
+EDE options. Over-cap NSEC3 proof omissions remain counted with
+`edns.extended_dns_errors = "off"` even when EDE INFO-CODE 27 is absent from
+the response.
 
-The opt-in metric families may walk active zone snapshots or collect extra
-pipeline timing. Keep `[metrics].zone_shape_enabled` and
+The opt-in metric families may walk active zone snapshots, compile immutable
+zone-image shadows, or collect extra pipeline timing. Keep
+`[metrics].zone_shape_enabled`, `[metrics].zone_image_shadow_enabled`, and
 `[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
-captures. These metrics do not enable a response cache; the current server
-still assembles authoritative responses from the active in-memory zone snapshot
-on demand.
+captures. These metrics do not enable a response cache or change the served
+answer path. The separate experimental `[query].zone_image_serve_enabled` gate
+can serve supported non-DNSSEC query shapes from immutable `ZoneImage` wire
+sections; unsupported shapes and oversized UDP responses still fall back to the
+ordinary active-snapshot response path. The served-hit and fallback counters
+make retained benchmark artifacts auditable: a ZoneImage-enabled run must show
+hits to prove it exercised the optimized path. Direct-answer and semantic-hit
+sub-counters distinguish the guarded hot direct-answer emitter from the generic
+semantic ZoneImage planner.
 
 ## Rate Limiting
 

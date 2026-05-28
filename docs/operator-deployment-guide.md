@@ -480,8 +480,16 @@ curl -fsS http://127.0.0.1:8080/metrics
 The metrics catalogue, gzip behavior, and opt-in expensive diagnostic metric
 families are documented in
 [`health-metrics-interface.md`](health-metrics-interface.md#metrics). Keep
-`[metrics].zone_shape_enabled` and `[metrics].pipeline_timing_enabled` disabled
-outside benchmark or diagnostic captures.
+`[metrics].zone_shape_enabled`, `[metrics].zone_image_shadow_enabled`, and
+`[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
+captures.
+
+The experimental `[query].zone_image_serve_enabled` gate is separate from
+metrics collection. It serves only supported non-DNSSEC query shapes from the
+immutable `ZoneImage` response path and falls back to ordinary snapshot lookup
+otherwise. Keep it disabled for normal deployments until the retained
+packet-level comparison and traffic-capture evidence for the target zone shape
+is available.
 
 SRS v0.9.1 still requires retained release evidence for build-info label
 accuracy, latency histogram behavior under release traffic, broader retained

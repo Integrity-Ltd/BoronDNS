@@ -914,6 +914,8 @@ pub struct MetricsConfig {
     pub pipeline_timing_enabled: bool,
     #[serde(default)]
     pub zone_shape_enabled: bool,
+    #[serde(default)]
+    pub zone_image_shadow_enabled: bool,
 }
 
 impl Default for MetricsConfig {
@@ -922,6 +924,7 @@ impl Default for MetricsConfig {
             latency_histogram_buckets: default_latency_histogram_buckets(),
             pipeline_timing_enabled: false,
             zone_shape_enabled: false,
+            zone_image_shadow_enabled: false,
         }
     }
 }
@@ -986,6 +989,8 @@ impl Eq for LatencyHistogramBucketSeconds {}
 pub struct QuerySettings {
     #[serde(default)]
     pub any_response: AnyResponseConfig,
+    #[serde(default)]
+    pub zone_image_serve_enabled: bool,
 }
 
 impl QuerySettings {
@@ -1001,6 +1006,7 @@ impl Default for QuerySettings {
     fn default() -> Self {
         Self {
             any_response: AnyResponseConfig::Minimal,
+            zone_image_serve_enabled: false,
         }
     }
 }
@@ -2023,6 +2029,7 @@ mod tests {
         );
         assert!(!config.metrics.pipeline_timing_enabled);
         assert!(!config.metrics.zone_shape_enabled);
+        assert!(!config.metrics.zone_image_shadow_enabled);
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 3600);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 300);
@@ -2039,6 +2046,7 @@ mod tests {
         assert_eq!(config.tsig.fudge_seconds, DEFAULT_TSIG_FUDGE_SECS);
         assert_eq!(config.query.any_response, AnyResponseConfig::Minimal);
         assert_eq!(config.query.any_response_mode(), AnyResponseMode::Minimal);
+        assert!(!config.query.zone_image_serve_enabled);
         assert_eq!(config.zones[0].class, "IN");
         assert_eq!(config.limits.max_udp_payload, 1232);
         assert_eq!(config.limits.max_cname_chain, 8);
@@ -3525,6 +3533,7 @@ mod tests {
                 latency_histogram_buckets = [0.0002, 0.001, 0.01]
                 pipeline_timing_enabled = true
                 zone_shape_enabled = true
+                zone_image_shadow_enabled = true
 
                 [[zones]]
                 name = "example.test."
@@ -3539,6 +3548,7 @@ mod tests {
         );
         assert!(config.metrics.pipeline_timing_enabled);
         assert!(config.metrics.zone_shape_enabled);
+        assert!(config.metrics.zone_image_shadow_enabled);
     }
 
     #[test]
@@ -3735,6 +3745,7 @@ mod tests {
 
                 [query]
                 any_response = "full"
+                zone_image_serve_enabled = true
 
                 [[zones]]
                 name = "example.test."
@@ -3745,6 +3756,7 @@ mod tests {
 
         assert_eq!(config.query.any_response, AnyResponseConfig::Full);
         assert_eq!(config.query.any_response_mode(), AnyResponseMode::Full);
+        assert!(config.query.zone_image_serve_enabled);
     }
 
     #[test]

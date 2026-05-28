@@ -88,6 +88,7 @@ module_map = [
     ("crates/oxidedns-core/src/config.rs", "static TOML configuration model and validation"),
     ("crates/oxidedns-core/src/tsig.rs", "TSIG signing, verification, and error response helpers"),
     ("crates/oxidedns-core/src/zone.rs", "memory-resident zone snapshots and lookup state"),
+    ("crates/oxidedns-core/src/zone_image.rs", "experimental immutable zone image, semantic lookup plans, and wire-section response prototype"),
     ("crates/oxidedns-core/src/lib.rs", "core crate public API boundary"),
     ("crates/oxidedns-server/src/lib.rs", "runtime listeners, refresh scheduling, health/metrics, interop-facing behavior"),
     ("crates/oxidedns-server/src/privilege.rs", "audited POSIX privilege-drop FFI boundary"),

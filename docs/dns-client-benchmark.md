@@ -22,6 +22,11 @@ OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
 OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_DURATION_SECONDS=10 \
 OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false \
+OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false \
+OXIDEDNS_BENCH_TRACE_ENABLED=false \
+OXIDEDNS_BENCH_LISTEN_ADDRESS=127.0.0.1 \
+OXIDEDNS_BENCH_CLIENT_SERVER=127.0.0.1 \
+OXIDEDNS_BENCH_CLIENT_BIND=127.0.0.1:0 \
 scripts/benchmark-dns-clients.sh
 ```
 
@@ -40,10 +45,217 @@ profile once with `OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false` and once with
 pipeline stage histograms and response-cache candidate counters in
 `metrics-after.prom`.
 
+To compare the experimental immutable ZoneImage serving path against the
+current snapshot path, run the same profile once with
+`OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false` and once with
+`OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=true`. The generated configuration,
+`run.env`, `benchmark-results.tsv`, and capability summary record the selected
+value.
+
+To replay an explicit query trace through the live runtime path, set
+`OXIDEDNS_BENCH_TRACE_ENABLED=true`. The script generates and retains
+`query-trace.tsv` in the artifact directory, then passes it to
+`tools/dns-load-client.rs` with `--trace`. To replay a caller-supplied trace,
+set `OXIDEDNS_BENCH_TRACE_FILE=/path/to/query-trace.tsv`; rows use:
+
+```text
+qname qtype qclass [none|edns|do] [rcode=NOERROR|NXDOMAIN|N] [answers=N] [label]
+```
+
+The default expectation is `rcode=NOERROR answers=1`, which preserves the
+direct-hit benchmark behavior. Add `answers=0` for NODATA rows and
+`rcode=NXDOMAIN answers=0` for negative rows. The generated trace includes hot
+and spread positive A rows, EDNS positive A, apex NS/SOA, glue, an opaque
+unknown RR type, NODATA, and NXDOMAIN rows.
+Set `OXIDEDNS_BENCH_STRESS_CANDIDATES=N` to also load `N` delegation and DNAME
+candidate pairs into the synthetic primary and generated trace. The stress rows
+alternate referral queries under delegated names with DNAME synthesis queries,
+which makes the live benchmark exercise the same name-graph shape as the
+in-process ZoneImage stress benchmark.
+
+After recording a current-path artifact and a ZoneImage artifact for the same
+profile, compare them with:
+
+```bash
+scripts/compare-zone-image-benchmarks.py \
+  --current target/evidence/zone-image-evidence-gate-loopback-stress-metrics-smoke/current \
+  --zone-image target/evidence/zone-image-evidence-gate-loopback-stress-metrics-smoke/zone-image \
+  --min-qps-ratio 1.25 \
+  --max-p50-ratio 0.80 \
+  --output target/evidence/zone-image-evidence-gate-loopback-stress-metrics-smoke/comparison.tsv
+```
+
+The comparator verifies matching profile metadata, matching retained trace hash
+for trace-mode runs, expected `zone_image_serve_enabled` values, drop/error
+limits, ZoneImage served-hit counters, and the configured throughput and
+latency ratios. The served-hit counters include total, direct-answer, semantic,
+and fallback counts; the direct/semantic counts must add up to total served
+hits, and ZoneImage fallbacks must be zero unless an explicit
+`--max-zone-image-fallbacks` value is supplied. Add
+`--require-direct-and-semantic` when the retained trace must prove that both the
+guarded direct-answer hot path and semantic planner were used.
+Add `--require-non-loopback` for physical NIC promotion evidence; that mode
+also requires both artifacts to record the same non-loopback network device and
+to have been captured with `require_non_loopback_device=true`, matching
+listen/client provenance, matching build provenance, matching `client_mode`,
+matching `remote_client_ssh`, a concrete non-loopback `client_server`,
+matching local/remote client architecture,
+`remote_client_allow_arch_mismatch=false`, matching local and remote
+`dns-load-client` binary SHA-256 digests, and retained
+`network/proc-net-dev-delta.tsv` files showing positive RX/TX packet and byte
+deltas, with zero RX/TX drop and error deltas, for both artifacts. Physical
+promotion mode requires `client_mode=ssh` and a non-empty remote SSH target so
+same-host local traffic cannot be promoted as physical server-NIC evidence; it
+also rejects architecture-override artifacts because the promoted result must
+prove the copied load-generator binary ran on a compatible client. Build
+provenance includes the Git revision and dirty-state, kernel, Rust toolchain,
+build profile, server binary digest, and load-client binary digest. The
+benchmark summary rows for RX/TX packet deltas must match the retained
+`proc-net-dev` delta file so mixed or stale network snapshots cannot satisfy the
+physical promotion gate. By default, RX and TX packet deltas must each be at
+least `0.25` packets per measured response so incidental background traffic
+cannot satisfy the physical promotion gate; use
+`--min-network-packets-per-response` only when the retained artifact explains a
+lower packet-per-response shape.
+For the common two-run workflow, `scripts/zone-image-evidence-gate.sh` wraps
+both live runs and the comparator:
+
+```bash
+OXIDEDNS_ZONE_IMAGE_GATE_MIN_QPS_RATIO=1.25 \
+OXIDEDNS_ZONE_IMAGE_GATE_MAX_P50_RATIO=0.75 \
+OXIDEDNS_BENCH_STRESS_CANDIDATES=128 \
+scripts/zone-image-evidence-gate.sh
+```
+
+The wrapper writes `current/`, `zone-image/`, `comparison.tsv`, and a README
+under one evidence directory. It uses the trace retained by the current-path
+run for the ZoneImage run, requires both direct-answer and semantic served-hit
+counters to be positive, and refuses to reuse a non-empty gate directory unless
+`OXIDEDNS_ZONE_IMAGE_GATE_OVERWRITE=true` is set.
+
+The in-process prototype benchmark has a separate checker:
+
+```bash
+scripts/check-zone-image-prototype-benchmark.py \
+  --input target/zone-image-bench/prototype-latest.tsv \
+  --output target/zone-image-bench/prototype-check-latest.tsv
+```
+
+Use it after `scripts/benchmark-zone-image-prototype.sh` to verify the retained
+TSV before comparing live runtime artifacts.
+
+The comparator and promotion checks have a synthetic regression test:
+
+```bash
+python3 scripts/check-zone-image-evidence-tools.py
+```
+
+It builds temporary current/ZoneImage artifacts and verifies normal loopback
+comparison, physical-NIC comparison, loopback rejection under
+`--require-non-loopback`, network-device mismatch rejection, direct/semantic
+coverage rejection, local-client and remote-client mismatch rejection,
+ZoneImage fallback rejection, zero network-counter rejection, stale
+benchmark-summary counter rejection, and drop-counter rejection.
+
+For NIC-facing evidence, run the same harness from a client host or namespace
+that reaches the OxideDNS host address and set:
+
+```bash
+OXIDEDNS_BENCH_LISTEN_ADDRESS=192.0.2.10 \
+OXIDEDNS_BENCH_CLIENT_SERVER=192.0.2.10 \
+OXIDEDNS_BENCH_CLIENT_BIND=0.0.0.0:0 \
+OXIDEDNS_BENCH_NETWORK_DEVICE=enp1s0 \
+OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true \
+scripts/benchmark-dns-clients.sh
+```
+
+`OXIDEDNS_BENCH_LISTEN_ADDRESS` controls the OxideDNS UDP/TCP listener, while
+`OXIDEDNS_BENCH_CLIENT_SERVER` controls the load-client destination. Use a
+concrete destination address, not `0.0.0.0`. `OXIDEDNS_BENCH_CLIENT_BIND`
+controls the UDP source bind only; TCP source address selection is left to the
+OS. `OXIDEDNS_BENCH_NETWORK_DEVICE=auto` records `lo` for loopback and otherwise
+uses `ip route get` against the client destination when available.
+`OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true` fails fast if the destination
+or resolved network device is loopback or unknown, which prevents accidentally
+recording loopback evidence as NIC-facing evidence. It also verifies that the
+resolved or configured `OXIDEDNS_BENCH_NETWORK_DEVICE` exists on the server
+host before starting services, so a stale or misspelled interface name fails
+during preflight instead of after a useless benchmark run.
+
+For physical NIC promotion evidence, prefer running the harness on the
+OxideDNS host and driving load from a second machine over SSH:
+
+```bash
+OXIDEDNS_BENCH_CLIENT_MODE=ssh \
+OXIDEDNS_BENCH_REMOTE_CLIENT_SSH=bench-client.example.net \
+OXIDEDNS_BENCH_LISTEN_ADDRESS=192.0.2.10 \
+OXIDEDNS_BENCH_CLIENT_SERVER=192.0.2.10 \
+OXIDEDNS_BENCH_CLIENT_BIND=0.0.0.0:0 \
+OXIDEDNS_BENCH_NETWORK_DEVICE=enp1s0 \
+OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true \
+scripts/benchmark-dns-clients.sh
+```
+
+In SSH mode the server host still starts the synthetic primary and OxideDNS,
+captures `network/` before and after the load window, and writes the final
+artifact locally. The script copies the compiled `dns-load-client` binary and
+the retained trace, when present, to
+`OXIDEDNS_BENCH_REMOTE_CLIENT_WORKDIR` on the remote client and records the
+exact remote command in `remote-client-command.txt`. This is the intended path
+for evidence where `/proc/net/dev` deltas need to prove traffic crossed a
+physical server NIC. The remote client should be the same CPU architecture as
+the server for the copied benchmark binary. SSH-mode runs check `uname -m` on
+both hosts and fail before starting local services if they differ. Set
+`OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true` only when you intend to
+replace the copied binary or run a compatible remote binary manually with the
+captured command. The benchmark artifact records the local architecture, remote
+architecture, and whether the override was enabled.
+Direct SSH-mode benchmark runs perform a non-interactive SSH reachability check
+before building tools or starting local services; tune that timeout with
+`OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS`.
+When `OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`, the wrapper fails
+before starting either run unless `OXIDEDNS_BENCH_CLIENT_MODE=ssh` and
+`OXIDEDNS_BENCH_REMOTE_CLIENT_SSH` are set. In SSH mode the wrapper defaults
+the client bind to `0.0.0.0:0`; in local mode it defaults to `127.0.0.1:0`.
+The wrapper also performs a non-interactive SSH reachability check before
+starting either benchmark run, and applies the same remote architecture guard;
+tune the timeout with `OXIDEDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS`.
+Unless `OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS` is set
+explicitly, the wrapper propagates that timeout to the two benchmark runs.
+
+Before occupying ports or starting the benchmark services, validate a proposed
+physical run with:
+
+```bash
+OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY=true \
+OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true \
+OXIDEDNS_BENCH_CLIENT_MODE=ssh \
+OXIDEDNS_BENCH_REMOTE_CLIENT_SSH=bench-client.example.net \
+OXIDEDNS_BENCH_LISTEN_ADDRESS=192.0.2.10 \
+OXIDEDNS_BENCH_CLIENT_SERVER=192.0.2.10 \
+OXIDEDNS_BENCH_NETWORK_DEVICE=enp1s0 \
+scripts/zone-image-evidence-gate.sh
+```
+
+The preflight validates wrapper options, SSH reachability, local/remote
+architecture compatibility, concrete non-loopback listen/client settings, and
+toolchain/build provenance without starting the synthetic primary or OxideDNS.
+It writes a small `*.preflight.env` file next to the planned gate directory and
+leaves the actual gate directory untouched. For direct benchmark preflight, use
+`OXIDEDNS_BENCH_PREFLIGHT_ONLY=true scripts/benchmark-dns-clients.sh`.
+
 The script writes retained artifacts under
 `target/evidence/dns-client-benchmark-<timestamp>/`, including server logs,
 client output, the generated configuration, Prometheus metrics before and after
-the run, and `benchmark-results.tsv`.
+the run, optional `query-trace.tsv`, `benchmark-results.tsv`, and a `network/`
+directory with before/after route, address, `/proc/net/dev`, softirq, interrupt,
+and optional `ethtool` snapshots for the recorded network device. The
+`network/proc-net-dev-delta.tsv` file summarizes packet and error counter
+deltas for the selected device; `network/ethtool-delta.tsv` is also written
+when ethtool data is available. `benchmark-results.tsv` also records Git,
+kernel, Rust toolchain, build profile, and local binary SHA-256 provenance. In
+SSH mode, `remote-client-command.txt` records the remote command plus the local
+and remote load-client binary digests.
 
 ## Large Catalog Benchmark
 

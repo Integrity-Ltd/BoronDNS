@@ -28,6 +28,9 @@ The stability commitment covers:
 - Minor releases may add optional configuration fields, optional command-line
   flags, additive metric labels, additive metric series, additive JSON fields,
   and new warning classes.
+- Experimental interfaces may be tracked before release promotion when they are
+  opt-in, disabled by default, and recorded with `minor-additive` change policy.
+  Promotion to stable requires release notes or an interface-baseline update.
 - Deprecations may be introduced in minor releases only when the old interface
   remains available and release notes name the migration path.
 - Removal or semantic change of a stable interface element requires a major
