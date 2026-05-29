@@ -45,8 +45,8 @@ that should the old query-time layout be phased out.
 - [x] Add physical-promotion comparator checks for non-loopback device, packet
   counters, drops, errors, provenance, client mode, remote SSH target, and
   remote binary digest.
-- [~] Physical-gate preflight exists, but same-host SSH identity rejection still
-  needs to be added before using it as strong physical evidence.
+- [x] Physical-gate preflight rejects SSH clients whose host identity matches
+  the local server host.
 - [ ] Run the physical gate from a separate client host over a real non-loopback
   NIC.
 - [ ] Retain 10G/25G/40G-class multi-queue NIC evidence.
@@ -108,9 +108,24 @@ that should the old query-time layout be phased out.
 - [x] Generic composer registers question-name compression state.
 - [x] Known-name RDATA compression is preserved for supported generic paths.
 - [x] Opaque and unknown RR types can use the direct-copy path after validation.
+- [x] Additional-data planning for NS/MX/SRV/NAPTR/SVCB/HTTPS parses targets
+  directly from `ZoneImage` RDATA arenas instead of rebuilding full answer
+  record vectors.
+- [x] Delegation glue planning parses NS targets directly from RRset RDATA.
+- [x] Exact CNAME and DNAME planning reads first-hop targets directly from
+  RRset RDATA instead of materializing those RRsets.
+- [x] SOA TTL-override wire emission reuses stored owner-wire slices instead
+  of allocating a temporary owner buffer.
+- [x] Wildcard owner-substitution answers keep RRset handles with stored
+  owner-wire overrides instead of synthesized `ResourceRecord` vectors.
+- [x] DNAME-synthesized CNAME answers store owner wire and RDATA fields without
+  rebuilding a full `ResourceRecord` for the composer.
+- [x] Focused tests cover wildcard owner overrides, additional-data discovery,
+  and wire-record visitation from handles.
 - [~] The full response composer is not yet a pure immutable template/WireArena
   pipeline.
-- [~] Some semantic paths still rebuild temporary `ResourceRecord` values.
+- [~] Public `LookupResult` materialization still rebuilds temporary
+  `ResourceRecord` values for compatibility outside the packet hot path.
 - [ ] Precompute negative SOA variants for the `ZoneImage` composer.
 - [ ] Add response-template cache experiments.
 - [ ] Add composer fuzz and bounds tests targeted specifically at the final
@@ -150,7 +165,7 @@ that should the old query-time layout be phased out.
 - [x] Existing standard socket path continues to work as the baseline.
 - [x] Benchmark harness can run local and SSH-client modes.
 - [x] Benchmark artifacts retain enough network evidence for physical review.
-- [~] Physical preflight exists but still needs same-host SSH rejection.
+- [x] Physical preflight rejects same-host SSH clients.
 - [ ] Implement standard UDP batch adapter.
 - [ ] Compare standard UDP batch adapter against the current socket path.
 - [ ] Add packet-capture evidence for the promoted UDP path.
@@ -203,15 +218,12 @@ is faster locally. Retire it only after these are true:
 
 ## Recommended Order
 
-1. Finish physical-evidence hardening by rejecting same-host SSH clients.
-2. Commit the current local MVP and evidence tooling as the experimental
-   `ZoneImage` data-plane slice.
-3. Run the physical promotion gate on a separate client host and real NIC.
-4. Fill DNSSEC denial indexes and signed-zone differential tests.
-5. Complete the pure WireArena composer and remove remaining temporary
+1. Run the physical promotion gate on a separate client host and real NIC.
+2. Fill DNSSEC denial indexes and signed-zone differential tests.
+3. Complete the pure WireArena composer and remove remaining temporary
    `ResourceRecord` materialization from served `ZoneImage` paths.
-6. Promote `ZoneImage` to default for unsigned supported traffic.
-7. Add the standard UDP batch adapter and measure whether packet I/O is the next
+4. Promote `ZoneImage` to default for unsigned supported traffic.
+5. Add the standard UDP batch adapter and measure whether packet I/O is the next
    bottleneck.
-8. Start the old query layout retirement checklist only after full semantic and
+6. Start the old query layout retirement checklist only after full semantic and
    physical evidence exists.

@@ -18,6 +18,25 @@ max_p999_ratio="${OXIDEDNS_ZONE_IMAGE_GATE_MAX_P999_RATIO:-}"
 ssh_connect_timeout="${OXIDEDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
 remote_client_allow_arch_mismatch="${OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH:-false}"
 
+hash_identity() {
+    local identity="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$identity" | sha256sum | awk '{ print $1 }'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$identity" | shasum -a 256 | awk '{ print $1 }'
+    else
+        printf 'unknown'
+    fi
+}
+
+local_host_identity() {
+    if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+        cat /proc/sys/kernel/random/boot_id
+    else
+        hostname
+    fi
+}
+
 case "$require_non_loopback" in
 true | false) ;;
 *)
@@ -104,6 +123,24 @@ if [[ "$require_non_loopback" == true ]]; then
     if [[ "$local_arch" != "$remote_arch" && "$remote_client_allow_arch_mismatch" != true ]]; then
         printf 'remote benchmark client architecture mismatch: local=%q remote=%q. The benchmark copies the local dns-load-client binary to the remote host; set OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true only if you will replace or run a compatible remote binary manually.\n' "$local_arch" "$remote_arch" >&2
         exit 69
+    fi
+    local_host_id="$(hash_identity "$(local_host_identity | tr -d '\r')")"
+    if ! remote_host_raw="$(ssh -o BatchMode=yes -o "ConnectTimeout=$ssh_connect_timeout" "$OXIDEDNS_BENCH_REMOTE_CLIENT_SSH" 'if [ -r /proc/sys/kernel/random/boot_id ]; then cat /proc/sys/kernel/random/boot_id; else hostname; fi' | tr -d '\r')"; then
+        printf 'remote benchmark client host-identity preflight failed for %s\n' "$OXIDEDNS_BENCH_REMOTE_CLIENT_SSH" >&2
+        exit 69
+    fi
+    if [[ -z "$remote_host_raw" ]]; then
+        printf 'remote benchmark client host-identity preflight returned an empty identity for %s\n' "$OXIDEDNS_BENCH_REMOTE_CLIENT_SSH" >&2
+        exit 69
+    fi
+    remote_host_id="$(hash_identity "$remote_host_raw")"
+    if [[ "$local_host_id" == unknown || "$remote_host_id" == unknown ]]; then
+        printf 'remote benchmark client host-identity preflight could not compute a host identity digest\n' >&2
+        exit 69
+    fi
+    if [[ "$local_host_id" == "$remote_host_id" ]]; then
+        printf 'physical NIC evidence requested, but OXIDEDNS_BENCH_REMOTE_CLIENT_SSH appears to resolve to the local server host\n' >&2
+        exit 64
     fi
 fi
 export OXIDEDNS_BENCH_CLIENT_MODE="$client_mode"

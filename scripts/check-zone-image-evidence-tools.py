@@ -37,6 +37,9 @@ BASE_RESULTS = {
     "remote_client_ssh": "none",
     "remote_client_local_arch": "none",
     "remote_client_remote_arch": "none",
+    "remote_client_local_host_id": "none",
+    "remote_client_remote_host_id": "none",
+    "remote_client_same_host": "none",
     "remote_client_allow_arch_mismatch": "none",
     "require_non_loopback_device": "false",
     "network_snapshot_dir": "network",
@@ -146,6 +149,9 @@ def write_artifact(
         results["remote_client_ssh"] = "bench-client.example.net"
         results["remote_client_local_arch"] = "x86_64"
         results["remote_client_remote_arch"] = "x86_64"
+        results["remote_client_local_host_id"] = "local-host"
+        results["remote_client_remote_host_id"] = "remote-host"
+        results["remote_client_same_host"] = "false"
         results["remote_client_allow_arch_mismatch"] = "false"
         results["remote_client_bin_sha256"] = results["client_bin_sha256"]
         results["require_non_loopback_device"] = "true"
@@ -319,7 +325,19 @@ def existing_non_loopback_device() -> str:
     return "lo"
 
 
-def install_fake_arch_ssh(temp: Path, remote_arch: str) -> str:
+def local_host_identity() -> str:
+    boot_id = Path("/proc/sys/kernel/random/boot_id")
+    if boot_id.is_file():
+        return boot_id.read_text(encoding="utf-8").strip()
+    return os.uname().nodename
+
+
+def install_fake_arch_ssh(
+    temp: Path,
+    remote_arch: str,
+    *,
+    remote_host_identity: str = "remote-test-host",
+) -> str:
     fakebin = temp / "fakebin"
     fakebin.mkdir(exist_ok=True)
     ssh = fakebin / "ssh"
@@ -331,6 +349,7 @@ def install_fake_arch_ssh(temp: Path, remote_arch: str) -> str:
                 "case \"$last_arg\" in",
                 "  true) exit 0 ;;",
                 f"  'uname -m') printf '%s\\n' {remote_arch!r}; exit 0 ;;",
+                f"  *boot_id*) printf '%s\\n' {remote_host_identity!r}; exit 0 ;;",
                 "  *) exit 0 ;;",
                 "esac",
                 "",
@@ -396,6 +415,9 @@ def main() -> None:
         assert_output_contains(output, "remote_client_ssh\tbench-client.example.net")
         assert_output_contains(output, "remote_client_local_arch\tx86_64")
         assert_output_contains(output, "remote_client_remote_arch\tx86_64")
+        assert_output_contains(output, "remote_client_local_host_id\tlocal-host")
+        assert_output_contains(output, "remote_client_remote_host_id\tremote-host")
+        assert_output_contains(output, "remote_client_same_host\tfalse")
         assert_output_contains(output, f"client_bin_sha256\t{'b' * 64}")
         assert_output_contains(output, f"remote_client_bin_sha256\t{'b' * 64}")
 
@@ -565,6 +587,32 @@ def main() -> None:
         assert_output_contains(
             output,
             "zone_image remote client architecture mismatch: local='x86_64' remote='aarch64'",
+        )
+
+        same_host_zone = temp / "same-host-zone"
+        write_artifact(same_host_zone, zone_image=True, network_device="enp1s0")
+        update_results(
+            same_host_zone,
+            {
+                "remote_client_remote_host_id": "local-host",
+                "remote_client_same_host": "true",
+            },
+        )
+        output = temp / "same-host-comparison.tsv"
+        result = run_compare(
+            nic_current,
+            same_host_zone,
+            output,
+            require_non_loopback=True,
+        )
+        assert_status(
+            "physical comparison same-host rejection",
+            result,
+            expected_success=False,
+        )
+        assert_output_contains(
+            output,
+            "physical NIC promotion requires a distinct remote client host",
         )
 
         weak_build_zone = temp / "weak-build-zone"
@@ -937,6 +985,44 @@ def main() -> None:
             "ssh benchmark arch-mismatch preflight rejection",
             result,
             "remote benchmark client architecture mismatch",
+        )
+
+        fake_same_host_ssh_path = install_fake_arch_ssh(
+            temp,
+            os.uname().machine,
+            remote_host_identity=local_host_identity(),
+        )
+        result = run_gate_preflight(
+            temp,
+            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
+            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            PATH=fake_same_host_ssh_path,
+        )
+        assert_status(
+            "physical gate same-host preflight rejection",
+            result,
+            expected_success=False,
+        )
+        assert_stderr_contains(
+            "physical gate same-host preflight rejection",
+            result,
+            "appears to resolve to the local server host",
+        )
+
+        result = run_benchmark_preflight(
+            temp,
+            OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE="true",
+            PATH=fake_same_host_ssh_path,
+        )
+        assert_status(
+            "ssh benchmark same-host preflight rejection",
+            result,
+            expected_success=False,
+        )
+        assert_stderr_contains(
+            "ssh benchmark same-host preflight rejection",
+            result,
+            "appears to resolve to the local server host",
         )
 
     print("zone_image_evidence_tools_check=passed")

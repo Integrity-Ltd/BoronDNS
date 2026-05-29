@@ -35,6 +35,9 @@ remote_client_ssh_connect_timeout="${OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TI
 remote_client_allow_arch_mismatch="${OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH:-false}"
 remote_client_local_arch="none"
 remote_client_remote_arch="none"
+remote_client_local_host_id="none"
+remote_client_remote_host_id="none"
+remote_client_same_host="none"
 remote_client_bin_sha256="none"
 git_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 if git -C "$repo_root" status --porcelain=v1 --untracked-files=normal >/dev/null 2>&1; then
@@ -61,6 +64,25 @@ digest_file() {
         shasum -a 256 "$path" | awk '{ print $1 }'
     else
         printf 'unknown'
+    fi
+}
+
+hash_identity() {
+    local identity="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$identity" | sha256sum | awk '{ print $1 }'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$identity" | shasum -a 256 | awk '{ print $1 }'
+    else
+        printf 'unknown'
+    fi
+}
+
+local_host_identity() {
+    if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+        cat /proc/sys/kernel/random/boot_id
+    else
+        hostname
     fi
 }
 
@@ -197,6 +219,26 @@ if [[ "$client_mode" == ssh ]]; then
         printf 'remote benchmark client architecture mismatch: local=%q remote=%q. The benchmark copies the local dns-load-client binary to the remote host; set OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true only if you will replace or run a compatible remote binary manually.\n' "$remote_client_local_arch" "$remote_client_remote_arch" >&2
         exit 69
     fi
+    remote_client_local_host_raw="$(local_host_identity | tr -d '\r')"
+    if ! remote_client_remote_host_raw="$(ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" "$remote_client_ssh" 'if [ -r /proc/sys/kernel/random/boot_id ]; then cat /proc/sys/kernel/random/boot_id; else hostname; fi' | tr -d '\r')"; then
+        printf 'remote benchmark client host-identity preflight failed for %s\n' "$remote_client_ssh" >&2
+        exit 69
+    fi
+    if [[ -z "$remote_client_local_host_raw" || -z "$remote_client_remote_host_raw" ]]; then
+        printf 'remote benchmark client host-identity preflight returned an empty identity for %s\n' "$remote_client_ssh" >&2
+        exit 69
+    fi
+    remote_client_local_host_id="$(hash_identity "$remote_client_local_host_raw")"
+    remote_client_remote_host_id="$(hash_identity "$remote_client_remote_host_raw")"
+    if [[ "$remote_client_local_host_id" == "$remote_client_remote_host_id" ]]; then
+        remote_client_same_host="true"
+    else
+        remote_client_same_host="false"
+    fi
+    if [[ "$require_non_loopback_device" == true && "$remote_client_same_host" == true ]]; then
+        printf 'physical NIC evidence requested, but OXIDEDNS_BENCH_REMOTE_CLIENT_SSH appears to resolve to the local server host\n' >&2
+        exit 64
+    fi
 fi
 
 if [[ "$network_device" == auto ]]; then
@@ -244,6 +286,9 @@ if [[ "$preflight_only" == true ]]; then
     printf 'remote_client_ssh=%s\n' "${remote_client_ssh:-none}"
     printf 'remote_client_local_arch=%s\n' "$remote_client_local_arch"
     printf 'remote_client_remote_arch=%s\n' "$remote_client_remote_arch"
+    printf 'remote_client_local_host_id=%s\n' "$remote_client_local_host_id"
+    printf 'remote_client_remote_host_id=%s\n' "$remote_client_remote_host_id"
+    printf 'remote_client_same_host=%s\n' "$remote_client_same_host"
     printf 'remote_client_allow_arch_mismatch=%s\n' "$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)"
     printf 'git_revision=%s\n' "$git_revision"
     printf 'git_dirty=%s\n' "$git_dirty"
@@ -736,6 +781,9 @@ remote_client_workdir=$([[ "$client_mode" == ssh ]] && echo "$remote_client_work
 remote_client_ssh_connect_timeout=$([[ "$client_mode" == ssh ]] && echo "$remote_client_ssh_connect_timeout" || echo none)
 remote_client_local_arch=$remote_client_local_arch
 remote_client_remote_arch=$remote_client_remote_arch
+remote_client_local_host_id=$remote_client_local_host_id
+remote_client_remote_host_id=$remote_client_remote_host_id
+remote_client_same_host=$remote_client_same_host
 remote_client_allow_arch_mismatch=$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)
 git_revision=$git_revision
 git_dirty=$git_dirty
@@ -858,6 +906,9 @@ else
         printf 'remote_client_workdir=%s\n' "$remote_client_workdir"
         printf 'remote_client_local_arch=%s\n' "$remote_client_local_arch"
         printf 'remote_client_remote_arch=%s\n' "$remote_client_remote_arch"
+        printf 'remote_client_local_host_id=%s\n' "$remote_client_local_host_id"
+        printf 'remote_client_remote_host_id=%s\n' "$remote_client_remote_host_id"
+        printf 'remote_client_same_host=%s\n' "$remote_client_same_host"
         printf 'remote_client_allow_arch_mismatch=%s\n' "$remote_client_allow_arch_mismatch"
         printf 'local_client_bin_sha256=%s\n' "$client_bin_sha256"
         printf 'remote_client_bin_sha256=%s\n' "$remote_client_bin_sha256"
@@ -935,6 +986,9 @@ client_mode	$client_mode	mode
 remote_client_ssh	${remote_client_ssh:-none}	ssh_target
 remote_client_local_arch	$remote_client_local_arch	architecture
 remote_client_remote_arch	$remote_client_remote_arch	architecture
+remote_client_local_host_id	$remote_client_local_host_id	sha256
+remote_client_remote_host_id	$remote_client_remote_host_id	sha256
+remote_client_same_host	$remote_client_same_host	boolean
 remote_client_allow_arch_mismatch	$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)	boolean
 network_rx_packets_delta	$network_rx_packets_delta	packets
 network_tx_packets_delta	$network_tx_packets_delta	packets

@@ -100,7 +100,8 @@ to have been captured with `require_non_loopback_device=true`, matching
 listen/client provenance, matching build provenance, matching `client_mode`,
 matching `remote_client_ssh`, a concrete non-loopback `client_server`,
 matching local/remote client architecture,
-`remote_client_allow_arch_mismatch=false`, matching local and remote
+`remote_client_allow_arch_mismatch=false`, distinct local/remote host identity,
+matching local and remote
 `dns-load-client` binary SHA-256 digests, and retained
 `network/proc-net-dev-delta.tsv` files showing positive RX/TX packet and byte
 deltas, with zero RX/TX drop and error deltas, for both artifacts. Physical
@@ -203,13 +204,18 @@ the retained trace, when present, to
 `OXIDEDNS_BENCH_REMOTE_CLIENT_WORKDIR` on the remote client and records the
 exact remote command in `remote-client-command.txt`. This is the intended path
 for evidence where `/proc/net/dev` deltas need to prove traffic crossed a
-physical server NIC. The remote client should be the same CPU architecture as
-the server for the copied benchmark binary. SSH-mode runs check `uname -m` on
-both hosts and fail before starting local services if they differ. Set
+physical server NIC. The remote client must be a distinct host: SSH-mode runs
+hash local and remote host identity from `/proc/sys/kernel/random/boot_id` when
+available, falling back to hostname, and physical-promotion preflight rejects a
+remote target that resolves back to the local server host. The remote client
+should be the same CPU architecture as the server for the copied benchmark
+binary. SSH-mode runs check `uname -m` on both hosts and fail before starting
+local services if they differ. Set
 `OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true` only when you intend to
 replace the copied binary or run a compatible remote binary manually with the
 captured command. The benchmark artifact records the local architecture, remote
-architecture, and whether the override was enabled.
+architecture, hashed local/remote host identities, same-host result, and
+whether the override was enabled.
 Direct SSH-mode benchmark runs perform a non-interactive SSH reachability check
 before building tools or starting local services; tune that timeout with
 `OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS`.
@@ -238,8 +244,9 @@ scripts/zone-image-evidence-gate.sh
 ```
 
 The preflight validates wrapper options, SSH reachability, local/remote
-architecture compatibility, concrete non-loopback listen/client settings, and
-toolchain/build provenance without starting the synthetic primary or OxideDNS.
+architecture compatibility, distinct local/remote host identity, concrete
+non-loopback listen/client settings, and toolchain/build provenance without
+starting the synthetic primary or OxideDNS.
 It writes a small `*.preflight.env` file next to the planned gate directory and
 leaves the actual gate directory untouched. For direct benchmark preflight, use
 `OXIDEDNS_BENCH_PREFLIGHT_ONLY=true scripts/benchmark-dns-clients.sh`.

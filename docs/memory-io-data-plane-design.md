@@ -848,7 +848,7 @@ parity for comparable packet and record totals, and configured performance
 ratios for exact lookup, mixed planning/wire emission, packet response, EDNS
 optioned response, and delegation/DNAME stress paths.
 
-Current retained prototype sample from 2026-05-28 on this development machine,
+Current retained prototype sample from 2026-05-29 on this development machine,
 after the exact lookup allocation removal, compact delegation/DNAME indexes,
 direct RR-section wire emission, the gated packet response path, and
 arena-wire owner/RDATA name compression. Runtime serving also keeps a last-hit
@@ -877,14 +877,18 @@ only when the packed ancestor chain proves no referral, ancestor DNAME, or
 additional-address processing can change the answer. The direct emitter then
 compares the RRset owner to the question once and uses the stored owner-wire
 length while copying each RR, avoiding repeated owner-name parsing for
-multi-RDATA direct answers:
+multi-RDATA direct answers. Additional-data planning for ordinary
+NS/MX/SRV/NAPTR/SVCB/HTTPS answers and delegation-glue discovery now parses
+targets directly from immutable RDATA arenas. Wildcard owner substitution keeps
+RRset handles plus stored owner-wire overrides, while DNAME CNAME synthesis
+stores only owner wire and RDATA instead of a full `ResourceRecord`:
 
 | Metric | Value |
 | --- | ---: |
 | `benchmark_schema_version` | 1 |
 | `benchmark_kind` | `in_process_zone_image_prototype` |
 | `benchmark_build_profile` | `profiling` |
-| `benchmark_git_revision` | `6c9131117718` |
+| `benchmark_git_revision` | `d7a2fe77e911` |
 | `benchmark_git_dirty` | `true` |
 | `benchmark_kernel` | `Linux 7.0.3-1-MANJARO x86_64 GNU/Linux` |
 | `benchmark_rustc` | `rustc 1.95.0 (59807616e 2026-04-14)` |
@@ -923,28 +927,28 @@ multi-RDATA direct answers:
 | `udp_ceiling_packet_validation_mismatches` | 0 |
 | `ede_fallback_packet_cases` | 1 |
 | `ede_fallback_packet_validation_mismatches` | 0 |
-| `zone_image_compile_ms` | 11.509 |
-| `zone_image_delegation_dname_stress_compile_ms` | 9.976 |
-| `current_lookup_ns_per_query` | 169.353 |
-| `zone_image_exact_lookup_ns_per_query` | 82.463 |
-| `current_hot_lookup_ns_per_query` | 127.853 |
-| `zone_image_hot_exact_lookup_ns_per_query` | 48.016 |
-| `current_mixed_response_ns_per_query` | 441.631 |
-| `zone_image_mixed_plan_ns_per_query` | 311.587 |
-| `zone_image_mixed_wire_ns_per_query` | 387.696 |
-| `zone_image_mixed_response_ns_per_query` | 491.029 |
-| `current_delegation_dname_stress_response_ns_per_query` | 90,346.905 |
-| `zone_image_delegation_dname_stress_plan_ns_per_query` | 744.717 |
-| `zone_image_delegation_dname_stress_wire_ns_per_query` | 772.171 |
-| `zone_image_delegation_dname_stress_response_ns_per_query` | 924.956 |
-| `current_mixed_packet_ns_per_query` | 1,369.985 |
-| `zone_image_mixed_packet_ns_per_query` | 909.025 |
-| `current_hot_packet_ns_per_query` | 569.208 |
-| `zone_image_hot_packet_ns_per_query` | 220.762 |
-| `current_trace_packet_ns_per_query` | 1,569.987 |
-| `zone_image_trace_packet_ns_per_query` | 1,196.963 |
-| `current_optioned_packet_ns_per_query` | 565.757 |
-| `zone_image_optioned_packet_ns_per_query` | 241.909 |
+| `zone_image_compile_ms` | 22.818 |
+| `zone_image_delegation_dname_stress_compile_ms` | 19.554 |
+| `current_lookup_ns_per_query` | 293.088 |
+| `zone_image_exact_lookup_ns_per_query` | 119.603 |
+| `current_hot_lookup_ns_per_query` | 218.371 |
+| `zone_image_hot_exact_lookup_ns_per_query` | 80.045 |
+| `current_mixed_response_ns_per_query` | 767.533 |
+| `zone_image_mixed_plan_ns_per_query` | 449.158 |
+| `zone_image_mixed_wire_ns_per_query` | 579.165 |
+| `zone_image_mixed_response_ns_per_query` | 800.967 |
+| `current_delegation_dname_stress_response_ns_per_query` | 112,812.394 |
+| `zone_image_delegation_dname_stress_plan_ns_per_query` | 680.209 |
+| `zone_image_delegation_dname_stress_wire_ns_per_query` | 710.305 |
+| `zone_image_delegation_dname_stress_response_ns_per_query` | 891.550 |
+| `current_mixed_packet_ns_per_query` | 1,457.444 |
+| `zone_image_mixed_packet_ns_per_query` | 853.428 |
+| `current_hot_packet_ns_per_query` | 519.888 |
+| `zone_image_hot_packet_ns_per_query` | 200.491 |
+| `current_trace_packet_ns_per_query` | 1,596.742 |
+| `zone_image_trace_packet_ns_per_query` | 1,239.950 |
+| `current_optioned_packet_ns_per_query` | 632.098 |
+| `zone_image_optioned_packet_ns_per_query` | 244.674 |
 | `current_mixed_packet_bytes` | 14,750,000 |
 | `zone_image_mixed_packet_bytes` | 14,750,000 |
 | `current_hot_packet_bytes` | 10,054,000 |
@@ -978,16 +982,16 @@ The retained prototype check artifact
 
 | Check Metric | Value |
 | --- | ---: |
-| `exact_lookup_ratio` | 0.487 |
-| `hot_exact_lookup_ratio` | 0.376 |
-| `mixed_plan_ratio` | 0.706 |
-| `mixed_wire_ratio` | 0.878 |
-| `mixed_packet_ratio` | 0.664 |
-| `hot_packet_ratio` | 0.388 |
-| `trace_packet_ratio` | 0.762 |
-| `optioned_packet_ratio` | 0.428 |
-| `delegation_dname_stress_plan_ratio` | 0.008 |
-| `delegation_dname_stress_wire_ratio` | 0.009 |
+| `exact_lookup_ratio` | 0.408 |
+| `hot_exact_lookup_ratio` | 0.367 |
+| `mixed_plan_ratio` | 0.585 |
+| `mixed_wire_ratio` | 0.755 |
+| `mixed_packet_ratio` | 0.586 |
+| `hot_packet_ratio` | 0.386 |
+| `trace_packet_ratio` | 0.777 |
+| `optioned_packet_ratio` | 0.387 |
+| `delegation_dname_stress_plan_ratio` | 0.006 |
+| `delegation_dname_stress_wire_ratio` | 0.006 |
 
 Interpretation: direct exact handle lookup is faster than the current snapshot
 path on this flat-zone sample. The mixed semantic plan path is also faster than
@@ -997,7 +1001,7 @@ temporary `ResourceRecord` materialization adapter: direct RR-section emission
 from handles and wire arenas keeps most of the plan-path gain, while full
 `ZoneImage` mixed responses remain slower because they rebuild owned records.
 The delegation/DNAME stress shape validates the main scaling reason for the
-packed name graph: the current snapshot path pays about 90 us/query while it
+packed name graph: the current snapshot path pays about 113 us/query while it
 scans 2,000 delegation and 2,000 DNAME candidates, while ZoneImage semantic
 planning stays below 1 us/query with byte-equivalent record counts. The gated
 packet path is faster than the current packet path in this sample
@@ -1267,6 +1271,7 @@ addresses on a suitable multi-queue host. In that mode, the comparator also
 requires the same non-loopback network device, `require_non_loopback_device=true`,
 matching listen/client provenance, matching `client_mode=ssh`, matching
 non-empty `remote_client_ssh`, a concrete non-loopback `client_server`,
+distinct local/remote host identity,
 matching local and remote client architecture with
 `remote_client_allow_arch_mismatch=false`, matching local and remote
 `dns-load-client` SHA-256 digests, matching Git/kernel/toolchain/build-profile

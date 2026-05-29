@@ -258,6 +258,9 @@ def main() -> None:
     for key in (
         "remote_client_local_arch",
         "remote_client_remote_arch",
+        "remote_client_local_host_id",
+        "remote_client_remote_host_id",
+        "remote_client_same_host",
         "remote_client_allow_arch_mismatch",
     ):
         if key in current or key in zone_image:
@@ -349,6 +352,26 @@ def main() -> None:
                 f"{label} remote client architecture mismatch: "
                 f"local={optional_value(results, 'remote_client_local_arch', 'none')!r} "
                 f"remote={optional_value(results, 'remote_client_remote_arch', 'none')!r}"
+            )
+        for key in ("remote_client_local_host_id", "remote_client_remote_host_id"):
+            if args.require_non_loopback and optional_value(results, key, "none") in WEAK_PROVENANCE_VALUES:
+                failures.append(
+                    f"{label} {key}={optional_value(results, key, 'none')!r} "
+                    "does not satisfy --require-non-loopback"
+                )
+        if args.require_non_loopback and optional_value(results, "remote_client_same_host", "none") != "false":
+            failures.append(
+                f"{label} remote_client_same_host="
+                f"{optional_value(results, 'remote_client_same_host', 'none')!r}; "
+                "physical NIC promotion requires a distinct remote client host"
+            )
+        if (
+            args.require_non_loopback
+            and optional_value(results, "remote_client_local_host_id", "none")
+            == optional_value(results, "remote_client_remote_host_id", "none")
+        ):
+            failures.append(
+                f"{label} remote client host identity matches the local server host"
             )
         if args.require_non_loopback and optional_value(results, "remote_client_bin_sha256", "none") in WEAK_PROVENANCE_VALUES:
             failures.append(
@@ -502,6 +525,9 @@ def main() -> None:
         ("remote_client_ssh", value(current, "remote_client_ssh")),
         ("remote_client_local_arch", optional_value(current, "remote_client_local_arch")),
         ("remote_client_remote_arch", optional_value(current, "remote_client_remote_arch")),
+        ("remote_client_local_host_id", optional_value(current, "remote_client_local_host_id")),
+        ("remote_client_remote_host_id", optional_value(current, "remote_client_remote_host_id")),
+        ("remote_client_same_host", optional_value(current, "remote_client_same_host")),
         (
             "remote_client_allow_arch_mismatch",
             optional_value(current, "remote_client_allow_arch_mismatch"),
