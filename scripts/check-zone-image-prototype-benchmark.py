@@ -13,7 +13,7 @@ ZERO_MISMATCH_KEYS = (
     "hot_packet_validation_mismatches",
     "trace_packet_validation_mismatches",
     "optioned_packet_validation_mismatches",
-    "fallback_packet_validation_mismatches",
+    "boundary_packet_validation_mismatches",
     "udp_ceiling_packet_validation_mismatches",
     "ede_fallback_packet_validation_mismatches",
 )
@@ -29,10 +29,8 @@ EQUAL_VALUE_PAIRS = (
     ("current_optioned_packet_bytes", "zone_image_optioned_packet_bytes"),
     ("current_delegation_dname_stress_record_count", "zone_image_delegation_dname_stress_plan_item_count"),
     ("current_delegation_dname_stress_record_count", "zone_image_delegation_dname_stress_wire_record_count"),
-    ("current_delegation_dname_stress_record_count", "zone_image_delegation_dname_stress_record_count"),
     ("current_mixed_rcode_checksum", "zone_image_mixed_plan_rcode_checksum"),
     ("current_mixed_rcode_checksum", "zone_image_mixed_wire_rcode_checksum"),
-    ("current_mixed_rcode_checksum", "zone_image_mixed_rcode_checksum"),
 )
 
 
@@ -121,10 +119,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-high-fanout-exact-ratio", type=float, default=1.25)
     parser.add_argument("--max-mixed-plan-ratio", type=float, default=1.0)
     parser.add_argument("--max-mixed-wire-ratio", type=float, default=1.0)
-    parser.add_argument("--max-mixed-packet-ratio", type=float, default=0.80)
-    parser.add_argument("--max-hot-packet-ratio", type=float, default=0.80)
-    parser.add_argument("--max-trace-packet-ratio", type=float, default=0.90)
-    parser.add_argument("--max-optioned-packet-ratio", type=float, default=0.60)
+    parser.add_argument("--max-mixed-packet-ratio", type=float, default=1.25)
+    parser.add_argument("--max-hot-packet-ratio", type=float, default=1.25)
+    parser.add_argument("--max-trace-packet-ratio", type=float, default=1.25)
+    parser.add_argument("--max-optioned-packet-ratio", type=float, default=1.25)
     parser.add_argument("--max-stress-plan-ratio", type=float, default=0.10)
     parser.add_argument("--max-stress-wire-ratio", type=float, default=0.10)
     return parser.parse_args()

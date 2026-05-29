@@ -21,16 +21,17 @@ requirements remain owned by `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
 - [x] Local immutable `ZoneImage` MVP exists.
 - [x] The gated runtime path can serve supported non-DNSSEC query shapes.
 - [x] Local differential, unit, prototype, and loopback evidence exists.
-- [~] `ZoneImage` is still experimental and disabled by default.
-- [~] The old `ZoneSnapshot` query layout remains the correctness oracle and
-  fallback.
+- [x] `ZoneImage` serving is enabled by default for supported query shapes,
+  with no live snapshot-serving rollback switch.
+- [~] The old `ZoneSnapshot` query layout remains an offline correctness oracle
+  for benchmark comparisons, not a runtime fallback.
 - [ ] Physical NIC promotion evidence is not complete.
 - [ ] The old query-time memory layout is not retired.
 
-Working position: the first useful local data-plane slice is implemented. The
-next work is to broaden correctness coverage, collect physical evidence, then
-promote `ZoneImage` from opt-in serving path to default query layout. Only after
-that should the old query-time layout be phased out.
+Working position: the local data-plane slice is default-enabled and the live
+snapshot rollback path has been removed. The next work is to broaden physical
+evidence and then reduce remaining offline-oracle reliance until the old
+query-time layout can be phased out.
 
 ## Phase 0: Baseline And Evidence Harness
 
@@ -87,15 +88,19 @@ that should the old query-time layout be phased out.
 - [x] NODATA and NXDOMAIN behavior for supported unsigned paths.
 - [x] Parent-chain indexes for delegation and DNAME discovery.
 - [x] Stress benchmark for delegation/DNAME candidate scans.
-- [x] Opt-in `zone_image_shadow_enabled`.
-- [x] Opt-in `zone_image_serve_enabled`.
+- [x] Runtime `zone_image_shadow_enabled` diagnostic retired; old/new
+  comparisons are offline test/benchmark evidence only.
+- [x] Always-on runtime `ZoneImage` serving; no operator-facing snapshot-serving
+  rollback switch remains.
 - [x] Fallback for unsupported or risky query shapes.
 - [~] Signed DO positive, NODATA, NXDOMAIN, wildcard, referral, and NSEC3 cap
   paths can serve through `ZoneImage`; broader default promotion still needs
   operator-trace and physical NIC evidence.
-- [~] Full QTYPE ANY behavior falls back unless the configured minimal mode is
-  compatible with the `ZoneImage` path.
-- [~] UDP truncation edge cases fall back to the current composer.
+- [x] Minimal and full QTYPE ANY behavior serves through `ZoneImage` for
+  supported exact and wildcard RRsets while preserving DNSSEC proof/signature
+  suppression semantics.
+- [x] UDP truncation edge cases for supported responses serve through the
+  `ZoneImage` composer.
 
 ## Phase 4: Wire Composition
 
@@ -125,12 +130,19 @@ that should the old query-time layout be phased out.
   rebuilding a full `ResourceRecord` for the composer.
 - [x] Generic response buffers are pre-sized from immutable plan wire bounds
   rather than a fixed small starting capacity.
+- [x] ZoneImage wire-name compression probes borrow canonical lowercase suffix
+  slices and allocate canonical suffix keys only for mixed-case names or new
+  compression entries.
+- [x] Packet response code no longer references the `ZoneImage`
+  `LookupResult` materialization APIs; served responses observe plan metrics and
+  visit immutable wire records directly.
 - [x] Focused tests cover wildcard owner overrides, additional-data discovery,
   wire-record visitation from handles, and plan wire-bound accounting.
 - [~] The full response composer is not yet a pure immutable template/WireArena
   pipeline.
-- [~] Public `LookupResult` materialization still rebuilds temporary
-  `ResourceRecord` values for compatibility outside the packet hot path.
+- [x] Public `ZoneImage` `LookupResult`/`ResourceRecord` materialization helpers
+  were removed; tests and benchmarks compare plan summaries or immutable wire
+  output instead.
 - [x] Precompute negative SOA variants for the `ZoneImage` composer.
 - [x] Add focused bounds tests for plan wire upper-bound accounting.
 - [x] Run a direct-answer response-template cache experiment; rejected for now
@@ -147,14 +159,15 @@ that should the old query-time layout be phased out.
 - [x] DNSSEC-sensitive query shapes are packet-differential tested against the
   current path before serving through `ZoneImage`.
 - [x] Tests cover served DO positive signing, NSEC proof selection, NSEC3
-  cap/EDE, referral proofs, wildcard proofs, and remaining fallback cases.
+  cap/EDE, referral proofs, wildcard proofs, and boundary cases.
 - [x] Add RRSIG covered-type indexes to `ZoneImage`.
 - [x] Add NSEC indexes to `ZoneImage`.
 - [x] Add NSEC3 indexes to `ZoneImage`.
 - [x] Implement bounded dynamic NSEC3 work in the `ZoneImage` path.
 - [x] Add packet-level signed-zone differential corpus for `ZoneImage`.
-- [~] DNSSEC-capable `ZoneImage` serving is enabled for supported opt-in paths;
-  default promotion still waits on broader trace and physical evidence.
+- [x] DNSSEC-capable `ZoneImage` serving is enabled by default; internal
+  plan/build failures now return ZoneImage SERVFAIL instead of using old-path
+  rollback.
 
 ## Phase 6: Runtime Integration And Promotion
 
@@ -164,13 +177,54 @@ that should the old query-time layout be phased out.
   cache or second store lookup.
 - [x] `ZoneStore` selects published zones through a suffix index instead of
   scanning all configured zones on each query.
-- [x] Shadow validation can compare `ZoneImage` and current snapshot answers.
-- [x] Serving path records hits, direct hits, semantic hits, and fallbacks.
-- [~] Runtime serving remains opt-in and experimental.
-- [~] The current snapshot path remains the default query path.
-- [ ] Make `ZoneImage` default for unsigned supported query traffic.
-- [ ] Keep a short rollback window where the old path can still be enabled.
-- [ ] Remove fallback reliance for query shapes after equivalent `ZoneImage`
+- [x] Offline validation can compare `ZoneImage` and current snapshot answers.
+- [x] Serving path records hits, direct hits, semantic hits, failures, and fixed
+  failure reasons.
+- [x] Failure counters include fixed reasons for ordering old-path retirement.
+- [x] The stale observer-unsupported fallback bucket is removed; plan
+  observation is infallible on the ZoneImage serving path.
+- [x] The unavailable-image fallback bucket is removed; enabled serving uses the
+  compiled image attached to the active published zone.
+- [x] Default ZoneImage serving checks published zone state directly and no
+  longer clones `ZoneSnapshot` or calls `lookup_with_options` in packet serving.
+- [x] Core serving APIs removed the explicitly named snapshot-rollback path; the
+  runtime packet responder has no old-layout serving selector.
+- [x] The remaining snapshot response composer was removed from packet-serving
+  code; offline old/new comparison uses explicit benchmark helpers instead.
+- [x] Core `answer_datagram`/`answer_message` convenience APIs enter
+  required-provider `ZoneImage` serving by default; materialized `LookupResult`
+  callbacks are no longer part of packet answering.
+- [x] Snapshot-rollback serving APIs were removed instead of retained as hidden
+  generated-documentation exceptions.
+- [x] Runtime query metric observation records zone origin/state through the
+  published-zone handle and no longer clones `ZoneSnapshot` on the default
+  observation path.
+- [x] Query-suffix zone lookup no longer exposes `Arc<ZoneSnapshot>` or a
+  snapshot-to-image bridge; callers use `PublishedZone`, while exact-origin
+  snapshots remain for transfer/catalog builder work.
+- [x] `PublishedZone` no longer exposes generic or rollback/oracle snapshot
+  accessors.
+- [x] Runtime packet serving observes `ZoneImage` lookup metrics from the plan
+  instead of materializing `LookupResult` values for the metrics path.
+- [x] The `LookupResult` callback API was removed from packet answering;
+  ZoneImage serving is exposed through the non-materializing lookup-metrics
+  observer.
+- [x] Live shadow diagnostics are retired, so runtime metric observation no
+  longer clones snapshots or runs old snapshot lookups as an oracle.
+- [x] Runtime serving always enters the `ZoneImage` path for supported query
+  shapes.
+- [x] Full-ANY response mode serves supported QTYPE ANY traffic through
+  `ZoneImage`; non-ANY traffic continues to use `ZoneImage` in that mode.
+- [x] UDP truncation for supported `ZoneImage` responses is emitted directly
+  from immutable wire records instead of falling back to the snapshot composer.
+- [x] Internal ZoneImage plan/DNSSEC-plan/response-build failures no longer
+  fall back to the snapshot path; they return SERVFAIL and fixed failure
+  metrics.
+- [~] The current snapshot path remains only as a hidden benchmark/test
+  correctness oracle.
+- [x] Make `ZoneImage` default for unsigned supported query traffic.
+- [x] Remove the live runtime rollback switch for the old path.
+- [ ] Remove hidden oracle reliance for query shapes after equivalent `ZoneImage`
   behavior and evidence exist.
 - [ ] Retire `ZoneSnapshot` as the query-time data plane.
 - [ ] Keep `ZoneSnapshot` or an equivalent safe builder model only for ingestion,
@@ -228,12 +282,11 @@ is faster locally. Retire it only after these are true:
   unknown-RR cases.
 - [ ] Physical benchmark evidence shows `ZoneImage` is not slower on real NIC
   profiles.
-- [ ] Operational metrics expose enough fallback/mismatch detail for rollback
-  during the promotion window.
-- [ ] Configuration defaults switch to `ZoneImage` serving.
-- [ ] The old query path remains available for one explicit rollback period.
-- [ ] After the rollback period, query-serving code no longer materializes the
-  old layout on the hot path.
+- [x] Operational metrics expose fixed ZoneImage failure detail; live rollback
+  metrics are retired.
+- [x] Configuration no longer exposes a snapshot-serving rollback switch.
+- [x] The old query path is no longer available as a live runtime rollback.
+- [x] Query-serving code no longer materializes the old layout on the hot path.
 - [ ] Transfer ingestion and validation still use a clear safe builder model.
 - [ ] Documentation no longer describes the old layout as the primary serving
   data plane.
@@ -241,8 +294,8 @@ is faster locally. Retire it only after these are true:
 ## Recommended Order
 
 1. Run the physical promotion gate on a separate client host and real NIC.
-2. Complete the pure WireArena composer and remove remaining temporary
-   `ResourceRecord` materialization from served `ZoneImage` paths.
+2. Complete the pure WireArena composer and keep response construction on
+   immutable section views.
 3. Promote `ZoneImage` to default for unsigned and signed supported traffic.
 4. Add the standard UDP batch adapter and measure whether packet I/O is the next
    bottleneck.

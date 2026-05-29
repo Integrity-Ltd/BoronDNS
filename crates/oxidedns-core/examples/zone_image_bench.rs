@@ -7,12 +7,16 @@ use std::{
 
 use oxidedns_core::{
     dns::{
-        AnswerOptions, DatagramAction, DnsCookieContext, DomainName, ExtendedDnsErrorsMode, Rcode,
-        RecordType, answer_message,
+        AnswerOptions, DatagramAction, DnsCookieContext, DomainName, ExtendedDnsErrorsMode,
+        LookupResult, Rcode, RecordType, answer_message,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
     },
-    zone::{PublishedZone, Rrset, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneStore},
-    zone_image::{ZoneImage, ZoneImageLookupOutcome},
+    zone::{
+        PublishedZone, ResourceRecord, Rrset, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneStore,
+    },
+    zone_image::{
+        ZoneImage, ZoneImageLookupOutcome, ZoneImagePlanSectionSummary, ZoneImagePlanSummary,
+    },
 };
 
 fn main() {
@@ -46,14 +50,12 @@ fn main() {
     let current_mixed = time_current_response_lookup(&snapshot, &mixed_queries, iterations);
     let image_mixed_plan = time_zone_image_response_plan(&image, &mixed_queries, iterations);
     let image_mixed_wire = time_zone_image_response_wire(&image, &mixed_queries, iterations);
-    let image_mixed = time_zone_image_response_lookup(&image, &mixed_queries, iterations);
     let current_stress =
         time_current_response_lookup(&stress_snapshot, &stress_queries, iterations);
     let image_stress_plan =
         time_zone_image_response_plan(&stress_image, &stress_queries, iterations);
     let image_stress_wire =
         time_zone_image_response_wire(&stress_image, &stress_queries, iterations);
-    let image_stress = time_zone_image_response_lookup(&stress_image, &stress_queries, iterations);
     let (zone_directory_store, zone_directory_qnames) =
         build_zone_directory_benchmark(config.zone_directory_zones);
     let zone_directory_snapshots = zone_directory_store.snapshots();
@@ -71,7 +73,7 @@ fn main() {
     let hot_packets = direct_query_packets(&hot_direct_qnames);
     let trace_packets = load_trace_packets(&config.trace_path);
     let optioned_packets = optioned_packet_cases();
-    let fallback_packets = fallback_packet_cases();
+    let boundary_packets = boundary_packet_cases();
     let udp_ceiling_packets = udp_ceiling_packet_cases();
     let store = ZoneStore::new();
     store.insert_snapshot(snapshot.clone());
@@ -83,8 +85,8 @@ fn main() {
         count_packet_case_mismatches(&store, image.clone(), &trace_packets);
     let optioned_packet_validation_mismatches =
         count_packet_case_mismatches(&store, image.clone(), &optioned_packets);
-    let fallback_packet_validation_mismatches =
-        count_packet_case_mismatches(&store, image.clone(), &fallback_packets);
+    let boundary_packet_validation_mismatches =
+        count_packet_case_mismatches(&store, image.clone(), &boundary_packets);
     let udp_ceiling_packet_validation_mismatches =
         count_packet_case_mismatches(&store, image.clone(), &udp_ceiling_packets);
     let ede_fallback_packet_validation_mismatches =
@@ -127,13 +129,13 @@ fn main() {
         "query_mix_mixed\tpositive_a,cname,wildcard,referral_glue,nodata,nxdomain,dname,opaque_unknown"
     );
     println!("query_mix_optioned\tedns_nsid,dns_cookie,edns_padding");
-    println!("query_mix_fallback\tdo_dnssec_positive,full_any,udp_truncation,ede_not_ready");
+    println!("query_mix_boundary\tqtype_any_full,dnssec_do,response_build_truncation");
     println!(
         "query_mix_udp_ceiling\tno_edns_512,edns_payload_512,edns_payload_1232,edns_payload_4096"
     );
     println!("query_mix_delegation_dname_stress\treferral_glue,dname_synthesis");
     println!("query_mix_zone_directory\tmany_zone_suffix_selection");
-    println!("serving_gate\tminimal_any_signed_dnssec_supported_with_snapshot_fallback");
+    println!("serving_gate\tzone_image_without_snapshot_rollback");
     println!("records\t{record_count}");
     println!("zone_directory_zones\t{}", config.zone_directory_zones);
     println!(
@@ -161,8 +163,8 @@ fn main() {
     println!("trace_packet_validation_mismatches\t{trace_packet_validation_mismatches}");
     println!("optioned_packet_cases\t{}", optioned_packets.len());
     println!("optioned_packet_validation_mismatches\t{optioned_packet_validation_mismatches}");
-    println!("fallback_packet_cases\t{}", fallback_packets.len());
-    println!("fallback_packet_validation_mismatches\t{fallback_packet_validation_mismatches}");
+    println!("boundary_packet_cases\t{}", boundary_packets.len());
+    println!("boundary_packet_validation_mismatches\t{boundary_packet_validation_mismatches}");
     println!("udp_ceiling_packet_cases\t{}", udp_ceiling_packets.len());
     println!(
         "udp_ceiling_packet_validation_mismatches\t{udp_ceiling_packet_validation_mismatches}"
@@ -208,10 +210,6 @@ fn main() {
         ns_per_query(current_mixed.duration, iterations)
     );
     println!(
-        "zone_image_mixed_response_ns_per_query\t{:.3}",
-        ns_per_query(image_mixed.duration, iterations)
-    );
-    println!(
         "current_delegation_dname_stress_response_ns_per_query\t{:.3}",
         ns_per_query(current_stress.duration, iterations)
     );
@@ -222,10 +220,6 @@ fn main() {
     println!(
         "zone_image_delegation_dname_stress_wire_ns_per_query\t{:.3}",
         ns_per_query(image_stress_wire.duration, iterations)
-    );
-    println!(
-        "zone_image_delegation_dname_stress_response_ns_per_query\t{:.3}",
-        ns_per_query(image_stress.duration, iterations)
     );
     println!(
         "zone_directory_linear_lookup_ns_per_query\t{:.3}",
@@ -330,10 +324,6 @@ fn main() {
         image_mixed_wire.extra_sum
     );
     println!(
-        "zone_image_mixed_record_count\t{}",
-        image_mixed.answer_count
-    );
-    println!(
         "current_delegation_dname_stress_record_count\t{}",
         current_stress.answer_count
     );
@@ -344,10 +334,6 @@ fn main() {
     println!(
         "zone_image_delegation_dname_stress_wire_record_count\t{}",
         image_stress_wire.answer_count
-    );
-    println!(
-        "zone_image_delegation_dname_stress_record_count\t{}",
-        image_stress.answer_count
     );
     println!(
         "zone_directory_linear_found_count\t{}",
@@ -374,7 +360,6 @@ fn main() {
         "zone_image_mixed_wire_rcode_checksum\t{}",
         image_mixed_wire.rcode_sum
     );
-    println!("zone_image_mixed_rcode_checksum\t{}", image_mixed.rcode_sum);
     println!("zone_image_nodes\t{}", stats.node_count);
     println!("zone_image_edges\t{}", stats.edge_count);
     println!("zone_image_max_child_fanout\t{}", stats.max_child_fanout);
@@ -800,33 +785,6 @@ fn time_current_response_lookup(
     }
 }
 
-fn time_zone_image_response_lookup(
-    image: &ZoneImage,
-    queries: &[QueryCase],
-    iterations: usize,
-) -> TimedLookup {
-    let started = Instant::now();
-    let mut record_count = 0usize;
-    let mut rcode_sum = 0u64;
-    for index in 0..iterations {
-        let query = &queries[index % queries.len()];
-        let lookup = image
-            .lookup_response(black_box(&query.qname), query.qtype, query.qclass)
-            .expect("zone image lookup succeeds");
-        record_count = record_count
-            .saturating_add(lookup.answers.len())
-            .saturating_add(lookup.authorities.len())
-            .saturating_add(lookup.additionals.len());
-        rcode_sum = rcode_sum.saturating_add(rcode_number(lookup.rcode));
-    }
-    TimedLookup {
-        duration: started.elapsed(),
-        answer_count: black_box(record_count),
-        rcode_sum: black_box(rcode_sum),
-        extra_sum: 0,
-    }
-}
-
 fn time_zone_directory_linear_lookup(
     snapshots: &[Arc<ZoneSnapshot>],
     qnames: &[DomainName],
@@ -866,8 +824,7 @@ fn time_zone_directory_suffix_lookup(
         let qname = &qnames[index % qnames.len()];
         if let Some(published) = store.find_published_zone(black_box(qname)) {
             found_count = found_count.saturating_add(1);
-            label_checksum =
-                label_checksum.saturating_add(published.snapshot().origin.label_count());
+            label_checksum = label_checksum.saturating_add(published.origin().label_count());
         }
     }
     TimedLookup {
@@ -889,7 +846,13 @@ fn time_zone_image_response_plan(
     for index in 0..iterations {
         let query = &queries[index % queries.len()];
         let plan = image
-            .lookup_response_plan(black_box(&query.qname), query.qtype, query.qclass, 8)
+            .lookup_response_plan(
+                black_box(&query.qname),
+                query.qtype,
+                query.qclass,
+                8,
+                oxidedns_core::dns::AnyResponseMode::Minimal,
+            )
             .expect("zone image plan lookup succeeds");
         item_count = item_count
             .saturating_add(plan.answer_rrsets().len())
@@ -919,7 +882,13 @@ fn time_zone_image_response_wire(
     for index in 0..iterations {
         let query = &queries[index % queries.len()];
         let plan = image
-            .lookup_response_plan(black_box(&query.qname), query.qtype, query.qclass, 8)
+            .lookup_response_plan(
+                black_box(&query.qname),
+                query.qtype,
+                query.qclass,
+                8,
+                oxidedns_core::dns::AnyResponseMode::Minimal,
+            )
             .expect("zone image plan lookup succeeds");
         wire.clear();
         record_count = record_count.saturating_add(
@@ -966,7 +935,7 @@ fn count_mixed_packet_mismatches(
     packets: &[Vec<u8>],
 ) -> usize {
     let image = Arc::new(image);
-    let provider = |_: &PublishedZone| Some(image.clone());
+    let provider = |_: &PublishedZone| image.clone();
     packets
         .iter()
         .filter(|packet| {
@@ -983,7 +952,7 @@ fn count_packet_case_mismatches(
     packets: &[PacketCase],
 ) -> usize {
     let image = Arc::new(image);
-    let provider = |_: &PublishedZone| Some(image.clone());
+    let provider = |_: &PublishedZone| image.clone();
     packets
         .iter()
         .filter(|packet| {
@@ -1014,7 +983,7 @@ fn count_ede_not_ready_packet_mismatches(image: ZoneImage) -> usize {
         ..AnswerOptions::default()
     };
     let image = Arc::new(image);
-    let provider = |_: &PublishedZone| Some(image.clone());
+    let provider = |_: &PublishedZone| image.clone();
     usize::from(
         current_packet_response_with_options(&store, &packet, options)
             != zone_image_packet_response_with_options(&store, &packet, options, &provider),
@@ -1051,7 +1020,7 @@ fn time_zone_image_packet_case_response(
     iterations: usize,
 ) -> TimedLookup {
     let image = Arc::new(image);
-    let provider = |_: &PublishedZone| Some(image.clone());
+    let provider = |_: &PublishedZone| image.clone();
     let started = Instant::now();
     let mut wire_bytes = 0usize;
     let mut rcode_sum = 0u64;
@@ -1081,7 +1050,7 @@ fn time_zone_image_packet_response(
     iterations: usize,
 ) -> TimedLookup {
     let image = Arc::new(image);
-    let provider = |_: &PublishedZone| Some(image.clone());
+    let provider = |_: &PublishedZone| image.clone();
     let started = Instant::now();
     let mut wire_bytes = 0usize;
     let mut rcode_sum = 0u64;
@@ -1117,7 +1086,7 @@ fn current_packet_response_with_options(
 fn zone_image_packet_response(
     store: &ZoneStore,
     packet: &[u8],
-    provider: &impl Fn(&PublishedZone) -> Option<Arc<ZoneImage>>,
+    provider: &impl Fn(&PublishedZone) -> Arc<ZoneImage>,
 ) -> Vec<u8> {
     zone_image_packet_response_with_options(store, packet, AnswerOptions::default(), provider)
 }
@@ -1126,7 +1095,7 @@ fn zone_image_packet_response_with_options(
     store: &ZoneStore,
     packet: &[u8],
     options: AnswerOptions,
-    provider: &impl Fn(&PublishedZone) -> Option<Arc<ZoneImage>>,
+    provider: &impl Fn(&PublishedZone) -> Arc<ZoneImage>,
 ) -> Vec<u8> {
     match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
@@ -1135,7 +1104,7 @@ fn zone_image_packet_response_with_options(
         |_, _| true,
         |_, _, _| {},
         |_| {},
-        Some(provider),
+        provider,
     ) {
         DatagramAction::Respond(response) => response,
         DatagramAction::Discard => panic!("benchmark query was discarded"),
@@ -1151,12 +1120,104 @@ fn count_mixed_lookup_mismatches(
         .iter()
         .filter(|query| {
             let snapshot_lookup = snapshot.lookup(&query.qname, query.qtype, query.qclass);
-            let image_lookup = image
-                .lookup_response(&query.qname, query.qtype, query.qclass)
-                .expect("zone image lookup succeeds");
-            snapshot_lookup != image_lookup
+            let image_plan = image
+                .lookup_response_plan(
+                    &query.qname,
+                    query.qtype,
+                    query.qclass,
+                    8,
+                    oxidedns_core::dns::AnyResponseMode::Minimal,
+                )
+                .expect("zone image plan lookup succeeds");
+            let image_summary = image
+                .plan_summary(&image_plan)
+                .expect("zone image plan summarizes");
+            snapshot_lookup_summary(&snapshot_lookup) != image_summary
         })
         .count()
+}
+
+fn snapshot_lookup_summary(lookup: &LookupResult) -> ZoneImagePlanSummary {
+    ZoneImagePlanSummary {
+        rcode: lookup.rcode,
+        authoritative: lookup.authoritative,
+        answers: snapshot_records_summary(&lookup.answers),
+        authorities: snapshot_records_summary(&lookup.authorities),
+        additionals: snapshot_records_summary(&lookup.additionals),
+        termination: lookup.termination,
+        nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
+    }
+}
+
+fn snapshot_records_summary(records: &[ResourceRecord]) -> ZoneImagePlanSectionSummary {
+    let mut summary = SnapshotSectionSummary::default();
+    for record in records {
+        summary.observe(record);
+    }
+    summary.finish()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SnapshotSectionSummary {
+    count: usize,
+    digest: u64,
+}
+
+impl Default for SnapshotSectionSummary {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            digest: FNV_OFFSET_BASIS,
+        }
+    }
+}
+
+impl SnapshotSectionSummary {
+    fn observe(&mut self, record: &ResourceRecord) {
+        self.count += 1;
+        self.digest = fnv1a_u64(
+            self.digest,
+            hash_record_identity(
+                record.owner.canonical_key().as_bytes(),
+                record.rr_type,
+                record.class,
+                record.ttl,
+                &record.rdata,
+            ),
+        );
+    }
+
+    fn finish(self) -> ZoneImagePlanSectionSummary {
+        ZoneImagePlanSectionSummary {
+            count: self.count,
+            digest: self.digest,
+        }
+    }
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn hash_record_identity(owner_key: &[u8], rr_type: u16, class: u16, ttl: u32, rdata: &[u8]) -> u64 {
+    let mut digest = FNV_OFFSET_BASIS;
+    digest = fnv1a_bytes(digest, owner_key);
+    digest = fnv1a_bytes(digest, &rr_type.to_be_bytes());
+    digest = fnv1a_bytes(digest, &class.to_be_bytes());
+    digest = fnv1a_bytes(digest, &ttl.to_be_bytes());
+    digest = fnv1a_bytes(digest, &(rdata.len() as u64).to_be_bytes());
+    fnv1a_bytes(digest, rdata)
+}
+
+fn fnv1a_u64(digest: u64, value: u64) -> u64 {
+    fnv1a_bytes(digest, &value.to_be_bytes())
+}
+
+fn fnv1a_bytes(mut digest: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        digest ^= u64::from(*byte);
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    digest
 }
 
 struct TimedLookup {
@@ -1443,7 +1504,7 @@ fn optioned_packet_cases() -> Vec<PacketCase> {
     ]
 }
 
-fn fallback_packet_cases() -> Vec<PacketCase> {
+fn boundary_packet_cases() -> Vec<PacketCase> {
     let mut dnssec_do = query_packet(
         &DomainName::from_absolute_str("host0.bench.test.").unwrap(),
         RecordType::A as u16,

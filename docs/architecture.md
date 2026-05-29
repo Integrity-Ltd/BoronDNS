@@ -120,9 +120,9 @@ implemented Engineering MVP scope now retained after external review, including
 IXFR with AXFR fallback, XoT, passive DNSSEC serving, RRL, DNS Cookies,
 RFC 9432 catalog zones, broad EDNS response behavior, bounded EDE diagnostics,
 CHAOS diagnostics, installer/Docker release tooling, OxideGun support tooling,
-the initial safe `ZoneImage` data-plane prototype, the opt-in runtime
-shadow-validation hook for that prototype, and the gated serving path for
-supported non-DNSSEC `ZoneImage` responses. These slices are bounded in
+the safe `ZoneImage` data-plane prototype, offline old/new comparison evidence,
+and the always-on serving path for supported `ZoneImage` responses. These
+slices are bounded in
 `docs/implemented-feature-scope.md` and
 `docs/memory-io-data-plane-design.md`; they are kept because code and tests
 already own them or because the next data-plane track needs a safe differential

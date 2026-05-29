@@ -9,8 +9,6 @@ configuration	[process].disable_core_dumps	stable	0.1	config/oxidedns.example.to
 configuration	[process].no_new_privileges	stable	0.1	config/oxidedns.example.toml	major	Linux startup hardening toggle for PR_SET_NO_NEW_PRIVS; defaults to true.
 configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
-configuration	[metrics].zone_image_shadow_enabled	experimental	0.1	config/oxidedns.example.toml	minor-additive	Opt-in diagnostic shadow validation for the immutable zone image path; disabled by default and not part of the served answer contract.
-configuration	[query].zone_image_serve_enabled	experimental	0.1	config/oxidedns.example.toml	minor-additive	Opt-in serving gate for supported immutable ZoneImage response shapes; disabled by default with ordinary snapshot lookup fallback.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
 configuration	[limits].max_tcp_connections	stable	0.1	config/oxidedns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
 configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.

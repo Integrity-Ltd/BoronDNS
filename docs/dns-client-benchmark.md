@@ -24,7 +24,6 @@ OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_DURATION_SECONDS=10 \
 OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false \
 OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED=false \
-OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false \
 OXIDEDNS_BENCH_TRACE_ENABLED=false \
 OXIDEDNS_BENCH_LISTEN_ADDRESS=127.0.0.1 \
 OXIDEDNS_BENCH_CLIENT_SERVER=127.0.0.1 \
@@ -52,12 +51,10 @@ To capture scrape-time zone-shape gauges and histograms for layout tuning, set
 throughput-only runs because the metric family walks active zone snapshots
 during metrics scrapes.
 
-To compare the experimental immutable ZoneImage serving path against the
-current snapshot path, run the same profile once with
-`OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false` and once with
-`OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=true`. The generated configuration,
-`run.env`, `benchmark-results.tsv`, and capability summary record the selected
-value.
+Immutable `ZoneImage` serving is always enabled in live runtime benchmarks. The
+generated `run.env`, `benchmark-results.tsv`, and capability summary retain the
+`zone_image_serve_enabled=true` evidence field for historical comparator
+compatibility.
 
 To compare the standard UDP batch adapter against the original one-datagram
 socket path, run the same UDP profile once with
@@ -108,12 +105,14 @@ scripts/compare-zone-image-benchmarks.py \
 ```
 
 The comparator verifies matching profile metadata, matching retained trace hash
-for trace-mode runs, expected `zone_image_serve_enabled` values, drop/error
-limits, ZoneImage served-hit counters, and the configured throughput and
-latency ratios. The served-hit counters include total, direct-answer, semantic,
-and fallback counts; the direct/semantic counts must add up to total served
-hits, and ZoneImage fallbacks must be zero unless an explicit
-`--max-zone-image-fallbacks` value is supplied. Add
+for trace-mode runs, always-on ZoneImage serving, drop/error limits, ZoneImage
+served-hit counters, and the configured throughput and latency ratios. The
+served-hit counters include total, direct-answer, semantic, failure, and
+rollback counts; the direct/semantic counts must add up to total served hits,
+ZoneImage failures must be zero unless an explicit
+`--max-zone-image-failures` value is supplied, and ZoneImage rollbacks must
+always be zero. When failures are allowed for diagnostics, inspect the fixed
+failure-reason counters before treating the artifact as retirement evidence. Add
 `--require-direct-and-semantic` when the retained trace must prove that both the
 guarded direct-answer hot path and semantic planner were used.
 Add `--require-non-loopback` for physical NIC promotion evidence; that mode
@@ -180,7 +179,7 @@ It builds temporary current/ZoneImage artifacts and verifies normal loopback
 comparison, physical-NIC comparison, loopback rejection under
 `--require-non-loopback`, network-device mismatch rejection, direct/semantic
 coverage rejection, local-client and remote-client mismatch rejection,
-ZoneImage fallback rejection, zero network-counter rejection, stale
+ZoneImage failure rejection, zero network-counter rejection, stale
 benchmark-summary counter rejection, and drop-counter rejection.
 
 For NIC-facing evidence, run the same harness from a client host or namespace

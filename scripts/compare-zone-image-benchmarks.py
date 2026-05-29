@@ -189,10 +189,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-dropped", type=int, default=0, help="Maximum dropped responses allowed per run")
     parser.add_argument("--max-errors", type=int, default=0, help="Maximum client validation errors allowed per run")
     parser.add_argument(
-        "--max-zone-image-fallbacks",
+        "--max-zone-image-failures",
         type=int,
         default=0,
-        help="Maximum ZoneImage fallback responses allowed in the ZoneImage artifact",
+        help="Maximum ZoneImage serve failures allowed in the ZoneImage artifact",
     )
     parser.add_argument("--min-qps-ratio", type=float, default=1.0, help="Minimum ZoneImage/current responses-per-second ratio")
     parser.add_argument("--max-p50-ratio", type=float, help="Maximum ZoneImage/current p50 latency ratio")
@@ -228,10 +228,10 @@ def main() -> None:
     current_network_deltas: dict[str, int] = {}
     zone_image_network_deltas: dict[str, int] = {}
 
-    if value(current, "zone_image_serve_enabled") != "false":
-        failures.append("current artifact did not record zone_image_serve_enabled=false")
+    if value(current, "zone_image_serve_enabled") != "true":
+        failures.append("current artifact did not record always-on ZoneImage serving")
     if value(zone_image, "zone_image_serve_enabled") != "true":
-        failures.append("ZoneImage artifact did not record zone_image_serve_enabled=true")
+        failures.append("ZoneImage replay artifact did not record always-on ZoneImage serving")
     if args.min_network_packets_per_response < 0:
         failures.append("--min-network-packets-per-response must be non-negative")
     if value(current, "network_device") != value(zone_image, "network_device"):
@@ -449,20 +449,27 @@ def main() -> None:
     current_zone_image_hits = integer(current, "zone_image_serve_hits")
     current_zone_image_direct_hits = integer(current, "zone_image_serve_direct_hits")
     current_zone_image_semantic_hits = integer(current, "zone_image_serve_semantic_hits")
-    current_zone_image_fallbacks = integer(current, "zone_image_serve_fallbacks")
+    current_zone_image_failures = integer(current, "zone_image_serve_failures")
+    current_zone_image_rollbacks = integer(current, "zone_image_serve_rollbacks")
     zone_image_hits = integer(zone_image, "zone_image_serve_hits")
     zone_image_direct_hits = integer(zone_image, "zone_image_serve_direct_hits")
     zone_image_semantic_hits = integer(zone_image, "zone_image_serve_semantic_hits")
-    zone_image_fallbacks = integer(zone_image, "zone_image_serve_fallbacks")
-    if (
-        current_zone_image_hits != 0
-        or current_zone_image_direct_hits != 0
-        or current_zone_image_semantic_hits != 0
-        or current_zone_image_fallbacks != 0
-    ):
+    zone_image_failures = integer(zone_image, "zone_image_serve_failures")
+    zone_image_rollbacks = integer(zone_image, "zone_image_serve_rollbacks")
+    if current_zone_image_hits <= 0:
+        failures.append("current artifact did not record any ZoneImage served hits")
+    if current_zone_image_direct_hits + current_zone_image_semantic_hits != current_zone_image_hits:
         failures.append(
-            "current artifact recorded ZoneImage serve hit/fallback counters despite "
-            "zone_image_serve_enabled=false"
+            "current direct/semantic served-hit counters do not add up to total served hits"
+        )
+    if current_zone_image_failures > args.max_zone_image_failures:
+        failures.append(
+            f"current artifact recorded {current_zone_image_failures} serve failures, "
+            f"limit is {args.max_zone_image_failures}"
+        )
+    if current_zone_image_rollbacks != 0:
+        failures.append(
+            f"current artifact recorded {current_zone_image_rollbacks} rollback responses"
         )
     if zone_image_hits <= 0:
         failures.append("ZoneImage artifact did not record any ZoneImage served hits")
@@ -470,10 +477,14 @@ def main() -> None:
         failures.append(
             "ZoneImage direct/semantic served-hit counters do not add up to total served hits"
         )
-    if zone_image_fallbacks > args.max_zone_image_fallbacks:
+    if zone_image_failures > args.max_zone_image_failures:
         failures.append(
-            f"ZoneImage artifact recorded {zone_image_fallbacks} fallbacks, "
-            f"limit is {args.max_zone_image_fallbacks}"
+            f"ZoneImage artifact recorded {zone_image_failures} serve failures, "
+            f"limit is {args.max_zone_image_failures}"
+        )
+    if zone_image_rollbacks != 0:
+        failures.append(
+            f"ZoneImage artifact recorded {zone_image_rollbacks} rollback responses"
         )
     if args.require_direct_and_semantic:
         if zone_image_direct_hits <= 0:
@@ -555,9 +566,11 @@ def main() -> None:
         ("zone_image_serve_direct_hits", str(zone_image_direct_hits)),
         ("current_zone_image_serve_semantic_hits", str(current_zone_image_semantic_hits)),
         ("zone_image_serve_semantic_hits", str(zone_image_semantic_hits)),
-        ("current_zone_image_serve_fallbacks", str(current_zone_image_fallbacks)),
-        ("zone_image_serve_fallbacks", str(zone_image_fallbacks)),
-        ("max_zone_image_fallbacks", str(args.max_zone_image_fallbacks)),
+        ("current_zone_image_serve_failures", str(current_zone_image_failures)),
+        ("zone_image_serve_failures", str(zone_image_failures)),
+        ("current_zone_image_serve_rollbacks", str(current_zone_image_rollbacks)),
+        ("zone_image_serve_rollbacks", str(zone_image_rollbacks)),
+        ("max_zone_image_failures", str(args.max_zone_image_failures)),
         ("direct_and_semantic_checked", str(args.require_direct_and_semantic).lower()),
         ("network_counter_deltas_checked", str(args.require_non_loopback).lower()),
         (

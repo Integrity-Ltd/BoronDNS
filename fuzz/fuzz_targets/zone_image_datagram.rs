@@ -8,10 +8,10 @@ use std::{
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
-        answer_message_with_notify_hooks_query_observer_and_zone_image, AnswerOptions,
+        answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image, AnswerOptions,
         DatagramAction, DomainName, Header, RecordType, Transport, DEFAULT_MAX_UDP_PAYLOAD,
     },
-    zone::{Rrset, ZoneSnapshot, ZoneStore},
+    zone::{PublishedZone, Rrset, ZoneSnapshot, ZoneStore},
     zone_image::ZoneImage,
 };
 
@@ -20,7 +20,7 @@ const QCLASS_IN: u16 = 1;
 
 fuzz_target!(|data: &[u8]| {
     let image = zone_image();
-    let provider = |_zone: &Arc<ZoneSnapshot>| Some(Arc::clone(image));
+    let provider = |_zone: &PublishedZone| Arc::clone(image);
 
     exercise_packet(data, data, &provider);
 
@@ -34,9 +34,9 @@ fuzz_target!(|data: &[u8]| {
 fn exercise_packet(
     packet: &[u8],
     data: &[u8],
-    provider: &dyn Fn(&Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>>,
+    provider: &dyn Fn(&PublishedZone) -> Arc<ZoneImage>,
 ) {
-    let action = answer_message_with_notify_hooks_query_observer_and_zone_image(
+    let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
         zones(),
         answer_options(data),
@@ -47,10 +47,10 @@ fn exercise_packet(
         |qname, qclass, serial| {
             black_box((qname, qclass, serial));
         },
-        |lookup| {
-            black_box(lookup);
+        |metrics| {
+            black_box(metrics);
         },
-        Some(provider),
+        provider,
     );
 
     if let DatagramAction::Respond(response) = action {

@@ -80,6 +80,6 @@ api.dname.bench.test.	A	IN	none	dname
 big.bench.test.	TXT	IN	edns	large-edns
 big.bench.test.	TXT	IN	edns	large-edns
 opaque.bench.test.	65280	IN	none	opaque-unknown
-host0.bench.test.	A	IN	do	do-fallback
-host1.bench.test.	A	IN	do	do-fallback
-absent.bench.test.	A	IN	do	do-fallback
+host0.bench.test.	A	IN	do	do-dnssec
+host1.bench.test.	A	IN	do	do-dnssec
+absent.bench.test.	A	IN	do	do-dnssec

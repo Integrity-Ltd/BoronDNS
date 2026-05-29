@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fmt, hash::Hasher, net::IpAddr, sync::Arc};
 
 use siphasher::sip::SipHasher24;
 use smallvec::SmallVec;
@@ -419,7 +419,7 @@ pub enum DatagramAction {
     Respond(Vec<u8>),
 }
 
-pub type ZoneImageProvider<'a> = &'a dyn Fn(&PublishedZone) -> Option<Arc<ZoneImage>>;
+pub type ZoneImageProvider<'a> = &'a dyn Fn(&PublishedZone) -> Arc<ZoneImage>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnyResponseMode {
@@ -593,56 +593,15 @@ pub fn answer_message_with_notify_hooks(
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
 ) -> DatagramAction {
-    answer_message_with_notify_hooks_and_query_observer(
+    let zone_image_provider = |published: &PublishedZone| published.active_zone_image();
+    answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
         zone_store,
         options,
         notify_authorized,
         notify_accepted,
         |_| {},
-    )
-}
-
-pub fn answer_message_with_notify_hooks_and_query_observer(
-    packet: &[u8],
-    zone_store: &ZoneStore,
-    options: AnswerOptions,
-    notify_authorized: impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
-    query_answered: impl Fn(&LookupResult),
-) -> DatagramAction {
-    answer_message_with_notify_hooks_query_observer_and_zone_image(
-        packet,
-        zone_store,
-        options,
-        notify_authorized,
-        notify_accepted,
-        query_answered,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn answer_message_with_notify_hooks_query_observer_and_zone_image(
-    packet: &[u8],
-    zone_store: &ZoneStore,
-    options: AnswerOptions,
-    notify_authorized: impl Fn(&DomainName, u16) -> bool,
-    notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
-    query_answered: impl Fn(&LookupResult),
-    zone_image_provider: Option<ZoneImageProvider<'_>>,
-) -> DatagramAction {
-    let observer = FullLookupObserver {
-        callback: query_answered,
-    };
-    answer_message_with_notify_hooks_observer_and_zone_image(
-        packet,
-        zone_store,
-        options,
-        notify_authorized,
-        notify_accepted,
-        &observer,
-        zone_image_provider,
+        &zone_image_provider as ZoneImageProvider<'_>,
     )
 }
 
@@ -654,7 +613,7 @@ pub fn answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
     lookup_observed: impl Fn(LookupMetrics),
-    zone_image_provider: Option<ZoneImageProvider<'_>>,
+    zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
     let observer = LookupMetricsObserver {
         callback: lookup_observed,
@@ -678,7 +637,7 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
     query_observer: &impl AnswerQueryObserver,
-    zone_image_provider: Option<ZoneImageProvider<'_>>,
+    zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
     let header = match Header::parse(packet) {
         Ok(header) => header,
@@ -729,38 +688,8 @@ fn answer_message_with_notify_hooks_observer_and_zone_image(
 }
 
 trait AnswerQueryObserver {
-    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()>;
-    fn observe_zone_image_plan(
-        &self,
-        image: &ZoneImage,
-        plan: &ZoneImageLookupPlan,
-        direct_answer: bool,
-    ) -> Option<()>;
-}
-
-struct FullLookupObserver<F> {
-    callback: F,
-}
-
-impl<F> AnswerQueryObserver for FullLookupObserver<F>
-where
-    F: Fn(&LookupResult),
-{
-    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()> {
-        (self.callback)(lookup);
-        Some(())
-    }
-
-    fn observe_zone_image_plan(
-        &self,
-        image: &ZoneImage,
-        plan: &ZoneImageLookupPlan,
-        _direct_answer: bool,
-    ) -> Option<()> {
-        let lookup = image.materialize_lookup_result(plan).ok()?;
-        (self.callback)(&lookup);
-        Some(())
-    }
+    fn observe_zone_image_plan(&self, plan: &ZoneImageLookupPlan, direct_answer: bool);
+    fn observe_zone_image_failure(&self, reason: ZoneImageServeFailureReason);
 }
 
 struct LookupMetricsObserver<F> {
@@ -771,19 +700,12 @@ impl<F> AnswerQueryObserver for LookupMetricsObserver<F>
 where
     F: Fn(LookupMetrics),
 {
-    fn observe_lookup(&self, lookup: &LookupResult) -> Option<()> {
-        (self.callback)(LookupMetrics::from(lookup));
-        Some(())
+    fn observe_zone_image_plan(&self, plan: &ZoneImageLookupPlan, direct_answer: bool) {
+        (self.callback)(LookupMetrics::from_zone_image_plan(plan, direct_answer));
     }
 
-    fn observe_zone_image_plan(
-        &self,
-        _image: &ZoneImage,
-        plan: &ZoneImageLookupPlan,
-        direct_answer: bool,
-    ) -> Option<()> {
-        (self.callback)(LookupMetrics::from_zone_image_plan(plan, direct_answer));
-        Some(())
+    fn observe_zone_image_failure(&self, reason: ZoneImageServeFailureReason) {
+        (self.callback)(LookupMetrics::from_zone_image_failure(reason));
     }
 }
 
@@ -793,7 +715,7 @@ fn answer_query_message(
     zone_store: &ZoneStore,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
-    zone_image_provider: Option<ZoneImageProvider<'_>>,
+    zone_image_provider: ZoneImageProvider<'_>,
 ) -> DatagramAction {
     if header.qdcount != 1 {
         return DatagramAction::Respond(build_response(
@@ -916,9 +838,7 @@ fn answer_query_message(
             options,
         ));
     };
-    let zone = published_zone.snapshot();
-
-    if zone.state != ZoneState::Active {
+    if published_zone.state() != ZoneState::Active {
         return DatagramAction::Respond(build_response(
             header,
             Rcode::ServFail,
@@ -931,8 +851,7 @@ fn answer_query_message(
             options,
         ));
     }
-
-    if let Some(response) = try_answer_with_zone_image(
+    match try_answer_with_zone_image(
         header,
         &question,
         metadata,
@@ -941,44 +860,19 @@ fn answer_query_message(
         zone_image_provider,
         &published_zone,
     ) {
-        return DatagramAction::Respond(response);
+        ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
+        ZoneImageAnswerAttempt::Failure(reason) => {
+            query_observer.observe_zone_image_failure(reason);
+            DatagramAction::Respond(build_zone_image_failure_response(
+                header, &question, metadata, options,
+            ))
+        }
     }
+}
 
-    let lookup = zone.lookup_with_options(
-        &question.qname,
-        question.qtype,
-        question.qclass,
-        options.max_cname_chain,
-        options.any_response,
-    );
-    let (lookup, dnssec_augmented, nsec3_iterations_exceeded) = if metadata.dnssec_requested() {
-        zone.augment_lookup_result_with_dnssec(
-            lookup,
-            &question.qname,
-            question.qtype,
-            question.qclass,
-            options.nsec3_max_iterations,
-        )
-    } else {
-        (lookup, false, false)
-    };
-    let metadata = if nsec3_iterations_exceeded {
-        metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations)
-    } else {
-        metadata
-    };
-    query_observer.observe_lookup(&lookup);
-    DatagramAction::Respond(build_response(
-        header,
-        lookup.rcode,
-        lookup.authoritative,
-        Some(&question),
-        &lookup.answers,
-        &lookup.authorities,
-        &lookup.additionals,
-        metadata.with_dnssec_augmented(dnssec_augmented),
-        options,
-    ))
+enum ZoneImageAnswerAttempt {
+    Respond(Vec<u8>),
+    Failure(ZoneImageServeFailureReason),
 }
 
 fn try_answer_with_zone_image(
@@ -987,14 +881,10 @@ fn try_answer_with_zone_image(
     metadata: RequestMetadata,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
-    zone_image_provider: Option<ZoneImageProvider<'_>>,
+    zone_image_provider: ZoneImageProvider<'_>,
     published_zone: &PublishedZone,
-) -> Option<Vec<u8>> {
-    if options.any_response != AnyResponseMode::Minimal {
-        return None;
-    }
-
-    let image = zone_image_provider?(published_zone)?;
+) -> ZoneImageAnswerAttempt {
+    let image = zone_image_provider(published_zone);
     if !metadata.dnssec_requested()
         && let Some(plan) =
             image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
@@ -1002,31 +892,30 @@ fn try_answer_with_zone_image(
             header, question, &image, &plan, metadata, options,
         )
     {
-        query_observer.observe_zone_image_plan(&image, &plan, true)?;
-        return Some(response);
+        query_observer.observe_zone_image_plan(&plan, true);
+        return ZoneImageAnswerAttempt::Respond(response);
     }
 
-    let plan = image
-        .lookup_response_plan(
+    let Ok(plan) = image.lookup_response_plan(
+        &question.qname,
+        question.qtype,
+        question.qclass,
+        options.max_cname_chain,
+        options.any_response,
+    ) else {
+        return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::PlanError);
+    };
+    let plan = if metadata.dnssec_requested() {
+        let Ok(plan) = image.augment_lookup_plan_with_dnssec(
+            plan,
             &question.qname,
             question.qtype,
             question.qclass,
-            options.max_cname_chain,
-        )
-        .ok()?;
-    if plan.is_unsupported() {
-        return None;
-    }
-    let plan = if metadata.dnssec_requested() {
-        image
-            .augment_lookup_plan_with_dnssec(
-                plan,
-                &question.qname,
-                question.qtype,
-                question.qclass,
-                options.nsec3_max_iterations,
-            )
-            .ok()?
+            options.nsec3_max_iterations,
+        ) else {
+            return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::DnssecPlanError);
+        };
+        plan
     } else {
         plan
     };
@@ -1035,9 +924,13 @@ fn try_answer_with_zone_image(
         metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
     }
 
-    let response = build_zone_image_response(header, question, &image, &plan, metadata, options)?;
-    query_observer.observe_zone_image_plan(&image, &plan, false)?;
-    Some(response)
+    let Some(response) =
+        build_zone_image_response(header, question, &image, &plan, metadata, options)
+    else {
+        return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::ResponseBuildFailed);
+    };
+    query_observer.observe_zone_image_plan(&plan, false);
+    ZoneImageAnswerAttempt::Respond(response)
 }
 
 pub fn chaos_query_observation(
@@ -1400,6 +1293,25 @@ fn build_response(
     response
 }
 
+fn build_zone_image_failure_response(
+    header: &Header,
+    question: &Question,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Vec<u8> {
+    build_response(
+        header,
+        Rcode::ServFail,
+        true,
+        Some(question),
+        &[],
+        &[],
+        &[],
+        metadata,
+        options,
+    )
+}
+
 fn build_zone_image_response(
     header: &Header,
     question: &Question,
@@ -1460,9 +1372,169 @@ fn build_zone_image_response(
     }
 
     if options.transport == Transport::Udp && response.len() > metadata.udp_ceiling(options) {
-        return None;
+        return build_truncated_zone_image_response(
+            header, question, image, plan, metadata, options,
+        );
     }
     Some(response)
+}
+
+fn build_truncated_zone_image_response(
+    header: &Header,
+    question: &Question,
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Option<Vec<u8>> {
+    let ceiling = metadata.udp_ceiling(options);
+    let mut kept_answers = Vec::new();
+    let mut kept_authorities = Vec::new();
+    let mut kept_additionals = Vec::new();
+    image.visit_plan_record_sections(
+        plan,
+        |record| kept_answers.push(record),
+        |record| kept_authorities.push(record),
+        |record| kept_additionals.push(record),
+    );
+
+    let mut metadata = metadata;
+    if metadata.extended_dns_error.is_some() {
+        metadata = metadata.without_extended_dns_error();
+        let response = build_zone_image_response_from_wire_records(
+            header,
+            question,
+            plan.rcode(),
+            plan.authoritative(),
+            true,
+            &kept_answers,
+            &kept_authorities,
+            &kept_additionals,
+            &metadata,
+            options,
+        )?;
+        if response.len() <= ceiling {
+            return Some(response);
+        }
+    }
+
+    loop {
+        let response_metadata =
+            metadata.with_dnssec_augmented(truncated_zone_image_dnssec_augmented(
+                &metadata,
+                &kept_answers,
+                &kept_authorities,
+                &kept_additionals,
+            ));
+        let response = build_zone_image_response_from_wire_records(
+            header,
+            question,
+            plan.rcode(),
+            plan.authoritative(),
+            true,
+            &kept_answers,
+            &kept_authorities,
+            &kept_additionals,
+            &response_metadata,
+            options,
+        )?;
+        if response.len() <= ceiling {
+            return Some(response);
+        }
+
+        let removed_record = if kept_additionals.pop().is_some() {
+            true
+        } else if let Some(index) = kept_authorities
+            .iter()
+            .rposition(|record| record.rr_type != RecordType::Soa as u16)
+        {
+            kept_authorities.remove(index);
+            true
+        } else {
+            kept_answers.pop().is_some() || kept_authorities.pop().is_some()
+        };
+
+        if !removed_record {
+            return Some(response);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_zone_image_response_from_wire_records(
+    header: &Header,
+    question: &Question,
+    rcode: Rcode,
+    authoritative: bool,
+    truncated: bool,
+    answers: &[ZoneImageWireRecord<'_>],
+    authorities: &[ZoneImageWireRecord<'_>],
+    additionals: &[ZoneImageWireRecord<'_>],
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+) -> Option<Vec<u8>> {
+    let edns_count = usize::from(metadata.edns.is_some());
+    let answer_count = u16::try_from(answers.len()).ok()?;
+    let authority_count = u16::try_from(authorities.len()).ok()?;
+    let additional_count = u16::try_from(additionals.len().checked_add(edns_count)?).ok()?;
+
+    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question_wire_len(question));
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags(rcode, authoritative, truncated)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&answer_count.to_be_bytes());
+    response.extend_from_slice(&authority_count.to_be_bytes());
+    response.extend_from_slice(&additional_count.to_be_bytes());
+    let mut compressor = WireNameCompressor::default();
+    let question_name_len = name_wire_len(question.qname.labels());
+    encode_question(question, &mut response);
+    compressor.register_wire_name_at_offset(
+        &response[DNS_HEADER_LEN..DNS_HEADER_LEN + question_name_len],
+        DNS_HEADER_LEN,
+    );
+
+    for record in answers.iter().chain(authorities).chain(additionals) {
+        encode_zone_image_wire_record(*record, &mut response, &mut compressor);
+    }
+
+    if let Some(edns) = metadata.edns {
+        encode_opt_record(
+            edns,
+            metadata.extended_rcode,
+            metadata.extended_dns_error,
+            options,
+            metadata.udp_ceiling(options),
+            &mut response,
+        );
+    }
+
+    Some(response)
+}
+
+fn truncated_zone_image_dnssec_augmented(
+    metadata: &RequestMetadata,
+    answers: &[ZoneImageWireRecord<'_>],
+    authorities: &[ZoneImageWireRecord<'_>],
+    additionals: &[ZoneImageWireRecord<'_>],
+) -> bool {
+    metadata.dnssec_augmented
+        && answers
+            .iter()
+            .chain(authorities)
+            .chain(additionals)
+            .any(|record| {
+                matches!(
+                    record.rr_type,
+                    rr_type if rr_type == RecordType::Ds as u16
+                        || rr_type == RecordType::Rrsig as u16
+                        || rr_type == RecordType::Nsec as u16
+                        || rr_type == RecordType::Nsec3 as u16
+                )
+            })
 }
 
 fn build_direct_zone_image_answer_response(
@@ -1786,9 +1858,7 @@ impl WireNameCompressor {
         for label_offset in label_offsets {
             let offset = start_offset + label_offset;
             if offset <= 0x3fff && wire_name.len().saturating_sub(label_offset) > 2 {
-                self.suffix_offsets
-                    .entry(wire_suffix_key(&wire_name[label_offset..]))
-                    .or_insert(offset as u16);
+                self.register_wire_suffix_offset(&wire_name[label_offset..], offset as u16);
             }
         }
     }
@@ -1803,9 +1873,7 @@ impl WireNameCompressor {
             if suffix.len() <= 2 {
                 return None;
             }
-            self.suffix_offsets
-                .get(&wire_suffix_key(suffix))
-                .copied()
+            self.wire_suffix_offset(suffix)
                 .map(|offset| (*label_offset, offset))
         });
         let pointer_label_offset = pointer_suffix.map(|(label_offset, _)| label_offset);
@@ -1818,9 +1886,10 @@ impl WireNameCompressor {
         {
             let response_offset = response_start + label_offset;
             if response_offset <= 0x3fff && wire_name.len().saturating_sub(label_offset) > 2 {
-                self.suffix_offsets
-                    .entry(wire_suffix_key(&wire_name[label_offset..]))
-                    .or_insert(response_offset as u16);
+                self.register_wire_suffix_offset(
+                    &wire_name[label_offset..],
+                    response_offset as u16,
+                );
             }
         }
         response.extend_from_slice(&wire_name[..write_end]);
@@ -1829,6 +1898,19 @@ impl WireNameCompressor {
         } else {
             response.push(0);
         }
+    }
+
+    fn wire_suffix_offset(&self, wire_suffix: &[u8]) -> Option<u16> {
+        let key = canonical_wire_suffix_key(wire_suffix);
+        self.suffix_offsets.get(key.as_ref()).copied()
+    }
+
+    fn register_wire_suffix_offset(&mut self, wire_suffix: &[u8], offset: u16) {
+        let key = canonical_wire_suffix_key(wire_suffix);
+        if self.suffix_offsets.contains_key(key.as_ref()) {
+            return;
+        }
+        self.suffix_offsets.insert(key.into_owned(), offset);
     }
 }
 
@@ -1889,6 +1971,33 @@ fn wire_suffix_key(wire_suffix: &[u8]) -> Vec<u8> {
         cursor += len;
     }
     key
+}
+
+fn canonical_wire_suffix_key(wire_suffix: &[u8]) -> Cow<'_, [u8]> {
+    if wire_suffix_is_ascii_lowercase(wire_suffix) {
+        Cow::Borrowed(wire_suffix)
+    } else {
+        Cow::Owned(wire_suffix_key(wire_suffix))
+    }
+}
+
+fn wire_suffix_is_ascii_lowercase(wire_suffix: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    while cursor < wire_suffix.len() {
+        let len = wire_suffix[cursor] as usize;
+        cursor += 1;
+        if len == 0 {
+            return true;
+        }
+        if wire_suffix[cursor..cursor + len]
+            .iter()
+            .any(u8::is_ascii_uppercase)
+        {
+            return false;
+        }
+        cursor += len;
+    }
+    true
 }
 
 fn question_wire_len(question: &Question) -> usize {
@@ -2642,15 +2751,37 @@ pub struct LookupMetrics {
     pub nsec3_iterations_exceeded: bool,
     pub zone_image_used: bool,
     pub zone_image_direct_answer: bool,
+    pub zone_image_failure_reason: Option<ZoneImageServeFailureReason>,
 }
 
-impl From<&LookupResult> for LookupMetrics {
-    fn from(lookup: &LookupResult) -> Self {
-        Self {
-            termination: lookup.termination,
-            nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
-            zone_image_used: false,
-            zone_image_direct_answer: false,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneImageServeFailureReason {
+    PlanError,
+    DnssecPlanError,
+    ResponseBuildFailed,
+}
+
+impl ZoneImageServeFailureReason {
+    pub const COUNT: usize = 3;
+    pub const ALL: [Self; 3] = [
+        Self::PlanError,
+        Self::DnssecPlanError,
+        Self::ResponseBuildFailed,
+    ];
+
+    pub const fn metric_label(self) -> &'static str {
+        match self {
+            Self::PlanError => "plan_error",
+            Self::DnssecPlanError => "dnssec_plan_error",
+            Self::ResponseBuildFailed => "response_build_failed",
+        }
+    }
+
+    pub const fn metric_index(self) -> usize {
+        match self {
+            Self::PlanError => 0,
+            Self::DnssecPlanError => 1,
+            Self::ResponseBuildFailed => 2,
         }
     }
 }
@@ -2668,6 +2799,17 @@ impl LookupMetrics {
             nsec3_iterations_exceeded: plan.nsec3_iterations_exceeded(),
             zone_image_used: true,
             zone_image_direct_answer: direct_answer,
+            zone_image_failure_reason: None,
+        }
+    }
+
+    fn from_zone_image_failure(reason: ZoneImageServeFailureReason) -> Self {
+        Self {
+            termination: None,
+            nsec3_iterations_exceeded: false,
+            zone_image_used: false,
+            zone_image_direct_answer: false,
+            zone_image_failure_reason: Some(reason),
         }
     }
 }
@@ -2904,7 +3046,7 @@ mod tests {
     }
 
     fn store_response_with_zone_image(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
-        let provider = |published: &PublishedZone| published.zone_image();
+        let provider = |published: &PublishedZone| published.active_zone_image();
         store_response_with_zone_image_provider(packet, store, AnswerOptions::default(), &provider)
     }
 
@@ -2914,14 +3056,14 @@ mod tests {
         options: AnswerOptions,
         provider: ZoneImageProvider<'_>,
     ) -> Vec<u8> {
-        match answer_message_with_notify_hooks_query_observer_and_zone_image(
+        match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
             packet,
             store,
             options,
             |_, _| true,
             |_, _, _| {},
             |_| {},
-            Some(provider),
+            provider,
         ) {
             DatagramAction::Discard => panic!("expected response"),
             DatagramAction::Respond(response) => response,
@@ -2937,7 +3079,13 @@ mod tests {
         let question = Question::parse(packet).ok()?;
         let metadata = RequestMetadata::parse(&header, packet, &question).ok()?;
         let plan = image
-            .lookup_response_plan(&question.qname, question.qtype, question.qclass, 8)
+            .lookup_response_plan(
+                &question.qname,
+                question.qtype,
+                question.qclass,
+                8,
+                options.any_response,
+            )
             .ok()?;
         build_direct_zone_image_answer_response(&header, &question, image, &plan, metadata, options)
     }
@@ -4558,7 +4706,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
 
         let snapshot_response =
@@ -4647,7 +4795,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
 
         let mut positive = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -4850,7 +4998,7 @@ mod tests {
             let provider_calls = std::cell::Cell::new(0);
             let provider = |published: &PublishedZone| {
                 provider_calls.set(provider_calls.get() + 1);
-                published.zone_image()
+                published.active_zone_image()
             };
 
             let snapshot_response =
@@ -4872,7 +5020,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_bypasses_provider_for_full_any_mode() {
+    fn zone_image_serving_uses_provider_for_full_any_query() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -4909,15 +5057,37 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
+        let observed = std::cell::Cell::new(None);
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
         let zone_image_response =
-            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+            match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+                &packet,
+                &store,
+                options,
+                |_, _| true,
+                |_, _, _| {},
+                |metrics| observed.set(Some(metrics)),
+                &provider,
+            ) {
+                DatagramAction::Discard => panic!("expected response"),
+                DatagramAction::Respond(response) => response,
+            };
 
-        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            observed
+                .get()
+                .and_then(|metrics| metrics.zone_image_failure_reason),
+            None
+        );
+        assert_eq!(
+            observed.get().map(|metrics| metrics.zone_image_used),
+            Some(true)
+        );
         assert_eq!(
             response_answer_types(&zone_image_response),
             vec![RecordType::Cname as u16, RecordType::Txt as u16]
@@ -4925,7 +5095,58 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_falls_back_when_udp_ceiling_requires_truncation() {
+    fn zone_image_serving_uses_provider_for_non_any_query_in_full_any_mode() {
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![vec![192, 0, 2, 1]],
+            )],
+        ));
+        let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        let options = AnswerOptions {
+            any_response: AnyResponseMode::Full,
+            ..AnswerOptions::default()
+        };
+        let provider_calls = std::cell::Cell::new(0);
+        let provider = |published: &PublishedZone| {
+            provider_calls.set(provider_calls.get() + 1);
+            published.active_zone_image()
+        };
+        let observed = std::cell::Cell::new(None);
+
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+        let zone_image_response =
+            match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+                &packet,
+                &store,
+                options,
+                |_, _| true,
+                |_, _, _| {},
+                |metrics| observed.set(Some(metrics)),
+                &provider,
+            ) {
+                DatagramAction::Discard => panic!("expected response"),
+                DatagramAction::Respond(response) => response,
+            };
+
+        assert_eq!(provider_calls.get(), 1);
+        assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            observed
+                .get()
+                .map(|metrics| (metrics.zone_image_used, metrics.zone_image_failure_reason)),
+            Some((true, None))
+        );
+    }
+
+    #[test]
+    fn zone_image_serving_truncates_without_snapshot_fallback_when_udp_ceiling_requires_it() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -4943,16 +5164,34 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
+        let observed = std::cell::Cell::new(None);
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
         let zone_image_response =
-            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+            match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+                &packet,
+                &store,
+                options,
+                |_, _| true,
+                |_, _, _| {},
+                |metrics| observed.set(Some(metrics)),
+                &provider,
+            ) {
+                DatagramAction::Discard => panic!("expected response"),
+                DatagramAction::Respond(response) => response,
+            };
         let flags = u16::from_be_bytes([zone_image_response[2], zone_image_response[3]]);
 
         assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            observed
+                .get()
+                .map(|metrics| (metrics.zone_image_used, metrics.zone_image_failure_reason)),
+            Some((true, None))
+        );
         assert!(zone_image_response.len() <= 128);
         assert_eq!(flags & 0x0200, 0x0200);
     }
@@ -4974,7 +5213,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
 
         let mut nsid_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -5051,7 +5290,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_preserves_ede_not_ready_fallback() {
+    fn zone_image_serving_preserves_ede_not_ready_without_image_attempt() {
         let store = ZoneStore::new();
         store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
         let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -5063,7 +5302,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -5105,7 +5344,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
 
         let mut small_edns_512 = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -5321,7 +5560,7 @@ mod tests {
                 .qname
                 .is_equal_or_subdomain_of(&DomainName::from_absolute_str("www.").unwrap())
         );
-        assert!(store.find_zone(&parsed_question.qname).is_some());
+        assert!(store.find_published_zone(&parsed_question.qname).is_some());
 
         let response = store_response(&packet, &store);
         let answer_offset = first_answer_offset(&response);
@@ -5417,6 +5656,22 @@ mod tests {
         assert_eq!(wire_label_offsets(b"\x03www\x00extra"), None);
         assert_eq!(wire_name_len_at(b"\x03www\x00extra", 0), Some(5));
         assert_eq!(wire_name_len_at(b"\x00\x03www\x00", 1), Some(5));
+    }
+
+    #[test]
+    fn wire_suffix_keys_borrow_canonical_lowercase_suffixes() {
+        let lowercase = b"\x03www\x07example\x04test\x00";
+        let mixed_case = b"\x03WWW\x07Example\x04test\x00";
+
+        assert!(matches!(
+            canonical_wire_suffix_key(lowercase),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            canonical_wire_suffix_key(mixed_case),
+            std::borrow::Cow::Owned(_)
+        ));
+        assert_eq!(wire_suffix_key(lowercase), wire_suffix_key(mixed_case));
     }
 
     #[test]
@@ -6017,7 +6272,8 @@ mod tests {
         append_opt(&mut packet, 4096, 0x8000, &[]);
 
         let nsec3_iterations_exceeded = std::cell::Cell::new(false);
-        let action = answer_message_with_notify_hooks_and_query_observer(
+        let provider = |published: &PublishedZone| published.active_zone_image();
+        let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
             &packet,
             &store,
             AnswerOptions {
@@ -6028,6 +6284,7 @@ mod tests {
             |_, _| true,
             |_, _, _| {},
             |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
+            &provider,
         );
         let response = match action {
             DatagramAction::Discard => panic!("expected response"),
@@ -6100,7 +6357,7 @@ mod tests {
         let provider_calls = std::cell::Cell::new(0);
         let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            published.zone_image()
+            published.active_zone_image()
         };
         let nsec3_iterations_exceeded = std::cell::Cell::new(false);
 
@@ -6111,7 +6368,7 @@ mod tests {
             |_, _| true,
             |_, _, _| {},
             |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
-            Some(&provider),
+            &provider,
         );
         let zone_image_response = match action {
             DatagramAction::Discard => panic!("expected response"),

@@ -1811,25 +1811,12 @@ impl ZoneStore {
             .map(|entry| entry.snapshot.clone())
     }
 
-    pub fn find_zone(&self, qname: &DomainName) -> Option<Arc<ZoneSnapshot>> {
-        self.find_published_zone(qname)
-            .map(|published| published.snapshot())
-    }
-
     pub fn find_published_zone(&self, qname: &DomainName) -> Option<PublishedZone> {
         let zones = self.zones.load();
         zones
             .find_best_match(qname)
             .filter(|entry| !entry.hidden)
             .map(|entry| PublishedZone { entry })
-    }
-
-    pub fn zone_image_for_snapshot(&self, snapshot: &Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>> {
-        let zones = self.zones.load();
-        let entry = zones.get(&snapshot.origin.canonical_key())?;
-        Arc::ptr_eq(&entry.snapshot, snapshot)
-            .then(|| entry.image.clone())
-            .flatten()
     }
 
     pub fn snapshots(&self) -> Vec<Arc<ZoneSnapshot>> {
@@ -1897,12 +1884,28 @@ impl ZoneStore {
 }
 
 impl PublishedZone {
-    pub fn snapshot(&self) -> Arc<ZoneSnapshot> {
-        self.entry.snapshot.clone()
+    pub fn origin(&self) -> &DomainName {
+        &self.entry.snapshot.origin
+    }
+
+    pub fn serial(&self) -> Option<u32> {
+        self.entry.snapshot.serial
+    }
+
+    pub fn state(&self) -> ZoneState {
+        self.entry.snapshot.state
     }
 
     pub fn zone_image(&self) -> Option<Arc<ZoneImage>> {
         self.entry.image.clone()
+    }
+
+    pub fn active_zone_image(&self) -> Arc<ZoneImage> {
+        debug_assert_eq!(self.entry.snapshot.state, ZoneState::Active);
+        self.entry
+            .image
+            .clone()
+            .expect("active published zone must include a compiled ZoneImage")
     }
 }
 
@@ -1978,7 +1981,9 @@ fn canonical_reverse_label_key_with_prefixes(name: &DomainName) -> (Vec<u8>, Vec
 impl ZoneStoreEntry {
     fn new(snapshot: Arc<ZoneSnapshot>, hidden: bool) -> Self {
         let image = if snapshot.state == ZoneState::Active {
-            ZoneImage::compile(&snapshot).ok().map(Arc::new)
+            Some(Arc::new(
+                ZoneImage::compile(&snapshot).expect("active zone image compiles"),
+            ))
         } else {
             None
         };
@@ -2292,12 +2297,12 @@ mod tests {
         store.insert_loading_hidden(origin.clone());
 
         assert!(store.find_exact_zone(&origin).is_some());
-        assert!(store.find_zone(&origin).is_none());
-        assert!(store.find_zone(&child).is_none());
+        assert!(store.find_published_zone(&origin).is_none());
+        assert!(store.find_published_zone(&child).is_none());
         assert!(store.is_hidden(&origin));
 
         store.show_zone(&origin);
-        assert!(store.find_zone(&child).is_some());
+        assert!(store.find_published_zone(&child).is_some());
     }
 
     #[test]
@@ -2313,7 +2318,7 @@ mod tests {
         let published = store
             .find_published_zone(&qname)
             .expect("published child zone");
-        assert_eq!(published.snapshot().origin, child);
+        assert_eq!(published.origin(), &child);
     }
 
     #[test]
@@ -2330,13 +2335,13 @@ mod tests {
         let hidden_child = store
             .find_published_zone(&qname)
             .expect("published parent zone");
-        assert_eq!(hidden_child.snapshot().origin, parent);
+        assert_eq!(hidden_child.origin(), &parent);
 
         store.show_zone(&child);
         let visible_child = store
             .find_published_zone(&qname)
             .expect("published child zone");
-        assert_eq!(visible_child.snapshot().origin, child);
+        assert_eq!(visible_child.origin(), &child);
     }
 
     #[test]
@@ -2352,9 +2357,8 @@ mod tests {
             store
                 .find_published_zone(&qname)
                 .expect("published child zone")
-                .snapshot()
-                .origin,
-            child
+                .origin(),
+            &child
         );
 
         assert!(store.remove_zone(&child));
@@ -2362,9 +2366,8 @@ mod tests {
             store
                 .find_published_zone(&qname)
                 .expect("published parent zone")
-                .snapshot()
-                .origin,
-            parent
+                .origin(),
+            &parent
         );
     }
 

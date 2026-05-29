@@ -65,16 +65,9 @@ pipeline_timing_enabled = false
 # Disabled by default because scrape-time zone-shape gauges and histograms walk
 # active zone snapshots. Enable only for memory-layout diagnostics.
 zone_shape_enabled = false
-# Disabled by default. When enabled, live comparable queries are checked against
-# the immutable ZoneImage shadow path and mismatch counters/logs are emitted.
-zone_image_shadow_enabled = false
-
 [query]
 # ANY response policy. Default: "minimal"; "full" returns ordinary owner RRsets.
 any_response = "minimal"
-# Experimental and disabled by default. Serves supported non-DNSSEC query shapes
-# from the immutable ZoneImage path, with ordinary snapshot lookup as fallback.
-zone_image_serve_enabled = false
 
 [edns]
 # Extended DNS Errors per RFC 8914. Default: "off". Use "minimal" to include

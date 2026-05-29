@@ -1,8 +1,9 @@
 # Memory And Packet I/O Data Plane Design
 
-Status: deferred optimization design with an experimental local `ZoneImage`
-implementation slice. Implementation progress and remaining retirement work are
-tracked in `docs/zone-image-implementation-status.md`.
+Status: data-plane optimization design with a default-enabled local `ZoneImage`
+implementation for supported query shapes. Implementation progress and
+remaining retirement work are tracked in
+`docs/zone-image-implementation-status.md`.
 
 Owner: this document owns implementation planning for a future cache-local
 authoritative query data plane. Normative DNS behavior remains owned by
@@ -497,10 +498,7 @@ packet loss
 send errors
 receive errors
 fallback count
-zone image shadow matches
-zone image shadow mismatches
-zone image shadow unsupported
-zone image shadow errors
+fallback count by fixed reason
 ```
 
 Required build statistics per `ZoneImage`:
@@ -656,7 +654,7 @@ Promotion gate:
 - standard UDP batch path beats the current path before deeper backends are
   attempted;
 - io_uring or AF_XDP beats the standard UDP batch baseline on target hardware;
-- fallback path remains continuously tested;
+- snapshot comparison evidence remains continuously tested offline;
 - attach/detach and unsupported-hardware behavior are clean.
 
 ## Implementation Phases
@@ -706,8 +704,8 @@ Exit:
 - exact positive corpus passes;
 - no unsafe in packed lookup;
 - build statistics and lookup metrics are emitted;
-- optional runtime shadow validation can compare published images without
-  changing served answers.
+- old/new comparisons are retained in offline tests and benchmarks rather than
+  live runtime shadow validation.
 
 ### Phase 3: Full Name Semantics
 
@@ -716,17 +714,17 @@ Tasks:
 - add wildcard, empty non-terminal, delegation, glue, CNAME, and DNAME support;
 - add additional-data index;
 - extend differential corpus;
-- add an opt-in serving gate that composes supported response sections directly
-  from immutable `ZoneImage` wire chunks and falls back to the current snapshot
-  response path for unsupported or oversized responses.
+- add a default-enabled serving gate that composes supported response sections
+  directly from immutable `ZoneImage` wire chunks and falls back to the current
+  snapshot response path for unsupported or oversized responses.
 
 Exit:
 
 - current name-semantics tests pass under both models;
 - packet-level sampled responses match expected behavior for the gated serving
   path;
-- shadow-validation counters stay at zero mismatches/errors for the retained
-  sampled query set;
+- offline old/new comparison evidence stays at zero mismatches/errors for the
+  retained sampled query set;
 - no regression in current interop smoke.
 
 ### Phase 4: DNSSEC Denial
@@ -856,9 +854,9 @@ CNAME, wildcard, referral/glue, NODATA, NXDOMAIN, DNAME behavior, and an
 opaque unknown RR type before timing both the current lookup path and the
 `ZoneImage` semantic path. The packet validator also checks positive EDNS
 option handling for NSID, DNS Cookie, and padding, signed DO handling for the
-covered corpus, plus fallback boundaries for full QTYPE ANY, UDP truncation,
-EDE not-ready responses, and varied no-EDNS/EDNS UDP payload ceilings before
-timing the gated packet path. A
+covered corpus, plus boundary coverage for full QTYPE ANY, signed DO, UDP
+truncation, EDE not-ready responses, and varied no-EDNS/EDNS UDP payload
+ceilings before timing the gated packet path. A
 deterministic hot-query shape
 also exercises 90 percent repeated `host0` A queries and 10 percent spread
 queries across the generated zone at both lookup and packet layers. A weighted
@@ -896,29 +894,35 @@ publication-time `ZoneImage` compilation, and the `ArcSwap`-published
 serving reads a `PublishedZone` handle containing the active `ZoneSnapshot` and
 `ZoneImage` instead of compiling through a query-time shadow cache, scanning all
 zones, or performing a second store lookup. The gated packet path uses a
-lightweight lookup-metrics observer so normal responses do not materialize `ResourceRecord` values only to
-record termination counters, and semantic planning skips answer materialization
-when the answer RR type cannot produce additional address records. The direct
-answer emitter is attempted before the generic section-counting pass, so the
-common single-RRset hot path patches the answer count after copying validated
-RRset wire chunks. The direct-copy eligibility now follows the current
+lightweight lookup-metrics observer so normal responses do not materialize
+`ResourceRecord` values only to record termination counters, and semantic
+planning skips answer materialization when the answer RR type cannot produce
+additional address records. Public `ZoneImage` materialization helpers have
+also been removed; tests and benchmarks compare plan summaries or immutable
+wire output instead of rebuilding temporary `LookupResult` values from the
+image. The direct answer emitter is attempted before the generic
+section-counting pass, so the common single-RRset hot path patches the answer
+count after copying validated RRset wire chunks. The direct-copy eligibility now follows the current
 composer: it rejects RR types whose RDATA is rewritten for DNS name
 compression, but admits opaque and unknown RR types after byte-for-byte
 validation. The response composer also writes question names directly from
 parsed labels and registers the already-written question slice with the wire
 compressor, avoiding an extra QNAME wire allocation in both the direct emitter
-and generic ZoneImage composer. Answer order tracking is lazy: direct positive
-plans record only their RRset list, while synthesized-answer paths populate a
-small ordering list with indexes into the stored synthesized answers only when
-interleaving is required. Delegation and DNAME discovery now walk the packed
-name graph's closest existing node and parent chain instead of scanning global
-candidate RRset lists. The runtime serving path first tries a guarded exact
-direct-answer candidate before full semantic planning; the candidate is allowed
-only when the packed ancestor chain proves no referral, ancestor DNAME, or
-additional-address processing can change the answer. The direct emitter then
-compares the RRset owner to the question once and uses the stored owner-wire
-length while copying each RR, avoiding repeated owner-name parsing for
-multi-RDATA direct answers. Additional-data planning for ordinary
+and generic ZoneImage composer. Canonical lowercase wire-name compression
+suffix probes now borrow the already validated wire suffix, while mixed-case
+names and new compression entries still canonicalize into owned suffix keys.
+Answer order tracking is lazy: direct positive plans record only their RRset
+list, while synthesized-answer paths populate a small ordering list with
+indexes into the stored synthesized answers only when interleaving is required.
+Delegation and DNAME discovery now walk the packed name graph's closest
+existing node and parent chain instead of scanning global candidate RRset
+lists. The runtime serving path first tries a guarded exact direct-answer
+candidate before full semantic planning; the candidate is allowed only when the
+packed ancestor chain proves no referral, ancestor DNAME, or additional-address
+processing can change the answer. The direct emitter then compares the RRset
+owner to the question once and uses the stored owner-wire length while copying
+each RR, avoiding repeated owner-name parsing for multi-RDATA direct answers.
+Additional-data planning for ordinary
 NS/MX/SRV/NAPTR/SVCB/HTTPS answers and delegation-glue discovery now parses
 targets directly from immutable RDATA arenas. Wildcard owner substitution keeps
 RRset handles plus stored owner-wire overrides, while DNAME CNAME synthesis
@@ -943,10 +947,10 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `query_mix_trace` | `weighted_reference_trace_tsv` |
 | `query_mix_mixed` | `positive_a,cname,wildcard,referral_glue,nodata,nxdomain,dname,opaque_unknown` |
 | `query_mix_optioned` | `edns_nsid,dns_cookie,edns_padding` |
-| `query_mix_fallback` | `do_dnssec_positive,full_any,udp_truncation,ede_not_ready` |
+| `query_mix_boundary` | `qtype_any_full,dnssec_do,response_build_truncation` |
 | `query_mix_udp_ceiling` | `no_edns_512,edns_payload_512,edns_payload_1232,edns_payload_4096` |
 | `query_mix_delegation_dname_stress` | `referral_glue,dname_synthesis` |
-| `serving_gate` | `minimal_any_signed_dnssec_supported_with_snapshot_fallback` |
+| `serving_gate` | `zone_image_without_snapshot_rollback` |
 | Records | 10,000 |
 | Delegation/DNAME stress candidates | 2,000 |
 | Iterations | 200,000 |
@@ -962,34 +966,32 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `trace_packet_validation_mismatches` | 0 |
 | `optioned_packet_cases` | 3 |
 | `optioned_packet_validation_mismatches` | 0 |
-| `fallback_packet_cases` | 3 |
-| `fallback_packet_validation_mismatches` | 0 |
+| `boundary_packet_cases` | 3 |
+| `boundary_packet_validation_mismatches` | 0 |
 | `udp_ceiling_packet_cases` | 5 |
 | `udp_ceiling_packet_validation_mismatches` | 0 |
 | `ede_fallback_packet_cases` | 1 |
 | `ede_fallback_packet_validation_mismatches` | 0 |
-| `zone_image_compile_ms` | 11.390 |
-| `zone_image_delegation_dname_stress_compile_ms` | 7.507 |
-| `current_lookup_ns_per_query` | 161.341 |
-| `zone_image_exact_lookup_ns_per_query` | 78.445 |
-| `current_hot_lookup_ns_per_query` | 126.862 |
-| `zone_image_hot_exact_lookup_ns_per_query` | 48.192 |
-| `current_mixed_response_ns_per_query` | 441.714 |
-| `zone_image_mixed_plan_ns_per_query` | 263.024 |
-| `zone_image_mixed_wire_ns_per_query` | 284.278 |
-| `zone_image_mixed_response_ns_per_query` | 395.087 |
-| `current_delegation_dname_stress_response_ns_per_query` | 85,909.958 |
-| `zone_image_delegation_dname_stress_plan_ns_per_query` | 685.605 |
-| `zone_image_delegation_dname_stress_wire_ns_per_query` | 635.747 |
-| `zone_image_delegation_dname_stress_response_ns_per_query` | 865.738 |
-| `current_mixed_packet_ns_per_query` | 1,443.832 |
-| `zone_image_mixed_packet_ns_per_query` | 822.145 |
-| `current_hot_packet_ns_per_query` | 548.710 |
-| `zone_image_hot_packet_ns_per_query` | 190.808 |
-| `current_trace_packet_ns_per_query` | 1,613.812 |
-| `zone_image_trace_packet_ns_per_query` | 625.646 |
-| `current_optioned_packet_ns_per_query` | 612.458 |
-| `zone_image_optioned_packet_ns_per_query` | 236.082 |
+| `zone_image_compile_ms` | 9.643 |
+| `zone_image_delegation_dname_stress_compile_ms` | 7.583 |
+| `current_lookup_ns_per_query` | 149.171 |
+| `zone_image_exact_lookup_ns_per_query` | 77.420 |
+| `current_hot_lookup_ns_per_query` | 133.774 |
+| `zone_image_hot_exact_lookup_ns_per_query` | 53.379 |
+| `current_mixed_response_ns_per_query` | 451.637 |
+| `zone_image_mixed_plan_ns_per_query` | 264.775 |
+| `zone_image_mixed_wire_ns_per_query` | 281.062 |
+| `current_delegation_dname_stress_response_ns_per_query` | 89,382.274 |
+| `zone_image_delegation_dname_stress_plan_ns_per_query` | 634.491 |
+| `zone_image_delegation_dname_stress_wire_ns_per_query` | 701.321 |
+| `current_mixed_packet_ns_per_query` | 1,405.084 |
+| `zone_image_mixed_packet_ns_per_query` | 753.901 |
+| `current_hot_packet_ns_per_query` | 567.413 |
+| `zone_image_hot_packet_ns_per_query` | 211.284 |
+| `current_trace_packet_ns_per_query` | 1,636.163 |
+| `zone_image_trace_packet_ns_per_query` | 505.872 |
+| `current_optioned_packet_ns_per_query` | 703.985 |
+| `zone_image_optioned_packet_ns_per_query` | 291.758 |
 | `current_mixed_packet_bytes` | 14,750,000 |
 | `zone_image_mixed_packet_bytes` | 14,750,000 |
 | `current_hot_packet_bytes` | 10,054,000 |
@@ -1002,7 +1004,6 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `current_delegation_dname_stress_record_count` | 500,000 |
 | `zone_image_delegation_dname_stress_plan_item_count` | 500,000 |
 | `zone_image_delegation_dname_stress_wire_record_count` | 500,000 |
-| `zone_image_delegation_dname_stress_record_count` | 500,000 |
 | `zone_image_nodes` | 10,013 |
 | `zone_image_edges` | 10,012 |
 | `zone_image_rrsets` | 10,013 |
@@ -1030,20 +1031,22 @@ The retained prototype check artifact
 | `mixed_packet_ratio` | 0.569 |
 | `hot_packet_ratio` | 0.348 |
 | `trace_packet_ratio` | 0.388 |
-| `optioned_packet_ratio` | 0.385 |
-| `delegation_dname_stress_plan_ratio` | 0.008 |
-| `delegation_dname_stress_wire_ratio` | 0.007 |
+| `optioned_packet_ratio` | 0.414 |
+| `delegation_dname_stress_plan_ratio` | 0.007 |
+| `delegation_dname_stress_wire_ratio` | 0.008 |
 
 Interpretation: direct exact handle lookup is faster than the current snapshot
 path on this flat-zone sample. The mixed semantic plan path is also faster than
 the current materialized lookup after adding compact delegation and DNAME
-candidate indexes to avoid scanning every RRset. The remaining gap is the
-temporary `ResourceRecord` materialization adapter for compatibility paths:
-direct RR-section emission from handles and wire arenas keeps most of the
-plan-path gain, while the served negative authority path now uses precomputed
-SOA negative TTL instead of reparsing SOA RDATA for each packet. Generic
-ZoneImage responses also pre-size their response buffers from plan wire bounds
-instead of relying on a small fixed starting capacity.
+candidate indexes to avoid scanning every RRset. The former temporary
+`ResourceRecord` materialization adapter is no longer part of `ZoneImage`'s
+public comparison surface; retained parity checks now compare plan summaries,
+immutable wire sections, and packet bytes. Direct RR-section emission from
+handles and wire arenas keeps most of the plan-path gain, while the served
+negative authority path now uses precomputed SOA negative TTL instead of
+reparsing SOA RDATA for each packet. Generic ZoneImage responses also pre-size
+their response buffers from plan wire bounds instead of relying on a small
+fixed starting capacity.
 The delegation/DNAME stress shape validates the main scaling reason for the
 packed name graph: the current snapshot path pays about 86 us/query while it
 scans 2,000 delegation and 2,000 DNAME candidates, while ZoneImage semantic
@@ -1073,6 +1076,113 @@ both old linear semantics and the current suffix-index baseline.
 Arena-wire compression for
 owner names plus known-name RDATA keeps packet bytes equal to the current
 composer for the retained query mix without rehydrating `DomainName` owners.
+The compressor now avoids per-probe suffix-key allocation for canonical
+lowercase wire names, which is the normal compiled `ZoneImage` owner/RDATA
+shape.
+ZoneImage packet response code no longer references the compatibility
+`LookupResult` materialization APIs: those APIs have been removed from
+`ZoneImage`. The runtime and fuzzed ZoneImage serving surface use the
+lookup-metrics observer, which reads termination and NSEC3-cap state directly
+from the plan, then the response composer visits immutable wire records. Old/new
+differential checks and in-process benchmarks compare `ZoneImage` plan
+summaries, immutable wire sections, or final packet bytes rather than
+materializing image `LookupResult` values.
+The stale `observer_unsupported` fallback reason was removed after ZoneImage
+serving moved fully onto the lookup-metrics observer. The `unavailable` bucket
+was then removed by making rollback skip the image attempt entirely and making
+enabled serving use the compiled image already attached to the active
+`PublishedZone`. The remaining internal failure buckets are plan build error,
+DNSSEC plan error, and response build failure; those now return ZoneImage
+SERVFAIL responses instead of re-entering the snapshot lookup path.
+The default-enabled query branch now also checks `PublishedZone` state directly
+before attempting `ZoneImage`, so it does not clone the old `ZoneSnapshot` on
+the hot path. Runtime query metric observation now reads origin and state
+through the same published-zone handle instead of cloning the snapshot just to
+label metrics. The live runtime shadow-validation oracle has been retired, so
+the runtime metric path no longer clones snapshots or runs old snapshot lookups
+for comparison. The hidden snapshot-rollback serving entry points were then
+removed, along with the runtime path selector and the materializing
+`LookupResult` observer bridge. The core `answer_datagram` and `answer_message`
+convenience APIs now use the same required-provider ZoneImage serving path by
+default, and packet-answering code has no snapshot clone or
+`lookup_with_options` call. Query-suffix zone lookup now exposes
+`PublishedZone` handles rather than `Arc<ZoneSnapshot>` or a snapshot-to-image
+bridge; exact-origin snapshot access is retained for transfer, catalog, builder,
+and offline benchmark comparison responsibilities. `PublishedZone` no longer
+exposes generic or rollback/oracle snapshot accessors to query-serving callers.
+After removing the live `[query].zone_image_serve_enabled` rollback switch, the
+current in-process profiling benchmark retained
+`target/zone-image-bench/default-serve-promotion-profiling.tsv` and passed
+`target/zone-image-bench/default-serve-promotion-profiling-check.tsv` with zero
+semantic, packet, fallback, UDP-ceiling, and EDE fallback mismatches. The packet
+ratios remained inside the promotion gates: mixed `0.583`, hot `0.390`, trace
+`0.435`, and optioned `0.428`.
+After adding fixed fallback-reason counters for the rollback path, the retained
+in-process profiling benchmark
+`target/zone-image-bench/fallback-reasons-profiling.tsv` passed
+`target/zone-image-bench/fallback-reasons-profiling-check.tsv` with zero
+semantic, packet, fallback, UDP-ceiling, and EDE fallback mismatches. The
+served packet ratios stayed inside the gates: mixed `0.567`, hot `0.397`,
+trace `0.406`, and optioned `0.423`.
+Full-ANY mode first stopped forcing non-ANY traffic down the old path, then
+QTYPE ANY itself moved onto the immutable `ZoneImage` path for supported exact
+and wildcard RRsets. Minimal mode keeps one sorted real RRset; full mode emits
+all matching real owner RRsets while omitting DNSSEC proof and signature RRsets,
+matching the snapshot path. The retained profiling benchmark
+`target/zone-image-bench/full-any-scope-profiling.tsv` passed
+`target/zone-image-bench/full-any-scope-profiling-check.tsv`; packet ratios
+remained inside the gates for the scoped non-ANY slice: mixed `0.538`, hot
+`0.411`, trace `0.414`, and optioned `0.447`.
+UDP truncation for supported responses is now handled by the ZoneImage composer:
+it emits TC=1 directly from immutable wire records, preserving the same record
+removal order as the snapshot composer and avoiding the old path for the
+oversized UDP boundary. The retained profiling benchmark
+`target/zone-image-bench/zone-image-udp-truncation-profiling.tsv` passed
+`target/zone-image-bench/zone-image-udp-truncation-profiling-check.tsv`; packet
+ratios remained inside the gates: mixed `0.584`, hot `0.393`, trace `0.295`,
+and optioned `0.446`.
+QTYPE ANY now uses the `ZoneImage` planner for supported exact and wildcard
+owner RRsets. The retained profiling benchmark
+`target/zone-image-bench/zone-image-qtype-any-profiling.tsv` passed
+`target/zone-image-bench/zone-image-qtype-any-profiling-check.tsv` with zero
+semantic, packet, boundary, UDP-ceiling, and EDE fallback mismatches. Packet
+ratios remained inside the gates: mixed `0.549`, hot `0.368`, trace `0.318`,
+and optioned `0.481`.
+Public `ZoneImage` materialization helpers were then removed and the retained
+benchmark stopped timing temporary image-to-`LookupResult` reconstruction. The
+replacement parity path compares plan summaries, immutable wire section output,
+and final packets. The retained profiling benchmark
+`target/zone-image-bench/zone-image-no-materialization-profiling.tsv` passed
+`target/zone-image-bench/zone-image-no-materialization-profiling-check.tsv`
+with zero semantic, packet, boundary, UDP-ceiling, and EDE fallback mismatches.
+Packet ratios remained inside the gates: mixed `0.537`, hot `0.372`, trace
+`0.309`, and optioned `0.414`.
+After isolating the default-enabled ZoneImage branch from `ZoneSnapshot` clones,
+the retained profiling benchmark
+`target/zone-image-bench/zone-image-snapshot-isolation-profiling.tsv` passed
+`target/zone-image-bench/zone-image-snapshot-isolation-profiling-check.tsv`
+with zero semantic, packet, boundary, UDP-ceiling, and EDE fallback mismatches.
+Packet ratios remained inside the gates: mixed `0.569`, hot `0.424`, trace
+`0.298`, and optioned `0.465`.
+After splitting the core serving API into required-provider ZoneImage serving
+and an explicitly named snapshot-rollback entry point, the retained profiling
+benchmark `target/zone-image-bench/zone-image-explicit-serving-api-profiling.tsv`
+passed
+`target/zone-image-bench/zone-image-explicit-serving-api-profiling-check.tsv`
+with zero semantic, packet, boundary, UDP-ceiling, and EDE fallback mismatches.
+Packet ratios remained inside the gates: mixed `0.597`, hot `0.352`, trace
+`0.321`, and optioned `0.493`.
+After removing the hidden snapshot-rollback serving entry points and
+`PublishedZone` rollback snapshot accessor, the retained profiling benchmark
+`target/zone-image-bench/no-rollback-serving-profiling.tsv` passed
+`target/zone-image-bench/no-rollback-serving-profiling-check.tsv` with zero
+semantic, packet, boundary, UDP-ceiling, and EDE fallback mismatches. The
+snapshot-layout plan/wire ratios remain strict win gates: mixed plan `0.561`,
+mixed wire `0.612`, delegation/DNAME stress plan `0.007`, and stress wire
+`0.007`. Packet ratios are now parity guardrails because both benchmark packet
+paths use ZoneImage packet serving after live rollback retirement: mixed
+`1.105`, hot `1.137`, trace `1.072`, and optioned `1.116`, all below the
+`1.25` regression ceiling.
 The separately timed optioned EDNS packet corpus now also uses the direct
 answer emitter for direct positive answers. The hot-query shape shows a strong
 exact-lookup win and a positive gated packet-path win once packet parsing and
@@ -1080,9 +1190,9 @@ response framing dominate the repeated-name workload. The benchmark now
 verifies zero byte-level packet mismatches across the retained mixed, hot, and
 weighted trace packet corpora before timing, and it also verifies that the
 gated path preserves positive EDNS option behavior for NSID, DNS Cookie, and
-padding while preserving served DO positive signing and fallback behavior for
-full QTYPE ANY, UDP truncation, EDE not-ready, and varied no-EDNS/EDNS UDP
-payload ceiling cases. The focused unit suite also verifies that DO positive
+padding while preserving served DO positive signing, served full QTYPE ANY,
+direct UDP truncation, EDE not-ready, and varied no-EDNS/EDNS UDP payload
+ceiling cases. The focused unit suite also verifies that DO positive
 signing, NODATA/NSEC proof selection, NXDOMAIN/NSEC proof selection, wildcard
 proofs, referral proofs, and NSEC3 iteration-cap EDE responses serve through
 ZoneImage while preserving byte-for-byte responses and the existing DNSSEC cap
@@ -1107,7 +1217,7 @@ and optional OPT/EDE bytes in a per-packet scratch header.
 ### Live Loopback Serving Sample
 
 `scripts/benchmark-dns-clients.sh` can compare the current snapshot serving path
-and the opt-in ZoneImage serving path through the actual OxideDNS runtime,
+and the default-enabled ZoneImage serving path through the actual OxideDNS runtime,
 loopback UDP/TCP sockets, AXFR load from a synthetic primary, and the checked-in
 `tools/dns-load-client.rs` load client. It can also pass an explicit query
 trace into the client with `OXIDEDNS_BENCH_TRACE_ENABLED=true` or
@@ -1135,18 +1245,7 @@ Use
 loopback or unresolved device selection fails before a run is recorded:
 
 ```sh
-OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR=target/evidence/zone-image-live-loopback-disabled \
-OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false \
-OXIDEDNS_BENCH_DURATION_SECONDS=3 \
-OXIDEDNS_BENCH_RECORDS=10000 \
-OXIDEDNS_BENCH_TRANSPORT=udp \
-OXIDEDNS_BENCH_SERVER_THREADS=4 \
-OXIDEDNS_BENCH_CLIENT_THREADS=8 \
-OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
-scripts/benchmark-dns-clients.sh
-
-OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR=target/evidence/zone-image-live-loopback-enabled \
-OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=true \
+OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR=target/evidence/zone-image-live-loopback \
 OXIDEDNS_BENCH_DURATION_SECONDS=3 \
 OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_TRANSPORT=udp \
@@ -1156,7 +1255,8 @@ OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
 scripts/benchmark-dns-clients.sh
 ```
 
-Retained loopback UDP samples from 2026-05-28:
+Retained loopback UDP samples from 2026-05-28 before the live rollback switch was
+removed:
 
 | Profile | ZoneImage serving | Responses/s | p50 us | p99 us | p999 us | Dropped | Errors | Artifact |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -1244,11 +1344,10 @@ After adding explicit served-path metrics, the retained
 `target/evidence/zone-image-evidence-gate-loopback-stress-metrics-smoke`
 artifact passed the same wrapper gate with `2.153x` responses/s, `0.441x`
 p50, `0.441x` p99, and `0.702x` p999 latency ratios. Its current-path artifact
-recorded `zone_image_serve_hits=0` and `zone_image_serve_fallbacks=0`; its
+recorded `zone_image_serve_hits=0` and `zone_image_serve_failures=0`; its
 ZoneImage artifact recorded `zone_image_serve_hits=295243` and
-`zone_image_serve_fallbacks=0`. That proves the measured runtime win came from
-the experimental immutable-zone-image serving path rather than from a fallback
-run.
+`zone_image_serve_failures=0`. That proves the measured runtime win came from
+the immutable-zone-image serving path rather than from a failure run.
 
 After splitting served hits into direct-answer and semantic-plan buckets,
 `target/evidence/zone-image-evidence-gate-loopback-direct-semantic-smoke`
@@ -1261,7 +1360,7 @@ coverage evidence, not as a tail-latency promotion claim. The ZoneImage
 artifact recorded `zone_image_serve_hits=776705`,
 `zone_image_serve_direct_hits=515175`,
 `zone_image_serve_semantic_hits=261530`, and
-`zone_image_serve_fallbacks=0`. That proves the retained live trace exercised
+`zone_image_serve_failures=0`. That proves the retained live trace exercised
 both the guarded direct-answer hot path and the semantic ZoneImage planner.
 
 Interpretation: the live runtime stress replay loads delegation and DNAME
@@ -1354,8 +1453,9 @@ delta file, and requires RX and TX packet deltas to meet the default `0.25`
 packets-per-response floor. The standard evidence gate also requires positive
 direct-answer and semantic ZoneImage served-hit counters so the hot path and
 semantic planner are both represented in the retained trace, and it requires
-zero ZoneImage fallbacks unless the comparator is deliberately run with a
-non-zero `--max-zone-image-fallbacks` threshold.
+zero ZoneImage failures unless the comparator is deliberately run with a
+non-zero `--max-zone-image-failures` threshold. ZoneImage rollback counters
+must remain zero for retirement evidence.
 
 Use `OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY=true` with the same environment to
 validate SSH reachability, remote architecture, non-loopback network settings,

@@ -7,12 +7,11 @@ use std::{
 use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::{
-    dns::{
-        DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination, Rcode, RecordType,
-    },
-    zone::{ResourceRecord, ZoneSnapshot},
+    dns::{AnyResponseMode, DomainName, LookupTermination, Rcode, RecordType},
+    zone::ZoneSnapshot,
 };
 
 // ODS-NFR-MAINT-004 principal functional requirement references for the
@@ -125,6 +124,23 @@ pub enum ZoneImageBuildError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoneImagePlanSummary {
+    pub rcode: Rcode,
+    pub authoritative: bool,
+    pub answers: ZoneImagePlanSectionSummary,
+    pub authorities: ZoneImagePlanSectionSummary,
+    pub additionals: ZoneImagePlanSectionSummary,
+    pub termination: Option<LookupTermination>,
+    pub nsec3_iterations_exceeded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoneImagePlanSectionSummary {
+    pub count: usize,
+    pub digest: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZoneImageWireRecord<'a> {
     pub owner_wire: &'a [u8],
     pub rr_type: u16,
@@ -212,6 +228,93 @@ struct ZoneImageDnssecState {
     dnssec_augmented: bool,
     nsec3_iterations_exceeded: bool,
     nsec3_max_iterations: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZoneImagePlanSectionAccumulator {
+    count: usize,
+    digest: u64,
+}
+
+impl Default for ZoneImagePlanSectionAccumulator {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            digest: FNV_OFFSET_BASIS,
+        }
+    }
+}
+
+impl ZoneImagePlanSectionAccumulator {
+    fn observe(&mut self, record: ZoneImageWireRecord<'_>) -> Result<(), ZoneImageBuildError> {
+        self.count += 1;
+        let owner_key = canonical_owner_key_from_wire(record.owner_wire)?;
+        self.digest = fnv1a_u64(
+            self.digest,
+            hash_record_identity(
+                owner_key.as_bytes(),
+                record.rr_type,
+                record.class,
+                record.ttl,
+                record.rdata,
+            ),
+        );
+        Ok(())
+    }
+
+    fn finish(self) -> ZoneImagePlanSectionSummary {
+        ZoneImagePlanSectionSummary {
+            count: self.count,
+            digest: self.digest,
+        }
+    }
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn observe_zone_image_record_summary(
+    record: ZoneImageWireRecord<'_>,
+    accumulator: &mut ZoneImagePlanSectionAccumulator,
+    error: &mut Option<ZoneImageBuildError>,
+) {
+    if error.is_some() {
+        return;
+    }
+    if let Err(next_error) = accumulator.observe(record) {
+        *error = Some(next_error);
+    }
+}
+
+fn canonical_owner_key_from_wire(owner_wire: &[u8]) -> Result<String, ZoneImageBuildError> {
+    let (owner, consumed) =
+        DomainName::parse(owner_wire, 0).map_err(|_| ZoneImageBuildError::InvalidCompiledOwner)?;
+    if consumed != owner_wire.len() {
+        return Err(ZoneImageBuildError::InvalidCompiledOwner);
+    }
+    Ok(owner.canonical_key())
+}
+
+fn hash_record_identity(owner_key: &[u8], rr_type: u16, class: u16, ttl: u32, rdata: &[u8]) -> u64 {
+    let mut digest = FNV_OFFSET_BASIS;
+    digest = fnv1a_bytes(digest, owner_key);
+    digest = fnv1a_bytes(digest, &rr_type.to_be_bytes());
+    digest = fnv1a_bytes(digest, &class.to_be_bytes());
+    digest = fnv1a_bytes(digest, &ttl.to_be_bytes());
+    digest = fnv1a_bytes(digest, &(rdata.len() as u64).to_be_bytes());
+    fnv1a_bytes(digest, rdata)
+}
+
+fn fnv1a_u64(digest: u64, value: u64) -> u64 {
+    fnv1a_bytes(digest, &value.to_be_bytes())
+}
+
+fn fnv1a_bytes(mut digest: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        digest ^= u64::from(*byte);
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    digest
 }
 
 impl ZoneImage {
@@ -336,11 +439,8 @@ impl ZoneImage {
         qtype: u16,
         qclass: u16,
         max_cname_chain: usize,
+        any_response: AnyResponseMode,
     ) -> Result<ZoneImageLookupPlan, ZoneImageBuildError> {
-        if qtype == 255 {
-            return Ok(ZoneImageLookupPlan::unsupported());
-        }
-
         if let Some(delegation) = self.delegation_for(qname, qclass)
             && !(qtype == RecordType::Ds as u16
                 && qname.canonical_key() == self.rrset_owner(delegation)?.canonical_key())
@@ -351,7 +451,18 @@ impl ZoneImage {
             return Ok(plan);
         }
 
-        if let Some(rrset) = self.find_rrset(qname, qtype, qclass) {
+        if qtype == 255 {
+            if let Some(node_index) = self.find_node(qname) {
+                let mut plan = ZoneImageLookupPlan::positive();
+                for rrset in self.any_rrsets_at_node(node_index, qclass, any_response) {
+                    plan.push_answer_rrset(rrset);
+                }
+                if !plan.answer_rrsets.is_empty() {
+                    self.add_additionals_for_answer_plan(&mut plan, qclass)?;
+                    return Ok(plan);
+                }
+            }
+        } else if let Some(rrset) = self.find_rrset(qname, qtype, qclass) {
             let mut plan = ZoneImageLookupPlan::positive();
             plan.push_answer_rrset(rrset);
             self.add_additionals_for_answer_plan(&mut plan, qclass)?;
@@ -383,31 +494,13 @@ impl ZoneImage {
             return Ok(self.nodata_plan(qclass));
         }
 
-        if let Some(wildcard_plan) = self.lookup_wildcard(qname, qtype, qclass, max_cname_chain)? {
+        if let Some(wildcard_plan) =
+            self.lookup_wildcard(qname, qtype, qclass, max_cname_chain, any_response)?
+        {
             return Ok(wildcard_plan);
         }
 
         Ok(self.nxdomain_plan(qclass))
-    }
-
-    pub fn lookup_response(
-        &self,
-        qname: &DomainName,
-        qtype: u16,
-        qclass: u16,
-    ) -> Result<LookupResult, ZoneImageBuildError> {
-        self.lookup_response_with_options(qname, qtype, qclass, DEFAULT_MAX_CNAME_CHAIN)
-    }
-
-    pub fn lookup_response_with_options(
-        &self,
-        qname: &DomainName,
-        qtype: u16,
-        qclass: u16,
-        max_cname_chain: usize,
-    ) -> Result<LookupResult, ZoneImageBuildError> {
-        let plan = self.lookup_response_plan(qname, qtype, qclass, max_cname_chain)?;
-        self.materialize_lookup_result(&plan)
     }
 
     pub fn augment_lookup_plan_with_dnssec(
@@ -462,13 +555,6 @@ impl ZoneImage {
         Ok(plan)
     }
 
-    pub fn materialize_answers(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        self.materialize_answer_records(plan)
-    }
-
     pub fn rrset_wire(&self, rrset_id: ZoneImageRrsetId) -> Option<&[u8]> {
         let rrset = self.rrsets.get(rrset_id.0 as usize)?;
         Some(self.blob(&self.wire, rrset.wire))
@@ -507,6 +593,40 @@ impl ZoneImage {
             self.rrset_list_record_count(&plan.additional_rrsets)?
                 + plan.synthesized_additionals.len(),
         ))
+    }
+
+    pub fn plan_summary(
+        &self,
+        plan: &ZoneImageLookupPlan,
+    ) -> Result<ZoneImagePlanSummary, ZoneImageBuildError> {
+        let mut answers = ZoneImagePlanSectionAccumulator::default();
+        let mut authorities = ZoneImagePlanSectionAccumulator::default();
+        let mut additionals = ZoneImagePlanSectionAccumulator::default();
+        let mut answer_error = None;
+        let mut authority_error = None;
+        let mut additional_error = None;
+        self.visit_plan_record_sections(
+            plan,
+            |record| observe_zone_image_record_summary(record, &mut answers, &mut answer_error),
+            |record| {
+                observe_zone_image_record_summary(record, &mut authorities, &mut authority_error)
+            },
+            |record| {
+                observe_zone_image_record_summary(record, &mut additionals, &mut additional_error)
+            },
+        );
+        if let Some(error) = answer_error.or(authority_error).or(additional_error) {
+            return Err(error);
+        }
+        Ok(ZoneImagePlanSummary {
+            rcode: plan.rcode(),
+            authoritative: plan.authoritative(),
+            answers: answers.finish(),
+            authorities: authorities.finish(),
+            additionals: additionals.finish(),
+            termination: plan.termination(),
+            nsec3_iterations_exceeded: plan.nsec3_iterations_exceeded(),
+        })
     }
 
     pub(crate) fn plan_wire_upper_bound(&self, plan: &ZoneImageLookupPlan) -> usize {
@@ -605,17 +725,10 @@ impl ZoneImage {
         Ok(record_count)
     }
 
-    pub fn materialize_lookup_result(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<LookupResult, ZoneImageBuildError> {
-        self.materialize_plan_lookup_result(plan)
-    }
-
-    pub(crate) fn visit_plan_records(
-        &self,
-        plan: &ZoneImageLookupPlan,
-        mut visit: impl FnMut(ZoneImageWireRecord<'_>),
+    pub(crate) fn visit_plan_records<'a>(
+        &'a self,
+        plan: &'a ZoneImageLookupPlan,
+        mut visit: impl FnMut(ZoneImageWireRecord<'a>),
     ) {
         if plan.answer_items.is_empty() {
             for rrset_id in &plan.answer_rrsets {
@@ -657,6 +770,56 @@ impl ZoneImage {
         }
         for record in &plan.synthesized_additionals {
             visit(synthesized_wire_record(record));
+        }
+    }
+
+    pub(crate) fn visit_plan_record_sections<'a>(
+        &'a self,
+        plan: &'a ZoneImageLookupPlan,
+        mut answer_visit: impl FnMut(ZoneImageWireRecord<'a>),
+        mut authority_visit: impl FnMut(ZoneImageWireRecord<'a>),
+        mut additional_visit: impl FnMut(ZoneImageWireRecord<'a>),
+    ) {
+        if plan.answer_items.is_empty() {
+            for rrset_id in &plan.answer_rrsets {
+                self.visit_rrset_records(*rrset_id, None, &mut answer_visit);
+            }
+        } else {
+            for item in &plan.answer_items {
+                match item {
+                    PlanAnswer::Rrset(rrset_id) => {
+                        self.visit_rrset_records(*rrset_id, None, &mut answer_visit)
+                    }
+                    PlanAnswer::RrsetWithOwner {
+                        rrset_id,
+                        owner_index,
+                    } => self.visit_rrset_records_with_owner(
+                        *rrset_id,
+                        &plan.owner_overrides[*owner_index],
+                        None,
+                        &mut answer_visit,
+                    ),
+                    PlanAnswer::Synthesized(index) => {
+                        let record = &plan.synthesized_answers[*index];
+                        answer_visit(synthesized_wire_record(record));
+                    }
+                }
+            }
+        }
+
+        for rrset_id in &plan.authority_rrsets {
+            let ttl_override = self.authority_ttl_override(plan, *rrset_id);
+            self.visit_rrset_records(*rrset_id, ttl_override, &mut authority_visit);
+        }
+        for record in &plan.synthesized_authorities {
+            authority_visit(synthesized_wire_record(record));
+        }
+
+        for rrset_id in &plan.additional_rrsets {
+            self.visit_rrset_records(*rrset_id, None, &mut additional_visit);
+        }
+        for record in &plan.synthesized_additionals {
+            additional_visit(synthesized_wire_record(record));
         }
     }
 
@@ -713,23 +876,23 @@ impl ZoneImage {
         bytes
     }
 
-    fn visit_rrset_records(
-        &self,
+    fn visit_rrset_records<'a>(
+        &'a self,
         rrset_id: ZoneImageRrsetId,
         ttl_override: Option<u32>,
-        visit: &mut impl FnMut(ZoneImageWireRecord<'_>),
+        visit: &mut impl FnMut(ZoneImageWireRecord<'a>),
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         let owner_wire = self.blob(&self.names, rrset.owner_wire);
         self.visit_rrset_records_with_owner(rrset_id, owner_wire, ttl_override, visit);
     }
 
-    fn visit_rrset_records_with_owner(
-        &self,
+    fn visit_rrset_records_with_owner<'a>(
+        &'a self,
         rrset_id: ZoneImageRrsetId,
-        owner_wire: &[u8],
+        owner_wire: &'a [u8],
         ttl_override: Option<u32>,
-        visit: &mut impl FnMut(ZoneImageWireRecord<'_>),
+        visit: &mut impl FnMut(ZoneImageWireRecord<'a>),
     ) {
         let rrset = self.rrsets[rrset_id.0 as usize];
         for offset in 0..rrset.record_count {
@@ -849,150 +1012,6 @@ impl ZoneImage {
         Some(rrset.negative_ttl)
     }
 
-    fn materialize_rrset(
-        &self,
-        rrset_id: ZoneImageRrsetId,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        self.materialize_rrset_with_owner(rrset_id, None)
-    }
-
-    fn materialize_rrset_with_owner(
-        &self,
-        rrset_id: ZoneImageRrsetId,
-        owner_override: Option<&DomainName>,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let rrset = self.rrsets[rrset_id.0 as usize];
-        let owner = match owner_override {
-            Some(owner) => owner.clone(),
-            None => self.rrset_owner(rrset_id)?,
-        };
-        let mut records = Vec::with_capacity(rrset.record_count as usize);
-        for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
-            records.push(ResourceRecord {
-                owner: owner.clone(),
-                rr_type: rrset.rr_type,
-                class: rrset.class,
-                ttl: rrset.ttl,
-                rdata: self.blob(&self.rdata, record.rdata).to_vec(),
-            });
-        }
-        Ok(records)
-    }
-
-    fn materialize_plan_lookup_result(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<LookupResult, ZoneImageBuildError> {
-        Ok(LookupResult {
-            rcode: plan.rcode,
-            authoritative: plan.authoritative,
-            answers: self.materialize_answer_records(plan)?,
-            authorities: self.materialize_authority_records(plan)?,
-            additionals: self.materialize_additional_records(plan)?,
-            termination: plan.termination,
-            nsec3_iterations_exceeded: plan.nsec3_iterations_exceeded,
-        })
-    }
-
-    fn materialize_answer_records(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        if plan.answer_items.is_empty() {
-            return self.materialize_rrset_list(&plan.answer_rrsets);
-        }
-
-        let mut records = Vec::new();
-        for item in &plan.answer_items {
-            match item {
-                PlanAnswer::Rrset(rrset_id) => records.extend(self.materialize_rrset(*rrset_id)?),
-                PlanAnswer::RrsetWithOwner {
-                    rrset_id,
-                    owner_index,
-                } => {
-                    let owner = parse_owner_wire(&plan.owner_overrides[*owner_index])?;
-                    records.extend(self.materialize_rrset_with_owner(*rrset_id, Some(&owner))?);
-                }
-                PlanAnswer::Synthesized(index) => {
-                    let record = &plan.synthesized_answers[*index];
-                    records.push(Self::materialize_synthesized_record(record)?);
-                }
-            }
-        }
-        Ok(records)
-    }
-
-    fn materialize_synthesized_record(
-        record: &ZoneImageSynthesizedRecord,
-    ) -> Result<ResourceRecord, ZoneImageBuildError> {
-        Ok(ResourceRecord {
-            owner: parse_owner_wire(&record.owner_wire)?,
-            rr_type: record.rr_type,
-            class: record.class,
-            ttl: record.ttl,
-            rdata: record.rdata.clone(),
-        })
-    }
-
-    fn materialize_rrset_list(
-        &self,
-        rrsets: &[ZoneImageRrsetId],
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let mut records = Vec::new();
-        for rrset_id in rrsets {
-            records.extend(self.materialize_rrset(*rrset_id)?);
-        }
-        Ok(records)
-    }
-
-    fn materialize_rrset_with_ttl_override(
-        &self,
-        rrset_id: ZoneImageRrsetId,
-        ttl_override: Option<u32>,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let rrset = self.rrsets[rrset_id.0 as usize];
-        let owner = self.rrset_owner(rrset_id)?;
-        let mut records = Vec::with_capacity(rrset.record_count as usize);
-        for offset in 0..rrset.record_count {
-            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
-            records.push(ResourceRecord {
-                owner: owner.clone(),
-                rr_type: rrset.rr_type,
-                class: rrset.class,
-                ttl: ttl_override.unwrap_or(rrset.ttl),
-                rdata: self.blob(&self.rdata, record.rdata).to_vec(),
-            });
-        }
-        Ok(records)
-    }
-
-    fn materialize_authority_records(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let mut records = Vec::new();
-        for rrset_id in &plan.authority_rrsets {
-            let ttl_override = self.authority_ttl_override(plan, *rrset_id);
-            records.extend(self.materialize_rrset_with_ttl_override(*rrset_id, ttl_override)?);
-        }
-        for record in &plan.synthesized_authorities {
-            records.push(Self::materialize_synthesized_record(record)?);
-        }
-        Ok(records)
-    }
-
-    fn materialize_additional_records(
-        &self,
-        plan: &ZoneImageLookupPlan,
-    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let mut records = self.materialize_rrset_list(&plan.additional_rrsets)?;
-        for record in &plan.synthesized_additionals {
-            records.push(Self::materialize_synthesized_record(record)?);
-        }
-        Ok(records)
-    }
-
     fn nodata_plan(&self, qclass: u16) -> ZoneImageLookupPlan {
         let mut plan = ZoneImageLookupPlan::nodata();
         if let Some(soa) = self.soa_rrset(qclass) {
@@ -1034,6 +1053,33 @@ impl ZoneImage {
             }
         }
         None
+    }
+
+    fn any_rrsets_at_node(
+        &self,
+        node_index: u32,
+        qclass: u16,
+        any_response: AnyResponseMode,
+    ) -> Vec<ZoneImageRrsetId> {
+        let node = &self.nodes[node_index as usize];
+        let mut rrsets = Vec::new();
+        for offset in 0..node.rrset_count {
+            let rrset_id = ZoneImageRrsetId(node.first_rrset + u32::from(offset));
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if qclass_matches(rrset.class, qclass)
+                && !is_dnssec_proof_or_signature_type(rrset.rr_type)
+            {
+                rrsets.push(rrset_id);
+            }
+        }
+        rrsets.sort_by_key(|rrset_id| {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            (rrset.class, rrset.rr_type)
+        });
+        if any_response == AnyResponseMode::Minimal {
+            rrsets.truncate(1);
+        }
+        rrsets
     }
 
     fn node_exists(&self, owner: &DomainName) -> bool {
@@ -1171,6 +1217,7 @@ impl ZoneImage {
         qtype: u16,
         qclass: u16,
         max_cname_chain: usize,
+        any_response: AnyResponseMode,
     ) -> Result<Option<ZoneImageLookupPlan>, ZoneImageBuildError> {
         let Some(closest_node) = self.closest_encloser_node(qname) else {
             return Ok(None);
@@ -1179,7 +1226,17 @@ impl ZoneImage {
             return Ok(None);
         };
 
-        if let Some(rrset) = self.find_rrset_at_node(wildcard_node, qtype, qclass) {
+        if qtype == 255 {
+            let rrsets = self.any_rrsets_at_node(wildcard_node, qclass, any_response);
+            if !rrsets.is_empty() {
+                let mut plan = ZoneImageLookupPlan::positive();
+                for rrset in rrsets {
+                    plan.push_answer_rrset_with_owner(rrset, qname);
+                }
+                self.add_additionals_for_answer_plan(&mut plan, qclass)?;
+                return Ok(Some(plan));
+            }
+        } else if let Some(rrset) = self.find_rrset_at_node(wildcard_node, qtype, qclass) {
             let mut plan = ZoneImageLookupPlan::positive();
             plan.push_answer_rrset_with_owner(rrset, qname);
             self.add_additionals_for_answer_plan(&mut plan, qclass)?;
@@ -1224,6 +1281,18 @@ impl ZoneImage {
         cname_rrset: Option<ZoneImageRrsetId>,
     ) -> Result<ZoneImageLookupPlan, ZoneImageBuildError> {
         if state.remaining == 0 {
+            let original_qname = state
+                .visited
+                .first()
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            warn!(
+                qname = %original_qname,
+                zone = %self.origin,
+                reason = "cname_chain_limit",
+                current = %current,
+                "CNAME chain limit reached; returning SERVFAIL with partial chain"
+            );
             return Ok(plan.into_servfail(LookupTermination::CnameChainLimit));
         }
 
@@ -1266,6 +1335,18 @@ impl ZoneImage {
 
         let target_key = target.canonical_key();
         if state.visited.contains(&target_key) {
+            let original_qname = state
+                .visited
+                .first()
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            warn!(
+                qname = %original_qname,
+                zone = %self.origin,
+                reason = "cname_loop",
+                looping_target = %target,
+                "CNAME chain loop detected; returning SERVFAIL with partial chain"
+            );
             return Ok(plan.into_servfail(LookupTermination::CnameLoop));
         }
         state.visited.push(target_key);
@@ -1987,24 +2068,6 @@ impl ZoneImageLookupPlan {
         }
     }
 
-    fn unsupported() -> Self {
-        Self {
-            rcode: Rcode::NotImp,
-            authoritative: false,
-            answer_rrsets: SmallVec::new(),
-            answer_items: SmallVec::new(),
-            authority_rrsets: SmallVec::new(),
-            additional_rrsets: SmallVec::new(),
-            owner_overrides: Vec::new(),
-            synthesized_answers: Vec::new(),
-            synthesized_authorities: Vec::new(),
-            synthesized_additionals: Vec::new(),
-            dnssec_augmented: false,
-            nsec3_iterations_exceeded: false,
-            termination: None,
-        }
-    }
-
     fn servfail(termination: LookupTermination) -> Self {
         Self {
             rcode: Rcode::ServFail,
@@ -2036,10 +2099,6 @@ impl ZoneImageLookupPlan {
 
     pub fn termination(&self) -> Option<LookupTermination> {
         self.termination
-    }
-
-    pub fn is_unsupported(&self) -> bool {
-        self.rcode == Rcode::NotImp && !self.authoritative && self.answer_items.is_empty()
     }
 
     pub fn synthesized_answer_count(&self) -> usize {
@@ -2507,15 +2566,6 @@ fn record_synthesized_identity(
     ));
 }
 
-fn parse_owner_wire(owner_wire: &[u8]) -> Result<DomainName, ZoneImageBuildError> {
-    let (owner, consumed) =
-        DomainName::parse(owner_wire, 0).map_err(|_| ZoneImageBuildError::InvalidCompiledOwner)?;
-    if consumed != owner_wire.len() {
-        return Err(ZoneImageBuildError::InvalidCompiledOwner);
-    }
-    Ok(owner)
-}
-
 fn single_name_rdata_bytes(rdata: &[u8]) -> Option<DomainName> {
     let (target, consumed) = DomainName::parse(rdata, 0).ok()?;
     (consumed == rdata.len()).then_some(target)
@@ -2695,6 +2745,12 @@ fn rr_type_may_have_additional_address_target(rr_type: u16) -> bool {
         || rr_type == RecordType::Https as u16
 }
 
+fn is_dnssec_proof_or_signature_type(rr_type: u16) -> bool {
+    rr_type == RecordType::Rrsig as u16
+        || rr_type == RecordType::Nsec as u16
+        || rr_type == RecordType::Nsec3 as u16
+}
+
 fn mx_exchange_rdata(rdata: &[u8]) -> Option<DomainName> {
     if rdata.len() < 3 {
         return None;
@@ -2763,8 +2819,8 @@ fn soa_minimum(rdata: &[u8]) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::{
-        dns::{Rcode, RecordType},
-        zone::{Rrset, ZoneSnapshot},
+        dns::{DEFAULT_MAX_CNAME_CHAIN, Rcode, RecordType},
+        zone::{ResourceRecord, Rrset, ZoneSnapshot},
     };
 
     #[test]
@@ -2779,12 +2835,12 @@ mod tests {
             panic!("expected exact A lookup to find an answer");
         };
 
-        let image_answers = image
-            .materialize_answers(&plan)
-            .expect("answers materialize");
         let snapshot_lookup = snapshot.lookup(&qname, RecordType::A as u16, 1);
         assert_eq!(snapshot_lookup.rcode, Rcode::NoError);
-        assert_eq!(image_answers, snapshot_lookup.answers);
+        assert_eq!(
+            image.plan_summary(&plan).expect("plan summarizes").answers,
+            records_summary(&snapshot_lookup.answers)
+        );
         assert_eq!(plan.answer_rrsets().len(), 1);
         assert!(
             !image
@@ -2803,7 +2859,7 @@ mod tests {
         let record_count = image
             .append_plan_wire(&plan, &mut wire)
             .expect("plan wire appends");
-        assert_eq!(record_count, image_answers.len());
+        assert_eq!(record_count, snapshot_lookup.answers.len());
         assert_eq!(wire, image.rrset_wire(plan.answer_rrsets()[0]).unwrap());
     }
 
@@ -2819,10 +2875,7 @@ mod tests {
             panic!("expected ANY-class direct A lookup to find an answer");
         };
 
-        let image_answers = image
-            .materialize_answers(&plan)
-            .expect("answers materialize");
-        assert_eq!(image_answers.len(), 2);
+        assert_eq!(image.plan_summary(&plan).unwrap().answers.count, 2);
     }
 
     #[test]
@@ -2932,12 +2985,141 @@ mod tests {
             ("missing.example.test.", RecordType::A as u16),
         ] {
             let qname = DomainName::from_absolute_str(qname).unwrap();
-            let image_lookup = image
-                .lookup_response(&qname, rr_type, 1)
-                .expect("zone image lookup materializes");
+            let image_plan = image
+                .lookup_response_plan(
+                    &qname,
+                    rr_type,
+                    1,
+                    DEFAULT_MAX_CNAME_CHAIN,
+                    AnyResponseMode::Minimal,
+                )
+                .expect("zone image lookup plan builds");
             let snapshot_lookup = snapshot.lookup(&qname, rr_type, 1);
-            assert_eq!(image_lookup, snapshot_lookup, "lookup mismatch for {qname}");
+            assert_eq!(
+                image.plan_summary(&image_plan).expect("plan summarizes"),
+                lookup_summary(&snapshot_lookup),
+                "lookup mismatch for {qname}"
+            );
         }
+    }
+
+    #[test]
+    fn qtype_any_plan_serves_exact_and_wildcard_rrsets() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let exact = DomainName::from_absolute_str("multi.example.test.").unwrap();
+        let wildcard = DomainName::from_absolute_str("*.wild.example.test.").unwrap();
+        let wildcard_qname = DomainName::from_absolute_str("host.wild.example.test.").unwrap();
+        let mail = DomainName::from_absolute_str("mail.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(45),
+            vec![
+                Rrset::new(origin, RecordType::Soa as u16, 1, 600, vec![soa_rdata()]),
+                Rrset::new(
+                    exact.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 10]],
+                ),
+                Rrset::new(
+                    exact.clone(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![vec![7, b'p', b'r', b'e', b's', b'e', b'n', b't']],
+                ),
+                Rrset::new(
+                    exact,
+                    RecordType::Rrsig as u16,
+                    1,
+                    300,
+                    vec![vec![0, 1, 2, 3]],
+                ),
+                Rrset::new(
+                    wildcard.clone(),
+                    RecordType::Mx as u16,
+                    1,
+                    300,
+                    vec![mx_rdata("mail.example.test.")],
+                ),
+                Rrset::new(
+                    wildcard.clone(),
+                    RecordType::Txt as u16,
+                    1,
+                    300,
+                    vec![vec![8, b'w', b'i', b'l', b'd', b'c', b'a', b'r', b'd']],
+                ),
+                Rrset::new(
+                    wildcard,
+                    RecordType::Nsec as u16,
+                    1,
+                    300,
+                    vec![vec![0, 1, 2, 3]],
+                ),
+                Rrset::new(
+                    mail,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 25]],
+                ),
+            ],
+        );
+        let image = ZoneImage::compile(&snapshot).expect("zone image compiles");
+
+        let exact_minimal = image
+            .lookup_response_plan(
+                &DomainName::from_absolute_str("multi.example.test.").unwrap(),
+                255,
+                1,
+                DEFAULT_MAX_CNAME_CHAIN,
+                AnyResponseMode::Minimal,
+            )
+            .expect("exact minimal ANY plan builds");
+        assert_eq!(
+            plan_answer_types(&image, &exact_minimal),
+            vec![RecordType::A as u16]
+        );
+
+        let exact_full = image
+            .lookup_response_plan(
+                &DomainName::from_absolute_str("multi.example.test.").unwrap(),
+                255,
+                1,
+                DEFAULT_MAX_CNAME_CHAIN,
+                AnyResponseMode::Full,
+            )
+            .expect("exact full ANY plan builds");
+        assert_eq!(
+            plan_answer_types(&image, &exact_full),
+            vec![RecordType::A as u16, RecordType::Txt as u16]
+        );
+
+        let wildcard_full = image
+            .lookup_response_plan(
+                &wildcard_qname,
+                255,
+                1,
+                DEFAULT_MAX_CNAME_CHAIN,
+                AnyResponseMode::Full,
+            )
+            .expect("wildcard full ANY plan builds");
+        assert_eq!(
+            plan_answer_types(&image, &wildcard_full),
+            vec![RecordType::Mx as u16, RecordType::Txt as u16]
+        );
+        assert_eq!(wildcard_full.additional_rrsets().len(), 1);
+        assert!(wildcard_full.answer_items.iter().all(|item| {
+            matches!(
+                item,
+                PlanAnswer::RrsetWithOwner {
+                    owner_index,
+                    ..
+                } if wildcard_full.owner_overrides[*owner_index].as_slice()
+                    == wildcard_qname.to_wire().as_slice()
+            )
+        }));
     }
 
     #[test]
@@ -2970,7 +3152,13 @@ mod tests {
         let image = ZoneImage::compile(&snapshot).expect("zone image compiles");
 
         let plan = image
-            .lookup_response_plan(&qname, RecordType::Mx as u16, 1, DEFAULT_MAX_CNAME_CHAIN)
+            .lookup_response_plan(
+                &qname,
+                RecordType::Mx as u16,
+                1,
+                DEFAULT_MAX_CNAME_CHAIN,
+                AnyResponseMode::Minimal,
+            )
             .expect("zone image lookup plan builds");
 
         assert_eq!(plan.synthesized_answer_count(), 0);
@@ -2979,12 +3167,9 @@ mod tests {
             [PlanAnswer::RrsetWithOwner { .. }]
         ));
         assert_eq!(plan.additional_rrsets().len(), 1);
-        let image_lookup = image
-            .lookup_response(&qname, RecordType::Mx as u16, 1)
-            .expect("zone image lookup materializes");
         assert_eq!(
-            image_lookup,
-            snapshot.lookup(&qname, RecordType::Mx as u16, 1)
+            image.plan_summary(&plan).expect("plan summarizes"),
+            lookup_summary(&snapshot.lookup(&qname, RecordType::Mx as u16, 1))
         );
 
         let mut visited = Vec::new();
@@ -3013,7 +3198,13 @@ mod tests {
         ] {
             let qname = DomainName::from_absolute_str(qname).unwrap();
             let plan = image
-                .lookup_response_plan(&qname, rr_type, 1, DEFAULT_MAX_CNAME_CHAIN)
+                .lookup_response_plan(
+                    &qname,
+                    rr_type,
+                    1,
+                    DEFAULT_MAX_CNAME_CHAIN,
+                    AnyResponseMode::Minimal,
+                )
                 .expect("zone image lookup plan builds");
             let mut wire = Vec::new();
             image
@@ -3204,11 +3395,63 @@ mod tests {
         else {
             panic!("expected exact lookup to find rrtype {rr_type}");
         };
-        let image_answers = image
-            .materialize_answers(&plan)
-            .expect("answers materialize");
         let snapshot_lookup = snapshot.lookup(qname, rr_type, qclass);
-        assert_eq!(image_answers, snapshot_lookup.answers);
+        assert_eq!(
+            image.plan_summary(&plan).expect("plan summarizes").answers,
+            records_summary(&snapshot_lookup.answers)
+        );
+    }
+
+    fn lookup_summary(lookup: &crate::dns::LookupResult) -> ZoneImagePlanSummary {
+        ZoneImagePlanSummary {
+            rcode: lookup.rcode,
+            authoritative: lookup.authoritative,
+            answers: records_summary(&lookup.answers),
+            authorities: records_summary(&lookup.authorities),
+            additionals: records_summary(&lookup.additionals),
+            termination: lookup.termination,
+            nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
+        }
+    }
+
+    fn records_summary(records: &[ResourceRecord]) -> ZoneImagePlanSectionSummary {
+        let mut summary = ZoneImagePlanSectionAccumulator::default();
+        for record in records {
+            summary.digest = fnv1a_u64(
+                summary.digest,
+                hash_record_identity(
+                    record.owner.canonical_key().as_bytes(),
+                    record.rr_type,
+                    record.class,
+                    record.ttl,
+                    &record.rdata,
+                ),
+            );
+            summary.count += 1;
+        }
+        summary.finish()
+    }
+
+    fn plan_answer_types(image: &ZoneImage, plan: &ZoneImageLookupPlan) -> Vec<u16> {
+        if plan.answer_items.is_empty() {
+            return plan
+                .answer_rrsets()
+                .iter()
+                .map(|rrset_id| image.rrsets[rrset_id.0 as usize].rr_type)
+                .collect();
+        }
+        plan.answer_items
+            .iter()
+            .map(|item| {
+                let rrset_id = match item {
+                    PlanAnswer::Rrset(rrset_id) | PlanAnswer::RrsetWithOwner { rrset_id, .. } => {
+                        rrset_id
+                    }
+                    PlanAnswer::Synthesized(_) => panic!("expected rrset answer"),
+                };
+                image.rrsets[rrset_id.0 as usize].rr_type
+            })
+            .collect()
     }
 
     fn name_rdata(name: &str) -> Vec<u8> {

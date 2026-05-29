@@ -135,7 +135,7 @@ def write_artifact(
     require_non_loopback_device: bool | None = None,
     direct_hits: int = 900,
     semantic_hits: int = 300,
-    fallbacks: int = 0,
+    failures: int = 0,
     summary_rx_packets_delta: int | None = None,
     summary_tx_packets_delta: int | None = None,
 ) -> None:
@@ -173,22 +173,18 @@ def write_artifact(
         results["network_rx_packets_delta"] = str(summary_rx_packets_delta)
     if summary_tx_packets_delta is not None:
         results["network_tx_packets_delta"] = str(summary_tx_packets_delta)
-    results["zone_image_serve_enabled"] = "true" if zone_image else "false"
+    results["zone_image_serve_enabled"] = "true"
+    total_hits = direct_hits + semantic_hits
+    results["zone_image_serve_hits"] = str(total_hits)
+    results["zone_image_serve_direct_hits"] = str(direct_hits)
+    results["zone_image_serve_semantic_hits"] = str(semantic_hits)
+    results["zone_image_serve_failures"] = str(failures)
+    results["zone_image_serve_rollbacks"] = "0"
     if zone_image:
-        total_hits = direct_hits + semantic_hits
         results["responses_per_second"] = "160000"
         results["latency_us_p50"] = "70.0"
         results["latency_us_p99"] = "160.0"
         results["latency_us_p999"] = "240.0"
-        results["zone_image_serve_hits"] = str(total_hits)
-        results["zone_image_serve_direct_hits"] = str(direct_hits)
-        results["zone_image_serve_semantic_hits"] = str(semantic_hits)
-        results["zone_image_serve_fallbacks"] = str(fallbacks)
-    else:
-        results["zone_image_serve_hits"] = "0"
-        results["zone_image_serve_direct_hits"] = "0"
-        results["zone_image_serve_semantic_hits"] = "0"
-        results["zone_image_serve_fallbacks"] = "0"
     write_tsv(root / "benchmark-results.tsv", results)
     (root / "query-trace.tsv").write_text(
         "host000000.perf.test. A IN none hot_positive\n"
@@ -476,7 +472,8 @@ def main() -> None:
                 "zone_image_serve_hits": "1200",
                 "zone_image_serve_direct_hits": "900",
                 "zone_image_serve_semantic_hits": "300",
-                "zone_image_serve_fallbacks": "0",
+                "zone_image_serve_failures": "0",
+                "zone_image_serve_rollbacks": "0",
             }
         )
         write_tsv(local_client_zone / "benchmark-results.tsv", local_rows)
@@ -519,7 +516,8 @@ def main() -> None:
                 "zone_image_serve_hits": "1200",
                 "zone_image_serve_direct_hits": "900",
                 "zone_image_serve_semantic_hits": "300",
-                "zone_image_serve_fallbacks": "0",
+                "zone_image_serve_failures": "0",
+                "zone_image_serve_rollbacks": "0",
                 "responses_per_second": "160000",
                 "latency_us_p50": "70.0",
                 "latency_us_p99": "160.0",
@@ -684,17 +682,17 @@ def main() -> None:
             "ZoneImage artifact did not record any semantic-plan served hits",
         )
 
-        fallback_zone = temp / "fallback-zone"
+        failure_zone = temp / "failure-zone"
         write_artifact(
-            fallback_zone,
+            failure_zone,
             zone_image=True,
             network_device="enp1s0",
-            fallbacks=1,
+            failures=1,
         )
-        output = temp / "fallback-comparison.tsv"
-        result = run_compare(nic_current, fallback_zone, output)
-        assert_status("fallback rejection", result, expected_success=False)
-        assert_output_contains(output, "ZoneImage artifact recorded 1 fallbacks")
+        output = temp / "failure-comparison.tsv"
+        result = run_compare(nic_current, failure_zone, output)
+        assert_status("failure rejection", result, expected_success=False)
+        assert_output_contains(output, "ZoneImage artifact recorded 1 serve failures")
 
         background_only_zone = temp / "background-only-zone"
         write_artifact(

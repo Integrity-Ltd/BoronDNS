@@ -17,7 +17,8 @@ udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
 response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
-zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-false}"
+requested_zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-true}"
+zone_image_serve_enabled="true"
 preflight_only="${OXIDEDNS_BENCH_PREFLIGHT_ONLY:-false}"
 trace_enabled="${OXIDEDNS_BENCH_TRACE_ENABLED:-false}"
 trace_file_override="${OXIDEDNS_BENCH_TRACE_FILE:-}"
@@ -138,13 +139,10 @@ true | false) ;;
     exit 64
     ;;
 esac
-case "$zone_image_serve_enabled" in
-true | false) ;;
-*)
-    printf 'OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED must be true or false, got %q\n' "$zone_image_serve_enabled" >&2
+if [[ "$requested_zone_image_serve_enabled" != true ]]; then
+    printf 'OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false was retired with the live snapshot-serving rollback path; ZoneImage serving is always enabled.\n' >&2
     exit 64
-    ;;
-esac
+fi
 case "$preflight_only" in
 true | false) ;;
 *)
@@ -739,7 +737,6 @@ log_format = "plain"
 
 [query]
 any_response = "minimal"
-zone_image_serve_enabled = $zone_image_serve_enabled
 
 [cookie]
 policy = "disabled"
@@ -967,7 +964,7 @@ prom_metric_value() {
 zone_image_serve_hits="$(prom_metric_value oxidedns_zone_image_serve_hits_total)"
 zone_image_serve_direct_hits="$(prom_metric_value oxidedns_zone_image_serve_direct_hits_total)"
 zone_image_serve_semantic_hits="$(prom_metric_value oxidedns_zone_image_serve_semantic_hits_total)"
-zone_image_serve_fallbacks="$(prom_metric_value oxidedns_zone_image_serve_fallbacks_total)"
+zone_image_serve_failures="$(prom_metric_value oxidedns_zone_image_serve_failures_total)"
 udp_receive_batches="$(prom_metric_value oxidedns_udp_receive_batches_total)"
 udp_received_datagrams="$(prom_metric_value oxidedns_udp_received_datagrams_total)"
 udp_send_batches="$(prom_metric_value oxidedns_udp_send_batches_total)"
@@ -975,7 +972,8 @@ udp_sent_datagrams="$(prom_metric_value oxidedns_udp_sent_datagrams_total)"
 zone_image_serve_hits="${zone_image_serve_hits:-unknown}"
 zone_image_serve_direct_hits="${zone_image_serve_direct_hits:-unknown}"
 zone_image_serve_semantic_hits="${zone_image_serve_semantic_hits:-unknown}"
-zone_image_serve_fallbacks="${zone_image_serve_fallbacks:-unknown}"
+zone_image_serve_failures="${zone_image_serve_failures:-unknown}"
+zone_image_serve_rollbacks="0"
 udp_receive_batches="${udp_receive_batches:-unknown}"
 udp_received_datagrams="${udp_received_datagrams:-unknown}"
 udp_send_batches="${udp_send_batches:-unknown}"
@@ -1035,7 +1033,8 @@ zone_image_serve_enabled	$zone_image_serve_enabled	boolean
 zone_image_serve_hits	$zone_image_serve_hits	queries
 zone_image_serve_direct_hits	$zone_image_serve_direct_hits	queries
 zone_image_serve_semantic_hits	$zone_image_serve_semantic_hits	queries
-zone_image_serve_fallbacks	$zone_image_serve_fallbacks	queries
+zone_image_serve_failures	$zone_image_serve_failures	queries
+zone_image_serve_rollbacks	$zone_image_serve_rollbacks	queries
 EOF
 
 cat >"$artifact_dir/README.md" <<EOF

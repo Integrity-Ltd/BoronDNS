@@ -113,9 +113,7 @@ The metrics endpoint exposes these implemented metric families:
 - opt-in active-zone shape gauges and fixed-bucket layout histograms under
   `oxidedns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
   RDATA records per RRset, and RDATA payload bytes per RRset;
-- experimental immutable-zone-image serving counters under
-  `oxidedns_zone_image_serve_*` and opt-in shadow counters under
-  `oxidedns_zone_image_shadow_*`;
+- immutable-zone-image serving counters under `oxidedns_zone_image_serve_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
 
 The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
@@ -124,19 +122,25 @@ EDE options. Over-cap NSEC3 proof omissions remain counted with
 `edns.extended_dns_errors = "off"` even when EDE INFO-CODE 27 is absent from
 the response.
 
-The opt-in metric families may walk active zone snapshots, compile immutable
-zone-image shadows, or collect extra pipeline timing. Keep
-`[metrics].zone_shape_enabled`, `[metrics].zone_image_shadow_enabled`, and
+The opt-in metric families may walk active zone snapshots or collect extra
+pipeline timing. Keep `[metrics].zone_shape_enabled` and
 `[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
 captures. These metrics do not enable a response cache or change the served
-answer path. The separate experimental `[query].zone_image_serve_enabled` gate
-can serve supported non-DNSSEC query shapes from immutable `ZoneImage` wire
-sections; unsupported shapes and oversized UDP responses still fall back to the
-ordinary active-snapshot response path. The served-hit and fallback counters
+answer path. Supported query shapes are served from immutable `ZoneImage` wire
+sections; plan, DNSSEC-plan, or response-build failures return an explicit
+ZoneImage SERVFAIL instead of falling back to the ordinary active-snapshot
+response path, while oversized supported UDP responses are truncated directly by
+the `ZoneImage` composer.
+Full-ANY response mode now serves supported QTYPE ANY queries through
+`ZoneImage`; non-ANY queries remain eligible for `ZoneImage`. The served-hit
+and failure counters
 make retained benchmark artifacts auditable: a ZoneImage-enabled run must show
 hits to prove it exercised the optimized path. Direct-answer and semantic-hit
 sub-counters distinguish the guarded hot direct-answer emitter from the generic
-semantic ZoneImage planner.
+semantic ZoneImage planner. Failures are also split by fixed reasons, so any
+remaining serve-error dependence can be ordered without adding per-query dynamic
+metric labels. Rollback responses are counted separately and should stay zero
+for ZoneImage-enabled retirement evidence.
 
 ## Rate Limiting
 
