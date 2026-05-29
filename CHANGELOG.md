@@ -6,12 +6,47 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+## 0.1.3 - 2026-05-29
+
 ### Added
 
 - Added the initial `oxide-gun` crate: a DNS load/probe tool with TOML
   configuration, process/drop receive modes, structured summary output, a local
   responder `--self-test` E2E path, and an explicit Linux AF_XDP backend behind
   the `xdp` Cargo feature for lab hosts.
+- Added release packaging for the XDP-enabled `oxide-gun` binary, including a
+  raw static binary asset, installer payload inclusion, SHA256 sidecars, and
+  installer smoke coverage.
+
+### Changed
+
+- Promoted the immutable `ZoneImage` data plane through the server query path,
+  publishing compiled images beside transferred zone snapshots with ArcSwap
+  directory replacement and suffix-indexed zone lookup.
+- Removed the live snapshot-serving rollback and shadow-validation paths from
+  packet answering; runtime query serving now uses the ZoneImage packet path
+  without cloning `ZoneSnapshot` or materializing `LookupResult` values on the
+  hot path.
+- Expanded ZoneImage coverage for DNSSEC proofs, QTYPE ANY, EDNS option cases,
+  UDP truncation, DNAME/delegation stress cases, high-fanout zones, and retained
+  in-process benchmark evidence.
+- Updated benchmark and evidence scripts to treat packet serving as ZoneImage
+  parity after rollback retirement while keeping plan/wire layout ratios as
+  strict performance guardrails.
+
+### Documentation
+
+- Refreshed memory-layout, architecture, health/metrics, operator, interface,
+  release-note, OxideGun, and test-plan documentation to describe the promoted
+  ZoneImage layout, retired rollback/shadow surfaces, and release-packaged
+  OxideGun tooling.
+
+### Notes
+
+- This is an Engineering release. Formal SRS release acceptance still requires
+  release/operations evidence such as real hardware benchmark runs, long fuzz
+  campaigns, soak, reproducible-build comparison, signing, and external operator
+  acceptance.
 
 ## 0.1.2 - 2026-05-26
 

@@ -9627,7 +9627,7 @@ mod tests {
         assert!(starting.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(starting.contains("content-type: application/json"));
         assert!(starting.ends_with(
-            r#"{"status":"not-ready","reason":"no_active_zones","version":"0.1.2","zones_active":0,"zones_loading":0,"zones_expired":0}"#
+            r#"{"status":"not-ready","reason":"no_active_zones","version":"0.1.3","zones_active":0,"zones_loading":0,"zones_expired":0}"#
         ));
 
         zones.insert_snapshot(ZoneSnapshot::active(
@@ -9639,7 +9639,7 @@ mod tests {
         let ready = http_request(addr, "GET", "/healthz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
         assert!(ready.ends_with(
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":0,"zones_expired":0}"#
         ));
 
         server.abort();
@@ -9663,7 +9663,7 @@ mod tests {
         let ready = http_request(addr, "GET", "/healthz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
         assert!(ready.ends_with(
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":0,"zones_expired":0}"#
         ));
 
         shutdown_tx.send(()).unwrap();
@@ -9874,7 +9874,7 @@ mod tests {
         let ready = http_request(addr, "GET", "/readyz").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK"));
         assert!(ready.ends_with(
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":1,"zones_expired":0}"#
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":1,"zones_expired":0}"#
         ));
 
         let metrics = http_request(addr, "GET", "/metrics").await;
@@ -9895,7 +9895,7 @@ mod tests {
         assert!(
             metrics.contains("oxidedns_secondary_query_responses_total{rcode=\"BADCOOKIE\"} 1")
         );
-        assert!(metrics.contains("oxidedns_secondary_build_info{version=\"0.1.2\",commit=\""));
+        assert!(metrics.contains("oxidedns_secondary_build_info{version=\"0.1.3\",commit=\""));
         assert!(metrics.contains("rust_version=\"rustc "));
         assert!(metrics.contains(
             "oxidedns_secondary_query_duration_seconds_bucket{query_category=\"udp_direct\",le=\"0.0001\"} 0"
@@ -10098,7 +10098,7 @@ mod tests {
         let mut decoded_metrics = String::new();
         std::io::Read::read_to_string(&mut decoder, &mut decoded_metrics).unwrap();
         assert!(decoded_metrics.contains("oxidedns_zones_total 2"));
-        assert!(decoded_metrics.contains("oxidedns_secondary_build_info{version=\"0.1.2\""));
+        assert!(decoded_metrics.contains("oxidedns_secondary_build_info{version=\"0.1.3\""));
         assert!(decoded_metrics.contains(
             "oxidedns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"} 1"
         ));
@@ -10219,7 +10219,7 @@ mod tests {
         let health = http_request(addr, "GET", "/healthz").await;
         assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(health.ends_with(
-            r#"{"status":"draining","version":"0.1.2","grace_period_remaining_seconds":30}"#
+            r#"{"status":"draining","version":"0.1.3","grace_period_remaining_seconds":30}"#
         ));
 
         let livez = tokio::time::timeout(
@@ -10238,13 +10238,13 @@ mod tests {
         .expect("/readyz should answer within SRS health bound while draining");
         assert!(ready.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(ready.ends_with(
-            r#"{"status":"draining","version":"0.1.2","grace_period_remaining_seconds":30}"#
+            r#"{"status":"draining","version":"0.1.3","grace_period_remaining_seconds":30}"#
         ));
 
         runtime_status.mark_unhealthy();
         let unhealthy = http_request(addr, "GET", "/healthz").await;
         assert!(unhealthy.starts_with("HTTP/1.1 503 Service Unavailable"));
-        assert!(unhealthy.ends_with(r#"{"status":"unhealthy","version":"0.1.2"}"#));
+        assert!(unhealthy.ends_with(r#"{"status":"unhealthy","version":"0.1.3"}"#));
 
         server.abort();
     }
@@ -10286,7 +10286,7 @@ mod tests {
         .await;
         assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(health.ends_with(
-            r#"{"status":"not-ready","reason":"loading","version":"0.1.2","zones_active":0,"zones_loading":1,"zones_expired":0}"#
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.3","zones_active":0,"zones_loading":1,"zones_expired":0}"#
         ));
 
         let _ = release_primary.send(());
@@ -10386,7 +10386,7 @@ mod tests {
         .await;
         assert!(health.starts_with("HTTP/1.1 503 Service Unavailable"));
         assert!(health.ends_with(
-            r#"{"status":"not-ready","reason":"loading","version":"0.1.2","zones_active":0,"zones_loading":1,"zones_expired":0}"#
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.3","zones_active":0,"zones_loading":1,"zones_expired":0}"#
         ));
 
         let _ = release_primary.send(());
@@ -10429,7 +10429,7 @@ mod tests {
             .expect("primary should observe initial transfer query");
         let starting = eventually_health_body(
             health_addr,
-            r#"{"status":"not-ready","reason":"loading","version":"0.1.2","zones_active":0,"zones_loading":1,"zones_expired":0}"#,
+            r#"{"status":"not-ready","reason":"loading","version":"0.1.3","zones_active":0,"zones_loading":1,"zones_expired":0}"#,
             std::time::Duration::from_secs(1),
         )
         .await;
@@ -10440,7 +10440,7 @@ mod tests {
             .expect("runtime receives shutdown");
         let draining = eventually_health_body(
             health_addr,
-            r#"{"status":"draining","version":"0.1.2","grace_period_remaining_seconds":2}"#,
+            r#"{"status":"draining","version":"0.1.3","grace_period_remaining_seconds":2}"#,
             std::time::Duration::from_secs(1),
         )
         .await;
@@ -10475,7 +10475,7 @@ mod tests {
 
         let ready = eventually_health_body(
             health_addr,
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
             std::time::Duration::from_secs(1),
         )
         .await;
@@ -10491,7 +10491,7 @@ mod tests {
         .await;
         assert!(still_ready.starts_with("HTTP/1.1 200 OK"));
         assert!(still_ready.ends_with(
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":0,"zones_expired":0}"#
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":0,"zones_expired":0}"#
         ));
 
         server.abort();
@@ -10523,7 +10523,7 @@ mod tests {
 
         let ready = eventually_health_body(
             health_addr,
-            r#"{"status":"ready","version":"0.1.2","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
+            r#"{"status":"ready","version":"0.1.3","zones_active":1,"zones_loading":0,"zones_expired":0}"#,
             std::time::Duration::from_secs(1),
         )
         .await;
