@@ -133,7 +133,10 @@ that should the old query-time layout be phased out.
   `ResourceRecord` values for compatibility outside the packet hot path.
 - [x] Precompute negative SOA variants for the `ZoneImage` composer.
 - [x] Add focused bounds tests for plan wire upper-bound accounting.
-- [ ] Add response-template cache experiments.
+- [x] Run a direct-answer response-template cache experiment; rejected for now
+  because local Vec/socket-path evidence showed more memory and no packet-path
+  win. Revisit when io_uring fixed buffers or AF_XDP UMEM can transmit from
+  reusable templates without copying.
 - [ ] Add composer fuzz and bounds tests targeted specifically at the final
   WireArena writer.
 

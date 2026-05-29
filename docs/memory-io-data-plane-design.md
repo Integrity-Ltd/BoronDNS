@@ -1038,6 +1038,21 @@ ZoneImage while preserving byte-for-byte responses and the existing DNSSEC cap
 metric. Promotion still needs real operator trace coverage and physical network
 evidence, not only retained in-process ns/query evidence.
 
+A direct-answer response-template cache experiment was tried and rejected in
+this slice. The prototype stored a prebuilt question-pointer RR body per RRset,
+then patched only the normal dynamic response fields. The existing direct
+packet differential tests stayed byte-identical, but the retained local
+benchmark moved the wrong way: hot packet response was 205.672 ns/query versus
+the retained 190.808 ns/query baseline, trace packet response was 673.813
+ns/query versus 625.646 ns/query, and `zone_image_bytes_per_record` increased
+from 143 to 167. The cache is therefore not retained for the current
+Vec-backed socket composer; the direct emitter remains smaller and faster on
+this machine. This result does not rule out template-backed transmission after
+the packet I/O layer changes: io_uring fixed buffers, send-zc style paths, or
+AF_XDP UMEM may make reusable response templates valuable if the transport can
+reference prebuilt immutable regions and only patch the query ID, flags, counts,
+and optional OPT/EDE bytes in a per-packet scratch header.
+
 ### Live Loopback Serving Sample
 
 `scripts/benchmark-dns-clients.sh` can compare the current snapshot serving path
