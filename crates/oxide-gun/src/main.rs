@@ -26,6 +26,7 @@ const DEFAULT_SOURCE_PORT: u16 = 53000;
 #[derive(Debug, Parser)]
 #[command(
     name = "oxide-gun",
+    version,
     about = "OxideDNS UDP DNS load generator and CI-safe self-test harness"
 )]
 struct Cli {

@@ -194,6 +194,9 @@ install_binary() {
     [[ -x "$source_bin" ]] || die "missing payload binary: $source_bin"
     install -d -m 0755 "$BIN_DIR"
     install -m 0755 "$source_bin" "$BIN_DIR/oxidedns"
+    if [[ -x "$PAYLOAD_ROOT/bin/oxide-gun" ]]; then
+        install -m 0755 "$PAYLOAD_ROOT/bin/oxide-gun" "$BIN_DIR/oxide-gun"
+    fi
 }
 
 maybe_set_bind_capability() {
@@ -413,8 +416,8 @@ do_uninstall() {
         rm -f "$OPENRC_DIR/$SERVICE_NAME"
         ;;
     esac
-    rm -f "$BIN_DIR/oxidedns"
-    info "Removed service and binary. Kept config directory: $CONFIG_DIR"
+    rm -f "$BIN_DIR/oxidedns" "$BIN_DIR/oxide-gun"
+    info "Removed service and binaries. Kept config directory: $CONFIG_DIR"
 }
 
 do_status() {

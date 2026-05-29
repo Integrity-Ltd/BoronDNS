@@ -84,10 +84,11 @@ Install it to a host path managed by the operator:
 sudo install -m 0755 target/release/oxidedns /usr/local/sbin/oxidedns
 ```
 
-The tag-push release workflow publishes three local-use artifacts for
-`x86_64-unknown-linux-musl`: the installer archive, the raw static binary, and
-an Alpine-based Docker image archive. Each public artifact has a sibling
-`.sha256` file. The Docker image is attached as
+The tag-push release workflow publishes local-use artifacts for
+`x86_64-unknown-linux-musl`: the installer archive, the raw static `oxidedns`
+binary, the raw static XDP-enabled `oxide-gun` binary, and an Alpine-based
+Docker image archive. Each public artifact has a sibling `.sha256` file. The
+Docker image is attached as
 `oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
 does not publish a registry image, so operators should load the release asset
 explicitly rather than using `docker pull`:
@@ -813,9 +814,10 @@ current operator-relevant limitations are:
   campaigns per parser target are later SRS acceptance execution items; the
   Engineering MVP only needs their setup, artifact formats, and handoff path.
 - Container image size and static-binary release packaging are covered by the
-  tag-push release workflow through the installer archive, static binary,
-  Alpine Docker image archive, and SHA256 sidecars. Registry publication remains
-  intentionally out of scope for the current private-repository phase.
+  tag-push release workflow through the installer archive, static `oxidedns`
+  binary, static XDP-enabled `oxide-gun` binary, Alpine Docker image archive,
+  and SHA256 sidecars. Registry publication remains intentionally out of scope
+  for the current private-repository phase.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.
 - There is no runtime configuration reload, no administrative API,

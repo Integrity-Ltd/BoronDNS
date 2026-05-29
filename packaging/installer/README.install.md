@@ -1,7 +1,7 @@
 # OxideDNS Installer
 
-This archive installs a statically linked `oxidedns` Linux binary plus a
-systemd or OpenRC service.
+This archive installs statically linked `oxidedns` and `oxide-gun` Linux
+binaries plus a systemd or OpenRC service for `oxidedns`.
 
 ## Quick install
 
@@ -14,7 +14,9 @@ sudo ./install.sh
 The installer:
 
 - creates an `oxidedns` runtime user and group when missing;
-- installs the binary to `/usr/local/bin/oxidedns`;
+- installs the server binary to `/usr/local/bin/oxidedns`;
+- installs the XDP-enabled lab load-generator binary to
+  `/usr/local/bin/oxide-gun`;
 - writes or validates `/etc/oxidedns-secondary/config.toml`;
 - detects systemd or OpenRC;
 - stops an existing service before update and starts the new service afterward;

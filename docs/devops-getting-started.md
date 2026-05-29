@@ -100,11 +100,12 @@ scripts/package-installer.sh
 
 The output is written under `target/dist/` as
 `oxidedns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
-archive contains `bin/oxidedns`, `install.sh`, systemd/OpenRC service templates,
-the example config, licenses, and an installer README. On a target host:
+archive contains `bin/oxidedns`, an XDP-enabled `bin/oxide-gun`, `install.sh`,
+systemd/OpenRC service templates, the example config, licenses, and an installer
+README. On a target host:
 
-The default `x86_64-unknown-linux-musl` packaging path verifies the binary with
-`ldd`/`file` output and fails if static linking cannot be confirmed. Use
+The default `x86_64-unknown-linux-musl` packaging path verifies both binaries
+with `ldd`/`file` output and fails if static linking cannot be confirmed. Use
 `OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1` only for non-release developer or distribution
 experiments; those artifacts are not the published portability baseline.
 

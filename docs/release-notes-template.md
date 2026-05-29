@@ -9,8 +9,9 @@ running `scripts/check-release-notes.sh`.
 - Release candidate commit: TBD
 - Release date UTC: TBD
 - Evidence snapshot: TBD
-- Release artifacts: installer `.tar.xz`, static binary, Alpine Docker image
-  `.tar.xz`, and SHA256 sidecars.
+- Release artifacts: installer `.tar.xz`, static `oxidedns` binary, static
+  XDP-enabled `oxide-gun` binary, Alpine Docker image `.tar.xz`, and SHA256
+  sidecars.
 
 ## Verification Summary
 

@@ -84,8 +84,9 @@ minutes on heavyweight evidence tooling before a public-release gate exists;
 
 This does not prohibit explicit release packaging automation. The repository
 contains a tag-push/workflow-dispatch release workflow. It acts as artifact publication automation for a named release by building and smoking the
-`x86_64-unknown-linux-musl` installer archive, raw static binary, and Docker
-image archive; it is not the standing Continuous gate unless the release
+`x86_64-unknown-linux-musl` installer archive, raw static `oxidedns` binary,
+raw static XDP-enabled `oxide-gun` binary, and Docker image archive; it is not
+the standing Continuous gate unless the release
 process records its retained logs as the accepted release-gate automation
 evidence.
 

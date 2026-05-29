@@ -5,6 +5,25 @@ fn oxide_gun() -> Command {
 }
 
 #[test]
+fn version_flag_prints_package_version() {
+    let output = oxide_gun()
+        .arg("--version")
+        .output()
+        .expect("oxide-gun --version runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    assert_eq!(
+        stdout.trim(),
+        concat!("oxide-gun ", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn self_test_outputs_summary_json() {
     let output = oxide_gun()
         .args([

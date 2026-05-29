@@ -39,6 +39,10 @@ docker run --rm \
     /bin/bash -euo pipefail -c '
 		/pkg/install.sh --yes --init none --no-start
 		/usr/local/bin/oxidedns --version
+		/usr/local/bin/oxide-gun --version
+		/usr/local/bin/oxide-gun --self-test --max-packets 2 --target-qps 1000 --flush-interval-ms 0 >/tmp/oxide-gun-self-test.json
+		grep -q "\"record_type\"" /tmp/oxide-gun-self-test.json
+		grep -q "\"summary\"" /tmp/oxide-gun-self-test.json
 		/usr/local/bin/oxidedns check-config --config /etc/oxidedns-secondary/config.toml
 		grep -q "installer-smoke.example." /etc/oxidedns-secondary/config.toml
 

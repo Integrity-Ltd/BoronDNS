@@ -5,6 +5,9 @@ specified in `docs/OxideGun-SRS-v0.1.md`, and the MVP path is tracked in
 `docs/oxide-gun-mvp-plan.md`.
 
 It is a separate workspace crate and is not part of the OxideDNS server runtime.
+Release installer archives include a statically linked `oxide-gun` built with
+the `xdp` feature so lab hosts can run the same binary used by release evidence
+without rebuilding the workspace.
 
 The default backend is portable UDP so normal development and CI can test the CLI,
 DNS packet generation, response classification, TOML configuration, and summary

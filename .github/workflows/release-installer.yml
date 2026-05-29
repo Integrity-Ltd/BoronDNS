@@ -55,11 +55,14 @@ jobs:
       - name: Docker image smoke
         run: scripts/test-docker-image.sh
 
-      - name: Verify static binary
+      - name: Verify static binaries
         run: |
           ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin | tee target/dist/release-binary-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-binary-ldd.txt
           target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin --version
+          ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin | tee target/dist/release-oxide-gun-ldd.txt
+          grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-oxide-gun-ldd.txt
+          target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin --version
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v5
@@ -70,12 +73,16 @@ jobs:
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.inspect.json
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/manifest.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd.txt
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd-oxidedns.txt
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd-oxide-gun.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/file.txt
           if-no-files-found: error
 
@@ -89,6 +96,7 @@ jobs:
           notes="target/dist/release-notes-$version.md"
           tarball="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
           binary="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.bin"
+          oxide_gun="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
           docker_image="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
           docker_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 
@@ -97,9 +105,10 @@ jobs:
 
           Assets:
           - Installer archive: $(basename "$tarball")
-          - Static binary: $(basename "$binary")
+          - Static OxideDNS binary: $(basename "$binary")
+          - Static XDP-enabled OxideGun binary: $(basename "$oxide_gun")
           - Docker image archive: $(basename "$docker_image")
-          - SHA256 files are attached for the installer, binary, and Docker image archive.
+          - SHA256 files are attached for the installer, binaries, and Docker image archive.
 
           Target: x86_64-unknown-linux-musl
 
@@ -116,6 +125,8 @@ jobs:
             "$tarball.sha256" \
             "$binary" \
             "$binary.sha256" \
+            "$oxide_gun" \
+            "$oxide_gun.sha256" \
             "$docker_image" \
             "$docker_image.sha256" \
             "$docker_manifest"
