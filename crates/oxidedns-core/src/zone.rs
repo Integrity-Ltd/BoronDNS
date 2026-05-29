@@ -1,8 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
 
+use arc_swap::ArcSwap;
 use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use tracing::warn;
@@ -11,6 +12,7 @@ use crate::dns::{
     AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination, Rcode,
     RecordType,
 };
+use crate::zone_image::ZoneImage;
 
 // ODS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
@@ -1689,10 +1691,33 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+type ZoneDirectory = HashMap<String, Arc<ZoneStoreEntry>>;
+
+#[derive(Debug, Clone)]
 pub struct ZoneStore {
-    zones: Arc<RwLock<HashMap<String, Arc<ZoneSnapshot>>>>,
-    hidden_zones: Arc<RwLock<HashSet<String>>>,
+    zones: Arc<ArcSwap<ZoneDirectory>>,
+    publish_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishedZone {
+    entry: Arc<ZoneStoreEntry>,
+}
+
+#[derive(Debug)]
+struct ZoneStoreEntry {
+    snapshot: Arc<ZoneSnapshot>,
+    image: Option<Arc<ZoneImage>>,
+    hidden: bool,
+}
+
+impl Default for ZoneStore {
+    fn default() -> Self {
+        Self {
+            zones: Arc::new(ArcSwap::from_pointee(HashMap::new())),
+            publish_lock: Arc::new(Mutex::new(())),
+        }
+    }
 }
 
 impl ZoneStore {
@@ -1701,129 +1726,131 @@ impl ZoneStore {
     }
 
     pub fn insert_loading(&self, origin: DomainName) {
-        self.zones
-            .write()
-            .expect("zone store lock poisoned")
-            .insert(
-                origin.canonical_key(),
-                Arc::new(ZoneSnapshot::loading(origin)),
-            );
+        let snapshot = Arc::new(ZoneSnapshot::loading(origin));
+        self.replace_snapshot(snapshot, false);
     }
 
     pub fn insert_loading_hidden(&self, origin: DomainName) {
-        self.hide_zone(&origin);
-        self.insert_loading(origin);
+        let snapshot = Arc::new(ZoneSnapshot::loading(origin));
+        self.replace_snapshot(snapshot, true);
     }
 
     pub fn insert_snapshot(&self, snapshot: ZoneSnapshot) {
-        self.zones
-            .write()
-            .expect("zone store lock poisoned")
-            .insert(snapshot.origin.canonical_key(), Arc::new(snapshot));
+        let snapshot = Arc::new(snapshot);
+        self.replace_snapshot(snapshot, false);
     }
 
     pub fn remove_zone(&self, origin: &DomainName) -> bool {
         let key = origin.canonical_key();
-        self.hidden_zones
-            .write()
-            .expect("zone store hidden-zone lock poisoned")
-            .remove(&key);
-        self.zones
-            .write()
-            .expect("zone store lock poisoned")
-            .remove(&key)
-            .is_some()
-    }
-
-    pub fn hide_zone(&self, origin: &DomainName) {
-        self.hidden_zones
-            .write()
-            .expect("zone store hidden-zone lock poisoned")
-            .insert(origin.canonical_key());
-    }
-
-    pub fn show_zone(&self, origin: &DomainName) {
-        self.hidden_zones
-            .write()
-            .expect("zone store hidden-zone lock poisoned")
-            .remove(&origin.canonical_key());
-    }
-
-    pub fn is_hidden(&self, origin: &DomainName) -> bool {
-        self.hidden_zones
-            .read()
-            .expect("zone store hidden-zone lock poisoned")
-            .contains(&origin.canonical_key())
-    }
-
-    pub fn expire_zone(&self, origin: &DomainName) -> bool {
-        let mut zones = self.zones.write().expect("zone store lock poisoned");
-        let key = origin.canonical_key();
-        let Some(snapshot) = zones.get(&key) else {
-            return false;
-        };
-        if snapshot.state == ZoneState::Expired {
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        if !current.contains_key(&key) {
             return false;
         }
 
-        let expired = snapshot.with_state(ZoneState::Expired);
-        zones.insert(key, Arc::new(expired));
+        let mut next = current.as_ref().clone();
+        next.remove(&key);
+        self.zones.store(Arc::new(next));
+        true
+    }
+
+    pub fn hide_zone(&self, origin: &DomainName) {
+        self.set_hidden(origin, true);
+    }
+
+    pub fn show_zone(&self, origin: &DomainName) {
+        self.set_hidden(origin, false);
+    }
+
+    pub fn is_hidden(&self, origin: &DomainName) -> bool {
+        self.zones
+            .load()
+            .get(&origin.canonical_key())
+            .is_some_and(|entry| entry.hidden)
+    }
+
+    pub fn expire_zone(&self, origin: &DomainName) -> bool {
+        let key = origin.canonical_key();
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        let Some(entry) = current.get(&key) else {
+            return false;
+        };
+        if entry.snapshot.state == ZoneState::Expired {
+            return false;
+        }
+
+        let expired = Arc::new(entry.snapshot.with_state(ZoneState::Expired));
+        let mut next = current.as_ref().clone();
+        next.insert(key, Arc::new(ZoneStoreEntry::new(expired, entry.hidden)));
+        self.zones.store(Arc::new(next));
         true
     }
 
     pub fn get(&self, origin: &str) -> Option<Arc<ZoneSnapshot>> {
         self.zones
-            .read()
-            .expect("zone store lock poisoned")
+            .load()
             .get(origin)
-            .cloned()
+            .map(|entry| entry.snapshot.clone())
     }
 
     pub fn find_exact_zone(&self, origin: &DomainName) -> Option<Arc<ZoneSnapshot>> {
         self.zones
-            .read()
-            .expect("zone store lock poisoned")
+            .load()
             .get(&origin.canonical_key())
-            .cloned()
+            .map(|entry| entry.snapshot.clone())
     }
 
     pub fn find_zone(&self, qname: &DomainName) -> Option<Arc<ZoneSnapshot>> {
-        let zones = self.zones.read().expect("zone store lock poisoned");
-        let hidden_zones = self
-            .hidden_zones
-            .read()
-            .expect("zone store hidden-zone lock poisoned");
+        self.find_published_zone(qname)
+            .map(|published| published.snapshot())
+    }
+
+    pub fn find_published_zone(&self, qname: &DomainName) -> Option<PublishedZone> {
+        let zones = self.zones.load();
         zones
-            .iter()
-            .filter(|(key, _)| !hidden_zones.contains(*key))
-            .map(|(_, zone)| zone)
-            .filter(|zone| qname.is_equal_or_subdomain_of(&zone.origin))
-            .max_by_key(|zone| zone.origin.label_count())
+            .values()
+            .filter(|entry| !entry.hidden)
+            .filter(|entry| qname.is_equal_or_subdomain_of(&entry.snapshot.origin))
+            .max_by_key(|entry| entry.snapshot.origin.label_count())
             .cloned()
+            .map(|entry| PublishedZone { entry })
+    }
+
+    pub fn zone_image_for_snapshot(&self, snapshot: &Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>> {
+        let zones = self.zones.load();
+        let entry = zones.get(&snapshot.origin.canonical_key())?;
+        Arc::ptr_eq(&entry.snapshot, snapshot)
+            .then(|| entry.image.clone())
+            .flatten()
     }
 
     pub fn snapshots(&self) -> Vec<Arc<ZoneSnapshot>> {
         let mut snapshots = self
             .zones
-            .read()
-            .expect("zone store lock poisoned")
+            .load()
             .values()
-            .cloned()
+            .map(|entry| entry.snapshot.clone())
             .collect::<Vec<_>>();
         snapshots.sort_by_key(|snapshot| snapshot.origin.canonical_key());
         snapshots
     }
 
     pub fn len(&self) -> usize {
-        self.zones.read().expect("zone store lock poisoned").len()
+        self.zones.load().len()
     }
 
     pub fn active_count(&self) -> usize {
         self.zones
-            .read()
-            .expect("zone store lock poisoned")
+            .load()
             .values()
-            .filter(|snapshot| snapshot.state == ZoneState::Active)
+            .filter(|entry| entry.snapshot.state == ZoneState::Active)
             .count()
     }
 
@@ -1832,10 +1859,72 @@ impl ZoneStore {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.zones
-            .read()
-            .expect("zone store lock poisoned")
-            .is_empty()
+        self.zones.load().is_empty()
+    }
+
+    fn replace_snapshot(&self, snapshot: Arc<ZoneSnapshot>, force_hidden: bool) {
+        let key = snapshot.origin.canonical_key();
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        let hidden = force_hidden || current.get(&key).is_some_and(|entry| entry.hidden);
+        let mut next = current.as_ref().clone();
+        next.insert(key, Arc::new(ZoneStoreEntry::new(snapshot, hidden)));
+        self.zones.store(Arc::new(next));
+    }
+
+    fn set_hidden(&self, origin: &DomainName, hidden: bool) {
+        let key = origin.canonical_key();
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        let Some(entry) = current.get(&key) else {
+            return;
+        };
+        if entry.hidden == hidden {
+            return;
+        }
+
+        let mut next = current.as_ref().clone();
+        next.insert(key, Arc::new(entry.with_hidden(hidden)));
+        self.zones.store(Arc::new(next));
+    }
+}
+
+impl PublishedZone {
+    pub fn snapshot(&self) -> Arc<ZoneSnapshot> {
+        self.entry.snapshot.clone()
+    }
+
+    pub fn zone_image(&self) -> Option<Arc<ZoneImage>> {
+        self.entry.image.clone()
+    }
+}
+
+impl ZoneStoreEntry {
+    fn new(snapshot: Arc<ZoneSnapshot>, hidden: bool) -> Self {
+        let image = if snapshot.state == ZoneState::Active {
+            ZoneImage::compile(&snapshot).ok().map(Arc::new)
+        } else {
+            None
+        };
+        Self {
+            snapshot,
+            image,
+            hidden,
+        }
+    }
+
+    fn with_hidden(&self, hidden: bool) -> Self {
+        Self {
+            snapshot: self.snapshot.clone(),
+            image: self.image.clone(),
+            hidden,
+        }
     }
 }
 

@@ -158,8 +158,10 @@ that should the old query-time layout be phased out.
 
 ## Phase 6: Runtime Integration And Promotion
 
-- [x] Runtime can compile and cache `ZoneImage` from a published snapshot.
-- [x] Last-hit cache avoids repeated zone-key map lookup for repeated queries.
+- [x] Runtime compiles and publishes `ZoneImage` with each active zone snapshot.
+- [x] Query serving reuses the `ZoneImage` from the `ArcSwap`-published
+  `PublishedZone` handle instead of a query-time shadow `Mutex<HashMap>` image
+  cache or second store lookup.
 - [x] Shadow validation can compare `ZoneImage` and current snapshot answers.
 - [x] Serving path records hits, direct hits, semantic hits, and fallbacks.
 - [~] Runtime serving remains opt-in and experimental.

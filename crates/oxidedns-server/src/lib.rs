@@ -8,7 +8,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex,
         atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -49,7 +49,9 @@ use oxidedns_core::{
         append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, message_tsig_owner_name,
         sign_tsig_error_response,
     },
-    zone::{SoaTimers, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneState, ZoneStore},
+    zone::{
+        PublishedZone, SoaTimers, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneState, ZoneStore,
+    },
     zone_image::ZoneImage,
 };
 use sha2::{Digest, Sha256};
@@ -3017,11 +3019,7 @@ fn handle_udp_datagram(
     };
     let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
     let compose_started = settings.metrics.start_pipeline_timer();
-    let zone_image_provider = |zone: &Arc<ZoneSnapshot>| {
-        settings
-            .zone_image_shadow
-            .image_for(zone, &settings.metrics)
-    };
+    let zone_image_provider = |published: &PublishedZone| published.zone_image();
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         &prepared.packet,
         zones,
@@ -3200,11 +3198,12 @@ fn observe_query_metrics(
     let Ok(question) = Question::parse(packet) else {
         return observed_query(None);
     };
-    if let Some(zone) = zones.find_zone(&question.qname) {
+    if let Some(published_zone) = zones.find_published_zone(&question.qname) {
+        let zone = published_zone.snapshot();
         metrics.record_zone_query(&zone.origin);
         if zone.state == ZoneState::Active {
             options.zone_image_shadow.validate_query(
-                &zone,
+                &published_zone,
                 &question,
                 options.max_cname_chain,
                 options.any_response,
@@ -3608,28 +3607,16 @@ struct UdpServerSettings {
 #[derive(Clone, Debug)]
 struct ZoneImageShadowValidator {
     enabled: bool,
-    last_hit: Arc<Mutex<Option<ZoneImageCacheEntry>>>,
-    cache: Arc<Mutex<HashMap<String, ZoneImageCacheEntry>>>,
-}
-
-#[derive(Clone, Debug)]
-struct ZoneImageCacheEntry {
-    snapshot: Weak<ZoneSnapshot>,
-    image: Arc<ZoneImage>,
 }
 
 impl ZoneImageShadowValidator {
     fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            last_hit: Arc::new(Mutex::new(None)),
-            cache: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { enabled }
     }
 
     fn validate_query(
         &self,
-        zone: &Arc<ZoneSnapshot>,
+        published_zone: &PublishedZone,
         question: &Question,
         max_cname_chain: usize,
         any_response: AnyResponseMode,
@@ -3643,7 +3630,8 @@ impl ZoneImageShadowValidator {
             return;
         }
 
-        let Some(image) = self.image_for(zone, metrics) else {
+        let zone = published_zone.snapshot();
+        let Some(image) = self.image_for(published_zone, &zone, metrics) else {
             return;
         };
 
@@ -3704,77 +3692,22 @@ impl ZoneImageShadowValidator {
 
     fn image_for(
         &self,
+        published_zone: &PublishedZone,
         snapshot: &Arc<ZoneSnapshot>,
         metrics: &RuntimeMetrics,
     ) -> Option<Arc<ZoneImage>> {
-        if let Some(image) = cached_zone_image_for_snapshot(&self.last_hit, snapshot) {
-            return Some(image);
+        let image = published_zone.zone_image();
+        if image.is_none() {
+            metrics.record_zone_image_shadow_error();
+            warn!(
+                category = "query",
+                zone = %snapshot.origin,
+                serial = ?snapshot.serial,
+                "published zone image is unavailable for active snapshot"
+            );
         }
-
-        let zone_key = snapshot.origin.canonical_key();
-        {
-            let cache = self
-                .cache
-                .lock()
-                .expect("zone image shadow cache lock poisoned");
-            if let Some(entry) = cache.get(&zone_key)
-                && entry
-                    .snapshot
-                    .upgrade()
-                    .is_some_and(|cached| Arc::ptr_eq(&cached, snapshot))
-            {
-                *self
-                    .last_hit
-                    .lock()
-                    .expect("zone image shadow last-hit lock poisoned") = Some(entry.clone());
-                return Some(entry.image.clone());
-            }
-        }
-
-        let image = match ZoneImage::compile(snapshot) {
-            Ok(image) => Arc::new(image),
-            Err(error) => {
-                metrics.record_zone_image_shadow_error();
-                warn!(
-                    category = "query",
-                    zone = %snapshot.origin,
-                    serial = ?snapshot.serial,
-                    %error,
-                    "zone image shadow compile failed"
-                );
-                return None;
-            }
-        };
-
-        let entry = ZoneImageCacheEntry {
-            snapshot: Arc::downgrade(snapshot),
-            image: image.clone(),
-        };
-        self.cache
-            .lock()
-            .expect("zone image shadow cache lock poisoned")
-            .insert(zone_key, entry.clone());
-        *self
-            .last_hit
-            .lock()
-            .expect("zone image shadow last-hit lock poisoned") = Some(entry);
-        Some(image)
+        image
     }
-}
-
-fn cached_zone_image_for_snapshot(
-    cache: &Mutex<Option<ZoneImageCacheEntry>>,
-    snapshot: &Arc<ZoneSnapshot>,
-) -> Option<Arc<ZoneImage>> {
-    let cache = cache
-        .lock()
-        .expect("zone image shadow last-hit lock poisoned");
-    let entry = cache.as_ref()?;
-    entry
-        .snapshot
-        .upgrade()
-        .is_some_and(|cached| Arc::ptr_eq(&cached, snapshot))
-        .then(|| entry.image.clone())
 }
 
 fn zone_image_shadow_supports_query(question: &Question) -> bool {
@@ -8950,8 +8883,7 @@ async fn handle_tcp_packet(
     };
     let chaos_observation = chaos_query_observation(&prepared.packet, &nsid, chaos);
     let compose_started = metrics.start_pipeline_timer();
-    let zone_image_provider =
-        |zone: &Arc<ZoneSnapshot>| zone_image_shadow.image_for(zone, &metrics);
+    let zone_image_provider = |published: &PublishedZone| published.zone_image();
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         &prepared.packet,
         &zones,
@@ -11868,35 +11800,10 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_shadow_image_cache_reuses_last_hit_for_repeated_snapshot() {
-        let snapshot = Arc::new(ZoneSnapshot::active(
-            DomainName::from_absolute_str("example.test.").unwrap(),
-            Some(1),
-            vec![Rrset::new(
-                DomainName::from_absolute_str("www.example.test.").unwrap(),
-                RecordType::A as u16,
-                1,
-                300,
-                vec![[192, 0, 2, 10].to_vec()],
-            )],
-        ));
-        let metrics = RuntimeMetrics::new();
-        let zone_image_shadow = ZoneImageShadowValidator::new(true);
-
-        let first = zone_image_shadow
-            .image_for(&snapshot, &metrics)
-            .expect("zone image compiles");
-        let second = zone_image_shadow
-            .image_for(&snapshot, &metrics)
-            .expect("zone image is cached");
-
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn zone_image_shadow_image_cache_replaces_last_hit_for_new_snapshot() {
+    fn zone_store_publishes_zone_image_for_active_snapshot() {
         let origin = DomainName::from_absolute_str("example.test.").unwrap();
-        let old_snapshot = Arc::new(ZoneSnapshot::active(
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
             origin.clone(),
             Some(1),
             vec![Rrset::new(
@@ -11907,8 +11814,40 @@ mod tests {
                 vec![[192, 0, 2, 10].to_vec()],
             )],
         ));
-        let new_snapshot = Arc::new(ZoneSnapshot::active(
-            origin,
+        let published = zones
+            .find_published_zone(&DomainName::from_absolute_str("www.example.test.").unwrap())
+            .expect("published zone");
+        let snapshot = zones.find_exact_zone(&origin).expect("published snapshot");
+
+        assert!(Arc::ptr_eq(&published.snapshot(), &snapshot));
+        let first = published.zone_image().expect("zone image is published");
+        let second = published.zone_image().expect("zone image stays published");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn zone_store_replaces_published_zone_image_for_new_snapshot() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let zones = ZoneStore::new();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        ));
+        let old_snapshot = zones.find_exact_zone(&origin).expect("old snapshot");
+        let old_image = zones
+            .zone_image_for_snapshot(&old_snapshot)
+            .expect("old zone image is published");
+
+        zones.insert_snapshot(ZoneSnapshot::active(
+            origin.clone(),
             Some(2),
             vec![Rrset::new(
                 DomainName::from_absolute_str("www.example.test.").unwrap(),
@@ -11918,19 +11857,19 @@ mod tests {
                 vec![[192, 0, 2, 11].to_vec()],
             )],
         ));
-        let metrics = RuntimeMetrics::new();
-        let zone_image_shadow = ZoneImageShadowValidator::new(true);
+        let new_published = zones
+            .find_published_zone(&DomainName::from_absolute_str("www.example.test.").unwrap())
+            .expect("new published zone");
+        let new_snapshot = zones.find_exact_zone(&origin).expect("new snapshot");
+        let new_image = new_published
+            .zone_image()
+            .expect("new zone image is published");
+        let new_image_again = new_published
+            .zone_image()
+            .expect("new zone image stays published");
 
-        let old_image = zone_image_shadow
-            .image_for(&old_snapshot, &metrics)
-            .expect("old zone image compiles");
-        let new_image = zone_image_shadow
-            .image_for(&new_snapshot, &metrics)
-            .expect("new zone image compiles");
-        let new_image_again = zone_image_shadow
-            .image_for(&new_snapshot, &metrics)
-            .expect("new zone image is cached");
-
+        assert!(Arc::ptr_eq(&new_published.snapshot(), &new_snapshot));
+        assert!(zones.zone_image_for_snapshot(&old_snapshot).is_none());
         assert!(!Arc::ptr_eq(&old_image, &new_image));
         assert!(Arc::ptr_eq(&new_image, &new_image_again));
     }

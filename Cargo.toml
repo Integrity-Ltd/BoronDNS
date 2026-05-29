@@ -30,6 +30,7 @@ strip = "none"
 
 [workspace.dependencies]
 anyhow = "1"
+arc-swap = "1.7"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }

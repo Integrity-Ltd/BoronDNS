@@ -6,7 +6,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneState, ZoneStore},
+    zone::{PublishedZone, ResourceRecord, Rrset, ZoneState, ZoneStore},
     zone_image::{ZoneImage, ZoneImageLookupPlan, ZoneImageWireRecord},
 };
 
@@ -419,7 +419,7 @@ pub enum DatagramAction {
     Respond(Vec<u8>),
 }
 
-pub type ZoneImageProvider<'a> = &'a dyn Fn(&Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>>;
+pub type ZoneImageProvider<'a> = &'a dyn Fn(&PublishedZone) -> Option<Arc<ZoneImage>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnyResponseMode {
@@ -903,7 +903,7 @@ fn answer_query_message(
         ));
     }
 
-    let Some(zone) = zone_store.find_zone(&question.qname) else {
+    let Some(published_zone) = zone_store.find_published_zone(&question.qname) else {
         return DatagramAction::Respond(build_response(
             header,
             Rcode::Refused,
@@ -916,6 +916,7 @@ fn answer_query_message(
             options,
         ));
     };
+    let zone = published_zone.snapshot();
 
     if zone.state != ZoneState::Active {
         return DatagramAction::Respond(build_response(
@@ -934,11 +935,11 @@ fn answer_query_message(
     if let Some(response) = try_answer_with_zone_image(
         header,
         &question,
-        &zone,
         metadata,
         options,
         query_observer,
         zone_image_provider,
+        &published_zone,
     ) {
         return DatagramAction::Respond(response);
     }
@@ -983,17 +984,17 @@ fn answer_query_message(
 fn try_answer_with_zone_image(
     header: &Header,
     question: &Question,
-    zone: &Arc<ZoneSnapshot>,
     metadata: RequestMetadata,
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: Option<ZoneImageProvider<'_>>,
+    published_zone: &PublishedZone,
 ) -> Option<Vec<u8>> {
     if options.any_response != AnyResponseMode::Minimal {
         return None;
     }
 
-    let image = zone_image_provider?(zone)?;
+    let image = zone_image_provider?(published_zone)?;
     if !metadata.dnssec_requested()
         && let Some(plan) =
             image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
@@ -2903,7 +2904,7 @@ mod tests {
     }
 
     fn store_response_with_zone_image(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
-        let provider = |zone: &Arc<ZoneSnapshot>| ZoneImage::compile(zone).ok().map(Arc::new);
+        let provider = |published: &PublishedZone| published.zone_image();
         store_response_with_zone_image_provider(packet, store, AnswerOptions::default(), &provider)
     }
 
@@ -4555,9 +4556,9 @@ mod tests {
         let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0x8000, &[]);
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let snapshot_response =
@@ -4644,9 +4645,9 @@ mod tests {
             ],
         ));
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let mut positive = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -4847,9 +4848,9 @@ mod tests {
             let store = ZoneStore::new();
             store.insert_snapshot(snapshot);
             let provider_calls = std::cell::Cell::new(0);
-            let provider = |zone: &Arc<ZoneSnapshot>| {
+            let provider = |published: &PublishedZone| {
                 provider_calls.set(provider_calls.get() + 1);
-                ZoneImage::compile(zone).ok().map(Arc::new)
+                published.zone_image()
             };
 
             let snapshot_response =
@@ -4906,9 +4907,9 @@ mod tests {
             ..AnswerOptions::default()
         };
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -4940,9 +4941,9 @@ mod tests {
         let packet = query(b"\x03www\x07example\x04test\x00", RecordType::Txt as u16, 1);
         let options = AnswerOptions::udp(128);
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -4971,9 +4972,9 @@ mod tests {
             )],
         ));
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let mut nsid_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -5060,9 +5061,9 @@ mod tests {
             ..AnswerOptions::default()
         };
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -5102,9 +5103,9 @@ mod tests {
             ],
         ));
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
 
         let mut small_edns_512 = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
@@ -6097,9 +6098,9 @@ mod tests {
             ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
         };
         let provider_calls = std::cell::Cell::new(0);
-        let provider = |zone: &Arc<ZoneSnapshot>| {
+        let provider = |published: &PublishedZone| {
             provider_calls.set(provider_calls.get() + 1);
-            ZoneImage::compile(zone).ok().map(Arc::new)
+            published.zone_image()
         };
         let nsec3_iterations_exceeded = std::cell::Cell::new(false);
 

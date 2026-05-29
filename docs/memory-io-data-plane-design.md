@@ -706,7 +706,7 @@ Exit:
 - exact positive corpus passes;
 - no unsafe in packed lookup;
 - build statistics and lookup metrics are emitted;
-- optional runtime shadow validation can compile and cache images without
+- optional runtime shadow validation can compare published images without
   changing served answers.
 
 ### Phase 3: Full Name Semantics
@@ -890,12 +890,12 @@ optioned response, and delegation/DNAME stress paths.
 Current retained prototype sample from 2026-05-29 on this development machine,
 after the exact lookup allocation removal, compact delegation/DNAME indexes,
 direct RR-section wire emission, the gated packet response path, arena-wire
-owner/RDATA name compression, and the signed-zone RRSIG/NSEC/NSEC3 indexes.
-Runtime serving also keeps a last-hit
-ZoneImage cache entry so repeated queries for the active snapshot avoid the
-zone-key string allocation and HashMap lookup before falling back to the
-multi-zone cache. The gated packet path uses a lightweight lookup-metrics
-observer so normal responses do not materialize `ResourceRecord` values only to
+owner/RDATA name compression, signed-zone RRSIG/NSEC/NSEC3 indexes, and
+publication-time `ZoneImage` compilation, and the `ArcSwap`-published
+`ZoneStore` directory. Runtime serving reads a `PublishedZone` handle containing
+the active `ZoneSnapshot` and `ZoneImage` instead of compiling through a
+query-time shadow cache or performing a second store lookup. The gated packet
+path uses a lightweight lookup-metrics observer so normal responses do not materialize `ResourceRecord` values only to
 record termination counters, and semantic planning skips answer materialization
 when the answer RR type cannot produce additional address records. The direct
 answer emitter is attempted before the generic section-counting pass, so the
@@ -1056,8 +1056,10 @@ the answer owner as a normal pointer to the question, copies the pre-encoded
 RRset body, and appends the regular OPT encoder for EDNS responses, avoiding
 per-record compressor and RDATA materialization work on direct answers whose
 RDATA is already copied opaquely by the normal composer. Runtime tests verify
-the serving cache reuses the same image for repeated snapshots and replaces it
-when a new snapshot for the same zone is published. Arena-wire compression for
+published images are reused for the active snapshot, stale snapshot handles do
+not resolve to a new image, a new snapshot for the same zone publishes a new
+image, and read-side lookup runs through the published directory handle.
+Arena-wire compression for
 owner names plus known-name RDATA keeps packet bytes equal to the current
 composer for the retained query mix without rehydrating `DomainName` owners.
 The separately timed optioned EDNS packet corpus now also uses the direct

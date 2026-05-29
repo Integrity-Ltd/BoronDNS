@@ -11,7 +11,7 @@ use oxidedns_core::{
         RecordType, answer_message,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
     },
-    zone::{Rrset, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneStore},
+    zone::{PublishedZone, Rrset, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneStore},
     zone_image::{ZoneImage, ZoneImageLookupOutcome},
 };
 
@@ -843,7 +843,7 @@ fn count_mixed_packet_mismatches(
     packets: &[Vec<u8>],
 ) -> usize {
     let image = Arc::new(image);
-    let provider = |_: &Arc<ZoneSnapshot>| Some(image.clone());
+    let provider = |_: &PublishedZone| Some(image.clone());
     packets
         .iter()
         .filter(|packet| {
@@ -860,7 +860,7 @@ fn count_packet_case_mismatches(
     packets: &[PacketCase],
 ) -> usize {
     let image = Arc::new(image);
-    let provider = |_: &Arc<ZoneSnapshot>| Some(image.clone());
+    let provider = |_: &PublishedZone| Some(image.clone());
     packets
         .iter()
         .filter(|packet| {
@@ -891,7 +891,7 @@ fn count_ede_not_ready_packet_mismatches(image: ZoneImage) -> usize {
         ..AnswerOptions::default()
     };
     let image = Arc::new(image);
-    let provider = |_: &Arc<ZoneSnapshot>| Some(image.clone());
+    let provider = |_: &PublishedZone| Some(image.clone());
     usize::from(
         current_packet_response_with_options(&store, &packet, options)
             != zone_image_packet_response_with_options(&store, &packet, options, &provider),
@@ -928,7 +928,7 @@ fn time_zone_image_packet_case_response(
     iterations: usize,
 ) -> TimedLookup {
     let image = Arc::new(image);
-    let provider = |_: &Arc<ZoneSnapshot>| Some(image.clone());
+    let provider = |_: &PublishedZone| Some(image.clone());
     let started = Instant::now();
     let mut wire_bytes = 0usize;
     let mut rcode_sum = 0u64;
@@ -958,7 +958,7 @@ fn time_zone_image_packet_response(
     iterations: usize,
 ) -> TimedLookup {
     let image = Arc::new(image);
-    let provider = |_: &Arc<ZoneSnapshot>| Some(image.clone());
+    let provider = |_: &PublishedZone| Some(image.clone());
     let started = Instant::now();
     let mut wire_bytes = 0usize;
     let mut rcode_sum = 0u64;
@@ -994,7 +994,7 @@ fn current_packet_response_with_options(
 fn zone_image_packet_response(
     store: &ZoneStore,
     packet: &[u8],
-    provider: &impl Fn(&Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>>,
+    provider: &impl Fn(&PublishedZone) -> Option<Arc<ZoneImage>>,
 ) -> Vec<u8> {
     zone_image_packet_response_with_options(store, packet, AnswerOptions::default(), provider)
 }
@@ -1003,7 +1003,7 @@ fn zone_image_packet_response_with_options(
     store: &ZoneStore,
     packet: &[u8],
     options: AnswerOptions,
-    provider: &impl Fn(&Arc<ZoneSnapshot>) -> Option<Arc<ZoneImage>>,
+    provider: &impl Fn(&PublishedZone) -> Option<Arc<ZoneImage>>,
 ) -> Vec<u8> {
     match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,

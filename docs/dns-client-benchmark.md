@@ -399,8 +399,9 @@ OxideDNS server scope.
 - keep the authoritative in-memory design and avoid eBPF/XDP/NSD-style packet
   cache work until `docs/future-optimization-tracks.md` re-entry conditions are
   met;
-- keep `ZoneStore` snapshot publication through `Arc<ZoneSnapshot>` rather than
-  introducing DashMap or ArcSwap until contention evidence justifies it;
+- keep `ZoneStore` publication through the `ArcSwap` immutable directory and
+  avoid adding DashMap or a custom RCU layer until contention evidence justifies
+  it;
 - keep the large-catalog benchmark as the primary local data-layout harness;
 - use the in-process ZoneImage prototype benchmark for focused name-edge layout
   timing before adding adaptive-radix or perfect-hash structures;

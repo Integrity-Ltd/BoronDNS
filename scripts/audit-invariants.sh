@@ -192,7 +192,11 @@ server_text = runtime_sources[Path("crates/oxidedns-server/src/lib.rs")]
 print()
 print("check=ODS-INV-003 atomic publish evidence")
 required_fragments = [
-    ("ZoneStore RwLock", "RwLock<HashMap<String, Arc<ZoneSnapshot>>>", zone_text),
+    ("ZoneStore ArcSwap", "ArcSwap<ZoneDirectory>", zone_text),
+    ("writer publish lock", "publish_lock: Arc<Mutex<()>>", zone_text),
+    ("published zone handle", "pub struct PublishedZone", zone_text),
+    ("snapshot entry", "snapshot: Arc<ZoneSnapshot>", zone_text),
+    ("published ZoneImage entry", "image: Option<Arc<ZoneImage>>", zone_text),
     ("insert_loading method", "pub fn insert_loading", zone_text),
     ("insert_snapshot method", "pub fn insert_snapshot", zone_text),
     ("Arc snapshot publication", "Arc::new(snapshot)", zone_text),
@@ -206,7 +210,7 @@ if missing:
     failures.append(f"ODS-INV-003 atomic publish evidence missing: {', '.join(missing)}")
 else:
     print("status=passed")
-    print("evidence=ZoneStore publishes complete Arc<ZoneSnapshot> values through RwLock-protected map replacement.")
+    print("evidence=ZoneStore publishes complete snapshot plus ZoneImage entries through an ArcSwap directory with writer-side serialized replacement.")
 
 print()
 print("allowed_startup_file_reads:")
