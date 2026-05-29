@@ -1420,7 +1420,11 @@ fn build_zone_image_response(
     let authority_count = u16::try_from(authority_count).ok()?;
     let additional_count = u16::try_from(additional_count.checked_add(edns_count)?).ok()?;
 
-    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question_wire_len(question) + 256);
+    let response_capacity = DNS_HEADER_LEN
+        .saturating_add(question_wire_len(question))
+        .saturating_add(image.plan_wire_upper_bound(plan))
+        .saturating_add(if metadata.edns.is_some() { 64 } else { 0 });
+    let mut response = Vec::with_capacity(response_capacity);
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
         &header

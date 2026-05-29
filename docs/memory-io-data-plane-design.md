@@ -890,7 +890,7 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `benchmark_schema_version` | 1 |
 | `benchmark_kind` | `in_process_zone_image_prototype` |
 | `benchmark_build_profile` | `profiling` |
-| `benchmark_git_revision` | `67fd75e65173` |
+| `benchmark_git_revision` | `2908b3898609` |
 | `benchmark_git_dirty` | `true` |
 | `benchmark_kernel` | `Linux 7.0.3-1-MANJARO x86_64 GNU/Linux` |
 | `benchmark_rustc` | `rustc 1.95.0 (59807616e 2026-04-14)` |
@@ -929,28 +929,28 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `udp_ceiling_packet_validation_mismatches` | 0 |
 | `ede_fallback_packet_cases` | 1 |
 | `ede_fallback_packet_validation_mismatches` | 0 |
-| `zone_image_compile_ms` | 10.409 |
-| `zone_image_delegation_dname_stress_compile_ms` | 7.338 |
-| `current_lookup_ns_per_query` | 149.542 |
-| `zone_image_exact_lookup_ns_per_query` | 78.842 |
-| `current_hot_lookup_ns_per_query` | 120.276 |
-| `zone_image_hot_exact_lookup_ns_per_query` | 47.138 |
-| `current_mixed_response_ns_per_query` | 467.066 |
-| `zone_image_mixed_plan_ns_per_query` | 268.919 |
-| `zone_image_mixed_wire_ns_per_query` | 300.005 |
-| `zone_image_mixed_response_ns_per_query` | 433.163 |
-| `current_delegation_dname_stress_response_ns_per_query` | 87,229.496 |
-| `zone_image_delegation_dname_stress_plan_ns_per_query` | 658.345 |
-| `zone_image_delegation_dname_stress_wire_ns_per_query` | 709.762 |
-| `zone_image_delegation_dname_stress_response_ns_per_query` | 936.174 |
-| `current_mixed_packet_ns_per_query` | 1,371.698 |
-| `zone_image_mixed_packet_ns_per_query` | 744.621 |
-| `current_hot_packet_ns_per_query` | 517.199 |
-| `zone_image_hot_packet_ns_per_query` | 182.996 |
-| `current_trace_packet_ns_per_query` | 1,568.620 |
-| `zone_image_trace_packet_ns_per_query` | 636.239 |
-| `current_optioned_packet_ns_per_query` | 610.055 |
-| `zone_image_optioned_packet_ns_per_query` | 257.379 |
+| `zone_image_compile_ms` | 11.390 |
+| `zone_image_delegation_dname_stress_compile_ms` | 7.507 |
+| `current_lookup_ns_per_query` | 161.341 |
+| `zone_image_exact_lookup_ns_per_query` | 78.445 |
+| `current_hot_lookup_ns_per_query` | 126.862 |
+| `zone_image_hot_exact_lookup_ns_per_query` | 48.192 |
+| `current_mixed_response_ns_per_query` | 441.714 |
+| `zone_image_mixed_plan_ns_per_query` | 263.024 |
+| `zone_image_mixed_wire_ns_per_query` | 284.278 |
+| `zone_image_mixed_response_ns_per_query` | 395.087 |
+| `current_delegation_dname_stress_response_ns_per_query` | 85,909.958 |
+| `zone_image_delegation_dname_stress_plan_ns_per_query` | 685.605 |
+| `zone_image_delegation_dname_stress_wire_ns_per_query` | 635.747 |
+| `zone_image_delegation_dname_stress_response_ns_per_query` | 865.738 |
+| `current_mixed_packet_ns_per_query` | 1,443.832 |
+| `zone_image_mixed_packet_ns_per_query` | 822.145 |
+| `current_hot_packet_ns_per_query` | 548.710 |
+| `zone_image_hot_packet_ns_per_query` | 190.808 |
+| `current_trace_packet_ns_per_query` | 1,613.812 |
+| `zone_image_trace_packet_ns_per_query` | 625.646 |
+| `current_optioned_packet_ns_per_query` | 612.458 |
+| `zone_image_optioned_packet_ns_per_query` | 236.082 |
 | `current_mixed_packet_bytes` | 14,750,000 |
 | `zone_image_mixed_packet_bytes` | 14,750,000 |
 | `current_hot_packet_bytes` | 10,054,000 |
@@ -968,42 +968,45 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `zone_image_edges` | 10,012 |
 | `zone_image_rrsets` | 10,013 |
 | `zone_image_records` | 10,033 |
-| `zone_image_hot_bytes` | 721,092 |
+| `zone_image_hot_bytes` | 761,144 |
 | `zone_image_cold_bytes` | 680,154 |
-| `zone_image_bytes_per_record` | 139 |
+| `zone_image_bytes_per_record` | 143 |
 | `zone_image_delegation_dname_stress_nodes` | 10,002 |
 | `zone_image_delegation_dname_stress_edges` | 10,001 |
 | `zone_image_delegation_dname_stress_rrsets` | 8,003 |
 | `zone_image_delegation_dname_stress_records` | 8,003 |
-| `zone_image_delegation_dname_stress_hot_bytes` | 656,172 |
+| `zone_image_delegation_dname_stress_hot_bytes` | 688,184 |
 | `zone_image_delegation_dname_stress_cold_bytes` | 715,614 |
-| `zone_image_delegation_dname_stress_bytes_per_record` | 171 |
+| `zone_image_delegation_dname_stress_bytes_per_record` | 175 |
 
 The retained prototype check artifact
 `target/zone-image-bench/prototype-check-latest.tsv` passed with:
 
 | Check Metric | Value |
 | --- | ---: |
-| `exact_lookup_ratio` | 0.527 |
-| `hot_exact_lookup_ratio` | 0.392 |
-| `mixed_plan_ratio` | 0.576 |
-| `mixed_wire_ratio` | 0.642 |
-| `mixed_packet_ratio` | 0.543 |
-| `hot_packet_ratio` | 0.354 |
-| `trace_packet_ratio` | 0.406 |
-| `optioned_packet_ratio` | 0.422 |
+| `exact_lookup_ratio` | 0.486 |
+| `hot_exact_lookup_ratio` | 0.380 |
+| `mixed_plan_ratio` | 0.595 |
+| `mixed_wire_ratio` | 0.644 |
+| `mixed_packet_ratio` | 0.569 |
+| `hot_packet_ratio` | 0.348 |
+| `trace_packet_ratio` | 0.388 |
+| `optioned_packet_ratio` | 0.385 |
 | `delegation_dname_stress_plan_ratio` | 0.008 |
-| `delegation_dname_stress_wire_ratio` | 0.008 |
+| `delegation_dname_stress_wire_ratio` | 0.007 |
 
 Interpretation: direct exact handle lookup is faster than the current snapshot
 path on this flat-zone sample. The mixed semantic plan path is also faster than
 the current materialized lookup after adding compact delegation and DNAME
 candidate indexes to avoid scanning every RRset. The remaining gap is the
-temporary `ResourceRecord` materialization adapter: direct RR-section emission
-from handles and wire arenas keeps most of the plan-path gain, while full
-`ZoneImage` mixed responses remain slower because they rebuild owned records.
+temporary `ResourceRecord` materialization adapter for compatibility paths:
+direct RR-section emission from handles and wire arenas keeps most of the
+plan-path gain, while the served negative authority path now uses precomputed
+SOA negative TTL instead of reparsing SOA RDATA for each packet. Generic
+ZoneImage responses also pre-size their response buffers from plan wire bounds
+instead of relying on a small fixed starting capacity.
 The delegation/DNAME stress shape validates the main scaling reason for the
-packed name graph: the current snapshot path pays about 113 us/query while it
+packed name graph: the current snapshot path pays about 86 us/query while it
 scans 2,000 delegation and 2,000 DNAME candidates, while ZoneImage semantic
 planning stays below 1 us/query with byte-equivalent record counts. The gated
 packet path is faster than the current packet path in this sample

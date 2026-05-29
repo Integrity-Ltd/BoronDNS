@@ -117,17 +117,22 @@ that should the old query-time layout be phased out.
   RRset RDATA instead of materializing those RRsets.
 - [x] SOA TTL-override wire emission reuses stored owner-wire slices instead
   of allocating a temporary owner buffer.
+- [x] Negative SOA TTL is precomputed in compiled RRsets so authority emission
+  does not parse SOA RDATA on every negative response.
 - [x] Wildcard owner-substitution answers keep RRset handles with stored
   owner-wire overrides instead of synthesized `ResourceRecord` vectors.
 - [x] DNAME-synthesized CNAME answers store owner wire and RDATA fields without
   rebuilding a full `ResourceRecord` for the composer.
+- [x] Generic response buffers are pre-sized from immutable plan wire bounds
+  rather than a fixed small starting capacity.
 - [x] Focused tests cover wildcard owner overrides, additional-data discovery,
-  and wire-record visitation from handles.
+  wire-record visitation from handles, and plan wire-bound accounting.
 - [~] The full response composer is not yet a pure immutable template/WireArena
   pipeline.
 - [~] Public `LookupResult` materialization still rebuilds temporary
   `ResourceRecord` values for compatibility outside the packet hot path.
-- [ ] Precompute negative SOA variants for the `ZoneImage` composer.
+- [x] Precompute negative SOA variants for the `ZoneImage` composer.
+- [x] Add focused bounds tests for plan wire upper-bound accounting.
 - [ ] Add response-template cache experiments.
 - [ ] Add composer fuzz and bounds tests targeted specifically at the final
   WireArena writer.

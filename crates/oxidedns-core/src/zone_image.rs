@@ -153,6 +153,7 @@ struct ImageRrset {
     rr_type: u16,
     class: u16,
     ttl: u32,
+    negative_ttl: u32,
     first_record: u32,
     record_count: u16,
     wire: BlobRange,
@@ -506,6 +507,25 @@ impl ZoneImage {
         ))
     }
 
+    pub(crate) fn plan_wire_upper_bound(&self, plan: &ZoneImageLookupPlan) -> usize {
+        let mut bytes = self.answer_wire_upper_bound(plan);
+        bytes = bytes.saturating_add(self.rrset_list_wire_upper_bound(&plan.authority_rrsets));
+        bytes = bytes.saturating_add(
+            plan.synthesized_authorities
+                .iter()
+                .map(synthesized_record_wire_len)
+                .sum::<usize>(),
+        );
+        bytes = bytes.saturating_add(self.rrset_list_wire_upper_bound(&plan.additional_rrsets));
+        bytes = bytes.saturating_add(
+            plan.synthesized_additionals
+                .iter()
+                .map(synthesized_record_wire_len)
+                .sum::<usize>(),
+        );
+        bytes
+    }
+
     pub fn append_answer_wire(
         &self,
         plan: &ZoneImageLookupPlan,
@@ -638,6 +658,59 @@ impl ZoneImage {
         }
     }
 
+    fn answer_wire_upper_bound(&self, plan: &ZoneImageLookupPlan) -> usize {
+        if plan.answer_items.is_empty() {
+            return self.rrset_list_wire_upper_bound(&plan.answer_rrsets);
+        }
+
+        let mut bytes = 0usize;
+        for item in &plan.answer_items {
+            bytes = bytes.saturating_add(match item {
+                PlanAnswer::Rrset(rrset_id) => self.rrset_wire_upper_bound(*rrset_id, None),
+                PlanAnswer::RrsetWithOwner {
+                    rrset_id,
+                    owner_index,
+                } => self.rrset_wire_upper_bound(
+                    *rrset_id,
+                    Some(plan.owner_overrides[*owner_index].len()),
+                ),
+                PlanAnswer::Synthesized(index) => {
+                    synthesized_record_wire_len(&plan.synthesized_answers[*index])
+                }
+            });
+        }
+        bytes
+    }
+
+    fn rrset_list_wire_upper_bound(&self, rrsets: &[ZoneImageRrsetId]) -> usize {
+        rrsets
+            .iter()
+            .map(|rrset_id| self.rrset_wire_upper_bound(*rrset_id, None))
+            .sum()
+    }
+
+    fn rrset_wire_upper_bound(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        owner_wire_len_override: Option<usize>,
+    ) -> usize {
+        let rrset = self.rrsets[rrset_id.0 as usize];
+        if owner_wire_len_override.is_none() {
+            return self.blob(&self.wire, rrset.wire).len();
+        }
+
+        let owner_wire_len = owner_wire_len_override.unwrap_or(0);
+        let mut bytes = 0usize;
+        for offset in 0..rrset.record_count {
+            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+            bytes = bytes
+                .saturating_add(owner_wire_len)
+                .saturating_add(10)
+                .saturating_add(self.blob(&self.rdata, record.rdata).len());
+        }
+        bytes
+    }
+
     fn visit_rrset_records(
         &self,
         rrset_id: ZoneImageRrsetId,
@@ -768,12 +841,10 @@ impl ZoneImage {
             return None;
         }
         let rrset = self.rrsets[rrset_id.0 as usize];
-        if rrset.rr_type != RecordType::Soa as u16 || rrset.record_count == 0 {
+        if rrset.rr_type != RecordType::Soa as u16 {
             return None;
         }
-        let record = self.records[rrset.first_record as usize];
-        let minimum = soa_minimum(self.blob(&self.rdata, record.rdata))?;
-        Some(rrset.ttl.min(minimum))
+        Some(rrset.negative_ttl)
     }
 
     fn materialize_rrset(
@@ -873,19 +944,35 @@ impl ZoneImage {
         Ok(records)
     }
 
+    fn materialize_rrset_with_ttl_override(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        ttl_override: Option<u32>,
+    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
+        let rrset = self.rrsets[rrset_id.0 as usize];
+        let owner = self.rrset_owner(rrset_id)?;
+        let mut records = Vec::with_capacity(rrset.record_count as usize);
+        for offset in 0..rrset.record_count {
+            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+            records.push(ResourceRecord {
+                owner: owner.clone(),
+                rr_type: rrset.rr_type,
+                class: rrset.class,
+                ttl: ttl_override.unwrap_or(rrset.ttl),
+                rdata: self.blob(&self.rdata, record.rdata).to_vec(),
+            });
+        }
+        Ok(records)
+    }
+
     fn materialize_authority_records(
         &self,
         plan: &ZoneImageLookupPlan,
     ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
-        let mut records = self.materialize_rrset_list(&plan.authority_rrsets)?;
-        if plan.authoritative {
-            for record in &mut records {
-                if record.rr_type == RecordType::Soa as u16
-                    && let Some(minimum) = soa_minimum(&record.rdata)
-                {
-                    record.ttl = record.ttl.min(minimum);
-                }
-            }
+        let mut records = Vec::new();
+        for rrset_id in &plan.authority_rrsets {
+            let ttl_override = self.authority_ttl_override(plan, *rrset_id);
+            records.extend(self.materialize_rrset_with_ttl_override(*rrset_id, ttl_override)?);
         }
         for record in &plan.synthesized_authorities {
             records.push(Self::materialize_synthesized_record(record)?);
@@ -2097,11 +2184,20 @@ impl ZoneImageBuilder {
         }
 
         let wire_end = checked_u32(self.wire.len(), "wire")?;
+        let negative_ttl = if rr_type == RecordType::Soa as u16 {
+            rdatas
+                .first()
+                .and_then(|rdata| soa_minimum(rdata))
+                .map_or(ttl, |minimum| ttl.min(minimum))
+        } else {
+            ttl
+        };
         self.image_rrsets.push(ImageRrset {
             owner_wire: owner_wire_ref,
             rr_type,
             class,
             ttl,
+            negative_ttl,
             first_record,
             record_count: checked_u16(rdatas.len(), "records")?,
             wire: BlobRange {
@@ -2339,6 +2435,14 @@ fn append_synthesized_record_wire(
         &record.rdata,
         out,
     )
+}
+
+fn synthesized_record_wire_len(record: &ZoneImageSynthesizedRecord) -> usize {
+    record
+        .owner_wire
+        .len()
+        .saturating_add(10)
+        .saturating_add(record.rdata.len())
 }
 
 fn synthesized_wire_record(record: &ZoneImageSynthesizedRecord) -> ZoneImageWireRecord<'_> {
@@ -2883,6 +2987,33 @@ mod tests {
                     .to_wire()
             )
         );
+    }
+
+    #[test]
+    fn plan_wire_upper_bound_matches_uncompressed_plan_wire() {
+        let snapshot = semantic_snapshot();
+        let image = ZoneImage::compile(&snapshot).expect("zone image compiles");
+
+        for (qname, rr_type) in [
+            ("host.wild.example.test.", RecordType::A as u16),
+            ("www.subtree.example.test.", RecordType::A as u16),
+            ("missing.example.test.", RecordType::A as u16),
+        ] {
+            let qname = DomainName::from_absolute_str(qname).unwrap();
+            let plan = image
+                .lookup_response_plan(&qname, rr_type, 1, DEFAULT_MAX_CNAME_CHAIN)
+                .expect("zone image lookup plan builds");
+            let mut wire = Vec::new();
+            image
+                .append_plan_wire(&plan, &mut wire)
+                .expect("plan wire appends");
+
+            assert_eq!(
+                image.plan_wire_upper_bound(&plan),
+                wire.len(),
+                "wire upper bound mismatch for {qname}"
+            );
+        }
     }
 
     #[test]
