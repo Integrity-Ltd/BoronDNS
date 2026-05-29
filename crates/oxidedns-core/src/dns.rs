@@ -989,13 +989,14 @@ fn try_answer_with_zone_image(
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: Option<ZoneImageProvider<'_>>,
 ) -> Option<Vec<u8>> {
-    if metadata.dnssec_requested() || options.any_response != AnyResponseMode::Minimal {
+    if options.any_response != AnyResponseMode::Minimal {
         return None;
     }
 
     let image = zone_image_provider?(zone)?;
-    if let Some(plan) =
-        image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
+    if !metadata.dnssec_requested()
+        && let Some(plan) =
+            image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
         && let Some(response) = build_direct_zone_image_answer_response(
             header, question, &image, &plan, metadata, options,
         )
@@ -1014,6 +1015,23 @@ fn try_answer_with_zone_image(
         .ok()?;
     if plan.is_unsupported() {
         return None;
+    }
+    let plan = if metadata.dnssec_requested() {
+        image
+            .augment_lookup_plan_with_dnssec(
+                plan,
+                &question.qname,
+                question.qtype,
+                question.qclass,
+                options.nsec3_max_iterations,
+            )
+            .ok()?
+    } else {
+        plan
+    };
+    let mut metadata = metadata.with_dnssec_augmented(plan.dnssec_augmented());
+    if plan.nsec3_iterations_exceeded() {
+        metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
     }
 
     let response = build_zone_image_response(header, question, &image, &plan, metadata, options)?;
@@ -2642,7 +2660,7 @@ impl LookupMetrics {
     fn from_zone_image_plan(plan: &ZoneImageLookupPlan, direct_answer: bool) -> Self {
         Self {
             termination: plan.termination(),
-            nsec3_iterations_exceeded: false,
+            nsec3_iterations_exceeded: plan.nsec3_iterations_exceeded(),
             zone_image_used: true,
             zone_image_direct_answer: direct_answer,
         }
@@ -4452,7 +4470,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_bypasses_provider_for_dnssec_do_queries() {
+    fn zone_image_serving_handles_dnssec_do_queries() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -4491,7 +4509,7 @@ mod tests {
             &provider,
         );
 
-        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(
             response_answer_types(&zone_image_response),
@@ -4501,7 +4519,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_bypasses_provider_for_dnssec_proof_selection_corpus() {
+    fn zone_image_serving_matches_dnssec_proof_selection_corpus() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
             DomainName::from_absolute_str("example.test.").unwrap(),
@@ -4634,7 +4652,162 @@ mod tests {
                 RecordType::Rrsig as u16,
             ]
         );
-        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(provider_calls.get(), 3);
+    }
+
+    #[test]
+    fn zone_image_serving_matches_signed_packet_edge_corpus() {
+        let cases = [
+            (
+                "wildcard_nsec_proof",
+                ZoneSnapshot::active(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    Some(1),
+                    vec![
+                        Rrset::new(
+                            DomainName::from_absolute_str("example.test.").unwrap(),
+                            RecordType::Soa as u16,
+                            1,
+                            3600,
+                            vec![soa_rdata()],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("*.example.test.").unwrap(),
+                            RecordType::A as u16,
+                            1,
+                            300,
+                            vec![[192, 0, 2, 20].to_vec()],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("a.example.test.").unwrap(),
+                            RecordType::Nsec as u16,
+                            1,
+                            300,
+                            vec![nsec_rdata("z.example.test.")],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("a.example.test.").unwrap(),
+                            RecordType::Rrsig as u16,
+                            1,
+                            300,
+                            vec![rrsig_rdata(RecordType::Nsec)],
+                        ),
+                    ],
+                ),
+                query(b"\x03foo\x07example\x04test\x00", RecordType::A as u16, 1),
+            ),
+            (
+                "signed_referral_with_ds",
+                ZoneSnapshot::active(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    Some(1),
+                    vec![
+                        Rrset::new(
+                            DomainName::from_absolute_str("example.test.").unwrap(),
+                            RecordType::Soa as u16,
+                            1,
+                            3600,
+                            vec![soa_rdata()],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Ns as u16,
+                            1,
+                            300,
+                            vec![cname_rdata("ns.child.example.test.")],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Ds as u16,
+                            1,
+                            300,
+                            vec![vec![0, 12, 8, 2, 1, 2, 3, 4]],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Rrsig as u16,
+                            1,
+                            300,
+                            vec![rrsig_rdata(RecordType::Ns), rrsig_rdata(RecordType::Ds)],
+                        ),
+                    ],
+                ),
+                query(
+                    b"\x03www\x05child\x07example\x04test\x00",
+                    RecordType::A as u16,
+                    1,
+                ),
+            ),
+            (
+                "unsigned_referral_nsec_proof",
+                ZoneSnapshot::active(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    Some(1),
+                    vec![
+                        Rrset::new(
+                            DomainName::from_absolute_str("example.test.").unwrap(),
+                            RecordType::Soa as u16,
+                            1,
+                            3600,
+                            vec![soa_rdata()],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Ns as u16,
+                            1,
+                            300,
+                            vec![cname_rdata("ns.child.example.test.")],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Nsec as u16,
+                            1,
+                            300,
+                            vec![nsec_rdata("next.example.test.")],
+                        ),
+                        Rrset::new(
+                            DomainName::from_absolute_str("child.example.test.").unwrap(),
+                            RecordType::Rrsig as u16,
+                            1,
+                            300,
+                            vec![rrsig_rdata(RecordType::Ns), rrsig_rdata(RecordType::Nsec)],
+                        ),
+                    ],
+                ),
+                query(
+                    b"\x03www\x05child\x07example\x04test\x00",
+                    RecordType::A as u16,
+                    1,
+                ),
+            ),
+        ];
+
+        for (case, snapshot, mut packet) in cases {
+            append_opt(&mut packet, 4096, 0x8000, &[]);
+            let store = ZoneStore::new();
+            store.insert_snapshot(snapshot);
+            let provider_calls = std::cell::Cell::new(0);
+            let provider = |zone: &Arc<ZoneSnapshot>| {
+                provider_calls.set(provider_calls.get() + 1);
+                ZoneImage::compile(zone).ok().map(Arc::new)
+            };
+
+            let snapshot_response =
+                store_response_with_options(&packet, &store, AnswerOptions::default());
+            let zone_image_response = store_response_with_zone_image_provider(
+                &packet,
+                &store,
+                AnswerOptions::default(),
+                &provider,
+            );
+
+            assert_eq!(provider_calls.get(), 1, "ZoneImage was not used for {case}");
+            assert_eq!(
+                zone_image_response, snapshot_response,
+                "packet mismatch for {case}"
+            );
+            assert_eq!(response_opt_ttl(&zone_image_response), Some(0x8000));
+        }
     }
 
     #[test]
@@ -5728,7 +5901,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_image_serving_bypasses_provider_for_dnssec_nsec3_ede_cap() {
+    fn zone_image_serving_handles_dnssec_nsec3_ede_cap() {
         let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
         let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
         let store = ZoneStore::new();
@@ -5792,7 +5965,7 @@ mod tests {
         };
         let snapshot_response = store_response_with_options(&packet, &store, options);
 
-        assert_eq!(provider_calls.get(), 0);
+        assert_eq!(provider_calls.get(), 1);
         assert!(nsec3_iterations_exceeded.get());
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(zone_image_response[3] & 0x0f, Rcode::NxDomain as u8);

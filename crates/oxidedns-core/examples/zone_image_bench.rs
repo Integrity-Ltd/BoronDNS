@@ -108,12 +108,12 @@ fn main() {
         "query_mix_mixed\tpositive_a,cname,wildcard,referral_glue,nodata,nxdomain,dname,opaque_unknown"
     );
     println!("query_mix_optioned\tedns_nsid,dns_cookie,edns_padding");
-    println!("query_mix_fallback\tdo_dnssec,full_any,udp_truncation,ede_not_ready");
+    println!("query_mix_fallback\tdo_dnssec_positive,full_any,udp_truncation,ede_not_ready");
     println!(
         "query_mix_udp_ceiling\tno_edns_512,edns_payload_512,edns_payload_1232,edns_payload_4096"
     );
     println!("query_mix_delegation_dname_stress\treferral_glue,dname_synthesis");
-    println!("serving_gate\tnon_dnssec_minimal_any_only_with_snapshot_fallback");
+    println!("serving_gate\tminimal_any_signed_dnssec_supported_with_snapshot_fallback");
     println!("records\t{record_count}");
     println!(
         "delegation_dname_stress_candidates\t{}",

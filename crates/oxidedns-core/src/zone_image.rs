@@ -1,9 +1,10 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     mem,
 };
 
+use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -28,6 +29,9 @@ pub struct ZoneImage {
     records: Box<[ImageRecord]>,
     delegation_rrsets: Box<[ZoneImageRrsetId]>,
     dname_rrsets: Box<[ZoneImageRrsetId]>,
+    rrsig_covered: Box<[ImageRrsigCovered]>,
+    nsec_rrsets: Box<[ZoneImageRrsetId]>,
+    nsec3_rrsets: Box<[ZoneImageRrsetId]>,
     labels: Box<[u8]>,
     names: Box<[u8]>,
     rdata: Box<[u8]>,
@@ -64,6 +68,10 @@ pub struct ZoneImageLookupPlan {
     additional_rrsets: SmallVec<[ZoneImageRrsetId; 8]>,
     owner_overrides: Vec<Vec<u8>>,
     synthesized_answers: Vec<ZoneImageSynthesizedRecord>,
+    synthesized_authorities: Vec<ZoneImageSynthesizedRecord>,
+    synthesized_additionals: Vec<ZoneImageSynthesizedRecord>,
+    dnssec_augmented: bool,
+    nsec3_iterations_exceeded: bool,
     termination: Option<LookupTermination>,
 }
 
@@ -87,6 +95,7 @@ struct ZoneImageSynthesizedRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ZoneImageLookupOutcome {
     Found(ZoneImageLookupPlan),
     NoData,
@@ -155,6 +164,12 @@ struct ImageRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageRrsigCovered {
+    rrset_id: ZoneImageRrsetId,
+    covered_type: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BlobRange {
     offset: u32,
     len: u32,
@@ -180,6 +195,20 @@ struct RrsetGroupKey {
 struct ChainState {
     visited: Vec<String>,
     remaining: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DnssecSection {
+    Answer,
+    Authority,
+    Additional,
+}
+
+struct ZoneImageDnssecState {
+    seen_records: HashSet<(Vec<u8>, u16, u16, Vec<u8>)>,
+    dnssec_augmented: bool,
+    nsec3_iterations_exceeded: bool,
+    nsec3_max_iterations: u16,
 }
 
 impl ZoneImage {
@@ -378,6 +407,58 @@ impl ZoneImage {
         self.materialize_lookup_result(&plan)
     }
 
+    pub fn augment_lookup_plan_with_dnssec(
+        &self,
+        mut plan: ZoneImageLookupPlan,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        nsec3_max_iterations: u16,
+    ) -> Result<ZoneImageLookupPlan, ZoneImageBuildError> {
+        let mut state = ZoneImageDnssecState {
+            seen_records: self.plan_record_identity_set(&plan),
+            dnssec_augmented: false,
+            nsec3_iterations_exceeded: false,
+            nsec3_max_iterations,
+        };
+        let nodata_candidate = plan.rcode == Rcode::NoError
+            && plan.authoritative
+            && self.answer_record_count(&plan)? == 0;
+        let nxdomain_candidate = plan.rcode == Rcode::NxDomain
+            && plan.authoritative
+            && self.answer_record_count(&plan)? == 0;
+        let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &plan);
+
+        self.add_referral_dnssec_augmentations(&mut plan, &mut state)?;
+        self.add_nodata_nsec_augmentations(
+            qname,
+            qtype,
+            qclass,
+            nodata_candidate,
+            &mut plan,
+            &mut state,
+        )?;
+        self.add_nxdomain_nsec_augmentations(
+            qname,
+            qclass,
+            nxdomain_candidate,
+            &mut plan,
+            &mut state,
+        )?;
+        self.add_wildcard_nsec_augmentations(
+            qname,
+            qclass,
+            wildcard_candidate,
+            &mut plan,
+            &mut state,
+        )?;
+        self.add_rrsig_augmentations(&mut plan, &mut state)?;
+
+        plan.dnssec_augmented = state.dnssec_augmented;
+        plan.nsec3_iterations_exceeded = state.nsec3_iterations_exceeded;
+        Ok(plan)
+    }
+
     pub fn materialize_answers(
         &self,
         plan: &ZoneImageLookupPlan,
@@ -418,8 +499,10 @@ impl ZoneImage {
     ) -> Result<(usize, usize, usize), ZoneImageBuildError> {
         Ok((
             self.answer_record_count(plan)?,
-            self.rrset_list_record_count(&plan.authority_rrsets)?,
-            self.rrset_list_record_count(&plan.additional_rrsets)?,
+            self.rrset_list_record_count(&plan.authority_rrsets)?
+                + plan.synthesized_authorities.len(),
+            self.rrset_list_record_count(&plan.additional_rrsets)?
+                + plan.synthesized_additionals.len(),
         ))
     }
 
@@ -447,14 +530,7 @@ impl ZoneImage {
                 )?,
                 PlanAnswer::Synthesized(index) => {
                     let record = &plan.synthesized_answers[*index];
-                    append_record_fields_wire(
-                        &record.owner_wire,
-                        record.rr_type,
-                        record.class,
-                        record.ttl,
-                        &record.rdata,
-                        out,
-                    )?;
+                    append_synthesized_record_wire(record, out)?;
                     1
                 }
             };
@@ -484,6 +560,10 @@ impl ZoneImage {
             let ttl_override = self.authority_ttl_override(plan, *rrset_id);
             record_count += self.append_rrset_wire(*rrset_id, ttl_override, out)?;
         }
+        for record in &plan.synthesized_authorities {
+            append_synthesized_record_wire(record, out)?;
+            record_count += 1;
+        }
         Ok(record_count)
     }
 
@@ -495,6 +575,10 @@ impl ZoneImage {
         let mut record_count = 0usize;
         for rrset_id in &plan.additional_rrsets {
             record_count += self.append_rrset_wire(*rrset_id, None, out)?;
+        }
+        for record in &plan.synthesized_additionals {
+            append_synthesized_record_wire(record, out)?;
+            record_count += 1;
         }
         Ok(record_count)
     }
@@ -532,13 +616,7 @@ impl ZoneImage {
                     ),
                     PlanAnswer::Synthesized(index) => {
                         let record = &plan.synthesized_answers[*index];
-                        visit(ZoneImageWireRecord {
-                            owner_wire: &record.owner_wire,
-                            rr_type: record.rr_type,
-                            class: record.class,
-                            ttl: record.ttl,
-                            rdata: &record.rdata,
-                        });
+                        visit(synthesized_wire_record(record));
                     }
                 }
             }
@@ -548,9 +626,15 @@ impl ZoneImage {
             let ttl_override = self.authority_ttl_override(plan, *rrset_id);
             self.visit_rrset_records(*rrset_id, ttl_override, &mut visit);
         }
+        for record in &plan.synthesized_authorities {
+            visit(synthesized_wire_record(record));
+        }
 
         for rrset_id in &plan.additional_rrsets {
             self.visit_rrset_records(*rrset_id, None, &mut visit);
+        }
+        for record in &plan.synthesized_additionals {
+            visit(synthesized_wire_record(record));
         }
     }
 
@@ -732,9 +816,9 @@ impl ZoneImage {
             authoritative: plan.authoritative,
             answers: self.materialize_answer_records(plan)?,
             authorities: self.materialize_authority_records(plan)?,
-            additionals: self.materialize_rrset_list(&plan.additional_rrsets)?,
+            additionals: self.materialize_additional_records(plan)?,
             termination: plan.termination,
-            nsec3_iterations_exceeded: false,
+            nsec3_iterations_exceeded: plan.nsec3_iterations_exceeded,
         })
     }
 
@@ -759,17 +843,23 @@ impl ZoneImage {
                 }
                 PlanAnswer::Synthesized(index) => {
                     let record = &plan.synthesized_answers[*index];
-                    records.push(ResourceRecord {
-                        owner: parse_owner_wire(&record.owner_wire)?,
-                        rr_type: record.rr_type,
-                        class: record.class,
-                        ttl: record.ttl,
-                        rdata: record.rdata.clone(),
-                    });
+                    records.push(Self::materialize_synthesized_record(record)?);
                 }
             }
         }
         Ok(records)
+    }
+
+    fn materialize_synthesized_record(
+        record: &ZoneImageSynthesizedRecord,
+    ) -> Result<ResourceRecord, ZoneImageBuildError> {
+        Ok(ResourceRecord {
+            owner: parse_owner_wire(&record.owner_wire)?,
+            rr_type: record.rr_type,
+            class: record.class,
+            ttl: record.ttl,
+            rdata: record.rdata.clone(),
+        })
     }
 
     fn materialize_rrset_list(
@@ -796,6 +886,20 @@ impl ZoneImage {
                     record.ttl = record.ttl.min(minimum);
                 }
             }
+        }
+        for record in &plan.synthesized_authorities {
+            records.push(Self::materialize_synthesized_record(record)?);
+        }
+        Ok(records)
+    }
+
+    fn materialize_additional_records(
+        &self,
+        plan: &ZoneImageLookupPlan,
+    ) -> Result<Vec<ResourceRecord>, ZoneImageBuildError> {
+        let mut records = self.materialize_rrset_list(&plan.additional_rrsets)?;
+        for record in &plan.synthesized_additionals {
+            records.push(Self::materialize_synthesized_record(record)?);
         }
         Ok(records)
     }
@@ -1236,6 +1340,446 @@ impl ZoneImage {
         }
     }
 
+    fn add_referral_dnssec_augmentations(
+        &self,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        let authority_rrsets = plan.authority_rrsets.clone();
+        for rrset_id in authority_rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if rrset.rr_type != RecordType::Ns as u16 {
+                continue;
+            }
+
+            let owner = self.rrset_owner(rrset_id)?;
+            if let Some(ds) = self.find_rrset(&owner, RecordType::Ds as u16, rrset.class) {
+                self.push_authority_rrset(plan, ds, state);
+            } else if let Some(nsec) = self.find_rrset(&owner, RecordType::Nsec as u16, rrset.class)
+            {
+                self.push_authority_rrset(plan, nsec, state);
+            } else {
+                self.push_nsec3_for_name(&owner, rrset.class, plan, state)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_nodata_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        nodata_candidate: bool,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        if !nodata_candidate
+            || !self.plan_has_authority_type(plan, RecordType::Soa as u16)
+            || self.find_rrset(qname, qtype, qclass).is_some()
+        {
+            return Ok(());
+        }
+
+        if let Some(nsec) = self.find_rrset(qname, RecordType::Nsec as u16, qclass) {
+            self.push_authority_rrset(plan, nsec, state);
+        } else {
+            self.push_nsec3_for_name(qname, qclass, plan, state)?;
+        }
+        Ok(())
+    }
+
+    fn add_nxdomain_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        nxdomain_candidate: bool,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        if !nxdomain_candidate || !self.plan_has_authority_type(plan, RecordType::Soa as u16) {
+            return Ok(());
+        }
+
+        self.push_nsec_covering_name(qname, qclass, plan, state)?;
+        self.push_nsec3_for_name(qname, qclass, plan, state)?;
+        if let Some(closest_encloser) = self.closest_encloser_name(qname) {
+            self.push_nsec_covering_name(&closest_encloser.wildcard_child(), qclass, plan, state)?;
+            self.push_nsec3_for_name(&closest_encloser, qclass, plan, state)?;
+            self.push_nsec3_for_name(&closest_encloser.wildcard_child(), qclass, plan, state)?;
+        }
+        Ok(())
+    }
+
+    fn add_wildcard_nsec_augmentations(
+        &self,
+        qname: &DomainName,
+        qclass: u16,
+        wildcard_candidate: bool,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        if !wildcard_candidate {
+            return Ok(());
+        }
+
+        self.push_nsec_covering_name(qname, qclass, plan, state)?;
+        self.push_nsec3_for_name(qname, qclass, plan, state)
+    }
+
+    fn add_rrsig_augmentations(
+        &self,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        if plan.answer_items.is_empty() {
+            let answer_rrsets = plan.answer_rrsets.clone();
+            for rrset_id in answer_rrsets {
+                self.push_rrsig_for_rrset(DnssecSection::Answer, rrset_id, plan, state);
+            }
+        } else {
+            let answer_items = plan.answer_items.clone();
+            for item in answer_items {
+                match item {
+                    PlanAnswer::Rrset(rrset_id) => {
+                        self.push_rrsig_for_rrset(DnssecSection::Answer, rrset_id, plan, state);
+                    }
+                    PlanAnswer::RrsetWithOwner { .. } | PlanAnswer::Synthesized(_) => {}
+                }
+            }
+        }
+
+        let authority_rrsets = plan.authority_rrsets.clone();
+        for rrset_id in authority_rrsets {
+            self.push_rrsig_for_rrset(DnssecSection::Authority, rrset_id, plan, state);
+        }
+
+        let additional_rrsets = plan.additional_rrsets.clone();
+        for rrset_id in additional_rrsets {
+            self.push_rrsig_for_rrset(DnssecSection::Additional, rrset_id, plan, state);
+        }
+        Ok(())
+    }
+
+    fn push_authority_rrset(
+        &self,
+        plan: &mut ZoneImageLookupPlan,
+        rrset_id: ZoneImageRrsetId,
+        state: &mut ZoneImageDnssecState,
+    ) {
+        if !plan.authority_rrsets.contains(&rrset_id) {
+            plan.authority_rrsets.push(rrset_id);
+            state.dnssec_augmented = true;
+            self.record_rrset_identities(rrset_id, None, &mut state.seen_records);
+        }
+    }
+
+    fn push_nsec_covering_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        let Some(nsec) = self.nsec_rrset_covering_name(name, qclass)? else {
+            return Ok(());
+        };
+        self.push_authority_rrset(plan, nsec, state);
+        Ok(())
+    }
+
+    fn nsec_rrset_covering_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+    ) -> Result<Option<ZoneImageRrsetId>, ZoneImageBuildError> {
+        for rrset_id in &self.nsec_rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if !qclass_matches(rrset.class, qclass) {
+                continue;
+            }
+            let owner = self.rrset_owner(*rrset_id)?;
+            for offset in 0..rrset.record_count {
+                let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+                if nsec_covers_name(&owner, self.blob(&self.rdata, record.rdata), name) {
+                    return Ok(Some(*rrset_id));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn push_nsec3_for_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) -> Result<(), ZoneImageBuildError> {
+        let Some(nsec3) = self.nsec3_rrset_for_name(
+            name,
+            qclass,
+            &mut state.nsec3_iterations_exceeded,
+            state.nsec3_max_iterations,
+        )?
+        else {
+            return Ok(());
+        };
+        self.push_authority_rrset(plan, nsec3, state);
+        Ok(())
+    }
+
+    fn nsec3_rrset_for_name(
+        &self,
+        name: &DomainName,
+        qclass: u16,
+        nsec3_iterations_exceeded: &mut bool,
+        nsec3_max_iterations: u16,
+    ) -> Result<Option<ZoneImageRrsetId>, ZoneImageBuildError> {
+        let mut candidates = Vec::new();
+        for rrset_id in &self.nsec3_rrsets {
+            let rrset = self.rrsets[rrset_id.0 as usize];
+            if !qclass_matches(rrset.class, qclass) || rrset.record_count == 0 {
+                continue;
+            }
+            let record = self.records[rrset.first_record as usize];
+            let rdata = self.blob(&self.rdata, record.rdata);
+            let Some(params) = nsec3_params_from_rdata(rdata) else {
+                continue;
+            };
+            if params.iterations > nsec3_max_iterations {
+                *nsec3_iterations_exceeded = true;
+                continue;
+            }
+            let Some(hash) = nsec3_hash_name(name, &params) else {
+                continue;
+            };
+            let owner = self.rrset_owner(*rrset_id)?;
+            let Some(owner_hash) = nsec3_owner_hash_label(&owner, &self.origin) else {
+                continue;
+            };
+            let Some(next_hash) = nsec3_next_hash_label(rdata) else {
+                continue;
+            };
+            candidates.push((*rrset_id, hash, owner_hash, next_hash));
+        }
+
+        Ok(candidates
+            .iter()
+            .find(|(_, hash, owner_hash, _)| hash == owner_hash)
+            .map(|(rrset_id, _, _, _)| *rrset_id)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find(|(_, hash, owner_hash, next_hash)| {
+                        nsec3_range_covers_hash(owner_hash, next_hash, hash)
+                    })
+                    .map(|(rrset_id, _, _, _)| *rrset_id)
+            }))
+    }
+
+    fn push_rrsig_for_rrset(
+        &self,
+        section: DnssecSection,
+        covered_rrset_id: ZoneImageRrsetId,
+        plan: &mut ZoneImageLookupPlan,
+        state: &mut ZoneImageDnssecState,
+    ) {
+        let covered_rrset = self.rrsets[covered_rrset_id.0 as usize];
+        if covered_rrset.rr_type == RecordType::Rrsig as u16 {
+            return;
+        }
+        let owner_wire = self.blob(&self.names, covered_rrset.owner_wire).to_vec();
+        for index in &self.rrsig_covered {
+            if index.covered_type != covered_rrset.rr_type {
+                continue;
+            }
+            let rrsig_rrset = self.rrsets[index.rrset_id.0 as usize];
+            if rrsig_rrset.class != covered_rrset.class
+                || self.blob(&self.names, rrsig_rrset.owner_wire) != owner_wire
+            {
+                continue;
+            }
+            for offset in 0..rrsig_rrset.record_count {
+                let record = self.records[(rrsig_rrset.first_record + u32::from(offset)) as usize];
+                let rdata = self.blob(&self.rdata, record.rdata);
+                if rrsig_type_covered_rdata(rdata) != Some(covered_rrset.rr_type) {
+                    continue;
+                }
+                let identity = (
+                    owner_wire.clone(),
+                    rrsig_rrset.rr_type,
+                    rrsig_rrset.class,
+                    rdata.to_vec(),
+                );
+                if !state.seen_records.insert(identity) {
+                    continue;
+                }
+                let record = ZoneImageSynthesizedRecord {
+                    owner_wire: owner_wire.clone(),
+                    rr_type: rrsig_rrset.rr_type,
+                    class: rrsig_rrset.class,
+                    ttl: rrsig_rrset.ttl,
+                    rdata: rdata.to_vec(),
+                };
+                plan.push_synthesized_section(section, record);
+                state.dnssec_augmented = true;
+            }
+        }
+    }
+
+    fn plan_record_identity_set(
+        &self,
+        plan: &ZoneImageLookupPlan,
+    ) -> HashSet<(Vec<u8>, u16, u16, Vec<u8>)> {
+        let mut seen = HashSet::new();
+        self.record_plan_identities(plan, &mut seen);
+        seen
+    }
+
+    fn record_plan_identities(
+        &self,
+        plan: &ZoneImageLookupPlan,
+        seen: &mut HashSet<(Vec<u8>, u16, u16, Vec<u8>)>,
+    ) {
+        if plan.answer_items.is_empty() {
+            for rrset_id in &plan.answer_rrsets {
+                self.record_rrset_identities(*rrset_id, None, seen);
+            }
+        } else {
+            for item in &plan.answer_items {
+                match item {
+                    PlanAnswer::Rrset(rrset_id) => {
+                        self.record_rrset_identities(*rrset_id, None, seen)
+                    }
+                    PlanAnswer::RrsetWithOwner {
+                        rrset_id,
+                        owner_index,
+                    } => self.record_rrset_identities(
+                        *rrset_id,
+                        Some(&plan.owner_overrides[*owner_index]),
+                        seen,
+                    ),
+                    PlanAnswer::Synthesized(index) => {
+                        record_synthesized_identity(&plan.synthesized_answers[*index], seen);
+                    }
+                }
+            }
+        }
+        for rrset_id in &plan.authority_rrsets {
+            self.record_rrset_identities(*rrset_id, None, seen);
+        }
+        for rrset_id in &plan.additional_rrsets {
+            self.record_rrset_identities(*rrset_id, None, seen);
+        }
+        for record in &plan.synthesized_authorities {
+            record_synthesized_identity(record, seen);
+        }
+        for record in &plan.synthesized_additionals {
+            record_synthesized_identity(record, seen);
+        }
+    }
+
+    fn record_rrset_identities(
+        &self,
+        rrset_id: ZoneImageRrsetId,
+        owner_override: Option<&[u8]>,
+        seen: &mut HashSet<(Vec<u8>, u16, u16, Vec<u8>)>,
+    ) {
+        let rrset = self.rrsets[rrset_id.0 as usize];
+        let owner_wire = owner_override
+            .map(<[u8]>::to_vec)
+            .unwrap_or_else(|| self.blob(&self.names, rrset.owner_wire).to_vec());
+        for offset in 0..rrset.record_count {
+            let record = self.records[(rrset.first_record + u32::from(offset)) as usize];
+            seen.insert((
+                owner_wire.clone(),
+                rrset.rr_type,
+                rrset.class,
+                self.blob(&self.rdata, record.rdata).to_vec(),
+            ));
+        }
+    }
+
+    fn plan_has_authority_type(&self, plan: &ZoneImageLookupPlan, rr_type: u16) -> bool {
+        plan.authority_rrsets
+            .iter()
+            .any(|rrset_id| self.rrsets[rrset_id.0 as usize].rr_type == rr_type)
+            || plan
+                .synthesized_authorities
+                .iter()
+                .any(|record| record.rr_type == rr_type)
+    }
+
+    fn is_wildcard_synthesis(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        plan: &ZoneImageLookupPlan,
+    ) -> bool {
+        if plan.rcode != Rcode::NoError
+            || !plan.authoritative
+            || self.answer_record_count(plan).ok().unwrap_or_default() == 0
+            || self.node_exists(qname)
+        {
+            return false;
+        }
+        let Some(first_owner) = self.first_answer_owner_wire(plan) else {
+            return false;
+        };
+        if !wire_names_equal_ignore_ascii_case(&first_owner, &qname.to_wire()) {
+            return false;
+        }
+        let Some(closest) = self.closest_encloser_name(qname) else {
+            return false;
+        };
+        let wildcard = closest.wildcard_child();
+        self.find_rrset(&wildcard, qtype, qclass).is_some()
+            || (qtype != RecordType::Cname as u16
+                && self
+                    .find_rrset(&wildcard, RecordType::Cname as u16, qclass)
+                    .is_some())
+    }
+
+    fn first_answer_owner_wire(&self, plan: &ZoneImageLookupPlan) -> Option<Vec<u8>> {
+        if plan.answer_items.is_empty() {
+            let rrset_id = *plan.answer_rrsets.first()?;
+            return Some(
+                self.blob(&self.names, self.rrsets[rrset_id.0 as usize].owner_wire)
+                    .to_vec(),
+            );
+        }
+        match plan.answer_items.first()? {
+            PlanAnswer::Rrset(rrset_id) => Some(
+                self.blob(&self.names, self.rrsets[rrset_id.0 as usize].owner_wire)
+                    .to_vec(),
+            ),
+            PlanAnswer::RrsetWithOwner { owner_index, .. } => {
+                Some(plan.owner_overrides[*owner_index].clone())
+            }
+            PlanAnswer::Synthesized(index) => {
+                Some(plan.synthesized_answers[*index].owner_wire.clone())
+            }
+        }
+    }
+
+    fn closest_encloser_name(&self, qname: &DomainName) -> Option<DomainName> {
+        let mut candidate = qname.parent()?;
+        loop {
+            if !candidate.is_equal_or_subdomain_of(&self.origin) {
+                return None;
+            }
+            if self.find_node(&candidate).is_some() {
+                return Some(candidate);
+            }
+            if candidate == self.origin {
+                return None;
+            }
+            candidate = candidate.parent()?;
+        }
+    }
+
     fn push_address_rrsets(
         &self,
         target: &DomainName,
@@ -1321,6 +1865,10 @@ impl ZoneImageLookupPlan {
             additional_rrsets: SmallVec::new(),
             owner_overrides: Vec::new(),
             synthesized_answers: Vec::new(),
+            synthesized_authorities: Vec::new(),
+            synthesized_additionals: Vec::new(),
+            dnssec_augmented: false,
+            nsec3_iterations_exceeded: false,
             termination: None,
         }
     }
@@ -1360,6 +1908,10 @@ impl ZoneImageLookupPlan {
             additional_rrsets: SmallVec::new(),
             owner_overrides: Vec::new(),
             synthesized_answers: Vec::new(),
+            synthesized_authorities: Vec::new(),
+            synthesized_additionals: Vec::new(),
+            dnssec_augmented: false,
+            nsec3_iterations_exceeded: false,
             termination: None,
         }
     }
@@ -1405,6 +1957,14 @@ impl ZoneImageLookupPlan {
         self.synthesized_answers.len()
     }
 
+    pub fn dnssec_augmented(&self) -> bool {
+        self.dnssec_augmented
+    }
+
+    pub fn nsec3_iterations_exceeded(&self) -> bool {
+        self.nsec3_iterations_exceeded
+    }
+
     fn push_answer_rrset(&mut self, rrset: ZoneImageRrsetId) {
         self.answer_rrsets.push(rrset);
         if !self.answer_items.is_empty() {
@@ -1442,6 +2002,23 @@ impl ZoneImageLookupPlan {
         self.answer_items.push(PlanAnswer::Synthesized(index));
     }
 
+    fn push_synthesized_section(
+        &mut self,
+        section: DnssecSection,
+        record: ZoneImageSynthesizedRecord,
+    ) {
+        match section {
+            DnssecSection::Answer => {
+                self.ensure_answer_items();
+                let index = self.synthesized_answers.len();
+                self.synthesized_answers.push(record);
+                self.answer_items.push(PlanAnswer::Synthesized(index));
+            }
+            DnssecSection::Authority => self.synthesized_authorities.push(record),
+            DnssecSection::Additional => self.synthesized_additionals.push(record),
+        }
+    }
+
     fn ensure_answer_items(&mut self) {
         if self.answer_items.is_empty() {
             self.answer_items
@@ -1465,6 +2042,9 @@ struct ZoneImageBuilder {
     image_records: Vec<ImageRecord>,
     delegation_rrsets: Vec<ZoneImageRrsetId>,
     dname_rrsets: Vec<ZoneImageRrsetId>,
+    rrsig_covered: Vec<ImageRrsigCovered>,
+    nsec_rrsets: Vec<ZoneImageRrsetId>,
+    nsec3_rrsets: Vec<ZoneImageRrsetId>,
     labels: Vec<u8>,
     names: Vec<u8>,
     rdata: Vec<u8>,
@@ -1480,6 +2060,9 @@ impl ZoneImageBuilder {
             image_records: Vec::new(),
             delegation_rrsets: Vec::new(),
             dname_rrsets: Vec::new(),
+            rrsig_covered: Vec::new(),
+            nsec_rrsets: Vec::new(),
+            nsec3_rrsets: Vec::new(),
             labels: Vec::new(),
             names: Vec::new(),
             rdata: Vec::new(),
@@ -1530,6 +2113,27 @@ impl ZoneImageBuilder {
             self.delegation_rrsets.push(rrset_index);
         } else if rr_type == RecordType::Dname as u16 {
             self.dname_rrsets.push(rrset_index);
+        } else if rr_type == RecordType::Nsec as u16 {
+            self.nsec_rrsets.push(rrset_index);
+        } else if rr_type == RecordType::Nsec3 as u16 {
+            self.nsec3_rrsets.push(rrset_index);
+        } else if rr_type == RecordType::Rrsig as u16 {
+            let mut covered_types = Vec::new();
+            for rdata in rdatas {
+                let Some(covered_type) = rrsig_type_covered_rdata(rdata) else {
+                    continue;
+                };
+                if !covered_types.contains(&covered_type) {
+                    covered_types.push(covered_type);
+                }
+            }
+            covered_types.sort_unstable();
+            for covered_type in covered_types {
+                self.rrsig_covered.push(ImageRrsigCovered {
+                    rrset_id: rrset_index,
+                    covered_type,
+                });
+            }
         }
         Ok(rrset_index)
     }
@@ -1613,7 +2217,10 @@ impl ZoneImageBuilder {
             + self.image_rrsets.len() * mem::size_of::<ImageRrset>()
             + self.image_records.len() * mem::size_of::<ImageRecord>()
             + self.delegation_rrsets.len() * mem::size_of::<ZoneImageRrsetId>()
-            + self.dname_rrsets.len() * mem::size_of::<ZoneImageRrsetId>();
+            + self.dname_rrsets.len() * mem::size_of::<ZoneImageRrsetId>()
+            + self.rrsig_covered.len() * mem::size_of::<ImageRrsigCovered>()
+            + self.nsec_rrsets.len() * mem::size_of::<ZoneImageRrsetId>()
+            + self.nsec3_rrsets.len() * mem::size_of::<ZoneImageRrsetId>();
         let cold_bytes = labels.len() + self.names.len() + self.rdata.len() + self.wire.len();
         let stats = ZoneImageStats {
             record_count,
@@ -1650,6 +2257,9 @@ impl ZoneImageBuilder {
             records: self.image_records.into_boxed_slice(),
             delegation_rrsets: self.delegation_rrsets.into_boxed_slice(),
             dname_rrsets: self.dname_rrsets.into_boxed_slice(),
+            rrsig_covered: self.rrsig_covered.into_boxed_slice(),
+            nsec_rrsets: self.nsec_rrsets.into_boxed_slice(),
+            nsec3_rrsets: self.nsec3_rrsets.into_boxed_slice(),
             labels: labels.into_boxed_slice(),
             names: self.names.into_boxed_slice(),
             rdata: self.rdata.into_boxed_slice(),
@@ -1717,6 +2327,30 @@ fn append_record_fields_wire(
     Ok(())
 }
 
+fn append_synthesized_record_wire(
+    record: &ZoneImageSynthesizedRecord,
+    out: &mut Vec<u8>,
+) -> Result<(), ZoneImageBuildError> {
+    append_record_fields_wire(
+        &record.owner_wire,
+        record.rr_type,
+        record.class,
+        record.ttl,
+        &record.rdata,
+        out,
+    )
+}
+
+fn synthesized_wire_record(record: &ZoneImageSynthesizedRecord) -> ZoneImageWireRecord<'_> {
+    ZoneImageWireRecord {
+        owner_wire: &record.owner_wire,
+        rr_type: record.rr_type,
+        class: record.class,
+        ttl: record.ttl,
+        rdata: &record.rdata,
+    }
+}
+
 fn push_blob(
     arena: &mut Vec<u8>,
     bytes: &[u8],
@@ -1745,6 +2379,18 @@ fn qclass_matches(class: u16, qclass: u16) -> bool {
     qclass == 255 || class == qclass
 }
 
+fn record_synthesized_identity(
+    record: &ZoneImageSynthesizedRecord,
+    seen: &mut HashSet<(Vec<u8>, u16, u16, Vec<u8>)>,
+) {
+    seen.insert((
+        record.owner_wire.clone(),
+        record.rr_type,
+        record.class,
+        record.rdata.clone(),
+    ));
+}
+
 fn parse_owner_wire(owner_wire: &[u8]) -> Result<DomainName, ZoneImageBuildError> {
     let (owner, consumed) =
         DomainName::parse(owner_wire, 0).map_err(|_| ZoneImageBuildError::InvalidCompiledOwner)?;
@@ -1761,6 +2407,154 @@ fn single_name_rdata_bytes(rdata: &[u8]) -> Option<DomainName> {
 
 fn ns_target_rdata(rdata: &[u8]) -> Option<DomainName> {
     single_name_rdata_bytes(rdata)
+}
+
+fn rrsig_type_covered_rdata(rdata: &[u8]) -> Option<u16> {
+    if rdata.len() < 2 {
+        return None;
+    }
+    Some(u16::from_be_bytes([rdata[0], rdata[1]]))
+}
+
+fn nsec_covers_name(owner: &DomainName, rdata: &[u8], name: &DomainName) -> bool {
+    let Ok((next_owner, _)) = DomainName::parse(rdata, 0) else {
+        return false;
+    };
+    canonical_nsec_range_covers(owner, &next_owner, name)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Nsec3Params {
+    hash_algorithm: u8,
+    iterations: u16,
+    salt: Vec<u8>,
+}
+
+fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
+    if rdata.len() < 5 {
+        return None;
+    }
+
+    let salt_len = rdata[4] as usize;
+    if rdata.len() < 5 + salt_len + 1 {
+        return None;
+    }
+
+    Some(Nsec3Params {
+        hash_algorithm: rdata[0],
+        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
+        salt: rdata[5..5 + salt_len].to_vec(),
+    })
+}
+
+fn nsec3_next_hash_label(rdata: &[u8]) -> Option<String> {
+    let params = nsec3_params_from_rdata(rdata)?;
+    let hash_len_offset = 5 + params.salt.len();
+    let hash_len = *rdata.get(hash_len_offset)? as usize;
+    let hash_start = hash_len_offset + 1;
+    let hash_end = hash_start.checked_add(hash_len)?;
+    if hash_end > rdata.len() {
+        return None;
+    }
+
+    Some(base32hex_no_padding_lower(&rdata[hash_start..hash_end]))
+}
+
+fn nsec3_hash_name(name: &DomainName, params: &Nsec3Params) -> Option<String> {
+    if params.hash_algorithm != 1 {
+        return None;
+    }
+
+    let canonical = DomainName::from_absolute_str(&name.canonical_key())
+        .ok()?
+        .to_wire();
+    let mut digest = Sha1::new();
+    digest.update(&canonical);
+    digest.update(&params.salt);
+    let mut hash = digest.finalize().to_vec();
+
+    for _ in 0..params.iterations {
+        let mut digest = Sha1::new();
+        digest.update(&hash);
+        digest.update(&params.salt);
+        hash = digest.finalize().to_vec();
+    }
+
+    Some(base32hex_no_padding_lower(&hash))
+}
+
+fn nsec3_owner_hash_label(owner: &DomainName, origin: &DomainName) -> Option<String> {
+    let owner_key = owner.canonical_key();
+    let origin_key = origin.canonical_key();
+    let prefix = owner_key.strip_suffix(&origin_key)?;
+    let hash_label = prefix.strip_suffix('.')?;
+    if hash_label.is_empty() || hash_label.contains('.') {
+        return None;
+    }
+
+    Some(hash_label.to_owned())
+}
+
+fn nsec3_range_covers_hash(owner_hash: &str, next_hash: &str, hash: &str) -> bool {
+    if owner_hash < next_hash {
+        owner_hash < hash && hash < next_hash
+    } else if owner_hash > next_hash {
+        owner_hash < hash || hash < next_hash
+    } else {
+        hash != owner_hash
+    }
+}
+
+fn base32hex_no_padding_lower(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
+    let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buffer = 0u16;
+    let mut bits = 0u8;
+
+    for byte in bytes {
+        buffer = (buffer << 8) | u16::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((buffer >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index] as char);
+            bits -= 5;
+        }
+    }
+
+    if bits > 0 {
+        let index = ((buffer << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index] as char);
+    }
+
+    out
+}
+
+fn canonical_nsec_range_covers(
+    owner: &DomainName,
+    next_owner: &DomainName,
+    name: &DomainName,
+) -> bool {
+    let owner_key = owner.canonical_order_key();
+    let next_key = next_owner.canonical_order_key();
+    let name_key = name.canonical_order_key();
+
+    if owner_key < next_key {
+        owner_key < name_key && name_key < next_key
+    } else {
+        owner_key < name_key || name_key < next_key
+    }
+}
+
+fn wire_names_equal_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
+    let Ok((left_name, left_consumed)) = DomainName::parse(left, 0) else {
+        return false;
+    };
+    let Ok((right_name, right_consumed)) = DomainName::parse(right, 0) else {
+        return false;
+    };
+    left_consumed == left.len()
+        && right_consumed == right.len()
+        && left_name.canonical_key() == right_name.canonical_key()
 }
 
 fn additional_address_target_rdata(rr_type: u16, rdata: &[u8]) -> Option<DomainName> {

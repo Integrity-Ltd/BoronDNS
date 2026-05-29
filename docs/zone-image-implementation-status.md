@@ -90,8 +90,9 @@ that should the old query-time layout be phased out.
 - [x] Opt-in `zone_image_shadow_enabled`.
 - [x] Opt-in `zone_image_serve_enabled`.
 - [x] Fallback for unsupported or risky query shapes.
-- [~] Full DNSSEC negative-proof behavior is not implemented in `ZoneImage`;
-  DNSSEC query shapes intentionally bypass or fall back to the current path.
+- [~] Signed DO positive, NODATA, NXDOMAIN, wildcard, referral, and NSEC3 cap
+  paths can serve through `ZoneImage`; broader default promotion still needs
+  operator-trace and physical NIC evidence.
 - [~] Full QTYPE ANY behavior falls back unless the configured minimal mode is
   compatible with the `ZoneImage` path.
 - [~] UDP truncation edge cases fall back to the current composer.
@@ -133,16 +134,17 @@ that should the old query-time layout be phased out.
 
 ## Phase 5: DNSSEC Denial And Signed Zones
 
-- [x] DNSSEC-sensitive query shapes are guarded so the current path remains the
-  correctness source.
-- [x] Tests cover bypass behavior for DO, NSEC proof selection, NSEC3 cap/EDE,
-  and DNSSEC fallback cases.
-- [ ] Add RRSIG covered-type indexes to `ZoneImage`.
-- [ ] Add NSEC indexes to `ZoneImage`.
-- [ ] Add NSEC3 indexes to `ZoneImage`.
-- [ ] Implement bounded dynamic NSEC3 work in the `ZoneImage` path.
-- [ ] Add packet-level signed-zone differential corpus for `ZoneImage`.
-- [ ] Promote DNSSEC-capable `ZoneImage` serving after signed-zone evidence.
+- [x] DNSSEC-sensitive query shapes are packet-differential tested against the
+  current path before serving through `ZoneImage`.
+- [x] Tests cover served DO positive signing, NSEC proof selection, NSEC3
+  cap/EDE, referral proofs, wildcard proofs, and remaining fallback cases.
+- [x] Add RRSIG covered-type indexes to `ZoneImage`.
+- [x] Add NSEC indexes to `ZoneImage`.
+- [x] Add NSEC3 indexes to `ZoneImage`.
+- [x] Implement bounded dynamic NSEC3 work in the `ZoneImage` path.
+- [x] Add packet-level signed-zone differential corpus for `ZoneImage`.
+- [~] DNSSEC-capable `ZoneImage` serving is enabled for supported opt-in paths;
+  default promotion still waits on broader trace and physical evidence.
 
 ## Phase 6: Runtime Integration And Promotion
 
@@ -219,11 +221,10 @@ is faster locally. Retire it only after these are true:
 ## Recommended Order
 
 1. Run the physical promotion gate on a separate client host and real NIC.
-2. Fill DNSSEC denial indexes and signed-zone differential tests.
-3. Complete the pure WireArena composer and remove remaining temporary
+2. Complete the pure WireArena composer and remove remaining temporary
    `ResourceRecord` materialization from served `ZoneImage` paths.
-4. Promote `ZoneImage` to default for unsigned supported traffic.
-5. Add the standard UDP batch adapter and measure whether packet I/O is the next
+3. Promote `ZoneImage` to default for unsigned and signed supported traffic.
+4. Add the standard UDP batch adapter and measure whether packet I/O is the next
    bottleneck.
-6. Start the old query layout retirement checklist only after full semantic and
+5. Start the old query layout retirement checklist only after full semantic and
    physical evidence exists.

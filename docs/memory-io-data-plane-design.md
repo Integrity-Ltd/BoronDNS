@@ -817,17 +817,18 @@ zone. It also validates a mixed semantic query set covering direct positive,
 CNAME, wildcard, referral/glue, NODATA, NXDOMAIN, DNAME behavior, and an
 opaque unknown RR type before timing both the current lookup path and the
 `ZoneImage` semantic path. The packet validator also checks positive EDNS
-option handling for NSID, DNS Cookie, and padding, plus fallback boundaries for
-DO/DNSSEC, full QTYPE ANY, UDP truncation, EDE not-ready responses, and varied
-no-EDNS/EDNS UDP payload ceilings before timing the gated packet path. A
+option handling for NSID, DNS Cookie, and padding, signed DO handling for the
+covered corpus, plus fallback boundaries for full QTYPE ANY, UDP truncation,
+EDE not-ready responses, and varied no-EDNS/EDNS UDP payload ceilings before
+timing the gated packet path. A
 deterministic hot-query shape
 also exercises 90 percent repeated `host0` A queries and 10 percent spread
 queries across the generated zone at both lookup and packet layers. A weighted
 reference trace fixture in
 `crates/oxidedns-core/examples/zone_image_reference_trace.tsv` covers repeated
 positive A queries, spread positives, CNAME, wildcard, referral, NODATA,
-NXDOMAIN, DNAME, opaque unknown RDATA, large EDNS TXT, and DO/DNSSEC fallback
-packets. The output is tab-separated metrics for schema version, build and host
+NXDOMAIN, DNAME, opaque unknown RDATA, large EDNS TXT, and signed DO packets.
+The output is tab-separated metrics for schema version, build and host
 metadata, query-mix labels, trace path, compile time, ns/query, mismatch count,
 record/item counts, node/edge/RRset counts, and hot/cold byte estimates. By
 default the script also writes the retained TSV to
@@ -850,8 +851,9 @@ optioned response, and delegation/DNAME stress paths.
 
 Current retained prototype sample from 2026-05-29 on this development machine,
 after the exact lookup allocation removal, compact delegation/DNAME indexes,
-direct RR-section wire emission, the gated packet response path, and
-arena-wire owner/RDATA name compression. Runtime serving also keeps a last-hit
+direct RR-section wire emission, the gated packet response path, arena-wire
+owner/RDATA name compression, and the signed-zone RRSIG/NSEC/NSEC3 indexes.
+Runtime serving also keeps a last-hit
 ZoneImage cache entry so repeated queries for the active snapshot avoid the
 zone-key string allocation and HashMap lookup before falling back to the
 multi-zone cache. The gated packet path uses a lightweight lookup-metrics
@@ -888,7 +890,7 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `benchmark_schema_version` | 1 |
 | `benchmark_kind` | `in_process_zone_image_prototype` |
 | `benchmark_build_profile` | `profiling` |
-| `benchmark_git_revision` | `d7a2fe77e911` |
+| `benchmark_git_revision` | `67fd75e65173` |
 | `benchmark_git_dirty` | `true` |
 | `benchmark_kernel` | `Linux 7.0.3-1-MANJARO x86_64 GNU/Linux` |
 | `benchmark_rustc` | `rustc 1.95.0 (59807616e 2026-04-14)` |
@@ -902,10 +904,10 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `query_mix_trace` | `weighted_reference_trace_tsv` |
 | `query_mix_mixed` | `positive_a,cname,wildcard,referral_glue,nodata,nxdomain,dname,opaque_unknown` |
 | `query_mix_optioned` | `edns_nsid,dns_cookie,edns_padding` |
-| `query_mix_fallback` | `do_dnssec,full_any,udp_truncation,ede_not_ready` |
+| `query_mix_fallback` | `do_dnssec_positive,full_any,udp_truncation,ede_not_ready` |
 | `query_mix_udp_ceiling` | `no_edns_512,edns_payload_512,edns_payload_1232,edns_payload_4096` |
 | `query_mix_delegation_dname_stress` | `referral_glue,dname_synthesis` |
-| `serving_gate` | `non_dnssec_minimal_any_only_with_snapshot_fallback` |
+| `serving_gate` | `minimal_any_signed_dnssec_supported_with_snapshot_fallback` |
 | Records | 10,000 |
 | Delegation/DNAME stress candidates | 2,000 |
 | Iterations | 200,000 |
@@ -927,28 +929,28 @@ stores only owner wire and RDATA instead of a full `ResourceRecord`:
 | `udp_ceiling_packet_validation_mismatches` | 0 |
 | `ede_fallback_packet_cases` | 1 |
 | `ede_fallback_packet_validation_mismatches` | 0 |
-| `zone_image_compile_ms` | 22.818 |
-| `zone_image_delegation_dname_stress_compile_ms` | 19.554 |
-| `current_lookup_ns_per_query` | 293.088 |
-| `zone_image_exact_lookup_ns_per_query` | 119.603 |
-| `current_hot_lookup_ns_per_query` | 218.371 |
-| `zone_image_hot_exact_lookup_ns_per_query` | 80.045 |
-| `current_mixed_response_ns_per_query` | 767.533 |
-| `zone_image_mixed_plan_ns_per_query` | 449.158 |
-| `zone_image_mixed_wire_ns_per_query` | 579.165 |
-| `zone_image_mixed_response_ns_per_query` | 800.967 |
-| `current_delegation_dname_stress_response_ns_per_query` | 112,812.394 |
-| `zone_image_delegation_dname_stress_plan_ns_per_query` | 680.209 |
-| `zone_image_delegation_dname_stress_wire_ns_per_query` | 710.305 |
-| `zone_image_delegation_dname_stress_response_ns_per_query` | 891.550 |
-| `current_mixed_packet_ns_per_query` | 1,457.444 |
-| `zone_image_mixed_packet_ns_per_query` | 853.428 |
-| `current_hot_packet_ns_per_query` | 519.888 |
-| `zone_image_hot_packet_ns_per_query` | 200.491 |
-| `current_trace_packet_ns_per_query` | 1,596.742 |
-| `zone_image_trace_packet_ns_per_query` | 1,239.950 |
-| `current_optioned_packet_ns_per_query` | 632.098 |
-| `zone_image_optioned_packet_ns_per_query` | 244.674 |
+| `zone_image_compile_ms` | 10.409 |
+| `zone_image_delegation_dname_stress_compile_ms` | 7.338 |
+| `current_lookup_ns_per_query` | 149.542 |
+| `zone_image_exact_lookup_ns_per_query` | 78.842 |
+| `current_hot_lookup_ns_per_query` | 120.276 |
+| `zone_image_hot_exact_lookup_ns_per_query` | 47.138 |
+| `current_mixed_response_ns_per_query` | 467.066 |
+| `zone_image_mixed_plan_ns_per_query` | 268.919 |
+| `zone_image_mixed_wire_ns_per_query` | 300.005 |
+| `zone_image_mixed_response_ns_per_query` | 433.163 |
+| `current_delegation_dname_stress_response_ns_per_query` | 87,229.496 |
+| `zone_image_delegation_dname_stress_plan_ns_per_query` | 658.345 |
+| `zone_image_delegation_dname_stress_wire_ns_per_query` | 709.762 |
+| `zone_image_delegation_dname_stress_response_ns_per_query` | 936.174 |
+| `current_mixed_packet_ns_per_query` | 1,371.698 |
+| `zone_image_mixed_packet_ns_per_query` | 744.621 |
+| `current_hot_packet_ns_per_query` | 517.199 |
+| `zone_image_hot_packet_ns_per_query` | 182.996 |
+| `current_trace_packet_ns_per_query` | 1,568.620 |
+| `zone_image_trace_packet_ns_per_query` | 636.239 |
+| `current_optioned_packet_ns_per_query` | 610.055 |
+| `zone_image_optioned_packet_ns_per_query` | 257.379 |
 | `current_mixed_packet_bytes` | 14,750,000 |
 | `zone_image_mixed_packet_bytes` | 14,750,000 |
 | `current_hot_packet_bytes` | 10,054,000 |
@@ -982,16 +984,16 @@ The retained prototype check artifact
 
 | Check Metric | Value |
 | --- | ---: |
-| `exact_lookup_ratio` | 0.408 |
-| `hot_exact_lookup_ratio` | 0.367 |
-| `mixed_plan_ratio` | 0.585 |
-| `mixed_wire_ratio` | 0.755 |
-| `mixed_packet_ratio` | 0.586 |
-| `hot_packet_ratio` | 0.386 |
-| `trace_packet_ratio` | 0.777 |
-| `optioned_packet_ratio` | 0.387 |
-| `delegation_dname_stress_plan_ratio` | 0.006 |
-| `delegation_dname_stress_wire_ratio` | 0.006 |
+| `exact_lookup_ratio` | 0.527 |
+| `hot_exact_lookup_ratio` | 0.392 |
+| `mixed_plan_ratio` | 0.576 |
+| `mixed_wire_ratio` | 0.642 |
+| `mixed_packet_ratio` | 0.543 |
+| `hot_packet_ratio` | 0.354 |
+| `trace_packet_ratio` | 0.406 |
+| `optioned_packet_ratio` | 0.422 |
+| `delegation_dname_stress_plan_ratio` | 0.008 |
+| `delegation_dname_stress_wire_ratio` | 0.008 |
 
 Interpretation: direct exact handle lookup is faster than the current snapshot
 path on this flat-zone sample. The mixed semantic plan path is also faster than
@@ -1024,13 +1026,14 @@ response framing dominate the repeated-name workload. The benchmark now
 verifies zero byte-level packet mismatches across the retained mixed, hot, and
 weighted trace packet corpora before timing, and it also verifies that the
 gated path preserves positive EDNS option behavior for NSID, DNS Cookie, and
-padding while preserving fallback behavior for DO/DNSSEC, full QTYPE ANY, UDP
-truncation, EDE not-ready, and varied no-EDNS/EDNS UDP payload ceiling cases.
-The focused unit suite also verifies that DO positive signing, NODATA/NSEC
-proof selection, NXDOMAIN/NSEC proof selection, and NSEC3 iteration-cap EDE
-responses bypass ZoneImage while preserving byte-for-byte responses and the
-existing DNSSEC cap metric. Promotion still needs real operator trace coverage
-and physical network evidence, not only retained in-process ns/query evidence.
+padding while preserving served DO positive signing and fallback behavior for
+full QTYPE ANY, UDP truncation, EDE not-ready, and varied no-EDNS/EDNS UDP
+payload ceiling cases. The focused unit suite also verifies that DO positive
+signing, NODATA/NSEC proof selection, NXDOMAIN/NSEC proof selection, wildcard
+proofs, referral proofs, and NSEC3 iteration-cap EDE responses serve through
+ZoneImage while preserving byte-for-byte responses and the existing DNSSEC cap
+metric. Promotion still needs real operator trace coverage and physical network
+evidence, not only retained in-process ns/query evidence.
 
 ### Live Loopback Serving Sample
 
