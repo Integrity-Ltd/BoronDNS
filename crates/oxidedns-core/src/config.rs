@@ -149,6 +149,11 @@ impl ServerConfig {
                 "limits.max_udp_payload must be at least 512".to_owned(),
             ));
         }
+        if self.limits.udp_batch_size == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.udp_batch_size must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.max_cname_chain == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_cname_chain must be at least 1".to_owned(),
@@ -1253,6 +1258,8 @@ impl RrlConfig {
 pub struct Limits {
     #[serde(default = "default_max_udp_payload")]
     pub max_udp_payload: u16,
+    #[serde(default = "default_udp_batch_size")]
+    pub udp_batch_size: usize,
     #[serde(default = "default_max_cname_chain")]
     pub max_cname_chain: usize,
     #[serde(default = "default_tcp_idle_timeout_secs")]
@@ -1305,6 +1312,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_udp_payload: default_max_udp_payload(),
+            udp_batch_size: default_udp_batch_size(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
             tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
@@ -1850,6 +1858,10 @@ fn default_max_udp_payload() -> u16 {
     1232
 }
 
+fn default_udp_batch_size() -> usize {
+    1
+}
+
 fn default_max_cname_chain() -> usize {
     8
 }
@@ -2049,6 +2061,7 @@ mod tests {
         assert!(!config.query.zone_image_serve_enabled);
         assert_eq!(config.zones[0].class, "IN");
         assert_eq!(config.limits.max_udp_payload, 1232);
+        assert_eq!(config.limits.udp_batch_size, 1);
         assert_eq!(config.limits.max_cname_chain, 8);
         assert_eq!(config.limits.tcp_idle_timeout_secs, 30);
         assert_eq!(config.limits.tcp_read_timeout_secs, 30);
@@ -3734,6 +3747,46 @@ mod tests {
         .expect_err("small UDP limit must fail");
 
         assert!(error.to_string().contains("max_udp_payload"));
+    }
+
+    #[test]
+    fn parses_custom_udp_batch_size() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_batch_size = 32
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("custom UDP batch size is valid");
+
+        assert_eq!(config.limits.udp_batch_size, 32);
+    }
+
+    #[test]
+    fn rejects_zero_udp_batch_size() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_batch_size = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero UDP batch size must fail");
+
+        assert!(error.to_string().contains("udp_batch_size"));
     }
 
     #[test]

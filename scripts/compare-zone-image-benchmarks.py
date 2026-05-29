@@ -14,6 +14,7 @@ COMPARABLE_KEYS = (
     "server_threads",
     "client_threads",
     "client_window",
+    "udp_batch_size",
     "listen_address",
     "client_server",
     "client_bind",

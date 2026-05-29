@@ -141,6 +141,10 @@ accept_out_of_zone_glue = false
 [limits]
 # EDNS UDP payload ceiling. Default: 1232.
 max_udp_payload = 1232
+# UDP datagrams to drain per standard socket readiness wakeup. Default: 1,
+# preserving one-datagram-at-a-time behavior; raise only with retained benchmark
+# evidence for the target host.
+udp_batch_size = 1
 # Maximum followed CNAME/DNAME chain depth. Default: 8.
 max_cname_chain = 8
 # TCP idle/read/write timeout seconds. Defaults: 30 seconds each.

@@ -178,8 +178,11 @@ that should the old query-time layout be phased out.
 - [x] Benchmark harness can run local and SSH-client modes.
 - [x] Benchmark artifacts retain enough network evidence for physical review.
 - [x] Physical preflight rejects same-host SSH clients.
-- [ ] Implement standard UDP batch adapter.
-- [ ] Compare standard UDP batch adapter against the current socket path.
+- [x] Implement standard UDP batch adapter.
+- [~] Compare standard UDP batch adapter against the current socket path with
+  local loopback evidence; a 2026-05-29 smoke improved from 303,943 to 350,738
+  responses/s at `udp_batch_size=32` with zero drops/errors, but physical NIC
+  comparison remains open.
 - [ ] Add packet-capture evidence for the promoted UDP path.
 - [ ] Run separate-client non-loopback physical gate.
 - [ ] Run multi-queue NIC profile with CPU/RSS/IRQ affinity recorded.

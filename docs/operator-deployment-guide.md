@@ -286,9 +286,12 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   startup fail if a configured static zone lacks `tsig_key`.
   `accept_out_of_zone_glue = true` is an off-by-default compatibility setting
   for primaries that emit out-of-zone A/AAAA glue in transfer streams.
-- `[limits]`: protocol, transfer, TCP, shutdown, EDNS, and zone-state timing
-  limits. `zsm_loading_warning_threshold_secs` defaults to 3600 and controls
-  the warning threshold and repeat interval for zones stuck in LOADING.
+- `[limits]`: protocol, transfer, TCP, shutdown, EDNS, UDP packet I/O, and
+  zone-state timing limits. `udp_batch_size` defaults to 1, preserving the
+  ordinary one-datagram-at-a-time socket path; raise it only with retained
+  benchmark evidence for the target host. `zsm_loading_warning_threshold_secs`
+  defaults to 3600 and controls the warning threshold and repeat interval for
+  zones stuck in LOADING.
 - `[[zones]]`: served secondary zones and their primary transfer sources. When
   multiple primaries are listed, OxideDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
@@ -356,6 +359,10 @@ Production configuration notes:
   metrics HTTP endpoint is not an authenticated administration interface.
 - Set `[limits].edns_padding_block_size = 0` unless padding is intentionally
   required and tested.
+- Keep `[limits].udp_batch_size = 1` unless a local or physical benchmark
+  artifact shows that the standard UDP batch path improves throughput or tail
+  latency without increasing drops. Benchmark artifacts record UDP receive/send
+  batch counters for this comparison.
 - Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
   diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
   downgrades. The `minimal` profile emits numeric EDE codes only, with no

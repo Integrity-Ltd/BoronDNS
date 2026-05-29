@@ -13,6 +13,7 @@ transport="${OXIDEDNS_BENCH_TRANSPORT:-udp}"
 server_threads="${OXIDEDNS_BENCH_SERVER_THREADS:-4}"
 client_threads="${OXIDEDNS_BENCH_CLIENT_THREADS:-8}"
 client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
+udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
 response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-false}"
@@ -110,6 +111,7 @@ for pair in \
     "OXIDEDNS_BENCH_SERVER_THREADS:$server_threads" \
     "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
     "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
+    "OXIDEDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
     "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
@@ -741,6 +743,7 @@ pipeline_timing_enabled = $pipeline_timing_enabled
 
 [limits]
 max_udp_payload = 1232
+udp_batch_size = $udp_batch_size
 max_concurrent_transfers = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
@@ -759,6 +762,7 @@ transport=$transport
 server_threads=$server_threads
 client_threads=$client_threads
 client_window=$client_window
+udp_batch_size=$udp_batch_size
 duration_seconds=$duration
 response_timeout_ms=$response_timeout_ms
 pipeline_timing_enabled=$pipeline_timing_enabled
@@ -953,10 +957,18 @@ zone_image_serve_hits="$(prom_metric_value oxidedns_zone_image_serve_hits_total)
 zone_image_serve_direct_hits="$(prom_metric_value oxidedns_zone_image_serve_direct_hits_total)"
 zone_image_serve_semantic_hits="$(prom_metric_value oxidedns_zone_image_serve_semantic_hits_total)"
 zone_image_serve_fallbacks="$(prom_metric_value oxidedns_zone_image_serve_fallbacks_total)"
+udp_receive_batches="$(prom_metric_value oxidedns_udp_receive_batches_total)"
+udp_received_datagrams="$(prom_metric_value oxidedns_udp_received_datagrams_total)"
+udp_send_batches="$(prom_metric_value oxidedns_udp_send_batches_total)"
+udp_sent_datagrams="$(prom_metric_value oxidedns_udp_sent_datagrams_total)"
 zone_image_serve_hits="${zone_image_serve_hits:-unknown}"
 zone_image_serve_direct_hits="${zone_image_serve_direct_hits:-unknown}"
 zone_image_serve_semantic_hits="${zone_image_serve_semantic_hits:-unknown}"
 zone_image_serve_fallbacks="${zone_image_serve_fallbacks:-unknown}"
+udp_receive_batches="${udp_receive_batches:-unknown}"
+udp_received_datagrams="${udp_received_datagrams:-unknown}"
+udp_send_batches="${udp_send_batches:-unknown}"
+udp_sent_datagrams="${udp_sent_datagrams:-unknown}"
 
 cat >"$artifact_dir/benchmark-results.tsv" <<EOF
 metric	value	unit
@@ -976,6 +988,11 @@ axfr_records_served	${records_served:-unknown}	records
 server_threads	$server_threads	cpus
 client_threads	$client_threads	threads
 client_window	$client_window	queries_per_thread
+udp_batch_size	$udp_batch_size	datagrams
+udp_receive_batches	$udp_receive_batches	batches
+udp_received_datagrams	$udp_received_datagrams	datagrams
+udp_send_batches	$udp_send_batches	batches
+udp_sent_datagrams	$udp_sent_datagrams	datagrams
 listen_address	$listen_address	address
 client_server	$client_server	address
 client_bind	$client_bind_summary	address
@@ -1027,11 +1044,15 @@ were configured as \`pipeline_timing_enabled=$pipeline_timing_enabled\`.
 \`zone_image_serve_enabled=$zone_image_serve_enabled\`.
 Query mode was \`$query_mode\`; when this is \`trace\`, the retained
 \`query-trace.tsv\` file is the exact replay input.
+The configured UDP batch size was \`$udp_batch_size\`; packet I/O counters
+recorded \`$udp_receive_batches\` receive batches, \`$udp_received_datagrams\`
+received datagrams, \`$udp_send_batches\` send batches, and
+\`$udp_sent_datagrams\` sent datagrams.
 
 This is a local engineering benchmark, not the full SRS Reference
 Hardware/Profile acceptance campaign.
 EOF
 
 printf 'dns_client_benchmark_dir=%s\n' "$artifact_dir"
-printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
-    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"
+printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_batch_size=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
+    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_batch_size" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"

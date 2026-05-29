@@ -746,7 +746,10 @@ Exit:
 Tasks:
 
 - implement `PacketIo` and `StdUdpBatchIo`;
-- isolate syscall unsafe in one registered adapter;
+- keep the initial `StdUdpBatchIo` baseline in safe Rust using ordinary Tokio
+  socket readiness and `try_recv_from`; isolate syscall unsafe in one
+  registered adapter only if a later `recvmmsg`/`sendmmsg` experiment is
+  justified by evidence;
 - add batch parse/lookup/compose/send pipeline;
 - retain existing socket path as fallback.
 
@@ -756,6 +759,16 @@ Exit:
 - sampled response behavior is unchanged;
 - loss and error accounting is visible;
 - unsupported-platform fallback is tested.
+
+Initial safe-Rust loopback evidence from 2026-05-29 used
+`scripts/benchmark-dns-clients.sh` with 1,000 generated records, UDP, four
+server threads, four client threads, and client window 16. The retained
+`target/evidence/udp-batch-loopback-baseline-1` artifact recorded 303,943
+responses/s at `udp_batch_size=1`; `target/evidence/udp-batch-loopback-batch-32`
+recorded 350,738 responses/s at `udp_batch_size=32`, with zero drops/errors and
+receive/send batch counters showing 352,049 datagrams over 11,013 batches. This
+is local loopback evidence only; physical NIC evidence remains required before
+promotion.
 
 ### Phase 7: Optional Experiments
 

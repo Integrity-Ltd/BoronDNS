@@ -104,6 +104,10 @@ The metrics endpoint exposes these implemented metric families:
   counters, the `oxidedns_secondary_build_info` gauge, the
   `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and
   the `oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics;
+- standard UDP packet I/O counters:
+  `oxidedns_udp_receive_batches_total`,
+  `oxidedns_udp_received_datagrams_total`, `oxidedns_udp_send_batches_total`,
+  and `oxidedns_udp_sent_datagrams_total`;
 - `oxidedns_secondary_query_duration_seconds` query latency histogram, with
   buckets configured by `[metrics].latency_histogram_buckets`;
 - opt-in active-zone shape gauges under `oxidedns_zone_shape_*`;

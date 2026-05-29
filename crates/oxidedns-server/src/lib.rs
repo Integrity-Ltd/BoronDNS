@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     future::Future,
-    io::Write,
+    io::{ErrorKind, Write},
     net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
@@ -504,6 +504,7 @@ impl Runtime {
         for socket in bound_udp_sockets {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
+            let udp_batch_size = self.config.limits.udp_batch_size;
             let max_cname_chain = self.config.limits.max_cname_chain;
             let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
@@ -521,6 +522,7 @@ impl Runtime {
             let rrl = rrl.clone();
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
+                udp_batch_size,
                 max_cname_chain,
                 nsec3_max_iterations,
                 edns_padding_block_size,
@@ -2817,199 +2819,314 @@ async fn serve_udp(
     zones: ZoneStore,
     settings: UdpServerSettings,
 ) -> Result<(), RuntimeError> {
-    let local_addr = socket.local_addr().map_err(RuntimeError::Udp)?;
+    let mut packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
+    let local_addr = packet_io.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, "UDP listener bound");
 
-    let mut buffer = vec![0u8; 4096];
     loop {
-        let (len, peer) = socket
-            .recv_from(&mut buffer)
+        let outbound = {
+            let inbound = packet_io.recv_batch().await.map_err(RuntimeError::Udp)?;
+            settings.metrics.record_udp_receive_batch(inbound.len());
+
+            let mut outbound = Vec::with_capacity(inbound.len());
+            for packet in inbound {
+                if let Some(response) =
+                    handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
+                {
+                    outbound.push(response);
+                }
+            }
+            outbound
+        };
+        packet_io
+            .send_batch(&outbound, &settings.metrics)
             .await
             .map_err(RuntimeError::Udp)?;
-        let peer_ip = peer.ip();
-        let parse_started = settings.metrics.start_pipeline_timer();
-        let Some(prepared) = prepare_notify_packet_with_metrics(
-            &buffer[..len],
-            &settings.notify_authority,
-            peer_ip,
-            &settings.metrics,
-            &settings.notify_log_limiter,
-        ) else {
+    }
+}
+
+struct StdUdpBatchIo {
+    socket: UdpSocket,
+    batch_size: usize,
+    inbound: Vec<UdpInbound>,
+}
+
+struct UdpInbound {
+    buffer: Vec<u8>,
+    len: usize,
+    peer: SocketAddr,
+}
+
+struct UdpOutbound {
+    response: Vec<u8>,
+    peer: SocketAddr,
+    query_metrics: Option<QueryMetricObservation>,
+}
+
+impl StdUdpBatchIo {
+    fn new(socket: UdpSocket, batch_size: usize) -> Self {
+        let batch_size = batch_size.max(1);
+        let inbound = (0..batch_size).map(|_| UdpInbound::new()).collect();
+        Self {
+            socket,
+            batch_size,
+            inbound,
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    async fn recv_batch(&mut self) -> std::io::Result<&[UdpInbound]> {
+        let (len, peer) = self.socket.recv_from(&mut self.inbound[0].buffer).await?;
+        self.inbound[0].len = len;
+        self.inbound[0].peer = peer;
+        let mut active = 1;
+
+        while active < self.batch_size {
+            match self.socket.try_recv_from(&mut self.inbound[active].buffer) {
+                Ok((len, peer)) => {
+                    self.inbound[active].len = len;
+                    self.inbound[active].peer = peer;
+                    active += 1;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(&self.inbound[..active])
+    }
+
+    async fn send_batch(
+        &self,
+        outbound: &[UdpOutbound],
+        metrics: &RuntimeMetrics,
+    ) -> std::io::Result<()> {
+        if outbound.is_empty() {
+            return Ok(());
+        }
+
+        let mut sent = 0usize;
+        for packet in outbound {
+            let send_started = packet
+                .query_metrics
+                .as_ref()
+                .and_then(|_| metrics.start_pipeline_timer());
+            self.socket.send_to(&packet.response, packet.peer).await?;
+            sent += 1;
+            if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, send_started) {
+                record_query_send_metric(
+                    query_metrics,
+                    &packet.response,
+                    metrics,
+                    started.elapsed(),
+                );
+            }
+        }
+        metrics.record_udp_send_batch(sent);
+        Ok(())
+    }
+}
+
+impl UdpInbound {
+    fn new() -> Self {
+        Self {
+            buffer: vec![0; UDP_PACKET_BUFFER_LEN],
+            len: 0,
+            peer: SocketAddr::from(([0, 0, 0, 0], 0)),
+        }
+    }
+
+    fn payload(&self) -> &[u8] {
+        &self.buffer[..self.len]
+    }
+}
+
+const UDP_PACKET_BUFFER_LEN: usize = 4096;
+
+fn handle_udp_datagram(
+    packet: &[u8],
+    peer: SocketAddr,
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+) -> Option<UdpOutbound> {
+    let peer_ip = peer.ip();
+    let parse_started = settings.metrics.start_pipeline_timer();
+    let Some(prepared) = prepare_notify_packet_with_metrics(
+        packet,
+        &settings.notify_authority,
+        peer_ip,
+        &settings.metrics,
+        &settings.notify_log_limiter,
+    ) else {
+        debug!(
+            peer_ip = %peer.ip(),
+            peer_port = peer.port(),
+            transport = "udp",
+            bytes = packet.len(),
+            "discarded DNS datagram"
+        );
+        return None;
+    };
+    let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
+    let parse_duration = parse_started.map(|started| started.elapsed());
+    if let Some(response) = prepared.immediate_response {
+        return Some(UdpOutbound {
+            response,
+            peer,
+            query_metrics: None,
+        });
+    }
+    let dns_cookie_secret = settings.dns_cookie_secrets.current();
+    let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, settings.dns_cookie);
+    let cookie_validated = dns_cookie
+        .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
+    let query_metrics = observe_query_metrics(
+        &prepared.packet,
+        zones,
+        &settings.metrics,
+        QueryObservationOptions {
+            transport: Transport::Udp,
+            cookie_validated,
+            parse_duration,
+            max_cname_chain: settings.max_cname_chain,
+            any_response: settings.any_response,
+            zone_image_serve_enabled: settings.zone_image_serve_enabled,
+            zone_image_shadow: &settings.zone_image_shadow,
+        },
+    );
+    let query_tsig_authenticated = prepared.tsig_authenticated || prepared.response_tsig.is_some();
+    let query_cache_ineligible = response_cache_ineligible_reason(
+        query_tsig_authenticated,
+        dns_cookie.is_some(),
+        settings.rrl.enabled() && !query_tsig_authenticated && !cookie_validated,
+        settings.edns_padding_block_size,
+    );
+    let dns_cookie_metrics = observe_dns_cookie_metrics(
+        &prepared.packet,
+        dns_cookie,
+        peer_ip,
+        settings.cookie_prefix_metrics,
+        &settings.metrics,
+    );
+    let chaos = ChaosOptions {
+        version: &settings.chaos_version,
+        hostname: &settings.chaos_hostname,
+    };
+    let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
+    let compose_started = settings.metrics.start_pipeline_timer();
+    let zone_image_provider = |zone: &Arc<ZoneSnapshot>| {
+        settings
+            .zone_image_shadow
+            .image_for(zone, &settings.metrics)
+    };
+    let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+        &prepared.packet,
+        zones,
+        AnswerOptions {
+            transport: Transport::Udp,
+            max_udp_payload: settings.max_udp_payload,
+            max_cname_chain: settings.max_cname_chain,
+            nsec3_max_iterations: settings.nsec3_max_iterations,
+            tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+            edns_padding_block_size: settings.edns_padding_block_size,
+            extended_dns_errors: settings.extended_dns_errors,
+            any_response: settings.any_response,
+            nsid: &settings.nsid,
+            chaos,
+            dns_cookie,
+        },
+        |qname, qclass| {
+            let authorized = settings
+                .notify_authority
+                .is_authorized(qname, qclass, peer_ip);
+            if !authorized {
+                settings.metrics.record_notify_unauthorized();
+                settings.notify_log_limiter.log_unauthorized(peer_ip, qname);
+            }
+            authorized
+        },
+        |qname, _qclass, serial| {
+            signal_notify_refresh(
+                &settings.notify_refresh,
+                &settings.notify_refresh_tx,
+                &settings.metrics,
+                qname,
+                peer_ip,
+                serial,
+            )
+        },
+        |lookup_metrics| {
+            record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
+        },
+        settings
+            .zone_image_serve_enabled
+            .then_some(&zone_image_provider as ZoneImageProvider<'_>),
+    );
+    let mut query_metrics = query_metrics;
+    query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
+    match action {
+        DatagramAction::Discard => {
             debug!(
                 peer_ip = %peer.ip(),
                 peer_port = peer.port(),
                 transport = "udp",
-                bytes = len,
+                bytes = packet.len(),
                 "discarded DNS datagram"
             );
-            continue;
-        };
-        let prepared = prepare_query_tsig_packet(prepared, &settings.notify_authority);
-        let parse_duration = parse_started.map(|started| started.elapsed());
-        if let Some(response) = prepared.immediate_response {
-            socket
-                .send_to(&response, peer)
-                .await
-                .map_err(RuntimeError::Udp)?;
-            continue;
+            None
         }
-        let dns_cookie_secret = settings.dns_cookie_secrets.current();
-        let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, settings.dns_cookie);
-        let cookie_validated = dns_cookie
-            .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
-        let query_metrics = observe_query_metrics(
-            &prepared.packet,
-            &zones,
-            &settings.metrics,
-            QueryObservationOptions {
-                transport: Transport::Udp,
-                cookie_validated,
-                parse_duration,
-                max_cname_chain: settings.max_cname_chain,
-                any_response: settings.any_response,
-                zone_image_serve_enabled: settings.zone_image_serve_enabled,
-                zone_image_shadow: &settings.zone_image_shadow,
-            },
-        );
-        let query_tsig_authenticated =
-            prepared.tsig_authenticated || prepared.response_tsig.is_some();
-        let query_cache_ineligible = response_cache_ineligible_reason(
-            query_tsig_authenticated,
-            dns_cookie.is_some(),
-            settings.rrl.enabled() && !query_tsig_authenticated && !cookie_validated,
-            settings.edns_padding_block_size,
-        );
-        let dns_cookie_metrics = observe_dns_cookie_metrics(
-            &prepared.packet,
-            dns_cookie,
-            peer_ip,
-            settings.cookie_prefix_metrics,
-            &settings.metrics,
-        );
-        let chaos = ChaosOptions {
-            version: &settings.chaos_version,
-            hostname: &settings.chaos_hostname,
-        };
-        let chaos_observation = chaos_query_observation(&prepared.packet, &settings.nsid, chaos);
-        let compose_started = settings.metrics.start_pipeline_timer();
-        let zone_image_provider = |zone: &Arc<ZoneSnapshot>| {
-            settings
-                .zone_image_shadow
-                .image_for(zone, &settings.metrics)
-        };
-        let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
-            &prepared.packet,
-            &zones,
-            AnswerOptions {
-                transport: Transport::Udp,
-                max_udp_payload: settings.max_udp_payload,
-                max_cname_chain: settings.max_cname_chain,
-                nsec3_max_iterations: settings.nsec3_max_iterations,
-                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
-                edns_padding_block_size: settings.edns_padding_block_size,
-                extended_dns_errors: settings.extended_dns_errors,
-                any_response: settings.any_response,
-                nsid: &settings.nsid,
-                chaos,
-                dns_cookie,
-            },
-            |qname, qclass| {
-                let authorized = settings
-                    .notify_authority
-                    .is_authorized(qname, qclass, peer_ip);
-                if !authorized {
-                    settings.metrics.record_notify_unauthorized();
-                    settings.notify_log_limiter.log_unauthorized(peer_ip, qname);
+        DatagramAction::Respond(response) => {
+            record_chaos_query_if_observed(
+                chaos_observation.as_ref(),
+                &response,
+                &settings.metrics,
+                peer_ip,
+                "udp",
+            );
+            let response = match sign_tsig_response(response, prepared.response_tsig) {
+                Ok(response) => response,
+                Err(error) => {
+                    warn!(
+                        peer_ip = %peer.ip(),
+                        peer_port = peer.port(),
+                        transport = "udp",
+                        %error,
+                        "failed to sign TSIG response"
+                    );
+                    return None;
                 }
-                authorized
-            },
-            |qname, _qclass, serial| {
-                signal_notify_refresh(
-                    &settings.notify_refresh,
-                    &settings.notify_refresh_tx,
-                    &settings.metrics,
-                    qname,
-                    peer_ip,
-                    serial,
-                )
-            },
-            |lookup_metrics| {
-                record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
-            },
-            settings
-                .zone_image_serve_enabled
-                .then_some(&zone_image_provider as ZoneImageProvider<'_>),
-        );
-        let mut query_metrics = query_metrics;
-        query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
-        match action {
-            DatagramAction::Discard => {
-                debug!(
-                    peer_ip = %peer.ip(),
-                    peer_port = peer.port(),
-                    transport = "udp",
-                    bytes = len,
-                    "discarded DNS datagram"
-                );
-            }
-            DatagramAction::Respond(response) => {
-                record_chaos_query_if_observed(
-                    chaos_observation.as_ref(),
-                    &response,
-                    &settings.metrics,
-                    peer_ip,
-                    "udp",
-                );
-                let response = match sign_tsig_response(response, prepared.response_tsig) {
-                    Ok(response) => response,
-                    Err(error) => {
-                        warn!(
-                            peer_ip = %peer.ip(),
-                            peer_port = peer.port(),
-                            transport = "udp",
-                            %error,
-                            "failed to sign TSIG response"
-                        );
-                        continue;
-                    }
-                };
-                let rrl_decision = if prepared.tsig_authenticated || cookie_validated {
-                    RrlDecision::Send(response)
-                } else {
-                    settings.rrl.apply(peer_ip, response)
-                };
-                match rrl_decision {
-                    RrlDecision::Send(response) => {
-                        record_dns_cookie_badcookie_if_emitted(
-                            dns_cookie_metrics,
-                            &response,
-                            &settings.metrics,
-                            peer_ip,
-                            settings.cookie_prefix_metrics,
-                        );
-                        record_query_response_metric(&query_metrics, &response, &settings.metrics);
-                        record_response_cache_metric(
-                            &query_metrics,
-                            &response,
-                            &settings.metrics,
-                            query_cache_ineligible,
-                        );
-                        let send_started = settings.metrics.start_pipeline_timer();
-                        socket
-                            .send_to(&response, peer)
-                            .await
-                            .map_err(RuntimeError::Udp)?;
-                        if let Some(started) = send_started {
-                            record_query_send_metric(
-                                &query_metrics,
-                                &response,
-                                &settings.metrics,
-                                started.elapsed(),
-                            );
-                        }
-                    }
-                    RrlDecision::Drop => {}
+            };
+            let rrl_decision = if prepared.tsig_authenticated || cookie_validated {
+                RrlDecision::Send(response)
+            } else {
+                settings.rrl.apply(peer_ip, response)
+            };
+            match rrl_decision {
+                RrlDecision::Send(response) => {
+                    record_dns_cookie_badcookie_if_emitted(
+                        dns_cookie_metrics,
+                        &response,
+                        &settings.metrics,
+                        peer_ip,
+                        settings.cookie_prefix_metrics,
+                    );
+                    record_query_response_metric(&query_metrics, &response, &settings.metrics);
+                    record_response_cache_metric(
+                        &query_metrics,
+                        &response,
+                        &settings.metrics,
+                        query_cache_ineligible,
+                    );
+                    Some(UdpOutbound {
+                        response,
+                        peer,
+                        query_metrics: Some(query_metrics),
+                    })
                 }
+                RrlDecision::Drop => None,
             }
         }
     }
@@ -3466,6 +3583,7 @@ fn skip_response_record(response: &[u8], offset: usize) -> Option<usize> {
 #[derive(Clone)]
 struct UdpServerSettings {
     max_udp_payload: u16,
+    udp_batch_size: usize,
     max_cname_chain: usize,
     nsec3_max_iterations: u16,
     edns_padding_block_size: u16,
@@ -4023,6 +4141,7 @@ fn metrics_body(
         snapshot.ixfr_failed,
     );
     append_build_info_metric(&mut body);
+    append_udp_packet_io_metrics(&mut body, snapshot);
     append_query_rcode_metrics(&mut body, metrics);
     append_query_latency_metrics(&mut body, metrics);
     append_query_pipeline_latency_metrics(&mut body, metrics);
@@ -4057,6 +4176,29 @@ fn append_build_info_metric(body: &mut String) {
     );
     body.push_str(&format!(
         "oxidedns_secondary_build_info{{version=\"{version}\",commit=\"{commit}\",rust_version=\"{rust_version}\",build_timestamp=\"{build_timestamp}\"}} 1\n"
+    ));
+}
+
+fn append_udp_packet_io_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
+    body.push_str(
+        "# HELP oxidedns_udp_receive_batches_total UDP receive batches processed by the standard socket listener.\n\
+         # TYPE oxidedns_udp_receive_batches_total counter\n\
+         # HELP oxidedns_udp_received_datagrams_total UDP datagrams received by the standard socket listener.\n\
+         # TYPE oxidedns_udp_received_datagrams_total counter\n\
+         # HELP oxidedns_udp_send_batches_total UDP send batches emitted by the standard socket listener.\n\
+         # TYPE oxidedns_udp_send_batches_total counter\n\
+         # HELP oxidedns_udp_sent_datagrams_total UDP datagrams sent by the standard socket listener.\n\
+         # TYPE oxidedns_udp_sent_datagrams_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_udp_receive_batches_total {}\n\
+         oxidedns_udp_received_datagrams_total {}\n\
+         oxidedns_udp_send_batches_total {}\n\
+         oxidedns_udp_sent_datagrams_total {}\n",
+        snapshot.udp_receive_batches,
+        snapshot.udp_received_datagrams,
+        snapshot.udp_send_batches,
+        snapshot.udp_sent_datagrams,
     ));
 }
 
@@ -5156,6 +5298,10 @@ struct RuntimeMetricsInner {
     queries_truncated: AtomicU64,
     queries_cname_chain_limit: AtomicU64,
     queries_cname_loop: AtomicU64,
+    udp_receive_batches: AtomicU64,
+    udp_received_datagrams: AtomicU64,
+    udp_send_batches: AtomicU64,
+    udp_sent_datagrams: AtomicU64,
     axfr_started: AtomicU64,
     axfr_succeeded: AtomicU64,
     axfr_failed: AtomicU64,
@@ -5215,6 +5361,10 @@ struct RuntimeMetricsSnapshot {
     queries_truncated: u64,
     queries_cname_chain_limit: u64,
     queries_cname_loop: u64,
+    udp_receive_batches: u64,
+    udp_received_datagrams: u64,
+    udp_send_batches: u64,
+    udp_sent_datagrams: u64,
     axfr_started: u64,
     axfr_succeeded: u64,
     axfr_failed: u64,
@@ -5562,6 +5712,22 @@ impl RuntimeMetrics {
         self.inner
             .queries_cname_loop
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_udp_receive_batch(&self, datagrams: usize) {
+        self.inner
+            .udp_receive_batches
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .udp_received_datagrams
+            .fetch_add(datagrams as u64, Ordering::Relaxed);
+    }
+
+    fn record_udp_send_batch(&self, datagrams: usize) {
+        self.inner.udp_send_batches.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .udp_sent_datagrams
+            .fetch_add(datagrams as u64, Ordering::Relaxed);
     }
 
     fn record_notify_received(&self) {
@@ -5921,6 +6087,10 @@ impl RuntimeMetrics {
             queries_truncated: self.inner.queries_truncated.load(Ordering::Relaxed),
             queries_cname_chain_limit: self.inner.queries_cname_chain_limit.load(Ordering::Relaxed),
             queries_cname_loop: self.inner.queries_cname_loop.load(Ordering::Relaxed),
+            udp_receive_batches: self.inner.udp_receive_batches.load(Ordering::Relaxed),
+            udp_received_datagrams: self.inner.udp_received_datagrams.load(Ordering::Relaxed),
+            udp_send_batches: self.inner.udp_send_batches.load(Ordering::Relaxed),
+            udp_sent_datagrams: self.inner.udp_sent_datagrams.load(Ordering::Relaxed),
             axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
             axfr_succeeded: self.inner.axfr_succeeded.load(Ordering::Relaxed),
             axfr_failed: self.inner.axfr_failed.load(Ordering::Relaxed),
@@ -8952,9 +9122,9 @@ mod tests {
         QueryObservationOptions, QueryPipelineStage, RefreshAttemptContext, RefreshRequest,
         RefreshWorkerSettings, ResponseCacheCandidateCategory, ResponseCacheIneligibleReason,
         RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
-        RuntimeStatus, TcpServerSettings, TransferError, TransferPlan, TransferSession,
-        TransferTsig, UdpServerSettings, ZoneImageShadowValidator, ZoneRefreshRegistry,
-        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError, TransferPlan,
+        TransferSession, TransferTsig, UdpServerSettings, ZoneImageShadowValidator,
+        ZoneRefreshRegistry, dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
         load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
         log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
@@ -12264,6 +12434,7 @@ mod tests {
             zones,
             UdpServerSettings {
                 max_udp_payload: 1232,
+                udp_batch_size: 1,
                 max_cname_chain: 1,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -12323,6 +12494,73 @@ mod tests {
         assert_eq!(snapshot.queries_received, 1);
         assert_eq!(snapshot.queries_cname_chain_limit, 1);
         assert_eq!(snapshot.queries_cname_loop, 0);
+    }
+
+    #[tokio::test]
+    async fn std_udp_batch_io_drains_ready_datagrams_up_to_batch_size() {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        for byte in [1_u8, 2, 3, 4] {
+            client.send_to(&[byte], server_addr).await.unwrap();
+        }
+
+        let mut packet_io = StdUdpBatchIo::new(socket, 3);
+        let first_payloads = {
+            let batch =
+                tokio::time::timeout(std::time::Duration::from_secs(1), packet_io.recv_batch())
+                    .await
+                    .expect("first UDP batch")
+                    .unwrap();
+            batch
+                .iter()
+                .map(|packet| packet.payload().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(first_payloads, vec![vec![1], vec![2], vec![3]]);
+
+        let second_payloads = {
+            let batch =
+                tokio::time::timeout(std::time::Duration::from_secs(1), packet_io.recv_batch())
+                    .await
+                    .expect("second UDP batch")
+                    .unwrap();
+            batch
+                .iter()
+                .map(|packet| packet.payload().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(second_payloads, vec![vec![4]]);
+    }
+
+    #[tokio::test]
+    async fn udp_batch_listener_records_packet_io_metrics() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = socket.local_addr().unwrap();
+        let mut settings = udp_settings_for_test(metrics.clone(), RrlConfig::default());
+        settings.udp_batch_size = 4;
+        let server = tokio::spawn(serve_udp(socket, zones, settings));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let request = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+
+        for _ in 0..3 {
+            client.send_to(&request, server_addr).await.unwrap();
+        }
+        for _ in 0..3 {
+            let response = recv_udp_with_timeout(&client, std::time::Duration::from_secs(1))
+                .await
+                .expect("UDP response");
+            assert_eq!(Header::parse(&response).unwrap().ancount, 1);
+        }
+        server.abort();
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.udp_received_datagrams, 3);
+        assert_eq!(snapshot.udp_sent_datagrams, 3);
+        assert!((1..=3).contains(&snapshot.udp_receive_batches));
+        assert!((1..=3).contains(&snapshot.udp_send_batches));
     }
 
     #[test]
@@ -12404,6 +12642,7 @@ mod tests {
             zones,
             UdpServerSettings {
                 max_udp_payload: 1232,
+                udp_batch_size: 1,
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -12495,6 +12734,7 @@ mod tests {
             zones,
             UdpServerSettings {
                 max_udp_payload: 1232,
+                udp_batch_size: 1,
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -16489,6 +16729,7 @@ mod tests {
     fn udp_settings_for_test(metrics: RuntimeMetrics, rrl_config: RrlConfig) -> UdpServerSettings {
         UdpServerSettings {
             max_udp_payload: 1232,
+            udp_batch_size: 1,
             max_cname_chain: 8,
             nsec3_max_iterations: 100,
             edns_padding_block_size: 0,

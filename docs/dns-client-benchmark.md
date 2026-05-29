@@ -19,6 +19,7 @@ OXIDEDNS_BENCH_SERVER_THREADS=4 \
 OXIDEDNS_BENCH_TRANSPORT=udp \
 OXIDEDNS_BENCH_CLIENT_THREADS=8 \
 OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
+OXIDEDNS_BENCH_UDP_BATCH_SIZE=1 \
 OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_DURATION_SECONDS=10 \
 OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false \
@@ -51,6 +52,21 @@ current snapshot path, run the same profile once with
 `OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=true`. The generated configuration,
 `run.env`, `benchmark-results.tsv`, and capability summary record the selected
 value.
+
+To compare the standard UDP batch adapter against the original one-datagram
+socket path, run the same UDP profile once with
+`OXIDEDNS_BENCH_UDP_BATCH_SIZE=1` and once with a larger value such as `32` or
+`64`. Retained artifacts record `udp_batch_size`,
+`udp_receive_batches`, `udp_received_datagrams`, `udp_send_batches`, and
+`udp_sent_datagrams` so the result can be checked against actual listener
+batching rather than only client-side throughput.
+
+Retained loopback UDP batch smoke from 2026-05-29:
+
+| Profile | UDP batch size | Responses/s | p50 us | p99 us | Dropped | Errors | Receive batches | Send batches | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 4 clients x window 16 | 1 | 303,943 | 190.8 | 252.3 | 0 | 0 | 304,985 | 304,985 | `target/evidence/udp-batch-loopback-baseline-1` |
+| 4 clients x window 16 | 32 | 350,738 | 157.3 | 242.7 | 0 | 0 | 11,013 | 11,013 | `target/evidence/udp-batch-loopback-batch-32` |
 
 To replay an explicit query trace through the live runtime path, set
 `OXIDEDNS_BENCH_TRACE_ENABLED=true`. The script generates and retains

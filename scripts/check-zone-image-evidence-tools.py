@@ -30,6 +30,7 @@ BASE_RESULTS = {
     "server_threads": "4",
     "client_threads": "4",
     "client_window": "16",
+    "udp_batch_size": "1",
     "listen_address": "127.0.0.1",
     "client_server": "127.0.0.1",
     "client_bind": "127.0.0.1:0",
