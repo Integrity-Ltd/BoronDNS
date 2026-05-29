@@ -6,8 +6,7 @@ use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
         answer_message_with_notify_hooks, AnswerOptions, DatagramAction, DomainName, Header,
-        Opcode, RecordType, Transport, DEFAULT_MAX_CNAME_CHAIN, DEFAULT_MAX_UDP_PAYLOAD,
-        DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+        Opcode, RecordType, Transport, DEFAULT_MAX_UDP_PAYLOAD,
     },
     zone::{Rrset, ZoneSnapshot, ZoneStore},
 };
@@ -87,7 +86,7 @@ fn zones() -> &'static ZoneStore {
     })
 }
 
-fn answer_options(data: &[u8]) -> AnswerOptions {
+fn answer_options(data: &[u8]) -> AnswerOptions<'_> {
     let transport = if byte(data, 2) & 1 == 0 {
         Transport::Udp
     } else {
@@ -100,14 +99,10 @@ fn answer_options(data: &[u8]) -> AnswerOptions {
         _ => 128,
     };
 
-    AnswerOptions {
-        transport,
-        max_udp_payload: 512 + (get_u16(data, 4) % (DEFAULT_MAX_UDP_PAYLOAD - 511)),
-        max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
-        tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
-        edns_padding_block_size: padding_block,
-        any_response: Default::default(),
-    }
+    let mut options = AnswerOptions::udp(512 + (get_u16(data, 4) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
+    options.transport = transport;
+    options.edns_padding_block_size = padding_block;
+    options
 }
 
 fn shaped_notify_packet(data: &[u8]) -> Vec<u8> {

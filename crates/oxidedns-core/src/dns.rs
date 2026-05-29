@@ -4336,6 +4336,62 @@ mod tests {
     }
 
     #[test]
+    fn zone_image_serving_matches_snapshot_for_malformed_known_name_rdata() {
+        let cases = [
+            (
+                "bad_ns_target",
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                RecordType::Ns as u16,
+                vec![0xc0, 0x0c],
+                query(b"\x07example\x04test\x00", RecordType::Ns as u16, 1),
+            ),
+            (
+                "bad_cname_target",
+                DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                RecordType::Cname as u16,
+                vec![0xc0, 0x0c],
+                query(
+                    b"\x05alias\x07example\x04test\x00",
+                    RecordType::Cname as u16,
+                    1,
+                ),
+            ),
+            (
+                "bad_mx_exchange",
+                DomainName::from_absolute_str("mx.example.test.").unwrap(),
+                RecordType::Mx as u16,
+                vec![0, 10, 0xc0, 0x0c],
+                query(b"\x02mx\x07example\x04test\x00", RecordType::Mx as u16, 1),
+            ),
+        ];
+
+        for (case, owner, rr_type, rdata, packet) in cases {
+            let store = ZoneStore::new();
+            store.insert_snapshot(ZoneSnapshot::active(
+                DomainName::from_absolute_str("example.test.").unwrap(),
+                Some(1),
+                vec![
+                    Rrset::new(
+                        DomainName::from_absolute_str("example.test.").unwrap(),
+                        RecordType::Soa as u16,
+                        1,
+                        3600,
+                        vec![soa_rdata()],
+                    ),
+                    Rrset::new(owner, rr_type, 1, 300, vec![rdata]),
+                ],
+            ));
+
+            let snapshot_response = store_response(&packet, &store);
+            let zone_image_response = store_response_with_zone_image(&packet, &store);
+            assert_eq!(
+                zone_image_response, snapshot_response,
+                "packet mismatch for {case}"
+            );
+        }
+    }
+
+    #[test]
     fn zone_image_serving_matches_snapshot_mixed_packet_corpus() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -5335,6 +5391,99 @@ mod tests {
             response_answer_rdatas(&response, UNKNOWN_TYPE),
             vec![pointer_like_rdata]
         );
+    }
+
+    #[test]
+    fn wire_name_helpers_reject_malformed_names_without_panicking() {
+        let invalid_standalone_names: &[&[u8]] = &[
+            b"",
+            b"\xc0\x0c",
+            b"\x40aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x00",
+            b"\x03ww",
+        ];
+
+        for wire_name in invalid_standalone_names {
+            assert_eq!(wire_label_offsets(wire_name), None, "{wire_name:02x?}");
+            assert_eq!(wire_name_len_at(wire_name, 0), None, "{wire_name:02x?}");
+        }
+
+        assert_eq!(
+            wire_label_offsets(b"\x03www\x07example\x04test\x00")
+                .unwrap()
+                .as_slice(),
+            &[0, 4, 12]
+        );
+        assert_eq!(wire_label_offsets(b"\x03www\x00extra"), None);
+        assert_eq!(wire_name_len_at(b"\x03www\x00extra", 0), Some(5));
+        assert_eq!(wire_name_len_at(b"\x00\x03www\x00", 1), Some(5));
+    }
+
+    #[test]
+    fn wire_name_compressor_copies_malformed_names_opaquely() {
+        let mut compressor = WireNameCompressor::default();
+        compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+
+        for wire_name in [
+            b"\xc0\x0c".as_slice(),
+            b"\x03ww".as_slice(),
+            b"\x03www\x00extra".as_slice(),
+        ] {
+            let mut out = Vec::new();
+            compressor.write_wire_name(wire_name, &mut out);
+            assert_eq!(out, wire_name);
+        }
+    }
+
+    #[test]
+    fn zone_image_known_name_rdata_encoder_compresses_or_copies_safely() {
+        let mut compressor = WireNameCompressor::default();
+        compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+
+        let mut single_name = Vec::new();
+        encode_zone_image_wire_record_rdata(
+            RecordType::Cname as u16,
+            b"\x06target\x07example\x04test\x00",
+            &mut single_name,
+            &mut compressor,
+        );
+        assert_eq!(single_name, b"\x06target\xc0\x0c");
+
+        let mut mx = Vec::new();
+        encode_zone_image_wire_record_rdata(
+            RecordType::Mx as u16,
+            b"\x00\x0a\x04mail\x07example\x04test\x00",
+            &mut mx,
+            &mut compressor,
+        );
+        assert_eq!(mx, b"\x00\x0a\x04mail\xc0\x0c");
+
+        let mut soa = Vec::new();
+        let mut soa_rdata =
+            b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00".to_vec();
+        soa_rdata.extend_from_slice(&[0; 20]);
+        encode_zone_image_wire_record_rdata(
+            RecordType::Soa as u16,
+            &soa_rdata,
+            &mut soa,
+            &mut compressor,
+        );
+        let mut expected_soa = b"\x02ns\xc0\x0c\x0ahostmaster\xc0\x0c".to_vec();
+        expected_soa.extend_from_slice(&[0; 20]);
+        assert_eq!(soa, expected_soa);
+
+        for (rr_type, malformed) in [
+            (RecordType::Ns as u16, b"\xc0\x0c".as_slice()),
+            (RecordType::Ptr as u16, b"\x03ww".as_slice()),
+            (RecordType::Mx as u16, b"\x00\x0a\x03ww".as_slice()),
+            (
+                RecordType::Soa as u16,
+                b"\x02ns\x00\x04host\x00short".as_slice(),
+            ),
+        ] {
+            let mut out = Vec::new();
+            encode_zone_image_wire_record_rdata(rr_type, malformed, &mut out, &mut compressor);
+            assert_eq!(out, malformed, "malformed RDATA changed for type {rr_type}");
+        }
     }
 
     #[test]

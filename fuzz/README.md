@@ -12,6 +12,10 @@ these targets:
 - `notify_edns_datagram`: NOTIFY request handling and EDNS OPT parsing against
   a populated `alpha.test.` zone, including shaped packets with fuzzed SOA and
   EDNS option payloads.
+- `zone_image_datagram`: raw and shaped query packets through the `ZoneImage`
+  response path against a populated `zoneimage.test.` zone, including
+  malformed known-name RDATA records that must be copied opaquely without
+  panicking.
 
 Run a compile check with a nightly cargo on `PATH`, without executing a long
 fuzzing campaign:
@@ -21,6 +25,7 @@ cargo fuzz check dns_datagram
 cargo fuzz check transfer_stream
 cargo fuzz check tsig_message
 cargo fuzz check notify_edns_datagram
+cargo fuzz check zone_image_datagram
 ```
 
 Or, without a nightly toolchain or `cargo-fuzz` installed:
@@ -43,6 +48,7 @@ Select targets and duration explicitly when needed:
 ```sh
 scripts/fuzz-campaign.sh --duration 60 dns_datagram tsig_message
 scripts/fuzz-campaign.sh --target transfer_stream --target notify_edns_datagram
+scripts/fuzz-campaign.sh --target zone_image_datagram
 ```
 
 Check the planned commands without starting a fuzzing run:
@@ -65,4 +71,7 @@ against a fixed current `alpha.test.` zone snapshot.
 
 The TSIG target exercises public `oxidedns-core::tsig` APIs for raw and shaped DNS
 messages. The NOTIFY/EDNS target exercises public datagram answering APIs with
-authorization and acceptance hooks while varying UDP/TCP answer options.
+authorization and acceptance hooks while varying UDP/TCP answer options. The
+ZoneImage target exercises the same datagram API with a static compiled image,
+raw fuzz input, shaped qname/qtype/EDNS queries, compression-eligible records,
+and malformed known-name RDATA that should safely fall back to opaque copying.

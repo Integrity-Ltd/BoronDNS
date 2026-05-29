@@ -38,3 +38,10 @@ path = "fuzz_targets/notify_edns_datagram.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "zone_image_datagram"
+path = "fuzz_targets/zone_image_datagram.rs"
+test = false
+doc = false
+bench = false

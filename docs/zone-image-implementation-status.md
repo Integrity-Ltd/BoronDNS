@@ -137,8 +137,10 @@ that should the old query-time layout be phased out.
   because local Vec/socket-path evidence showed more memory and no packet-path
   win. Revisit when io_uring fixed buffers or AF_XDP UMEM can transmit from
   reusable templates without copying.
-- [ ] Add composer fuzz and bounds tests targeted specifically at the final
-  WireArena writer.
+- [x] Add composer fuzz and bounds tests targeted at the current WireArena
+  writer surface: malformed wire-name helper bounds, malformed known-name RDATA
+  opaque fallback, packet differential coverage, and the `zone_image_datagram`
+  fuzz target.
 
 ## Phase 5: DNSSEC Denial And Signed Zones
 

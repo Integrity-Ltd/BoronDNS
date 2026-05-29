@@ -7,10 +7,10 @@ use oxidedns_core::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(header) = Header::parse(data) {
-        if header.qdcount > 0 {
-            let _ = Question::parse(data);
-        }
+    if let Ok(header) = Header::parse(data)
+        && header.qdcount > 0
+    {
+        let _ = Question::parse(data);
     }
 
     let zones = ZoneStore::new();

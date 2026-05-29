@@ -446,6 +446,13 @@ Add fuzz targets when each implementation surface exists:
 - packet I/O adapters with short packets, oversized packets, partial batches,
   send errors, and cancellation.
 
+The first ZoneImage composer fuzz surface is `zone_image_datagram`. It feeds raw
+and shaped query packets through the public datagram API with a static
+`ZoneImage` provider. The static zone includes compression-eligible owner/RDATA
+records plus malformed known-name RDATA for NS, CNAME, and MX, so the composer
+is continuously checked for safe opaque fallback and no panics before transport
+work starts.
+
 ## Metrics
 
 Every benchmark report for this track must include:
