@@ -16,6 +16,7 @@ client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
 udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
 response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
+zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
 zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-false}"
 preflight_only="${OXIDEDNS_BENCH_PREFLIGHT_ONLY:-false}"
 trace_enabled="${OXIDEDNS_BENCH_TRACE_ENABLED:-false}"
@@ -127,6 +128,13 @@ case "$pipeline_timing_enabled" in
 true | false) ;;
 *)
     printf 'OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED must be true or false, got %q\n' "$pipeline_timing_enabled" >&2
+    exit 64
+    ;;
+esac
+case "$zone_shape_metrics_enabled" in
+true | false) ;;
+*)
+    printf 'OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED must be true or false, got %q\n' "$zone_shape_metrics_enabled" >&2
     exit 64
     ;;
 esac
@@ -294,6 +302,7 @@ if [[ "$preflight_only" == true ]]; then
     printf 'remote_client_allow_arch_mismatch=%s\n' "$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)"
     printf 'git_revision=%s\n' "$git_revision"
     printf 'git_dirty=%s\n' "$git_dirty"
+    printf 'zone_shape_metrics_enabled=%s\n' "$zone_shape_metrics_enabled"
     printf 'kernel_version=%s\n' "$kernel_version"
     printf 'rustc_version=%s\n' "$rustc_version"
     printf 'cargo_version=%s\n' "$cargo_version"
@@ -740,6 +749,7 @@ enabled = false
 
 [metrics]
 pipeline_timing_enabled = $pipeline_timing_enabled
+zone_shape_enabled = $zone_shape_metrics_enabled
 
 [limits]
 max_udp_payload = 1232
@@ -766,6 +776,7 @@ udp_batch_size=$udp_batch_size
 duration_seconds=$duration
 response_timeout_ms=$response_timeout_ms
 pipeline_timing_enabled=$pipeline_timing_enabled
+zone_shape_metrics_enabled=$zone_shape_metrics_enabled
 zone_image_serve_enabled=$zone_image_serve_enabled
 listen_address=$listen_address
 client_server=$client_server
@@ -1019,6 +1030,7 @@ errors	$errors	responses
 query_mode	$query_mode	mode
 trace_queries	$trace_queries	queries
 pipeline_timing_enabled	$pipeline_timing_enabled	boolean
+zone_shape_metrics_enabled	$zone_shape_metrics_enabled	boolean
 zone_image_serve_enabled	$zone_image_serve_enabled	boolean
 zone_image_serve_hits	$zone_image_serve_hits	queries
 zone_image_serve_direct_hits	$zone_image_serve_direct_hits	queries
@@ -1041,6 +1053,8 @@ TCP source address selection is left to the OS. Network device was recorded as
 \`$network_device\`; route, link, /proc, optional ethtool snapshots, and quick
 counter deltas are retained under \`network/\`. Query pipeline timing metrics
 were configured as \`pipeline_timing_enabled=$pipeline_timing_enabled\`.
+\`zone_shape_metrics_enabled=$zone_shape_metrics_enabled\` controls whether
+scrape-time zone-shape gauges and histograms were collected.
 \`zone_image_serve_enabled=$zone_image_serve_enabled\`.
 Query mode was \`$query_mode\`; when this is \`trace\`, the retained
 \`query-trace.tsv\` file is the exact replay input.

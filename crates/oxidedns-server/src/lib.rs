@@ -49,7 +49,7 @@ use oxidedns_core::{
         append_unsigned_tsig_error, extract_tsig_mac, message_tsig_key, message_tsig_owner_name,
         sign_tsig_error_response,
     },
-    zone::{SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
+    zone::{SoaTimers, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneState, ZoneStore},
     zone_image::ZoneImage,
 };
 use sha2::{Digest, Sha256};
@@ -4729,7 +4729,15 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
          # HELP oxidedns_zone_shape_name_key_unique_bytes Unique canonical-name key bytes retained by zone indexes after interning.\n\
          # TYPE oxidedns_zone_shape_name_key_unique_bytes gauge\n\
          # HELP oxidedns_zone_shape_name_key_deduplicated_bytes Logical canonical-name key bytes avoided by zone index interning.\n\
-         # TYPE oxidedns_zone_shape_name_key_deduplicated_bytes gauge\n",
+         # TYPE oxidedns_zone_shape_name_key_deduplicated_bytes gauge\n\
+         # HELP oxidedns_zone_shape_child_name_fanout_names Owner or empty non-terminal names grouped by immediate child-name fan-out.\n\
+         # TYPE oxidedns_zone_shape_child_name_fanout_names gauge\n\
+         # HELP oxidedns_zone_shape_rrsets_per_owner_names Owner names grouped by RRset count.\n\
+         # TYPE oxidedns_zone_shape_rrsets_per_owner_names gauge\n\
+         # HELP oxidedns_zone_shape_rdata_records_per_rrset RRsets grouped by RDATA record count.\n\
+         # TYPE oxidedns_zone_shape_rdata_records_per_rrset gauge\n\
+         # HELP oxidedns_zone_shape_rdata_payload_bytes_per_rrset RRsets grouped by total RDATA payload bytes.\n\
+         # TYPE oxidedns_zone_shape_rdata_payload_bytes_per_rrset gauge\n",
     );
 
     for snapshot in zones.snapshots() {
@@ -4781,6 +4789,46 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
         ] {
             body.push_str(&format!("{metric}{{zone=\"{zone}\"}} {value}\n"));
         }
+
+        let histograms = snapshot.shape_histogram_summary();
+        append_zone_shape_histogram_metrics(
+            body,
+            "oxidedns_zone_shape_child_name_fanout_names",
+            &zone,
+            &histograms.child_name_fanout_names,
+        );
+        append_zone_shape_histogram_metrics(
+            body,
+            "oxidedns_zone_shape_rrsets_per_owner_names",
+            &zone,
+            &histograms.rrsets_per_owner_name,
+        );
+        append_zone_shape_histogram_metrics(
+            body,
+            "oxidedns_zone_shape_rdata_records_per_rrset",
+            &zone,
+            &histograms.rdata_records_per_rrset,
+        );
+        append_zone_shape_histogram_metrics(
+            body,
+            "oxidedns_zone_shape_rdata_payload_bytes_per_rrset",
+            &zone,
+            &histograms.rdata_payload_bytes_per_rrset,
+        );
+    }
+}
+
+fn append_zone_shape_histogram_metrics(
+    body: &mut String,
+    metric: &str,
+    zone: &str,
+    buckets: &[ZoneShapeHistogramBucket],
+) {
+    for bucket in buckets {
+        body.push_str(&format!(
+            "{metric}{{zone=\"{zone}\",bucket=\"{}\"}} {}\n",
+            bucket.bucket, bucket.count
+        ));
     }
 }
 
@@ -10261,6 +10309,18 @@ mod tests {
         );
         assert!(metrics.contains(
             "oxidedns_zone_shape_name_key_deduplicated_bytes{zone=\"example.test.\"} 13"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_shape_child_name_fanout_names{zone=\"example.test.\",bucket=\"0\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_shape_rrsets_per_owner_names{zone=\"example.test.\",bucket=\"1\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_shape_rdata_records_per_rrset{zone=\"example.test.\",bucket=\"1\"} 1"
+        ));
+        assert!(metrics.contains(
+            "oxidedns_zone_shape_rdata_payload_bytes_per_rrset{zone=\"example.test.\",bucket=\"33_64\"} 1"
         ));
         assert!(!metrics.contains("oxidedns_zone_shape_rrsets{zone=\"loading.test.\"}"));
         assert!(metrics.contains(

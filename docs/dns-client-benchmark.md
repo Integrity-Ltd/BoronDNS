@@ -23,6 +23,7 @@ OXIDEDNS_BENCH_UDP_BATCH_SIZE=1 \
 OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_DURATION_SECONDS=10 \
 OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false \
+OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED=false \
 OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false \
 OXIDEDNS_BENCH_TRACE_ENABLED=false \
 OXIDEDNS_BENCH_LISTEN_ADDRESS=127.0.0.1 \
@@ -45,6 +46,11 @@ profile once with `OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false` and once with
 `OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=true`. The enabled run exports query
 pipeline stage histograms and response-cache candidate counters in
 `metrics-after.prom`.
+
+To capture scrape-time zone-shape gauges and histograms for layout tuning, set
+`OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED=true`. Keep it disabled for
+throughput-only runs because the metric family walks active zone snapshots
+during metrics scrapes.
 
 To compare the experimental immutable ZoneImage serving path against the
 current snapshot path, run the same profile once with

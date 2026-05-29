@@ -525,6 +525,13 @@ build duration
 self-check duration
 ```
 
+The runtime exposes the child fan-out, RRsets-per-owner, RDATA-per-RRset, and
+RDATA-bytes-per-RRset distributions as opt-in Prometheus gauges under
+`oxidedns_zone_shape_*` when `[metrics].zone_shape_enabled = true`. These are
+scrape-time diagnostics for retained layout evidence and must stay disabled for
+plain throughput runs unless the run is explicitly collecting memory-layout
+data.
+
 ## Structure Comparison And Tuning
 
 Do not pick a structure because it looks faster in isolation. Compare it under

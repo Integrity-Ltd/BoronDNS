@@ -196,7 +196,8 @@ that should the old query-time layout be phased out.
 - [x] Current lookup avoids global delegation/DNAME scans with compact indexes.
 - [x] Current benchmark records node, edge, RRset, record, hot-byte, and
   cold-byte counts.
-- [ ] Add zone-shape histograms for high fan-out nodes and RRset distribution.
+- [x] Add opt-in zone-shape histograms for high fan-out nodes and RRset
+  distribution.
 - [ ] Compare current sorted-edge lookup against adaptive radix on measured
   high-fanout corpora.
 - [ ] Compare current sorted-edge lookup against generated perfect hash tables

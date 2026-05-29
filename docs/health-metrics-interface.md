@@ -110,7 +110,9 @@ The metrics endpoint exposes these implemented metric families:
   and `oxidedns_udp_sent_datagrams_total`;
 - `oxidedns_secondary_query_duration_seconds` query latency histogram, with
   buckets configured by `[metrics].latency_histogram_buckets`;
-- opt-in active-zone shape gauges under `oxidedns_zone_shape_*`;
+- opt-in active-zone shape gauges and fixed-bucket layout histograms under
+  `oxidedns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
+  RDATA records per RRset, and RDATA payload bytes per RRset;
 - experimental immutable-zone-image serving counters under
   `oxidedns_zone_image_serve_*` and opt-in shadow counters under
   `oxidedns_zone_image_shadow_*`;

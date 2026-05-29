@@ -62,8 +62,8 @@ latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01
 # Disabled by default. Enable only for benchmark captures that need pipeline
 # stage timings or response-cache candidacy counters.
 pipeline_timing_enabled = false
-# Disabled by default because scrape-time zone-shape gauges walk active zone
-# snapshots. Enable only for memory-layout diagnostics.
+# Disabled by default because scrape-time zone-shape gauges and histograms walk
+# active zone snapshots. Enable only for memory-layout diagnostics.
 zone_shape_enabled = false
 # Disabled by default. When enabled, live comparable queries are checked against
 # the immutable ZoneImage shadow path and mismatch counters/logs are emitted.

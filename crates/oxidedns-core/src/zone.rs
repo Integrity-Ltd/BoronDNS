@@ -61,6 +61,112 @@ pub struct ZoneShapeSummary {
     pub name_key_deduplicated_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoneShapeHistogramBucket {
+    pub bucket: &'static str,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneShapeHistogramSummary {
+    pub child_name_fanout_names: Vec<ZoneShapeHistogramBucket>,
+    pub rrsets_per_owner_name: Vec<ZoneShapeHistogramBucket>,
+    pub rdata_records_per_rrset: Vec<ZoneShapeHistogramBucket>,
+    pub rdata_payload_bytes_per_rrset: Vec<ZoneShapeHistogramBucket>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZoneShapeBucketDefinition {
+    label: &'static str,
+    upper_bound: Option<usize>,
+}
+
+const ZONE_SHAPE_COUNT_BUCKETS: &[ZoneShapeBucketDefinition] = &[
+    ZoneShapeBucketDefinition {
+        label: "0",
+        upper_bound: Some(0),
+    },
+    ZoneShapeBucketDefinition {
+        label: "1",
+        upper_bound: Some(1),
+    },
+    ZoneShapeBucketDefinition {
+        label: "2_4",
+        upper_bound: Some(4),
+    },
+    ZoneShapeBucketDefinition {
+        label: "5_8",
+        upper_bound: Some(8),
+    },
+    ZoneShapeBucketDefinition {
+        label: "9_16",
+        upper_bound: Some(16),
+    },
+    ZoneShapeBucketDefinition {
+        label: "17_32",
+        upper_bound: Some(32),
+    },
+    ZoneShapeBucketDefinition {
+        label: "33_64",
+        upper_bound: Some(64),
+    },
+    ZoneShapeBucketDefinition {
+        label: "65_128",
+        upper_bound: Some(128),
+    },
+    ZoneShapeBucketDefinition {
+        label: "129_256",
+        upper_bound: Some(256),
+    },
+    ZoneShapeBucketDefinition {
+        label: "gt_256",
+        upper_bound: None,
+    },
+];
+
+const ZONE_SHAPE_BYTE_BUCKETS: &[ZoneShapeBucketDefinition] = &[
+    ZoneShapeBucketDefinition {
+        label: "0",
+        upper_bound: Some(0),
+    },
+    ZoneShapeBucketDefinition {
+        label: "1_16",
+        upper_bound: Some(16),
+    },
+    ZoneShapeBucketDefinition {
+        label: "17_32",
+        upper_bound: Some(32),
+    },
+    ZoneShapeBucketDefinition {
+        label: "33_64",
+        upper_bound: Some(64),
+    },
+    ZoneShapeBucketDefinition {
+        label: "65_128",
+        upper_bound: Some(128),
+    },
+    ZoneShapeBucketDefinition {
+        label: "129_256",
+        upper_bound: Some(256),
+    },
+    ZoneShapeBucketDefinition {
+        label: "257_512",
+        upper_bound: Some(512),
+    },
+    ZoneShapeBucketDefinition {
+        label: "513_1024",
+        upper_bound: Some(1024),
+    },
+    ZoneShapeBucketDefinition {
+        label: "1025_2048",
+        upper_bound: Some(2048),
+    },
+    ZoneShapeBucketDefinition {
+        label: "gt_2048",
+        upper_bound: None,
+    },
+];
+
 struct DnssecAugmentationState {
     dnssec_augmented: bool,
     nsec3_iterations_exceeded: bool,
@@ -190,6 +296,58 @@ impl ZoneSnapshot {
             .name_key_logical_bytes
             .saturating_sub(summary.name_key_unique_bytes);
         summary
+    }
+
+    pub fn shape_histogram_summary(&self) -> ZoneShapeHistogramSummary {
+        let mut known_names = HashSet::<NameKey>::new();
+        known_names.extend(self.name_classes.keys().cloned());
+        known_names.extend(self.empty_non_terminal_classes.keys().cloned());
+
+        let mut child_counts = known_names
+            .iter()
+            .map(|name| (name.clone(), 0usize))
+            .collect::<HashMap<_, _>>();
+        for name in &known_names {
+            if name.as_ref() == self.origin_key.as_ref() {
+                continue;
+            }
+            let Some(parent) = parent_name_key(name.as_ref()) else {
+                continue;
+            };
+            if let Some(count) = child_counts.get_mut(parent.as_str()) {
+                *count += 1;
+            }
+        }
+
+        let mut rrsets_per_owner = self
+            .name_classes
+            .keys()
+            .map(|name| (name.clone(), 0usize))
+            .collect::<HashMap<_, _>>();
+        for key in self.rrsets.keys() {
+            *rrsets_per_owner.entry(key.owner.clone()).or_insert(0) += 1;
+        }
+
+        ZoneShapeHistogramSummary {
+            child_name_fanout_names: bucketize_zone_shape_values(
+                child_counts.values().copied(),
+                ZONE_SHAPE_COUNT_BUCKETS,
+            ),
+            rrsets_per_owner_name: bucketize_zone_shape_values(
+                rrsets_per_owner.values().copied(),
+                ZONE_SHAPE_COUNT_BUCKETS,
+            ),
+            rdata_records_per_rrset: bucketize_zone_shape_values(
+                self.rrsets.values().map(|rrset| rrset.rdatas.len()),
+                ZONE_SHAPE_COUNT_BUCKETS,
+            ),
+            rdata_payload_bytes_per_rrset: bucketize_zone_shape_values(
+                self.rrsets
+                    .values()
+                    .map(|rrset| rrset.rdatas.iter().map(Vec::len).sum::<usize>()),
+                ZONE_SHAPE_BYTE_BUCKETS,
+            ),
+        }
     }
 
     pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
@@ -1086,6 +1244,38 @@ fn soa_timers_from_rrsets(
     soa.rdatas.first().and_then(|rdata| soa_timers(rdata))
 }
 
+fn bucketize_zone_shape_values(
+    values: impl IntoIterator<Item = usize>,
+    buckets: &[ZoneShapeBucketDefinition],
+) -> Vec<ZoneShapeHistogramBucket> {
+    let mut counts = vec![0usize; buckets.len()];
+    for value in values {
+        let index = buckets
+            .iter()
+            .position(|bucket| match bucket.upper_bound {
+                Some(upper_bound) => value <= upper_bound,
+                None => true,
+            })
+            .expect("zone shape histogram must have an open-ended final bucket");
+        counts[index] += 1;
+    }
+
+    buckets
+        .iter()
+        .zip(counts)
+        .map(|(bucket, count)| ZoneShapeHistogramBucket {
+            bucket: bucket.label,
+            count,
+        })
+        .collect()
+}
+
+fn parent_name_key(name_key: &str) -> Option<String> {
+    let without_root = name_key.strip_suffix('.')?;
+    let (_, parent) = without_root.split_once('.')?;
+    Some(format!("{parent}."))
+}
+
 struct ZoneSnapshotIndexes {
     name_classes: HashMap<NameKey, ClassSet>,
     empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
@@ -1806,6 +1996,74 @@ mod tests {
             shape.name_key_deduplicated_bytes,
             shape.name_key_logical_bytes - shape.name_key_unique_bytes
         );
+    }
+
+    #[test]
+    fn shape_histogram_summary_reports_layout_distributions() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let www = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let api = DomainName::from_absolute_str("api.deep.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![
+                Rrset::new(origin, RecordType::Soa as u16, 1, 300, vec![soa_rdata()]),
+                Rrset::new(
+                    www,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 1], vec![192, 0, 2, 2]],
+                ),
+                Rrset::new(api, RecordType::A as u16, 1, 300, vec![vec![192, 0, 2, 3]]),
+            ],
+        );
+
+        let histograms = snapshot.shape_histogram_summary();
+        assert_eq!(
+            histogram_bucket_count(&histograms.child_name_fanout_names, "0"),
+            2
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.child_name_fanout_names, "1"),
+            1
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.child_name_fanout_names, "2_4"),
+            1
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.rrsets_per_owner_name, "1"),
+            3
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.rdata_records_per_rrset, "1"),
+            2
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.rdata_records_per_rrset, "2_4"),
+            1
+        );
+        assert_eq!(
+            histogram_bucket_count(&histograms.rdata_payload_bytes_per_rrset, "1_16"),
+            2
+        );
+        assert_eq!(
+            histograms
+                .child_name_fanout_names
+                .iter()
+                .map(|bucket| bucket.count)
+                .sum::<usize>(),
+            4
+        );
+    }
+
+    fn histogram_bucket_count(buckets: &[ZoneShapeHistogramBucket], bucket: &str) -> usize {
+        buckets
+            .iter()
+            .find(|candidate| candidate.bucket == bucket)
+            .map(|candidate| candidate.count)
+            .unwrap_or(0)
     }
 
     #[test]
