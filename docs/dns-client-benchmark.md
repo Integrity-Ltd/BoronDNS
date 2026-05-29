@@ -165,7 +165,10 @@ scripts/check-zone-image-prototype-benchmark.py \
 ```
 
 Use it after `scripts/benchmark-zone-image-prototype.sh` to verify the retained
-TSV before comparing live runtime artifacts.
+TSV before comparing live runtime artifacts. The prototype TSV includes an
+isolated high-fanout exact-lookup mix with first, middle, last, and absent child
+labels under the same large parent, plus retained `zone_image_max_child_fanout`
+and `zone_shape_*_bucket_*` rows for layout-tuning decisions.
 
 The comparator and promotion checks have a synthetic regression test:
 
@@ -399,6 +402,8 @@ OxideDNS server scope.
 - keep `ZoneStore` snapshot publication through `Arc<ZoneSnapshot>` rather than
   introducing DashMap or ArcSwap until contention evidence justifies it;
 - keep the large-catalog benchmark as the primary local data-layout harness;
+- use the in-process ZoneImage prototype benchmark for focused name-edge layout
+  timing before adding adaptive-radix or perfect-hash structures;
 - keep release-build tuning history in `CHANGELOG.md`; use this guide for the
   commands and artifacts that reproduce or challenge a tuning decision;
 - retain a profiling build profile with line tables and symbols for perf/flame

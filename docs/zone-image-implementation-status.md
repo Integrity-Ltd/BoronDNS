@@ -198,6 +198,8 @@ that should the old query-time layout be phased out.
   cold-byte counts.
 - [x] Add opt-in zone-shape histograms for high fan-out nodes and RRset
   distribution.
+- [x] Add retained high-fanout first/middle/last/absent-child lookup evidence
+  to the in-process ZoneImage prototype benchmark.
 - [ ] Compare current sorted-edge lookup against adaptive radix on measured
   high-fanout corpora.
 - [ ] Compare current sorted-edge lookup against generated perfect hash tables

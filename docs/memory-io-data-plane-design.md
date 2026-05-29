@@ -233,6 +233,9 @@ Initial child-edge layout:
 ART, byte-compressed radix, generated perfect hash, SIMD child matching, and
 other high-fan-out structures are experiments. They must be compared against the
 baseline on the same corpus and hardware before promotion.
+The in-process ZoneImage prototype benchmark now retains a high-fanout
+first/middle/last/absent-child lookup mix and the matching fan-out histogram
+rows so this decision can be made from evidence instead of shape guesses.
 
 ### RRsets And WireArena
 
@@ -559,6 +562,14 @@ Promotion gate:
   documented high-fan-out zone shape;
 - no regression above the configured threshold on ordinary mixed zones;
 - equal old/new semantic results for the full differential corpus.
+
+Retain `zone_image_max_child_fanout`,
+`current_high_fanout_lookup_ns_per_query`,
+`zone_image_high_fanout_exact_lookup_ns_per_query`, and
+`zone_shape_child_name_fanout_names_bucket_*` before adding a candidate layout.
+If the sorted-edge baseline is already comfortably below the current snapshot
+path and CPU profiles do not show lookup-memory stalls, keep the simpler
+layout.
 
 ### RRset Lookup
 

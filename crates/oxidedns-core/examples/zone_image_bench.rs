@@ -11,7 +11,7 @@ use oxidedns_core::{
         RecordType, answer_message,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
     },
-    zone::{Rrset, ZoneSnapshot, ZoneStore},
+    zone::{Rrset, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneStore},
     zone_image::{ZoneImage, ZoneImageLookupOutcome},
 };
 
@@ -21,6 +21,7 @@ fn main() {
     let iterations = config.iterations;
     let (snapshot, direct_qnames, mixed_queries) = build_snapshot(record_count);
     let hot_direct_qnames = hot_direct_qnames(&direct_qnames);
+    let high_fanout_qnames = high_fanout_qnames(&direct_qnames);
     let (stress_snapshot, stress_queries) =
         build_delegation_dname_stress_snapshot(config.stress_candidates);
 
@@ -39,6 +40,9 @@ fn main() {
     let image_exact = time_zone_image_exact_lookup(&image, &direct_qnames, iterations);
     let current_hot = time_current_lookup(&snapshot, &hot_direct_qnames, iterations);
     let image_hot_exact = time_zone_image_exact_lookup(&image, &hot_direct_qnames, iterations);
+    let current_high_fanout = time_current_lookup(&snapshot, &high_fanout_qnames, iterations);
+    let image_high_fanout_exact =
+        time_zone_image_exact_lookup(&image, &high_fanout_qnames, iterations);
     let current_mixed = time_current_response_lookup(&snapshot, &mixed_queries, iterations);
     let image_mixed_plan = time_zone_image_response_plan(&image, &mixed_queries, iterations);
     let image_mixed_wire = time_zone_image_response_wire(&image, &mixed_queries, iterations);
@@ -87,6 +91,7 @@ fn main() {
     let image_optioned_packet =
         time_zone_image_packet_case_response(&store, image.clone(), &optioned_packets, iterations);
     let stats = image.stats();
+    let shape_histograms = snapshot.shape_histogram_summary();
 
     println!("metric\tvalue");
     println!("benchmark_schema_version\t1");
@@ -103,6 +108,7 @@ fn main() {
     println!("benchmark_trace\t{}", config.trace_path);
     println!("query_mix_direct\tflat_positive_a");
     println!("query_mix_hot_direct\trepeated_host0_90_percent_spread_10_percent");
+    println!("query_mix_high_fanout_exact\tfirst_child,middle_child,last_child,absent_child");
     println!("query_mix_trace\tweighted_reference_trace_tsv");
     println!(
         "query_mix_mixed\tpositive_a,cname,wildcard,referral_glue,nodata,nxdomain,dname,opaque_unknown"
@@ -121,6 +127,7 @@ fn main() {
     );
     println!("iterations\t{iterations}");
     println!("hot_direct_query_cases\t{}", hot_direct_qnames.len());
+    println!("high_fanout_query_cases\t{}", high_fanout_qnames.len());
     println!("hot_packet_query_cases\t{}", hot_packets.len());
     println!("trace_packet_query_cases\t{}", trace_packets.len());
     println!("mixed_query_cases\t{}", mixed_queries.len());
@@ -168,6 +175,14 @@ fn main() {
     println!(
         "zone_image_hot_exact_lookup_ns_per_query\t{:.3}",
         ns_per_query(image_hot_exact.duration, iterations)
+    );
+    println!(
+        "current_high_fanout_lookup_ns_per_query\t{:.3}",
+        ns_per_query(current_high_fanout.duration, iterations)
+    );
+    println!(
+        "zone_image_high_fanout_exact_lookup_ns_per_query\t{:.3}",
+        ns_per_query(image_high_fanout_exact.duration, iterations)
     );
     println!(
         "current_mixed_response_ns_per_query\t{:.3}",
@@ -243,6 +258,14 @@ fn main() {
         "zone_image_hot_answer_rrset_count\t{}",
         image_hot_exact.answer_count
     );
+    println!(
+        "current_high_fanout_answer_count\t{}",
+        current_high_fanout.answer_count
+    );
+    println!(
+        "zone_image_high_fanout_answer_rrset_count\t{}",
+        image_high_fanout_exact.answer_count
+    );
     println!("current_mixed_record_count\t{}", current_mixed.answer_count);
     println!(
         "zone_image_mixed_plan_item_count\t{}",
@@ -311,6 +334,11 @@ fn main() {
     println!("zone_image_mixed_rcode_checksum\t{}", image_mixed.rcode_sum);
     println!("zone_image_nodes\t{}", stats.node_count);
     println!("zone_image_edges\t{}", stats.edge_count);
+    println!("zone_image_max_child_fanout\t{}", stats.max_child_fanout);
+    println!(
+        "zone_image_max_rrsets_per_name\t{}",
+        stats.max_rrsets_per_name
+    );
     println!("zone_image_rrsets\t{}", stats.rrset_count);
     println!("zone_image_records\t{}", stats.record_count);
     println!("zone_image_hot_bytes\t{}", stats.hot_bytes);
@@ -344,6 +372,22 @@ fn main() {
     println!(
         "zone_image_delegation_dname_stress_bytes_per_record\t{}",
         stress_stats.bytes_per_record
+    );
+    emit_shape_histogram(
+        "zone_shape_child_name_fanout_names",
+        &shape_histograms.child_name_fanout_names,
+    );
+    emit_shape_histogram(
+        "zone_shape_rrsets_per_owner_names",
+        &shape_histograms.rrsets_per_owner_name,
+    );
+    emit_shape_histogram(
+        "zone_shape_rdata_records_per_rrset",
+        &shape_histograms.rdata_records_per_rrset,
+    );
+    emit_shape_histogram(
+        "zone_shape_rdata_payload_bytes_per_rrset",
+        &shape_histograms.rdata_payload_bytes_per_rrset,
     );
 }
 
@@ -590,6 +634,30 @@ fn hot_direct_qnames(qnames: &[DomainName]) -> Vec<DomainName> {
         hot.push(qnames[spread_index].clone());
     }
     hot
+}
+
+fn high_fanout_qnames(qnames: &[DomainName]) -> Vec<DomainName> {
+    let first = qnames
+        .first()
+        .expect("benchmark snapshot must include direct query names")
+        .clone();
+    let middle = qnames[qnames.len() / 2].clone();
+    let last = qnames
+        .last()
+        .expect("benchmark snapshot must include direct query names")
+        .clone();
+    vec![
+        first,
+        middle,
+        last,
+        DomainName::from_absolute_str("absent-high-fanout.bench.test.").unwrap(),
+    ]
+}
+
+fn emit_shape_histogram(prefix: &str, buckets: &[ZoneShapeHistogramBucket]) {
+    for bucket in buckets {
+        println!("{prefix}_bucket_{}\t{}", bucket.bucket, bucket.count);
+    }
 }
 
 fn time_current_lookup(

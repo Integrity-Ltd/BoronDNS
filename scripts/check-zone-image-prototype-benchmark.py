@@ -21,6 +21,7 @@ ZERO_MISMATCH_KEYS = (
 EQUAL_VALUE_PAIRS = (
     ("current_answer_count", "zone_image_answer_rrset_count"),
     ("current_hot_answer_count", "zone_image_hot_answer_rrset_count"),
+    ("current_high_fanout_answer_count", "zone_image_high_fanout_answer_rrset_count"),
     ("current_mixed_record_count", "zone_image_mixed_wire_record_count"),
     ("current_mixed_packet_bytes", "zone_image_mixed_packet_bytes"),
     ("current_hot_packet_bytes", "zone_image_hot_packet_bytes"),
@@ -117,6 +118,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="Optional TSV check output path")
     parser.add_argument("--max-exact-ratio", type=float, default=0.75)
     parser.add_argument("--max-hot-exact-ratio", type=float, default=0.75)
+    parser.add_argument("--max-high-fanout-exact-ratio", type=float, default=1.25)
     parser.add_argument("--max-mixed-plan-ratio", type=float, default=1.0)
     parser.add_argument("--max-mixed-wire-ratio", type=float, default=1.0)
     parser.add_argument("--max-mixed-packet-ratio", type=float, default=0.80)
@@ -149,6 +151,7 @@ def main() -> None:
         ("benchmark_kind", value(rows, "benchmark_kind")),
         ("records", value(rows, "records")),
         ("iterations", value(rows, "iterations")),
+        ("high_fanout_query_cases", value(rows, "high_fanout_query_cases")),
         ("delegation_dname_stress_candidates", value(rows, "delegation_dname_stress_candidates")),
     ]
 
@@ -156,6 +159,22 @@ def main() -> None:
         failures.append("unsupported benchmark_schema_version")
     if value(rows, "benchmark_kind") != "in_process_zone_image_prototype":
         failures.append("unexpected benchmark_kind")
+
+    for key in (
+        "zone_image_max_child_fanout",
+        "zone_image_max_rrsets_per_name",
+        "zone_shape_rrsets_per_owner_names_bucket_1",
+    ):
+        observed = integer(rows, key)
+        output.append((key, str(observed)))
+        if observed <= 0:
+            failures.append(f"{key}={observed}, expected a positive retained layout metric")
+    high_fanout_gt_256 = integer(rows, "zone_shape_child_name_fanout_names_bucket_gt_256")
+    output.append(("zone_shape_child_name_fanout_names_bucket_gt_256", str(high_fanout_gt_256)))
+    if integer(rows, "records") > 256 and high_fanout_gt_256 <= 0:
+        failures.append(
+            "zone_shape_child_name_fanout_names_bucket_gt_256=0, expected high-fanout evidence"
+        )
 
     for key in ZERO_MISMATCH_KEYS:
         observed = integer(rows, key)
@@ -187,6 +206,15 @@ def main() -> None:
         "current_hot_lookup_ns_per_query",
         "zone_image_hot_exact_lookup_ns_per_query",
         args.max_hot_exact_ratio,
+    )
+    check_ratio(
+        rows,
+        failures,
+        output,
+        "high_fanout_exact_lookup",
+        "current_high_fanout_lookup_ns_per_query",
+        "zone_image_high_fanout_exact_lookup_ns_per_query",
+        args.max_high_fanout_exact_ratio,
     )
     check_ratio(
         rows,

@@ -46,6 +46,8 @@ pub struct ZoneImageStats {
     pub name_count: usize,
     pub node_count: usize,
     pub edge_count: usize,
+    pub max_child_fanout: usize,
+    pub max_rrsets_per_name: usize,
     pub max_depth: usize,
     pub average_depth_times_1000: usize,
     pub rdata_bytes: usize,
@@ -2328,6 +2330,16 @@ impl ZoneImageBuilder {
                 .count(),
             node_count: nodes.len(),
             edge_count: edges.len(),
+            max_child_fanout: nodes
+                .iter()
+                .map(|node| usize::from(node.edge_count))
+                .max()
+                .unwrap_or_default(),
+            max_rrsets_per_name: nodes
+                .iter()
+                .map(|node| usize::from(node.rrset_count))
+                .max()
+                .unwrap_or_default(),
             max_depth: self
                 .build_nodes
                 .iter()
@@ -3068,6 +3080,8 @@ mod tests {
         assert_eq!(stats.name_count, 3);
         assert!(stats.node_count >= stats.name_count);
         assert!(stats.edge_count >= 2);
+        assert!(stats.max_child_fanout >= 1);
+        assert!(stats.max_rrsets_per_name >= 1);
         assert!(stats.max_depth >= 1);
         assert!(stats.rdata_bytes > 0);
         assert!(stats.wire_bytes > stats.rdata_bytes);
