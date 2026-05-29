@@ -189,6 +189,32 @@ def main() -> None:
         if current != zone_image:
             failures.append(f"{zone_image_key}={zone_image}, expected {current_key}={current}")
 
+    if "zone_directory_suffix_lookup_ns_per_query" in rows:
+        for key in (
+            "zone_directory_zones",
+            "zone_directory_query_cases",
+            "zone_directory_linear_found_count",
+            "zone_directory_suffix_found_count",
+            "zone_directory_linear_label_checksum",
+            "zone_directory_suffix_label_checksum",
+        ):
+            output.append((key, value(rows, key)))
+        for linear_key, suffix_key in (
+            ("zone_directory_linear_found_count", "zone_directory_suffix_found_count"),
+            ("zone_directory_linear_label_checksum", "zone_directory_suffix_label_checksum"),
+        ):
+            linear = value(rows, linear_key)
+            suffix = value(rows, suffix_key)
+            output.append((f"{suffix_key}_matches_{linear_key}", str(linear == suffix).lower()))
+            if linear != suffix:
+                failures.append(f"{suffix_key}={suffix}, expected {linear_key}={linear}")
+        directory_ratio = ratio(
+            rows,
+            "zone_directory_linear_lookup_ns_per_query",
+            "zone_directory_suffix_lookup_ns_per_query",
+        )
+        output.append(("zone_directory_suffix_lookup_ratio", f"{directory_ratio:.3f}"))
+
     check_ratio(
         rows,
         failures,

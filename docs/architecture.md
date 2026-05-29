@@ -57,7 +57,7 @@ implementation code for review locality, but they are not counted toward the
 
 | Decision area | Current Engineering MVP choice | SRS linkage |
 | --- | --- | --- |
-| Zone store | `ArcSwap`-published immutable `HashMap` directory; readers load `PublishedZone` entries containing a complete `ZoneSnapshot` plus compiled `ZoneImage`, while writers serialize replacement with a publication mutex and never expose partial transfer state. | `ODS-INV-003`, `ODS-FR-ZONE-001..008`, `ODS-NFR-RES-002` |
+| Zone store | `ArcSwap`-published immutable `ZoneDirectory` with exact-origin entries and a QNAME suffix index; readers load `PublishedZone` entries containing a complete `ZoneSnapshot` plus compiled `ZoneImage`, while writers serialize replacement with a publication mutex and never expose partial transfer state. | `ODS-INV-003`, `ODS-FR-ZONE-001..008`, `ODS-NFR-RES-002` |
 | Occluded/out-of-zone transfer data | Transfer validation excludes out-of-zone records; zone lookup excludes occluded non-glue data from authoritative answers. | `ODS-FR-AXFR-012..014`, `ODS-FR-QRY-017` |
 | TCP connection overload behavior | New over-limit TCP connections are accepted and immediately closed, with runtime log evidence. | `ODS-FR-TCP-005` |
 | TSIG constant-time comparison | MAC verification uses the `subtle` crate's constant-time equality path through `ct_eq`. | `ODS-FR-TSIG-008`, `ODS-NFR-SEC-001` |

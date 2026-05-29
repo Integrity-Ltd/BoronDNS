@@ -193,6 +193,8 @@ print()
 print("check=ODS-INV-003 atomic publish evidence")
 required_fragments = [
     ("ZoneStore ArcSwap", "ArcSwap<ZoneDirectory>", zone_text),
+    ("ZoneDirectory suffix index", "suffix_index: HashMap<String, Arc<ZoneStoreEntry>>", zone_text),
+    ("suffix-index lookup", "fn find_best_match", zone_text),
     ("writer publish lock", "publish_lock: Arc<Mutex<()>>", zone_text),
     ("published zone handle", "pub struct PublishedZone", zone_text),
     ("snapshot entry", "snapshot: Arc<ZoneSnapshot>", zone_text),
@@ -210,7 +212,7 @@ if missing:
     failures.append(f"ODS-INV-003 atomic publish evidence missing: {', '.join(missing)}")
 else:
     print("status=passed")
-    print("evidence=ZoneStore publishes complete snapshot plus ZoneImage entries through an ArcSwap directory with writer-side serialized replacement.")
+    print("evidence=ZoneStore publishes complete snapshot plus ZoneImage entries through a suffix-indexed ArcSwap directory with writer-side serialized replacement.")
 
 print()
 print("allowed_startup_file_reads:")

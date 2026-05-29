@@ -162,6 +162,8 @@ that should the old query-time layout be phased out.
 - [x] Query serving reuses the `ZoneImage` from the `ArcSwap`-published
   `PublishedZone` handle instead of a query-time shadow `Mutex<HashMap>` image
   cache or second store lookup.
+- [x] `ZoneStore` selects published zones through a suffix index instead of
+  scanning all configured zones on each query.
 - [x] Shadow validation can compare `ZoneImage` and current snapshot answers.
 - [x] Serving path records hits, direct hits, semantic hits, and fallbacks.
 - [~] Runtime serving remains opt-in and experimental.

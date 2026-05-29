@@ -892,10 +892,11 @@ after the exact lookup allocation removal, compact delegation/DNAME indexes,
 direct RR-section wire emission, the gated packet response path, arena-wire
 owner/RDATA name compression, signed-zone RRSIG/NSEC/NSEC3 indexes, and
 publication-time `ZoneImage` compilation, and the `ArcSwap`-published
-`ZoneStore` directory. Runtime serving reads a `PublishedZone` handle containing
-the active `ZoneSnapshot` and `ZoneImage` instead of compiling through a
-query-time shadow cache or performing a second store lookup. The gated packet
-path uses a lightweight lookup-metrics observer so normal responses do not materialize `ResourceRecord` values only to
+`ZoneStore` directory with an exact-origin map plus QNAME suffix index. Runtime
+serving reads a `PublishedZone` handle containing the active `ZoneSnapshot` and
+`ZoneImage` instead of compiling through a query-time shadow cache, scanning all
+zones, or performing a second store lookup. The gated packet path uses a
+lightweight lookup-metrics observer so normal responses do not materialize `ResourceRecord` values only to
 record termination counters, and semantic planning skips answer materialization
 when the answer RR type cannot produce additional address records. The direct
 answer emitter is attempted before the generic section-counting pass, so the
@@ -1059,6 +1060,13 @@ RDATA is already copied opaquely by the normal composer. Runtime tests verify
 published images are reused for the active snapshot, stale snapshot handles do
 not resolve to a new image, a new snapshot for the same zone publishes a new
 image, and read-side lookup runs through the published directory handle.
+The first directory index is intentionally simple: query lookup tests canonical
+QNAME suffixes from most-specific to root against the published suffix map,
+skipping hidden catalog zones and falling back to the next visible parent zone.
+The in-process benchmark records `zone_directory_linear_lookup_ns_per_query`,
+`zone_directory_suffix_lookup_ns_per_query`, matching found counts, and matching
+origin-label checksums so future directory structures can be compared against
+both old linear semantics and the current suffix-index baseline.
 Arena-wire compression for
 owner names plus known-name RDATA keeps packet bytes equal to the current
 composer for the retained query mix without rehydrating `DomainName` owners.

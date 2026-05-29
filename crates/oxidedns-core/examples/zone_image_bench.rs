@@ -54,6 +54,19 @@ fn main() {
     let image_stress_wire =
         time_zone_image_response_wire(&stress_image, &stress_queries, iterations);
     let image_stress = time_zone_image_response_lookup(&stress_image, &stress_queries, iterations);
+    let (zone_directory_store, zone_directory_qnames) =
+        build_zone_directory_benchmark(config.zone_directory_zones);
+    let zone_directory_snapshots = zone_directory_store.snapshots();
+    let zone_directory_linear = time_zone_directory_linear_lookup(
+        &zone_directory_snapshots,
+        &zone_directory_qnames,
+        iterations,
+    );
+    let zone_directory_suffix = time_zone_directory_suffix_lookup(
+        &zone_directory_store,
+        &zone_directory_qnames,
+        iterations,
+    );
     let mixed_packets = mixed_query_packets(&mixed_queries);
     let hot_packets = direct_query_packets(&hot_direct_qnames);
     let trace_packets = load_trace_packets(&config.trace_path);
@@ -119,8 +132,10 @@ fn main() {
         "query_mix_udp_ceiling\tno_edns_512,edns_payload_512,edns_payload_1232,edns_payload_4096"
     );
     println!("query_mix_delegation_dname_stress\treferral_glue,dname_synthesis");
+    println!("query_mix_zone_directory\tmany_zone_suffix_selection");
     println!("serving_gate\tminimal_any_signed_dnssec_supported_with_snapshot_fallback");
     println!("records\t{record_count}");
+    println!("zone_directory_zones\t{}", config.zone_directory_zones);
     println!(
         "delegation_dname_stress_candidates\t{}",
         config.stress_candidates
@@ -134,6 +149,10 @@ fn main() {
     println!(
         "delegation_dname_stress_query_cases\t{}",
         stress_queries.len()
+    );
+    println!(
+        "zone_directory_query_cases\t{}",
+        zone_directory_qnames.len()
     );
     println!("mixed_validation_mismatches\t{mixed_validation_mismatches}");
     println!("delegation_dname_stress_validation_mismatches\t{stress_validation_mismatches}");
@@ -207,6 +226,14 @@ fn main() {
     println!(
         "zone_image_delegation_dname_stress_response_ns_per_query\t{:.3}",
         ns_per_query(image_stress.duration, iterations)
+    );
+    println!(
+        "zone_directory_linear_lookup_ns_per_query\t{:.3}",
+        ns_per_query(zone_directory_linear.duration, iterations)
+    );
+    println!(
+        "zone_directory_suffix_lookup_ns_per_query\t{:.3}",
+        ns_per_query(zone_directory_suffix.duration, iterations)
     );
     println!(
         "zone_image_mixed_plan_ns_per_query\t{:.3}",
@@ -322,6 +349,22 @@ fn main() {
         "zone_image_delegation_dname_stress_record_count\t{}",
         image_stress.answer_count
     );
+    println!(
+        "zone_directory_linear_found_count\t{}",
+        zone_directory_linear.answer_count
+    );
+    println!(
+        "zone_directory_suffix_found_count\t{}",
+        zone_directory_suffix.answer_count
+    );
+    println!(
+        "zone_directory_linear_label_checksum\t{}",
+        zone_directory_linear.extra_sum
+    );
+    println!(
+        "zone_directory_suffix_label_checksum\t{}",
+        zone_directory_suffix.extra_sum
+    );
     println!("current_mixed_rcode_checksum\t{}", current_mixed.rcode_sum);
     println!(
         "zone_image_mixed_plan_rcode_checksum\t{}",
@@ -405,6 +448,7 @@ fn env_string(name: &str, default: &str) -> String {
 
 struct BenchConfig {
     records: usize,
+    zone_directory_zones: usize,
     stress_candidates: usize,
     iterations: usize,
     build_profile: String,
@@ -423,6 +467,10 @@ impl BenchConfig {
     fn from_env_and_args() -> Self {
         let mut config = Self {
             records: env_usize("OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS", 10_000),
+            zone_directory_zones: env_usize(
+                "OXIDEDNS_ZONE_IMAGE_BENCH_ZONE_DIRECTORY_ZONES",
+                1_000,
+            ),
             stress_candidates: env_usize(
                 "OXIDEDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES",
                 env_usize("OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS", 10_000).min(2_000),
@@ -447,6 +495,10 @@ impl BenchConfig {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--records" => config.records = parse_next_usize(&mut args, "--records"),
+                "--zone-directory-zones" => {
+                    config.zone_directory_zones =
+                        parse_next_usize(&mut args, "--zone-directory-zones");
+                }
                 "--stress-candidates" => {
                     config.stress_candidates = parse_next_usize(&mut args, "--stress-candidates");
                 }
@@ -621,6 +673,26 @@ fn build_delegation_dname_stress_snapshot(
     (ZoneSnapshot::active(origin, Some(1), rrsets), queries)
 }
 
+fn build_zone_directory_benchmark(zone_count: usize) -> (ZoneStore, Vec<DomainName>) {
+    let store = ZoneStore::new();
+    let mut qnames = Vec::with_capacity(zone_count.saturating_add(1));
+
+    for index in 0..zone_count {
+        let origin =
+            DomainName::from_absolute_str(&format!("zone{index}.catalog-bench.test.")).unwrap();
+        let serial = u32::try_from(index)
+            .ok()
+            .map(|value| value.saturating_add(1));
+        store.insert_snapshot(ZoneSnapshot::active(origin, serial, Vec::new()));
+        qnames.push(
+            DomainName::from_absolute_str(&format!("www.zone{index}.catalog-bench.test.")).unwrap(),
+        );
+    }
+    qnames.push(DomainName::from_absolute_str("outside.catalog-bench.test.").unwrap());
+
+    (store, qnames)
+}
+
 fn hot_direct_qnames(qnames: &[DomainName]) -> Vec<DomainName> {
     let mut hot = Vec::with_capacity(100);
     let hot_name = qnames
@@ -752,6 +824,57 @@ fn time_zone_image_response_lookup(
         answer_count: black_box(record_count),
         rcode_sum: black_box(rcode_sum),
         extra_sum: 0,
+    }
+}
+
+fn time_zone_directory_linear_lookup(
+    snapshots: &[Arc<ZoneSnapshot>],
+    qnames: &[DomainName],
+    iterations: usize,
+) -> TimedLookup {
+    let started = Instant::now();
+    let mut found_count = 0usize;
+    let mut label_checksum = 0usize;
+    for index in 0..iterations {
+        let qname = &qnames[index % qnames.len()];
+        let found = snapshots
+            .iter()
+            .filter(|zone| qname.is_equal_or_subdomain_of(&zone.origin))
+            .max_by_key(|zone| zone.origin.label_count());
+        if let Some(zone) = found {
+            found_count = found_count.saturating_add(1);
+            label_checksum = label_checksum.saturating_add(zone.origin.label_count());
+        }
+    }
+    TimedLookup {
+        duration: started.elapsed(),
+        answer_count: black_box(found_count),
+        rcode_sum: 0,
+        extra_sum: black_box(label_checksum),
+    }
+}
+
+fn time_zone_directory_suffix_lookup(
+    store: &ZoneStore,
+    qnames: &[DomainName],
+    iterations: usize,
+) -> TimedLookup {
+    let started = Instant::now();
+    let mut found_count = 0usize;
+    let mut label_checksum = 0usize;
+    for index in 0..iterations {
+        let qname = &qnames[index % qnames.len()];
+        if let Some(published) = store.find_published_zone(black_box(qname)) {
+            found_count = found_count.saturating_add(1);
+            label_checksum =
+                label_checksum.saturating_add(published.snapshot().origin.label_count());
+        }
+    }
+    TimedLookup {
+        duration: started.elapsed(),
+        answer_count: black_box(found_count),
+        rcode_sum: 0,
+        extra_sum: black_box(label_checksum),
     }
 }
 

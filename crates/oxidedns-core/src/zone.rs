@@ -1691,7 +1691,11 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
     }
 }
 
-type ZoneDirectory = HashMap<String, Arc<ZoneStoreEntry>>;
+#[derive(Debug, Clone, Default)]
+struct ZoneDirectory {
+    by_origin: HashMap<String, Arc<ZoneStoreEntry>>,
+    suffix_index: HashMap<String, Arc<ZoneStoreEntry>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ZoneStore {
@@ -1714,7 +1718,7 @@ struct ZoneStoreEntry {
 impl Default for ZoneStore {
     fn default() -> Self {
         Self {
-            zones: Arc::new(ArcSwap::from_pointee(HashMap::new())),
+            zones: Arc::new(ArcSwap::from_pointee(ZoneDirectory::default())),
             publish_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -1815,11 +1819,8 @@ impl ZoneStore {
     pub fn find_published_zone(&self, qname: &DomainName) -> Option<PublishedZone> {
         let zones = self.zones.load();
         zones
-            .values()
+            .find_best_match(qname)
             .filter(|entry| !entry.hidden)
-            .filter(|entry| qname.is_equal_or_subdomain_of(&entry.snapshot.origin))
-            .max_by_key(|entry| entry.snapshot.origin.label_count())
-            .cloned()
             .map(|entry| PublishedZone { entry })
     }
 
@@ -1903,6 +1904,65 @@ impl PublishedZone {
     pub fn zone_image(&self) -> Option<Arc<ZoneImage>> {
         self.entry.image.clone()
     }
+}
+
+impl ZoneDirectory {
+    fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
+        self.by_origin.insert(key.clone(), entry.clone());
+        self.suffix_index.insert(key, entry);
+    }
+
+    fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
+        self.suffix_index.remove(key);
+        self.by_origin.remove(key)
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.by_origin.contains_key(key)
+    }
+
+    fn get(&self, key: &str) -> Option<&Arc<ZoneStoreEntry>> {
+        self.by_origin.get(key)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Arc<ZoneStoreEntry>> {
+        self.by_origin.values()
+    }
+
+    fn len(&self) -> usize {
+        self.by_origin.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_origin.is_empty()
+    }
+
+    fn find_best_match(&self, qname: &DomainName) -> Option<Arc<ZoneStoreEntry>> {
+        for offset in 0..=qname.label_count() {
+            let key = canonical_suffix_key(&qname.labels()[offset..]);
+            if let Some(entry) = self.suffix_index.get(&key)
+                && !entry.hidden
+            {
+                return Some(entry.clone());
+            }
+        }
+        None
+    }
+}
+
+fn canonical_suffix_key(labels: &[Vec<u8>]) -> String {
+    if labels.is_empty() {
+        return ".".to_owned();
+    }
+
+    let mut key = String::new();
+    for label in labels {
+        for byte in label {
+            key.push(byte.to_ascii_lowercase() as char);
+        }
+        key.push('.');
+    }
+    key
 }
 
 impl ZoneStoreEntry {
@@ -2228,6 +2288,74 @@ mod tests {
 
         store.show_zone(&origin);
         assert!(store.find_zone(&child).is_some());
+    }
+
+    #[test]
+    fn published_zone_lookup_uses_most_specific_suffix() {
+        let store = ZoneStore::new();
+        let parent = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+
+        store.insert_snapshot(ZoneSnapshot::active(parent.clone(), Some(1), Vec::new()));
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(1), Vec::new()));
+
+        let published = store
+            .find_published_zone(&qname)
+            .expect("published child zone");
+        assert_eq!(published.snapshot().origin, child);
+    }
+
+    #[test]
+    fn published_zone_lookup_skips_hidden_suffix_and_uses_visible_parent() {
+        let store = ZoneStore::new();
+        let parent = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+
+        store.insert_snapshot(ZoneSnapshot::active(parent.clone(), Some(1), Vec::new()));
+        store.insert_loading_hidden(child.clone());
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(1), Vec::new()));
+
+        let hidden_child = store
+            .find_published_zone(&qname)
+            .expect("published parent zone");
+        assert_eq!(hidden_child.snapshot().origin, parent);
+
+        store.show_zone(&child);
+        let visible_child = store
+            .find_published_zone(&qname)
+            .expect("published child zone");
+        assert_eq!(visible_child.snapshot().origin, child);
+    }
+
+    #[test]
+    fn published_zone_lookup_updates_after_removal() {
+        let store = ZoneStore::new();
+        let parent = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+
+        store.insert_snapshot(ZoneSnapshot::active(parent.clone(), Some(1), Vec::new()));
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(1), Vec::new()));
+        assert_eq!(
+            store
+                .find_published_zone(&qname)
+                .expect("published child zone")
+                .snapshot()
+                .origin,
+            child
+        );
+
+        assert!(store.remove_zone(&child));
+        assert_eq!(
+            store
+                .find_published_zone(&qname)
+                .expect("published parent zone")
+                .snapshot()
+                .origin,
+            parent
+        );
     }
 
     fn soa_rdata() -> Vec<u8> {

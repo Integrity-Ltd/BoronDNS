@@ -399,12 +399,13 @@ OxideDNS server scope.
 - keep the authoritative in-memory design and avoid eBPF/XDP/NSD-style packet
   cache work until `docs/future-optimization-tracks.md` re-entry conditions are
   met;
-- keep `ZoneStore` publication through the `ArcSwap` immutable directory and
-  avoid adding DashMap or a custom RCU layer until contention evidence justifies
-  it;
+- keep `ZoneStore` publication through the `ArcSwap` immutable suffix-indexed
+  directory and avoid adding DashMap, a custom RCU layer, or a more complex trie
+  until contention or suffix-key construction evidence justifies it;
 - keep the large-catalog benchmark as the primary local data-layout harness;
 - use the in-process ZoneImage prototype benchmark for focused name-edge layout
-  timing before adding adaptive-radix or perfect-hash structures;
+  timing and `ZoneDirectory` suffix-index timing before adding adaptive-radix,
+  trie, or perfect-hash structures;
 - keep release-build tuning history in `CHANGELOG.md`; use this guide for the
   commands and artifacts that reproduce or challenge a tuning decision;
 - retain a profiling build profile with line tables and symbols for perf/flame
