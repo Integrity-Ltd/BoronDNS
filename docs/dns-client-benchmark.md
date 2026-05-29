@@ -401,7 +401,7 @@ OxideDNS server scope.
   met;
 - keep `ZoneStore` publication through the `ArcSwap` immutable suffix-indexed
   directory and avoid adding DashMap, a custom RCU layer, or a more complex trie
-  until contention or suffix-key construction evidence justifies it;
+  until contention or canonical label-key evidence justifies it;
 - keep the large-catalog benchmark as the primary local data-layout harness;
 - use the in-process ZoneImage prototype benchmark for focused name-edge layout
   timing and `ZoneDirectory` suffix-index timing before adding adaptive-radix,

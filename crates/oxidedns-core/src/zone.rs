@@ -1694,7 +1694,7 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
 #[derive(Debug, Clone, Default)]
 struct ZoneDirectory {
     by_origin: HashMap<String, Arc<ZoneStoreEntry>>,
-    suffix_index: HashMap<String, Arc<ZoneStoreEntry>>,
+    suffix_index: HashMap<Vec<u8>, Arc<ZoneStoreEntry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1908,13 +1908,16 @@ impl PublishedZone {
 
 impl ZoneDirectory {
     fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
+        let suffix_key = canonical_reverse_label_key(&entry.snapshot.origin);
         self.by_origin.insert(key.clone(), entry.clone());
-        self.suffix_index.insert(key, entry);
+        self.suffix_index.insert(suffix_key, entry);
     }
 
     fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
-        self.suffix_index.remove(key);
-        self.by_origin.remove(key)
+        let entry = self.by_origin.remove(key)?;
+        self.suffix_index
+            .remove(canonical_reverse_label_key(&entry.snapshot.origin).as_slice());
+        Some(entry)
     }
 
     fn contains_key(&self, key: &str) -> bool {
@@ -1938,31 +1941,38 @@ impl ZoneDirectory {
     }
 
     fn find_best_match(&self, qname: &DomainName) -> Option<Arc<ZoneStoreEntry>> {
-        for offset in 0..=qname.label_count() {
-            let key = canonical_suffix_key(&qname.labels()[offset..]);
-            if let Some(entry) = self.suffix_index.get(&key)
+        let (qname_key, prefix_lengths) = canonical_reverse_label_key_with_prefixes(qname);
+        for prefix_len in prefix_lengths.into_iter().rev() {
+            if let Some(entry) = self.suffix_index.get(&qname_key[..prefix_len])
                 && !entry.hidden
             {
                 return Some(entry.clone());
             }
         }
+        if let Some(entry) = self.suffix_index.get([].as_slice())
+            && !entry.hidden
+        {
+            return Some(entry.clone());
+        }
         None
     }
 }
 
-fn canonical_suffix_key(labels: &[Vec<u8>]) -> String {
-    if labels.is_empty() {
-        return ".".to_owned();
-    }
-
-    let mut key = String::new();
-    for label in labels {
-        for byte in label {
-            key.push(byte.to_ascii_lowercase() as char);
-        }
-        key.push('.');
-    }
+fn canonical_reverse_label_key(name: &DomainName) -> Vec<u8> {
+    let (key, _) = canonical_reverse_label_key_with_prefixes(name);
     key
+}
+
+fn canonical_reverse_label_key_with_prefixes(name: &DomainName) -> (Vec<u8>, Vec<usize>) {
+    let key_capacity = name.labels().iter().map(|label| label.len() + 1).sum();
+    let mut key = Vec::with_capacity(key_capacity);
+    let mut prefix_lengths = Vec::with_capacity(name.label_count());
+    for label in name.labels().iter().rev() {
+        key.push(label.len() as u8);
+        key.extend(label.iter().map(u8::to_ascii_lowercase));
+        prefix_lengths.push(key.len());
+    }
+    (key, prefix_lengths)
 }
 
 impl ZoneStoreEntry {

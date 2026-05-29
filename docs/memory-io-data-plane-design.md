@@ -1061,8 +1061,11 @@ published images are reused for the active snapshot, stale snapshot handles do
 not resolve to a new image, a new snapshot for the same zone publishes a new
 image, and read-side lookup runs through the published directory handle.
 The first directory index is intentionally simple: query lookup tests canonical
-QNAME suffixes from most-specific to root against the published suffix map,
-skipping hidden catalog zones and falling back to the next visible parent zone.
+length-delimited reversed-label QNAME prefixes from most-specific to root
+against the published suffix map, skipping hidden catalog zones and falling back
+to the next visible parent zone. Lookup builds one canonical byte key per query
+and probes borrowed prefix slices, avoiding the earlier per-suffix canonical
+string construction.
 The in-process benchmark records `zone_directory_linear_lookup_ns_per_query`,
 `zone_directory_suffix_lookup_ns_per_query`, matching found counts, and matching
 origin-label checksums so future directory structures can be compared against
