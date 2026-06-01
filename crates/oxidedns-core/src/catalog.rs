@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     dns::{DomainName, RecordType},
-    zone::ZoneSnapshot,
+    zone::CatalogZoneView,
 };
 
 // ODS-NFR-MAINT-004 principal functional requirement references for RFC 9432
@@ -40,25 +40,27 @@ pub enum CatalogError {
     },
 }
 
-pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMember>, CatalogError> {
-    validate_catalog_version(snapshot)?;
+pub fn parse_catalog_members(
+    catalog_view: CatalogZoneView<'_>,
+) -> Result<Vec<CatalogMember>, CatalogError> {
+    validate_catalog_version(&catalog_view)?;
 
-    let catalog = &snapshot.origin;
+    let catalog = catalog_view.origin();
     let zones_owner = DomainName::from_absolute_str(&format!("zones.{catalog}"))
         .expect("valid catalog origin builds valid zones owner");
     let mut ptr_records_by_owner = BTreeMap::<String, Vec<_>>::new();
 
-    for record in snapshot.records() {
-        if record.class != 1 || record.rr_type != RecordType::Ptr as u16 {
+    for rrset in catalog_view.rrsets() {
+        if rrset.class != 1 || rrset.rr_type != RecordType::Ptr as u16 {
             continue;
         }
-        if record.owner.parent().as_ref() != Some(&zones_owner) {
+        if rrset.owner.parent().as_ref() != Some(&zones_owner) {
             continue;
         }
         ptr_records_by_owner
-            .entry(record.owner.canonical_key())
+            .entry(rrset.owner.canonical_key())
             .or_default()
-            .push(record);
+            .extend(rrset.rdatas().iter().map(|rdata| (&rrset.owner, rdata)));
     }
 
     let mut seen_members = HashSet::new();
@@ -70,23 +72,23 @@ pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMembe
                 owner: records
                     .first()
                     .expect("non-empty grouped PTR records")
-                    .owner
+                    .0
                     .clone(),
             });
         }
-        let record = records
+        let (owner, rdata) = records
             .into_iter()
             .next()
             .expect("single grouped PTR record");
         let (member, consumed) =
-            DomainName::parse(&record.rdata, 0).map_err(|_| CatalogError::MalformedMemberPtr {
+            DomainName::parse(rdata, 0).map_err(|_| CatalogError::MalformedMemberPtr {
                 catalog: catalog.clone(),
-                owner: record.owner.clone(),
+                owner: owner.clone(),
             })?;
-        if consumed != record.rdata.len() {
+        if consumed != rdata.len() {
             return Err(CatalogError::MalformedMemberPtr {
                 catalog: catalog.clone(),
-                owner: record.owner.clone(),
+                owner: owner.clone(),
             });
         }
         if !seen_members.insert(member.canonical_key()) {
@@ -96,7 +98,7 @@ pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMembe
             });
         }
         members.push(CatalogMember {
-            member_node: record.owner,
+            member_node: owner.clone(),
             zone: member,
         });
     }
@@ -105,26 +107,23 @@ pub fn parse_catalog_members(snapshot: &ZoneSnapshot) -> Result<Vec<CatalogMembe
     Ok(members)
 }
 
-fn validate_catalog_version(snapshot: &ZoneSnapshot) -> Result<(), CatalogError> {
-    let catalog = &snapshot.origin;
+fn validate_catalog_version(catalog_view: &CatalogZoneView<'_>) -> Result<(), CatalogError> {
+    let catalog = catalog_view.origin();
     let version_owner = DomainName::from_absolute_str(&format!("version.{catalog}"))
         .expect("valid catalog origin builds valid version owner");
-    let version_records = snapshot
-        .records()
-        .into_iter()
-        .filter(|record| {
-            record.class == 1
-                && record.rr_type == RecordType::Txt as u16
-                && record.owner == version_owner
-        })
-        .collect::<Vec<_>>();
+    let version_records = catalog_view.rrsets().find_map(|rrset| {
+        (rrset.class == 1
+            && rrset.rr_type == RecordType::Txt as u16
+            && rrset.owner == version_owner)
+            .then(|| rrset.rdatas())
+    });
 
-    let [record] = version_records.as_slice() else {
+    let Some([rdata]) = version_records else {
         return Err(CatalogError::MissingOrUnsupportedVersion {
             catalog: catalog.clone(),
         });
     };
-    let text = parse_single_txt(&record.rdata).ok_or_else(|| CatalogError::MalformedVersion {
+    let text = parse_single_txt(rdata).ok_or_else(|| CatalogError::MalformedVersion {
         catalog: catalog.clone(),
     })?;
     if text == b"2" {
@@ -145,7 +144,7 @@ fn parse_single_txt(rdata: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zone::Rrset;
+    use crate::zone::{Rrset, ZoneSnapshot};
 
     #[test]
     fn parses_rfc9432_member_ptrs() {
@@ -182,7 +181,7 @@ mod tests {
             ],
         );
 
-        let members = parse_catalog_members(&snapshot).unwrap();
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
 
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
@@ -221,7 +220,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_catalog_members(&snapshot),
+            parse_catalog_members(snapshot.catalog_zone_view()),
             Err(CatalogError::DuplicateMember { catalog, member })
         );
     }
@@ -272,7 +271,7 @@ mod tests {
             ],
         );
 
-        let members = parse_catalog_members(&snapshot).unwrap();
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
 
         let member_zones = members
             .iter()

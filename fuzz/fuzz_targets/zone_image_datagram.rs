@@ -125,6 +125,56 @@ fn zone_snapshot(apex: DomainName) -> ZoneSnapshot {
                 vec![txt_rdata(b"zone-image composer fuzz")],
             ),
             rrset(
+                &name("*.wild.zoneimage.test."),
+                RecordType::A,
+                vec![vec![192, 0, 2, 90]],
+            ),
+            rrset(
+                &name("tree.zoneimage.test."),
+                RecordType::Dname,
+                vec![name_wire("target.zoneimage.test.")],
+            ),
+            rrset(
+                &name("leaf.target.zoneimage.test."),
+                RecordType::A,
+                vec![vec![192, 0, 2, 91]],
+            ),
+            rrset(
+                &name("child.zoneimage.test."),
+                RecordType::Ns,
+                vec![name_wire("ns.child.zoneimage.test.")],
+            ),
+            rrset(
+                &name("ns.child.zoneimage.test."),
+                RecordType::A,
+                vec![vec![192, 0, 2, 92]],
+            ),
+            rrset(
+                &name("_sip._udp.zoneimage.test."),
+                RecordType::Srv,
+                vec![srv_rdata(10, 20, 5060, "sip.zoneimage.test.")],
+            ),
+            rrset(
+                &name("sip.zoneimage.test."),
+                RecordType::A,
+                vec![vec![192, 0, 2, 93]],
+            ),
+            rrset(
+                &name("www.zoneimage.test."),
+                RecordType::Rrsig,
+                vec![rrsig_rdata(RecordType::A)],
+            ),
+            rrset(
+                &apex,
+                RecordType::Nsec,
+                vec![nsec_rdata("www.zoneimage.test.")],
+            ),
+            rrset(
+                &apex,
+                RecordType::Rrsig,
+                vec![rrsig_rdata(RecordType::Nsec)],
+            ),
+            rrset(
                 &name("badns.zoneimage.test."),
                 RecordType::Ns,
                 vec![vec![0xc0, 0x0c]],
@@ -184,6 +234,12 @@ fn shaped_query_packet(data: &[u8]) -> Vec<u8> {
         "badcname.zoneimage.test.",
         "badmx.zoneimage.test.",
         "opaque.zoneimage.test.",
+        "host.wild.zoneimage.test.",
+        "leaf.tree.zoneimage.test.",
+        "child.zoneimage.test.",
+        "www.child.zoneimage.test.",
+        "_sip._udp.zoneimage.test.",
+        "absent.zoneimage.test.",
         "*.zoneimage.test.",
     ];
     let qtypes = [
@@ -191,8 +247,14 @@ fn shaped_query_packet(data: &[u8]) -> Vec<u8> {
         RecordType::Aaaa as u16,
         RecordType::Ns as u16,
         RecordType::Cname as u16,
+        RecordType::Dname as u16,
+        RecordType::Soa as u16,
         RecordType::Mx as u16,
+        RecordType::Srv as u16,
         RecordType::Txt as u16,
+        RecordType::Ds as u16,
+        RecordType::Nsec as u16,
+        255,
         65_280,
         get_u16(data, 6),
     ];
@@ -268,10 +330,37 @@ fn mx_rdata(preference: u16, exchange: &str) -> Vec<u8> {
     rdata
 }
 
+fn srv_rdata(priority: u16, weight: u16, port: u16, target: &str) -> Vec<u8> {
+    let mut rdata = Vec::new();
+    rdata.extend_from_slice(&priority.to_be_bytes());
+    rdata.extend_from_slice(&weight.to_be_bytes());
+    rdata.extend_from_slice(&port.to_be_bytes());
+    rdata.extend_from_slice(&name_wire(target));
+    rdata
+}
+
 fn txt_rdata(text: &[u8]) -> Vec<u8> {
     let mut rdata = Vec::new();
     rdata.push(text.len().min(255) as u8);
     rdata.extend_from_slice(&text[..text.len().min(255)]);
+    rdata
+}
+
+fn rrsig_rdata(type_covered: RecordType) -> Vec<u8> {
+    let mut rdata = (type_covered as u16).to_be_bytes().to_vec();
+    rdata.extend_from_slice(&[8, 2]);
+    rdata.extend_from_slice(&300u32.to_be_bytes());
+    rdata.extend_from_slice(&1_700_086_400u32.to_be_bytes());
+    rdata.extend_from_slice(&1_700_000_000u32.to_be_bytes());
+    rdata.extend_from_slice(&1u16.to_be_bytes());
+    rdata.extend_from_slice(&name_wire("zoneimage.test."));
+    rdata.extend_from_slice(b"signature");
+    rdata
+}
+
+fn nsec_rdata(next_owner: &str) -> Vec<u8> {
+    let mut rdata = name_wire(next_owner);
+    rdata.extend_from_slice(&[0, 1, 0x40]);
     rdata
 }
 

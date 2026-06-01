@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::{
     dns::{DNS_HEADER_LEN, DnsParseError, DomainName, Header, RecordType},
-    zone::{ResourceRecord, Rrset, ZoneSnapshot},
+    zone::{ResourceRecord, Rrset, SoaRecordView, ZoneSnapshot},
 };
 
 // ODS-NFR-MAINT-004 principal functional requirement references for zone
@@ -210,7 +210,41 @@ pub fn build_ixfr_query(
     current_soa: &ResourceRecord,
 ) -> Result<Vec<u8>, IxfrError> {
     validate_current_soa(current_soa, zone_apex, qclass)?;
+    Ok(build_ixfr_query_message(
+        qid,
+        zone_apex,
+        qclass,
+        &current_soa.owner,
+        current_soa.ttl,
+        &current_soa.rdata,
+    ))
+}
 
+pub fn build_ixfr_query_from_soa_view(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa: SoaRecordView<'_>,
+) -> Result<Vec<u8>, IxfrError> {
+    validate_current_soa_view(current_soa, zone_apex, qclass)?;
+    Ok(build_ixfr_query_message(
+        qid,
+        zone_apex,
+        qclass,
+        current_soa.owner,
+        current_soa.ttl,
+        current_soa.rdata,
+    ))
+}
+
+fn build_ixfr_query_message(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    current_soa_owner: &DomainName,
+    current_soa_ttl: u32,
+    current_soa_rdata: &[u8],
+) -> Vec<u8> {
     let mut message = Vec::new();
     message.extend_from_slice(&qid.to_be_bytes());
     message.extend_from_slice(&0u16.to_be_bytes());
@@ -221,8 +255,15 @@ pub fn build_ixfr_query(
     message.extend_from_slice(&zone_apex.to_wire());
     message.extend_from_slice(&(RecordType::Ixfr as u16).to_be_bytes());
     message.extend_from_slice(&qclass.to_be_bytes());
-    append_record(&mut message, current_soa);
-    Ok(message)
+    append_record_parts(
+        &mut message,
+        current_soa_owner,
+        RecordType::Soa as u16,
+        qclass,
+        current_soa_ttl,
+        current_soa_rdata,
+    );
+    message
 }
 
 fn build_query(qid: u16, zone_apex: &DomainName, qtype: u16, qclass: u16) -> Vec<u8> {
@@ -239,13 +280,20 @@ fn build_query(qid: u16, zone_apex: &DomainName, qtype: u16, qclass: u16) -> Vec
     message
 }
 
-fn append_record(message: &mut Vec<u8>, record: &ResourceRecord) {
-    message.extend_from_slice(&record.owner.to_wire());
-    message.extend_from_slice(&record.rr_type.to_be_bytes());
-    message.extend_from_slice(&record.class.to_be_bytes());
-    message.extend_from_slice(&record.ttl.to_be_bytes());
-    message.extend_from_slice(&(record.rdata.len() as u16).to_be_bytes());
-    message.extend_from_slice(&record.rdata);
+fn append_record_parts(
+    message: &mut Vec<u8>,
+    owner: &DomainName,
+    rr_type: u16,
+    class: u16,
+    ttl: u32,
+    rdata: &[u8],
+) {
+    message.extend_from_slice(&owner.to_wire());
+    message.extend_from_slice(&rr_type.to_be_bytes());
+    message.extend_from_slice(&class.to_be_bytes());
+    message.extend_from_slice(&ttl.to_be_bytes());
+    message.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+    message.extend_from_slice(rdata);
 }
 
 pub fn frame_tcp_message(message: &[u8]) -> Vec<u8> {
@@ -486,7 +534,7 @@ pub fn parse_ixfr_response_with_options(
     options: TransferParseOptions,
 ) -> Result<IxfrResponse, IxfrError> {
     let current_soa = current_zone
-        .soa_record(qclass)
+        .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
     validate_current_soa(&current_soa, zone_apex, qclass)?;
     if messages.is_empty() {
@@ -570,10 +618,10 @@ fn apply_ixfr_incremental(
     let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
     let final_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
     let current_soa = current_zone
-        .soa_record(qclass)
+        .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
     let mut expected_old_soa = current_soa;
-    let mut records = current_zone.records();
+    let mut records = current_zone.transfer_records();
     let mut index = 1usize;
 
     while index < answers.len() {
@@ -666,6 +714,18 @@ fn validate_current_soa(
         return Err(IxfrError::InvalidCurrentSoa);
     }
     soa_serial(&record.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
+    Ok(())
+}
+
+fn validate_current_soa_view(
+    record: SoaRecordView<'_>,
+    zone_apex: &DomainName,
+    qclass: u16,
+) -> Result<(), IxfrError> {
+    if record.owner != zone_apex || record.class != qclass {
+        return Err(IxfrError::InvalidCurrentSoa);
+    }
+    soa_serial(record.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
     Ok(())
 }
 
@@ -1595,7 +1655,7 @@ mod tests {
     fn first_rdata(snapshot: &ZoneSnapshot, owner: &str, rr_type: u16) -> Vec<u8> {
         let owner = DomainName::from_absolute_str(owner).unwrap();
         snapshot
-            .records()
+            .transfer_records()
             .into_iter()
             .find(|record| record.owner == owner && record.rr_type == rr_type)
             .expect("record present")
@@ -1652,6 +1712,20 @@ mod tests {
     }
 
     #[test]
+    fn builds_ixfr_query_from_borrowed_soa_view() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let snapshot = current_zone(vec![soa.clone()]);
+        let soa_view = snapshot.soa_record_view(1).expect("SOA view");
+
+        let borrowed_query =
+            build_ixfr_query_from_soa_view(0x1234, &apex, 1, soa_view).expect("IXFR query");
+        let owned_query = build_ixfr_query(0x1234, &apex, 1, &soa).expect("IXFR query");
+
+        assert_eq!(borrowed_query, owned_query);
+    }
+
+    #[test]
     fn rejects_ixfr_query_without_current_apex_soa() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let a = record(
@@ -1702,6 +1776,7 @@ mod tests {
         );
         assert!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -1732,6 +1807,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(1));
         assert!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -1854,7 +1930,7 @@ mod tests {
         )
         .expect("AXFR with opaque unknown RDATA");
 
-        let lookup = snapshot.lookup(
+        let lookup = snapshot.offline_oracle().lookup(
             &DomainName::from_absolute_str("opaque.example.test.").unwrap(),
             UNKNOWN_TYPE,
             1,
@@ -1942,7 +2018,7 @@ mod tests {
         )
         .expect("AXFR with non-uniform RRset TTLs");
 
-        let lookup = snapshot.lookup(
+        let lookup = snapshot.offline_oracle().lookup(
             &DomainName::from_absolute_str("www.example.test.").unwrap(),
             RecordType::A as u16,
             1,
@@ -2240,6 +2316,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(2));
         assert!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("old.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -2250,6 +2327,7 @@ mod tests {
         );
         assert_eq!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("new.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -2305,6 +2383,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(2));
         assert_eq!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("new.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -3541,6 +3620,7 @@ mod tests {
 
         assert!(
             !snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("ns1.provider.test.").unwrap(),
                     RecordType::A as u16,

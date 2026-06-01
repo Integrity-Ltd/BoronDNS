@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fmt, hash::Hasher, net::IpAddr, sync::Arc};
+use std::{collections::HashMap, fmt, hash::Hasher, net::IpAddr};
 
 use siphasher::sip::SipHasher24;
 use smallvec::SmallVec;
@@ -7,8 +7,16 @@ use thiserror::Error;
 
 use crate::{
     zone::{PublishedZone, ResourceRecord, Rrset, ZoneState, ZoneStore},
-    zone_image::{ZoneImage, ZoneImageLookupPlan, ZoneImageWireRecord},
+    zone_image::{
+        PackedRdataEncoding, ZoneImage, ZoneImageLookupPlan, ZoneImagePlanResponseShape,
+        ZoneImageWireRecord,
+    },
 };
+
+#[cfg(test)]
+use crate::zone_image::zone_image_record_fixed_fields;
+
+pub(crate) type InlineNameWire = SmallVec<[u8; 64]>;
 
 // ODS-NFR-MAINT-004 principal functional requirement references for DNS
 // message parsing, authoritative response construction, EDNS, DNSSEC serving,
@@ -63,6 +71,17 @@ const EDE_UNSUPPORTED_NSEC3_ITERATIONS: u16 = 27;
 const DNS_COOKIE_CLIENT_LEN: usize = 8;
 const DNS_COOKIE_SERVER_V1_LEN: usize = 16;
 const DNS_COOKIE_VERSION_1: u8 = 1;
+const OPT_OWNER_AND_TYPE_WIRE: [u8; 3] = [0, 0, RecordType::Opt as u8];
+const EDNS_TCP_KEEPALIVE_RESPONSE_OPTION_PREFIX: [u8; 4] =
+    [0, EDNS_TCP_KEEPALIVE_OPTION as u8, 0, 2];
+const EDNS_COOKIE_RESPONSE_OPTION_PREFIX: [u8; 4] = [
+    0,
+    EDNS_COOKIE_OPTION as u8,
+    0,
+    (DNS_COOKIE_CLIENT_LEN + DNS_COOKIE_SERVER_V1_LEN) as u8,
+];
+const EDNS_EXTENDED_DNS_ERROR_RESPONSE_OPTION_PREFIX: [u8; 4] =
+    [0, EDNS_EXTENDED_DNS_ERROR_OPTION as u8, 0, 2];
 const DNS_COOKIE_DEFAULT_PAST_WINDOW_SECS: u32 = 3600;
 const DNS_COOKIE_DEFAULT_FUTURE_WINDOW_SECS: u32 = 300;
 
@@ -130,8 +149,13 @@ pub enum Rcode {
 }
 
 impl Rcode {
-    fn bits(self) -> u16 {
+    pub(crate) fn bits(self) -> u16 {
         (self as u16) & 0x000f
+    }
+
+    pub(crate) fn response_flag_bits(self, authoritative: bool) -> u16 {
+        let aa = if authoritative { 0x0400 } else { 0 };
+        aa | self.bits()
     }
 }
 
@@ -183,11 +207,14 @@ impl Header {
     }
 
     fn response_flags(&self, rcode: Rcode, authoritative: bool, truncated: bool) -> u16 {
+        self.response_flags_from_plan_bits(rcode.response_flag_bits(authoritative), truncated)
+    }
+
+    fn response_flags_from_plan_bits(&self, plan_response_flag_bits: u16, truncated: bool) -> u16 {
         let opcode = self.flags & 0x7800;
         let rd = self.flags & 0x0100;
-        let aa = if authoritative { 0x0400 } else { 0 };
         let tc = if truncated { 0x0200 } else { 0 };
-        0x8000 | opcode | aa | tc | rd | rcode.bits()
+        0x8000 | opcode | tc | rd | plan_response_flag_bits
     }
 }
 
@@ -229,11 +256,20 @@ impl DomainName {
     }
 
     pub fn parse(packet: &[u8], offset: usize) -> Result<(Self, usize), DnsParseError> {
+        let (name, consumed, _) = Self::parse_with_ascii_lowercase(packet, offset)?;
+        Ok((name, consumed))
+    }
+
+    pub(crate) fn parse_with_ascii_lowercase(
+        packet: &[u8],
+        offset: usize,
+    ) -> Result<(Self, usize, bool), DnsParseError> {
         let mut labels = Vec::new();
         let mut pos = offset;
         let mut consumed = None;
-        let mut visited_pointers = Vec::new();
+        let mut visited_pointers = SmallVec::<[usize; 4]>::new();
         let mut total_len = 1usize;
+        let mut ascii_lowercase = true;
 
         loop {
             let Some(&len) = packet.get(pos) else {
@@ -257,7 +293,7 @@ impl DomainName {
                     pos += 1;
                     if len == 0 {
                         let consumed = consumed.unwrap_or_else(|| pos - offset);
-                        return Ok((Self { labels }, consumed));
+                        return Ok((Self { labels }, consumed, ascii_lowercase));
                     }
 
                     let label_len = len as usize;
@@ -270,11 +306,50 @@ impl DomainName {
                         return Err(DnsParseError::FormErr);
                     }
 
+                    ascii_lowercase &= packet[pos..pos + label_len]
+                        .iter()
+                        .all(|byte| byte.to_ascii_lowercase() == *byte);
                     labels.push(packet[pos..pos + label_len].to_vec());
                     pos += label_len;
                 }
                 _ => return Err(DnsParseError::FormErr),
             }
+        }
+    }
+
+    pub(crate) fn from_uncompressed_wire(wire: &[u8]) -> Result<Self, DnsParseError> {
+        let mut labels = Vec::new();
+        let mut pos = 0usize;
+        let mut total_len = 1usize;
+
+        loop {
+            let Some(&len) = wire.get(pos) else {
+                return Err(DnsParseError::FormErr);
+            };
+            pos += 1;
+
+            if len == 0 {
+                return (pos == wire.len())
+                    .then_some(Self { labels })
+                    .ok_or(DnsParseError::FormErr);
+            }
+
+            if len & 0xc0 != 0 {
+                return Err(DnsParseError::FormErr);
+            }
+
+            let label_len = len as usize;
+            if label_len > 63 || pos + label_len > wire.len() {
+                return Err(DnsParseError::FormErr);
+            }
+
+            total_len += 1 + label_len;
+            if total_len > 255 {
+                return Err(DnsParseError::FormErr);
+            }
+
+            labels.push(wire[pos..pos + label_len].to_vec());
+            pos += label_len;
         }
     }
 
@@ -290,12 +365,32 @@ impl DomainName {
             .all(|(left, right)| left.eq_ignore_ascii_case(right))
     }
 
+    pub(crate) fn matches_ascii_labels_ignore_case(&self, labels: &[&[u8]]) -> bool {
+        self.labels.len() == labels.len()
+            && self
+                .labels
+                .iter()
+                .zip(labels)
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
+    }
+
     pub fn label_count(&self) -> usize {
         self.labels.len()
     }
 
     pub(crate) fn labels(&self) -> &[Vec<u8>] {
         &self.labels
+    }
+
+    #[cfg(test)]
+    pub(crate) fn suffix_from_label_index(&self, start: usize) -> Option<Self> {
+        if start > self.labels.len() {
+            return None;
+        }
+
+        Some(Self {
+            labels: self.labels[start..].to_vec(),
+        })
     }
 
     pub fn parent(&self) -> Option<Self> {
@@ -337,6 +432,106 @@ impl DomainName {
         Some(Self { labels })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_replaced_wire_suffix(
+        &self,
+        suffix_wire: &[u8],
+        replacement: &DomainName,
+    ) -> Option<Self> {
+        self.with_replaced_wire_suffix_and_wire(suffix_wire, replacement)
+            .map(|(name, _)| name)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_replaced_wire_suffix_and_wire(
+        &self,
+        suffix_wire: &[u8],
+        replacement: &DomainName,
+    ) -> Option<(Self, Vec<u8>)> {
+        let replacement_wire = replacement.to_wire();
+        self.with_replaced_wire_suffix_and_stored_wire(suffix_wire, replacement, &replacement_wire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_replaced_wire_suffix_and_stored_wire(
+        &self,
+        suffix_wire: &[u8],
+        replacement: &DomainName,
+        replacement_wire: &[u8],
+    ) -> Option<(Self, Vec<u8>)> {
+        self.with_replaced_wire_suffix_and_stored_wire_parts(
+            suffix_wire,
+            replacement,
+            replacement_wire,
+        )
+        .map(|(name, wire, _)| (name, wire.to_vec()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_replaced_wire_suffix_and_stored_wire_parts(
+        &self,
+        suffix_wire: &[u8],
+        replacement: &DomainName,
+        replacement_wire: &[u8],
+    ) -> Option<(Self, InlineNameWire, usize)> {
+        let suffix_label_count = wire_label_count(suffix_wire)?;
+        self.with_replaced_wire_suffix_and_stored_wire_parts_counted(
+            suffix_wire,
+            suffix_label_count,
+            replacement,
+            replacement_wire,
+        )
+    }
+
+    pub(crate) fn with_replaced_wire_suffix_and_stored_wire_parts_counted(
+        &self,
+        suffix_wire: &[u8],
+        suffix_label_count: usize,
+        replacement: &DomainName,
+        replacement_wire: &[u8],
+    ) -> Option<(Self, InlineNameWire, usize)> {
+        let (wire, prefix_len) = self.with_replaced_wire_suffix_wire_counted(
+            suffix_wire,
+            suffix_label_count,
+            replacement_wire,
+        )?;
+
+        let mut labels = Vec::with_capacity(prefix_len + replacement.labels.len());
+        labels.extend_from_slice(&self.labels[..prefix_len]);
+        labels.extend_from_slice(&replacement.labels);
+
+        Some((Self { labels }, wire, prefix_len))
+    }
+
+    pub(crate) fn with_replaced_wire_suffix_wire_counted(
+        &self,
+        suffix_wire: &[u8],
+        suffix_label_count: usize,
+        replacement_wire: &[u8],
+    ) -> Option<(InlineNameWire, usize)> {
+        if suffix_label_count > self.labels.len() {
+            return None;
+        }
+
+        let prefix_len = self.labels.len() - suffix_label_count;
+        if !wire_labels_match_name_suffix(suffix_wire, &self.labels[prefix_len..])? {
+            return None;
+        }
+
+        let mut wire = InlineNameWire::new();
+        for label in &self.labels[..prefix_len] {
+            wire.push(label.len() as u8);
+            wire.extend_from_slice(label);
+        }
+        wire.extend_from_slice(replacement_wire);
+
+        if wire.len() > 255 {
+            return None;
+        }
+
+        Some((wire, prefix_len))
+    }
+
     pub fn canonical_key(&self) -> String {
         if self.labels.is_empty() {
             return ".".to_owned();
@@ -352,23 +547,165 @@ impl DomainName {
         key
     }
 
-    pub(crate) fn canonical_order_key(&self) -> Vec<Vec<u8>> {
-        self.labels
-            .iter()
-            .rev()
-            .map(|label| label.iter().map(u8::to_ascii_lowercase).collect::<Vec<_>>())
-            .collect()
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut wire = Vec::with_capacity(self.wire_len());
+        self.append_wire_to(&mut wire);
+        wire
     }
 
-    pub fn to_wire(&self) -> Vec<u8> {
-        let mut wire = Vec::new();
+    pub(crate) fn wire_len(&self) -> usize {
+        self.labels
+            .iter()
+            .map(|label| 1 + label.len())
+            .sum::<usize>()
+            + 1
+    }
+
+    pub(crate) fn append_wire_to(&self, wire: &mut Vec<u8>) {
         for label in &self.labels {
             wire.push(label.len() as u8);
             wire.extend_from_slice(label);
         }
         wire.push(0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_canonical_wire(&self) -> Vec<u8> {
+        let mut wire = Vec::with_capacity(self.wire_len());
+        for label in &self.labels {
+            wire.push(label.len() as u8);
+            wire.extend(label.iter().map(u8::to_ascii_lowercase));
+        }
+        wire.push(0);
         wire
     }
+}
+
+fn skip_compressed_name(packet: &[u8], offset: usize) -> Result<usize, DnsParseError> {
+    scan_compressed_name(packet, offset, None).map(|scan| scan.consumed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompressedNameScan {
+    consumed: usize,
+    label_count: usize,
+    matches_expected: bool,
+}
+
+fn scan_compressed_name(
+    packet: &[u8],
+    offset: usize,
+    expected: Option<&DomainName>,
+) -> Result<CompressedNameScan, DnsParseError> {
+    let mut pos = offset;
+    let mut consumed = None;
+    let mut visited_pointers = SmallVec::<[usize; 4]>::new();
+    let mut total_len = 1usize;
+    let mut label_count = 0usize;
+    let mut matches_expected = true;
+
+    loop {
+        let Some(&len) = packet.get(pos) else {
+            return Err(DnsParseError::FormErr);
+        };
+
+        match len & 0xc0 {
+            0xc0 => {
+                let Some(&next) = packet.get(pos + 1) else {
+                    return Err(DnsParseError::FormErr);
+                };
+                let pointer = (((len & 0x3f) as usize) << 8) | next as usize;
+                if pointer >= packet.len() || visited_pointers.contains(&pointer) {
+                    return Err(DnsParseError::FormErr);
+                }
+                visited_pointers.push(pointer);
+                consumed.get_or_insert_with(|| pos + 2 - offset);
+                pos = pointer;
+            }
+            0x00 => {
+                pos += 1;
+                if len == 0 {
+                    if let Some(expected) = expected {
+                        matches_expected &= label_count == expected.labels.len();
+                    }
+                    return Ok(CompressedNameScan {
+                        consumed: consumed.unwrap_or_else(|| pos - offset),
+                        label_count,
+                        matches_expected,
+                    });
+                }
+
+                let label_len = len as usize;
+                if label_len > 63 || pos + label_len > packet.len() {
+                    return Err(DnsParseError::FormErr);
+                }
+
+                total_len += 1 + label_len;
+                if total_len > 255 {
+                    return Err(DnsParseError::FormErr);
+                }
+
+                if let Some(expected) = expected {
+                    matches_expected &= expected.labels.get(label_count).is_some_and(|label| {
+                        label.eq_ignore_ascii_case(&packet[pos..pos + label_len])
+                    });
+                }
+                label_count += 1;
+                pos += label_len;
+            }
+            _ => return Err(DnsParseError::FormErr),
+        }
+    }
+}
+
+#[cfg(test)]
+fn wire_label_count(mut wire: &[u8]) -> Option<usize> {
+    let mut count = 0usize;
+    let mut total_len = 1usize;
+    loop {
+        let (&len, rest) = wire.split_first()?;
+        if len == 0 {
+            return rest.is_empty().then_some(count);
+        }
+        if len & 0xc0 != 0 {
+            return None;
+        }
+        let label_len = len as usize;
+        if label_len > 63 || rest.len() < label_len {
+            return None;
+        }
+        total_len += 1 + label_len;
+        if total_len > 255 {
+            return None;
+        }
+        let (_, next) = rest.split_at(label_len);
+        count += 1;
+        wire = next;
+    }
+}
+
+fn wire_labels_match_name_suffix(mut wire: &[u8], labels: &[Vec<u8>]) -> Option<bool> {
+    let mut total_len = 1usize;
+    for label in labels {
+        let (&len, rest) = wire.split_first()?;
+        if len & 0xc0 != 0 || len as usize != label.len() {
+            return Some(false);
+        }
+        let label_len = len as usize;
+        if label_len > 63 || rest.len() < label_len {
+            return None;
+        }
+        total_len += 1 + label_len;
+        if total_len > 255 {
+            return None;
+        }
+        let (wire_label, next) = rest.split_at(label_len);
+        if !label.eq_ignore_ascii_case(wire_label) {
+            return Some(false);
+        }
+        wire = next;
+    }
+    Some(wire == [0])
 }
 
 impl fmt::Display for DomainName {
@@ -389,12 +726,15 @@ pub struct Question {
     pub qname: DomainName,
     pub qtype: u16,
     pub qclass: u16,
-    wire: Vec<u8>,
+    qname_wire_len: usize,
+    qtype_qclass_wire: [u8; 4],
+    qname_ascii_lowercase: bool,
 }
 
 impl Question {
     pub fn parse(packet: &[u8]) -> Result<Self, DnsParseError> {
-        let (qname, qname_len) = DomainName::parse(packet, DNS_HEADER_LEN)?;
+        let (qname, qname_len, qname_ascii_lowercase) =
+            DomainName::parse_with_ascii_lowercase(packet, DNS_HEADER_LEN)?;
         let qtype_offset = DNS_HEADER_LEN + qname_len;
         if qtype_offset + 4 > packet.len() {
             return Err(DnsParseError::FormErr);
@@ -404,12 +744,26 @@ impl Question {
             qname,
             qtype: u16::from_be_bytes([packet[qtype_offset], packet[qtype_offset + 1]]),
             qclass: u16::from_be_bytes([packet[qtype_offset + 2], packet[qtype_offset + 3]]),
-            wire: packet[DNS_HEADER_LEN..qtype_offset + 4].to_vec(),
+            qname_wire_len: qname_len,
+            qtype_qclass_wire: packet[qtype_offset..qtype_offset + 4]
+                .try_into()
+                .expect("question qtype/qclass slice length is checked above"),
+            qname_ascii_lowercase,
         })
     }
 
-    fn wire(&self) -> &[u8] {
-        &self.wire
+    fn wire_len(&self) -> usize {
+        self.qname_wire_len + self.qtype_qclass_wire.len()
+    }
+
+    fn qname_wire_len(&self) -> usize {
+        self.qname_wire_len
+    }
+
+    /// Return whether packet parsing proved every QNAME label byte was already
+    /// lowercase ASCII.
+    pub fn qname_ascii_lowercase(&self) -> bool {
+        self.qname_ascii_lowercase
     }
 }
 
@@ -419,7 +773,13 @@ pub enum DatagramAction {
     Respond(Vec<u8>),
 }
 
-pub type ZoneImageProvider<'a> = &'a dyn Fn(&PublishedZone) -> Arc<ZoneImage>;
+pub type ZoneImageProvider<'a> =
+    &'a dyn for<'published> Fn(&'published PublishedZone) -> &'published ZoneImage;
+
+/// Borrow the active immutable query image from a published zone.
+pub fn default_zone_image_provider(published: &PublishedZone) -> &ZoneImage {
+    published.active_zone_image_ref()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnyResponseMode {
@@ -593,7 +953,6 @@ pub fn answer_message_with_notify_hooks(
     notify_authorized: impl Fn(&DomainName, u16) -> bool,
     notify_accepted: impl Fn(&DomainName, u16, Option<u32>),
 ) -> DatagramAction {
-    let zone_image_provider = |published: &PublishedZone| published.active_zone_image();
     answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
         zone_store,
@@ -601,7 +960,7 @@ pub fn answer_message_with_notify_hooks(
         notify_authorized,
         notify_accepted,
         |_| {},
-        &zone_image_provider as ZoneImageProvider<'_>,
+        &default_zone_image_provider as ZoneImageProvider<'_>,
     )
 }
 
@@ -825,7 +1184,10 @@ fn answer_query_message(
         ));
     }
 
-    let Some(published_zone) = zone_store.find_published_zone(&question.qname) else {
+    let Some(published_zone) = zone_store.find_published_zone_with_ascii_lowercase_hint(
+        &question.qname,
+        question.qname_ascii_lowercase(),
+    ) else {
         return DatagramAction::Respond(build_response(
             header,
             Rcode::Refused,
@@ -885,48 +1247,78 @@ fn try_answer_with_zone_image(
     published_zone: &PublishedZone,
 ) -> ZoneImageAnswerAttempt {
     let image = zone_image_provider(published_zone);
-    if !metadata.dnssec_requested()
-        && let Some(plan) =
-            image.lookup_direct_answer_plan(&question.qname, question.qtype, question.qclass)
-        && let Some(response) = build_direct_zone_image_answer_response(
-            header, question, &image, &plan, metadata, options,
-        )
-    {
-        query_observer.observe_zone_image_plan(&plan, true);
-        return ZoneImageAnswerAttempt::Respond(response);
-    }
-
-    let Ok(plan) = image.lookup_response_plan(
-        &question.qname,
-        question.qtype,
-        question.qclass,
-        options.max_cname_chain,
-        options.any_response,
-    ) else {
-        return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::PlanError);
-    };
-    let plan = if metadata.dnssec_requested() {
-        let Ok(plan) = image.augment_lookup_plan_with_dnssec(
-            plan,
+    let dnssec_requested = metadata.dnssec_requested();
+    let udp_ceiling = metadata.udp_ceiling(options);
+    let direct_response_sizing = (!dnssec_requested)
+        .then(|| zone_image_response_sizing(question, udp_ceiling, &metadata, options));
+    let mut direct_plan_rejected = false;
+    let mut rejected_direct_plan = None;
+    if !dnssec_requested
+        && let Some(plan) = image.lookup_direct_answer_plan_with_ascii_lowercase_hint(
             &question.qname,
             question.qtype,
             question.qclass,
+            question.qname_ascii_lowercase(),
+        )
+    {
+        if let Some(response) = build_direct_zone_image_answer_response(
+            header,
+            question,
+            image,
+            &plan,
+            metadata,
+            options,
+            direct_response_sizing.expect("direct preflight is gated to non-DNSSEC requests"),
+        ) {
+            query_observer.observe_zone_image_plan(&plan, true);
+            return ZoneImageAnswerAttempt::Respond(response);
+        }
+        direct_plan_rejected = true;
+        rejected_direct_plan = Some(plan);
+    }
+
+    let plan = rejected_direct_plan.unwrap_or_else(|| {
+        image.lookup_response_plan_with_ascii_lowercase_hint(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            options.max_cname_chain,
+            options.any_response,
+            question.qname_ascii_lowercase(),
+        )
+    });
+    let plan = if dnssec_requested {
+        image.augment_lookup_plan_with_dnssec_ascii_lowercase_hint(
+            plan,
+            &question.qname,
+            question.qclass,
             options.nsec3_max_iterations,
-        ) else {
-            return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::DnssecPlanError);
-        };
-        plan
+            question.qname_ascii_lowercase(),
+        )
     } else {
         plan
     };
-    let mut metadata = metadata.with_dnssec_augmented(plan.dnssec_augmented());
-    if plan.nsec3_iterations_exceeded() {
+    let mut metadata = metadata;
+    let response_sizing = if plan.nsec3_iterations_exceeded() {
         metadata = metadata.with_extended_dns_error(ExtendedDnsError::UnsupportedNsec3Iterations);
-    }
+        zone_image_response_sizing(question, udp_ceiling, &metadata, options)
+    } else {
+        direct_response_sizing.unwrap_or_else(|| {
+            zone_image_response_sizing(question, udp_ceiling, &metadata, options)
+        })
+    };
+    let allow_direct_answer_retry = !direct_plan_rejected && !dnssec_requested;
 
-    let Some(response) =
-        build_zone_image_response(header, question, &image, &plan, metadata, options)
-    else {
+    let Some(response) = build_zone_image_response(
+        header,
+        question,
+        image,
+        &plan,
+        metadata,
+        options,
+        allow_direct_answer_retry,
+        response_sizing,
+    ) else {
         return ZoneImageAnswerAttempt::Failure(ZoneImageServeFailureReason::ResponseBuildFailed);
     };
     query_observer.observe_zone_image_plan(&plan, false);
@@ -974,22 +1366,8 @@ fn answer_chaos_query(
         ));
     };
 
-    DatagramAction::Respond(build_response(
-        header,
-        Rcode::NoError,
-        true,
-        Some(question),
-        &[ResourceRecord {
-            owner: question.qname.clone(),
-            rr_type: RecordType::Txt as u16,
-            class: DNS_CLASS_CH,
-            ttl: 0,
-            rdata: txt_character_string(value),
-        }],
-        &[],
-        &[],
-        metadata,
-        options,
+    DatagramAction::Respond(build_chaos_txt_response(
+        header, question, value, metadata, options,
     ))
 }
 
@@ -1011,15 +1389,27 @@ fn classify_chaos_query<'a>(
         };
     }
 
-    match question.qname.canonical_key().as_str() {
-        "version.bind." | "version.server." => configured_chaos_value(chaos.version.as_bytes()),
-        "hostname.bind." | "id.server." => configured_chaos_value(chaos.hostname.as_bytes())
-            .or_else(|| printable_nsid_chaos_value(nsid)),
-        _ => ChaosClassification {
+    if is_chaos_version_name(&question.qname) {
+        configured_chaos_value(chaos.version.as_bytes())
+    } else if is_chaos_hostname_name(&question.qname) {
+        configured_chaos_value(chaos.hostname.as_bytes())
+            .or_else(|| printable_nsid_chaos_value(nsid))
+    } else {
+        ChaosClassification {
             outcome: ChaosQueryOutcome::UnrecognizedName,
             value: None,
-        },
+        }
     }
+}
+
+fn is_chaos_version_name(name: &DomainName) -> bool {
+    name.matches_ascii_labels_ignore_case(&[b"version".as_slice(), b"bind".as_slice()])
+        || name.matches_ascii_labels_ignore_case(&[b"version".as_slice(), b"server".as_slice()])
+}
+
+fn is_chaos_hostname_name(name: &DomainName) -> bool {
+    name.matches_ascii_labels_ignore_case(&[b"hostname".as_slice(), b"bind".as_slice()])
+        || name.matches_ascii_labels_ignore_case(&[b"id".as_slice(), b"server".as_slice()])
 }
 
 impl<'a> ChaosClassification<'a> {
@@ -1061,11 +1451,60 @@ fn printable_nsid_chaos_value(nsid: &[u8]) -> ChaosClassification<'_> {
     }
 }
 
-fn txt_character_string(value: &[u8]) -> Vec<u8> {
-    let mut rdata = Vec::with_capacity(value.len() + 1);
-    rdata.push(value.len() as u8);
-    rdata.extend_from_slice(value);
-    rdata
+fn build_chaos_txt_response(
+    header: &Header,
+    question: &Question,
+    value: &[u8],
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Vec<u8> {
+    let udp_ceiling = metadata.udp_ceiling(options);
+    let response_sizing = zone_image_response_sizing(question, udp_ceiling, &metadata, options);
+    let answer_wire_len = 2usize
+        .saturating_add(10)
+        .saturating_add(1)
+        .saturating_add(value.len());
+    let response_capacity =
+        zone_image_response_capacity_hint(response_sizing, answer_wire_len, false);
+    let mut response = zone_image_response_prefix(
+        header,
+        Rcode::NoError.response_flag_bits(true),
+        false,
+        zone_image_section_count_header_bytes(1, 0, response_sizing.edns.additional_count),
+        response_capacity,
+    );
+    encode_question(question, &mut response);
+    encode_chaos_txt_answer(value, &mut response);
+    append_zone_image_response_edns(
+        &mut response,
+        &metadata,
+        options,
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
+
+    if options.transport == Transport::Udp && response.len() > udp_ceiling {
+        return build_empty_response(
+            header,
+            Rcode::NoError,
+            true,
+            Some(question),
+            metadata,
+            options,
+        );
+    }
+
+    response
+}
+
+fn encode_chaos_txt_answer(value: &[u8], response: &mut Vec<u8>) {
+    response.extend_from_slice(&0xc00cu16.to_be_bytes());
+    response.extend_from_slice(&(RecordType::Txt as u16).to_be_bytes());
+    response.extend_from_slice(&DNS_CLASS_CH.to_be_bytes());
+    response.extend_from_slice(&0u32.to_be_bytes());
+    response.extend_from_slice(&(value.len().saturating_add(1) as u16).to_be_bytes());
+    response.push(value.len() as u8);
+    response.extend_from_slice(value);
 }
 
 fn answer_notify_message(
@@ -1169,7 +1608,9 @@ fn answer_notify_message(
         }
     };
 
-    if question.qclass != DNS_CLASS_IN || zone_store.find_exact_zone(&question.qname).is_none() {
+    if question.qclass != DNS_CLASS_IN
+        || !zone_store.contains_exact_zone_for_control(&question.qname)
+    {
         return DatagramAction::Respond(build_response(
             header,
             Rcode::Refused,
@@ -1207,15 +1648,14 @@ fn validate_notify_answer_soa(
     packet: &[u8],
     question: &Question,
 ) -> Result<Option<u32>, EdnsError> {
-    let mut offset = DNS_HEADER_LEN + question.wire().len();
+    let mut offset = DNS_HEADER_LEN + question.wire_len();
     let mut serial = None;
     for _ in 0..header.ancount {
-        let (record, consumed) = parse_additional_record(packet, offset)?;
+        let ((record, owner_matches_question), consumed) =
+            parse_record_view_with_owner_match(packet, offset, &question.qname)?;
         offset += consumed;
         if record.rr_type == RecordType::Soa as u16 {
-            if record.owner.canonical_key() != question.qname.canonical_key()
-                || record.class != question.qclass
-            {
+            if !owner_matches_question || record.class != question.qclass {
                 return Err(EdnsError::FormErr);
             }
             serial = Some(soa_serial(packet, record.rdata_offset, record.rdata.len())?);
@@ -1228,11 +1668,11 @@ fn soa_serial(packet: &[u8], rdata_offset: usize, rdata_len: usize) -> Result<u3
     let rdata_end = rdata_offset
         .checked_add(rdata_len)
         .ok_or(EdnsError::FormErr)?;
-    let (_, consumed_mname) =
-        DomainName::parse(packet, rdata_offset).map_err(|_| EdnsError::FormErr)?;
+    let consumed_mname =
+        skip_compressed_name(packet, rdata_offset).map_err(|_| EdnsError::FormErr)?;
     let rname_offset = rdata_offset + consumed_mname;
-    let (_, consumed_rname) =
-        DomainName::parse(packet, rname_offset).map_err(|_| EdnsError::FormErr)?;
+    let consumed_rname =
+        skip_compressed_name(packet, rname_offset).map_err(|_| EdnsError::FormErr)?;
     let serial_offset = rname_offset + consumed_rname;
     if serial_offset + 20 != rdata_end {
         return Err(EdnsError::FormErr);
@@ -1265,6 +1705,10 @@ fn build_response(
     metadata: RequestMetadata,
     options: AnswerOptions,
 ) -> Vec<u8> {
+    if answers.is_empty() && authorities.is_empty() && additionals.is_empty() {
+        return build_empty_response(header, rcode, authoritative, question, metadata, options);
+    }
+
     let mut response = build_response_inner(
         header,
         rcode,
@@ -1293,23 +1737,117 @@ fn build_response(
     response
 }
 
+fn build_empty_response(
+    header: &Header,
+    rcode: Rcode,
+    authoritative: bool,
+    question: Option<&Question>,
+    metadata: RequestMetadata,
+    options: AnswerOptions,
+) -> Vec<u8> {
+    let udp_ceiling = metadata.udp_ceiling(options);
+    let edns_sizing = zone_image_edns_sizing(&metadata, options);
+    let mut response = build_empty_response_inner(
+        header,
+        rcode,
+        authoritative,
+        false,
+        question,
+        &metadata,
+        options,
+        udp_ceiling,
+        edns_sizing,
+    );
+    if options.transport == Transport::Udp && response.len() > udp_ceiling {
+        response = build_empty_response_inner(
+            header,
+            rcode,
+            authoritative,
+            true,
+            question,
+            &metadata,
+            options,
+            udp_ceiling,
+            edns_sizing,
+        );
+    }
+    response
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_empty_response_inner(
+    header: &Header,
+    rcode: Rcode,
+    authoritative: bool,
+    truncated: bool,
+    question: Option<&Question>,
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+    udp_ceiling: usize,
+    edns_sizing: ZoneImageEdnsSizing,
+) -> Vec<u8> {
+    let response_capacity =
+        empty_response_capacity_hint(question, truncated, udp_ceiling, edns_sizing);
+    let mut response = Vec::with_capacity(response_capacity);
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags(rcode, authoritative, truncated)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&(u16::from(question.is_some())).to_be_bytes());
+    response.extend_from_slice(&zone_image_section_count_header_bytes(
+        0,
+        0,
+        edns_sizing.additional_count,
+    ));
+
+    if let Some(question) = question {
+        encode_question(question, &mut response);
+    }
+
+    append_zone_image_response_edns(&mut response, metadata, options, udp_ceiling, edns_sizing);
+    response
+}
+
+fn empty_response_capacity_hint(
+    question: Option<&Question>,
+    truncated: bool,
+    udp_ceiling: usize,
+    edns_sizing: ZoneImageEdnsSizing,
+) -> usize {
+    let minimum_capacity = DNS_HEADER_LEN + question.map_or(0, Question::wire_len);
+    if truncated || edns_sizing.reserve_full_udp_capacity {
+        return udp_ceiling.max(minimum_capacity);
+    }
+    minimum_capacity.saturating_add(edns_sizing.capacity_hint)
+}
+
 fn build_zone_image_failure_response(
     header: &Header,
     question: &Question,
     metadata: RequestMetadata,
     options: AnswerOptions,
 ) -> Vec<u8> {
-    build_response(
+    let udp_ceiling = metadata.udp_ceiling(options);
+    let response_sizing = zone_image_response_sizing(question, udp_ceiling, &metadata, options);
+    let response_capacity = zone_image_response_capacity_hint(response_sizing, 0, false);
+    let mut response = zone_image_response_prefix(
         header,
-        Rcode::ServFail,
-        true,
-        Some(question),
-        &[],
-        &[],
-        &[],
-        metadata,
+        Rcode::ServFail.response_flag_bits(true),
+        false,
+        zone_image_section_count_header_bytes(0, 0, response_sizing.edns.additional_count),
+        response_capacity,
+    );
+    encode_question(question, &mut response);
+    append_zone_image_response_edns(
+        &mut response,
+        &metadata,
         options,
-    )
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
+    response
 }
 
 fn build_zone_image_response(
@@ -1319,61 +1857,46 @@ fn build_zone_image_response(
     plan: &ZoneImageLookupPlan,
     metadata: RequestMetadata,
     options: AnswerOptions,
+    allow_direct_answer: bool,
+    response_sizing: ZoneImageResponseSizing,
 ) -> Option<Vec<u8>> {
-    if let Some(response) =
-        build_direct_zone_image_answer_response(header, question, image, plan, metadata, options)
+    if allow_direct_answer
+        && let Some(response) = build_direct_zone_image_answer_response(
+            header,
+            question,
+            image,
+            plan,
+            metadata,
+            options,
+            response_sizing,
+        )
     {
         return Some(response);
     }
 
-    let (answer_count, authority_count, additional_count) =
-        image.plan_section_record_counts(plan).ok()?;
-    let edns_count = usize::from(metadata.edns.is_some());
-    let answer_count = u16::try_from(answer_count).ok()?;
-    let authority_count = u16::try_from(authority_count).ok()?;
-    let additional_count = u16::try_from(additional_count.checked_add(edns_count)?).ok()?;
+    let response_shape = plan.response_shape()?;
+    let response = build_zone_image_response_from_plan_records(
+        header,
+        question,
+        image,
+        plan,
+        response_shape,
+        &metadata,
+        options,
+        false,
+        response_sizing,
+    )?;
 
-    let response_capacity = DNS_HEADER_LEN
-        .saturating_add(question_wire_len(question))
-        .saturating_add(image.plan_wire_upper_bound(plan))
-        .saturating_add(if metadata.edns.is_some() { 64 } else { 0 });
-    let mut response = Vec::with_capacity(response_capacity);
-    response.extend_from_slice(&header.id.to_be_bytes());
-    response.extend_from_slice(
-        &header
-            .response_flags(plan.rcode(), plan.authoritative(), false)
-            .to_be_bytes(),
-    );
-    response.extend_from_slice(&1u16.to_be_bytes());
-    response.extend_from_slice(&answer_count.to_be_bytes());
-    response.extend_from_slice(&authority_count.to_be_bytes());
-    response.extend_from_slice(&additional_count.to_be_bytes());
-    let mut compressor = WireNameCompressor::default();
-    let question_name_len = name_wire_len(question.qname.labels());
-    encode_question(question, &mut response);
-    compressor.register_wire_name_at_offset(
-        &response[DNS_HEADER_LEN..DNS_HEADER_LEN + question_name_len],
-        DNS_HEADER_LEN,
-    );
-
-    image.visit_plan_records(plan, |record| {
-        encode_zone_image_wire_record(record, &mut response, &mut compressor);
-    });
-
-    if let Some(edns) = metadata.edns {
-        encode_opt_record(
-            edns,
-            metadata.extended_rcode,
-            metadata.extended_dns_error,
-            options,
-            metadata.udp_ceiling(options),
-            &mut response,
-        );
-    }
-
-    if options.transport == Transport::Udp && response.len() > metadata.udp_ceiling(options) {
+    if options.transport == Transport::Udp && response.len() > response_sizing.udp_ceiling {
         return build_truncated_zone_image_response(
-            header, question, image, plan, metadata, options,
+            header,
+            question,
+            image,
+            plan,
+            response_shape,
+            metadata,
+            options,
+            response_sizing,
         );
     }
     Some(response)
@@ -1384,157 +1907,429 @@ fn build_truncated_zone_image_response(
     question: &Question,
     image: &ZoneImage,
     plan: &ZoneImageLookupPlan,
+    response_shape: ZoneImagePlanResponseShape,
     metadata: RequestMetadata,
     options: AnswerOptions,
+    mut response_sizing: ZoneImageResponseSizing,
 ) -> Option<Vec<u8>> {
-    let ceiling = metadata.udp_ceiling(options);
-    let mut kept_answers = Vec::new();
-    let mut kept_authorities = Vec::new();
-    let mut kept_additionals = Vec::new();
-    image.visit_plan_record_sections(
-        plan,
-        |record| kept_answers.push(record),
-        |record| kept_authorities.push(record),
-        |record| kept_additionals.push(record),
-    );
-
     let mut metadata = metadata;
     if metadata.extended_dns_error.is_some() {
         metadata = metadata.without_extended_dns_error();
-        let response = build_zone_image_response_from_wire_records(
+        let stripped_edns_sizing = zone_image_edns_sizing(&metadata, options);
+        let stripped_response_sizing = response_sizing.with_edns_sizing(stripped_edns_sizing);
+        let response = build_zone_image_response_from_plan_records(
             header,
             question,
-            plan.rcode(),
-            plan.authoritative(),
-            true,
-            &kept_answers,
-            &kept_authorities,
-            &kept_additionals,
+            image,
+            plan,
+            response_shape,
             &metadata,
             options,
+            true,
+            stripped_response_sizing,
         )?;
-        if response.len() <= ceiling {
+        if response.len() <= response_sizing.udp_ceiling {
             return Some(response);
         }
+        response_sizing = stripped_response_sizing;
     }
 
+    let mut kept_answers: SmallVec<[ZoneImageWireRecord<'_>; 4]> =
+        SmallVec::with_capacity(usize::from(response_shape.answer_count));
+    let mut kept_authorities: SmallVec<[ZoneImageWireRecord<'_>; 4]> =
+        SmallVec::with_capacity(usize::from(response_shape.authority_count));
+    let mut kept_additionals: SmallVec<[ZoneImageWireRecord<'_>; 8]> =
+        SmallVec::with_capacity(usize::from(response_shape.additional_count));
+    let mut section_counts = ZoneImageRetrySectionCounts::from_response_shape(response_shape);
+    let mut body_wire_upper_bound = response_shape.body_wire_upper_bound;
+    let mut removable_authority_indices = SmallVec::<[u16; 4]>::new();
+    image.visit_plan_record_sections_with_authority_removability(
+        plan,
+        |record| {
+            kept_answers.push(record);
+        },
+        |record, removable_authority| {
+            if removable_authority {
+                debug_assert!(
+                    kept_authorities.len() <= u16::MAX as usize,
+                    "truncation authority index is bounded by DNS section count"
+                );
+                removable_authority_indices.push(kept_authorities.len() as u16);
+            }
+            kept_authorities.push(record);
+        },
+        |record| {
+            kept_additionals.push(record);
+        },
+    );
+
     loop {
-        let response_metadata =
-            metadata.with_dnssec_augmented(truncated_zone_image_dnssec_augmented(
-                &metadata,
-                &kept_answers,
-                &kept_authorities,
-                &kept_additionals,
-            ));
         let response = build_zone_image_response_from_wire_records(
             header,
             question,
-            plan.rcode(),
-            plan.authoritative(),
+            response_shape.response_flag_bits,
             true,
+            section_counts,
             &kept_answers,
             &kept_authorities,
             &kept_additionals,
-            &response_metadata,
+            body_wire_upper_bound,
+            &metadata,
             options,
+            response_sizing,
         )?;
-        if response.len() <= ceiling {
+        if response.len() <= response_sizing.udp_ceiling {
             return Some(response);
         }
 
-        let removed_record = if kept_additionals.pop().is_some() {
-            true
-        } else if let Some(index) = kept_authorities
-            .iter()
-            .rposition(|record| record.rr_type != RecordType::Soa as u16)
-        {
-            kept_authorities.remove(index);
-            true
+        let removed_record = if let Some(record) = kept_additionals.pop() {
+            section_counts.decrement_additional();
+            Some(record)
+        } else if let Some(index) = removable_authority_indices.pop() {
+            let index = usize::from(index);
+            let removed = if index + 1 == kept_authorities.len() {
+                kept_authorities.pop()
+            } else {
+                Some(kept_authorities.remove(index))
+            };
+            if removed.is_some() {
+                section_counts.decrement_authority();
+            }
+            removed
+        } else if let Some(record) = kept_answers.pop() {
+            section_counts.decrement_answer();
+            Some(record)
         } else {
-            kept_answers.pop().is_some() || kept_authorities.pop().is_some()
+            let removed = kept_authorities.pop();
+            if removed.is_some() {
+                section_counts.decrement_authority();
+            }
+            removed
         };
 
-        if !removed_record {
+        let Some(record) = removed_record else {
             return Some(response);
+        };
+        body_wire_upper_bound =
+            body_wire_upper_bound.saturating_sub(zone_image_wire_record_uncompressed_len(record));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_zone_image_response_from_plan_records(
+    header: &Header,
+    question: &Question,
+    image: &ZoneImage,
+    plan: &ZoneImageLookupPlan,
+    response_shape: ZoneImagePlanResponseShape,
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+    truncated: bool,
+    response_sizing: ZoneImageResponseSizing,
+) -> Option<Vec<u8>> {
+    let section_count_header_bytes = response_shape
+        .section_count_header_bytes_with_extra_additional(response_sizing.edns.additional_count)?;
+    let response_capacity = zone_image_response_capacity_hint(
+        response_sizing,
+        response_shape.body_wire_upper_bound,
+        truncated,
+    );
+    let mut response = zone_image_response_prefix(
+        header,
+        response_shape.response_flag_bits,
+        truncated,
+        section_count_header_bytes,
+        response_capacity,
+    );
+    let mut compressor = WireNameCompressor::default();
+    encode_question(question, &mut response);
+    compressor.register_name_labels_at_offset(
+        question.qname.labels(),
+        question.qname_wire_len(),
+        question.qname_ascii_lowercase(),
+        DNS_HEADER_LEN,
+    );
+
+    image.visit_plan_records(plan, |record| {
+        encode_zone_image_wire_record(record, &mut response, &mut compressor);
+    });
+
+    append_zone_image_response_edns(
+        &mut response,
+        metadata,
+        options,
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
+    Some(response)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn zone_image_response_prefix(
+    header: &Header,
+    response_flag_bits: u16,
+    truncated: bool,
+    section_count_header_bytes: [u8; 6],
+    response_capacity: usize,
+) -> Vec<u8> {
+    let mut response = Vec::with_capacity(response_capacity);
+    response.extend_from_slice(&header.id.to_be_bytes());
+    response.extend_from_slice(
+        &header
+            .response_flags_from_plan_bits(response_flag_bits, truncated)
+            .to_be_bytes(),
+    );
+    response.extend_from_slice(&1u16.to_be_bytes());
+    response.extend_from_slice(&section_count_header_bytes);
+    response
+}
+
+fn zone_image_section_count_header_bytes(
+    answer_count: u16,
+    authority_count: u16,
+    additional_count: u16,
+) -> [u8; 6] {
+    let answer_count = answer_count.to_be_bytes();
+    let authority_count = authority_count.to_be_bytes();
+    let additional_count = additional_count.to_be_bytes();
+    [
+        answer_count[0],
+        answer_count[1],
+        authority_count[0],
+        authority_count[1],
+        additional_count[0],
+        additional_count[1],
+    ]
+}
+
+fn zone_image_response_capacity_hint(
+    sizing: ZoneImageResponseSizing,
+    body_wire_upper_bound: usize,
+    truncated: bool,
+) -> usize {
+    if truncated || sizing.edns.reserve_full_udp_capacity {
+        return sizing.udp_ceiling.max(sizing.minimum_capacity);
+    }
+
+    sizing
+        .minimum_capacity
+        .saturating_add(body_wire_upper_bound)
+        .saturating_add(sizing.edns.capacity_hint)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ZoneImageEdnsSizing {
+    additional_count: u16,
+    capacity_hint: usize,
+    reserve_full_udp_capacity: bool,
+    base_shape: Option<EdnsResponseBaseShape>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ZoneImageResponseSizing {
+    udp_ceiling: usize,
+    minimum_capacity: usize,
+    edns: ZoneImageEdnsSizing,
+}
+
+impl ZoneImageResponseSizing {
+    fn with_edns_sizing(self, edns: ZoneImageEdnsSizing) -> Self {
+        Self { edns, ..self }
+    }
+}
+
+fn zone_image_response_sizing(
+    question: &Question,
+    udp_ceiling: usize,
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+) -> ZoneImageResponseSizing {
+    ZoneImageResponseSizing {
+        udp_ceiling,
+        minimum_capacity: DNS_HEADER_LEN + question.wire_len(),
+        edns: zone_image_edns_sizing(metadata, options),
+    }
+}
+
+fn zone_image_edns_sizing(
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+) -> ZoneImageEdnsSizing {
+    let Some(edns) = metadata.edns else {
+        return ZoneImageEdnsSizing::default();
+    };
+
+    let base_shape = edns_response_base_shape(edns, options, metadata.extended_dns_error);
+
+    ZoneImageEdnsSizing {
+        additional_count: 1,
+        capacity_hint: 11usize.saturating_add(base_shape.rdata_len),
+        reserve_full_udp_capacity: options.transport == Transport::Udp
+            && edns.padding_requested
+            && options.edns_padding_block_size > 0,
+        base_shape: Some(base_shape),
+    }
+}
+
+fn append_zone_image_response_edns(
+    response: &mut Vec<u8>,
+    metadata: &RequestMetadata,
+    options: AnswerOptions,
+    udp_ceiling: usize,
+    edns_sizing: ZoneImageEdnsSizing,
+) {
+    debug_assert_eq!(metadata.edns.is_some(), edns_sizing.additional_count != 0);
+    if let Some(edns) = metadata.edns {
+        let base_shape = edns_sizing
+            .base_shape
+            .expect("ZoneImage EDNS sizing must carry OPT base shape when EDNS is present");
+        debug_assert_eq!(
+            edns_sizing.capacity_hint,
+            11usize.saturating_add(base_shape.rdata_len)
+        );
+        encode_opt_record_with_base_shape(
+            edns,
+            metadata.extended_rcode,
+            metadata.extended_dns_error,
+            options,
+            udp_ceiling,
+            base_shape,
+            response,
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ZoneImageRetrySectionCounts {
+    answer_count: u16,
+    authority_count: u16,
+    additional_count: u16,
+    section_count_header_bytes: [u8; 6],
+}
+
+impl ZoneImageRetrySectionCounts {
+    fn from_response_shape(response_shape: ZoneImagePlanResponseShape) -> Self {
+        Self {
+            answer_count: response_shape.answer_count,
+            authority_count: response_shape.authority_count,
+            additional_count: response_shape.additional_count,
+            section_count_header_bytes: response_shape.section_count_header_bytes,
         }
     }
+
+    fn section_count_header_bytes_with_extra_additional(
+        self,
+        extra_additional_count: u16,
+    ) -> Option<[u8; 6]> {
+        let mut bytes = self.section_count_header_bytes;
+        if extra_additional_count != 0 {
+            let additional_count = self.additional_count.checked_add(extra_additional_count)?;
+            bytes[4..6].copy_from_slice(&additional_count.to_be_bytes());
+        }
+        Some(bytes)
+    }
+
+    fn decrement_answer(&mut self) {
+        decrement_dns_section_count(
+            &mut self.answer_count,
+            &mut self.section_count_header_bytes[0..2],
+        );
+    }
+
+    fn decrement_authority(&mut self) {
+        decrement_dns_section_count(
+            &mut self.authority_count,
+            &mut self.section_count_header_bytes[2..4],
+        );
+    }
+
+    fn decrement_additional(&mut self) {
+        decrement_dns_section_count(
+            &mut self.additional_count,
+            &mut self.section_count_header_bytes[4..6],
+        );
+    }
+}
+
+fn decrement_dns_section_count(count: &mut u16, count_bytes: &mut [u8]) {
+    *count = count.saturating_sub(1);
+    count_bytes.copy_from_slice(&count.to_be_bytes());
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_zone_image_response_from_wire_records(
     header: &Header,
     question: &Question,
-    rcode: Rcode,
-    authoritative: bool,
+    response_flag_bits: u16,
     truncated: bool,
+    section_counts: ZoneImageRetrySectionCounts,
     answers: &[ZoneImageWireRecord<'_>],
     authorities: &[ZoneImageWireRecord<'_>],
     additionals: &[ZoneImageWireRecord<'_>],
+    body_wire_upper_bound: usize,
     metadata: &RequestMetadata,
     options: AnswerOptions,
+    response_sizing: ZoneImageResponseSizing,
 ) -> Option<Vec<u8>> {
-    let edns_count = usize::from(metadata.edns.is_some());
-    let answer_count = u16::try_from(answers.len()).ok()?;
-    let authority_count = u16::try_from(authorities.len()).ok()?;
-    let additional_count = u16::try_from(additionals.len().checked_add(edns_count)?).ok()?;
-
-    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question_wire_len(question));
-    response.extend_from_slice(&header.id.to_be_bytes());
-    response.extend_from_slice(
-        &header
-            .response_flags(rcode, authoritative, truncated)
-            .to_be_bytes(),
+    debug_assert_eq!(usize::from(section_counts.answer_count), answers.len());
+    debug_assert_eq!(
+        usize::from(section_counts.authority_count),
+        authorities.len()
     );
-    response.extend_from_slice(&1u16.to_be_bytes());
-    response.extend_from_slice(&answer_count.to_be_bytes());
-    response.extend_from_slice(&authority_count.to_be_bytes());
-    response.extend_from_slice(&additional_count.to_be_bytes());
+    debug_assert_eq!(
+        usize::from(section_counts.additional_count),
+        additionals.len()
+    );
+    let section_count_header_bytes = section_counts
+        .section_count_header_bytes_with_extra_additional(response_sizing.edns.additional_count)?;
+    let response_capacity =
+        zone_image_response_capacity_hint(response_sizing, body_wire_upper_bound, truncated);
+    let mut response = zone_image_response_prefix(
+        header,
+        response_flag_bits,
+        truncated,
+        section_count_header_bytes,
+        response_capacity,
+    );
     let mut compressor = WireNameCompressor::default();
-    let question_name_len = name_wire_len(question.qname.labels());
     encode_question(question, &mut response);
-    compressor.register_wire_name_at_offset(
-        &response[DNS_HEADER_LEN..DNS_HEADER_LEN + question_name_len],
+    compressor.register_name_labels_at_offset(
+        question.qname.labels(),
+        question.qname_wire_len(),
+        question.qname_ascii_lowercase(),
         DNS_HEADER_LEN,
     );
 
-    for record in answers.iter().chain(authorities).chain(additionals) {
-        encode_zone_image_wire_record(*record, &mut response, &mut compressor);
-    }
+    encode_zone_image_wire_record_section(answers, &mut response, &mut compressor);
+    encode_zone_image_wire_record_section(authorities, &mut response, &mut compressor);
+    encode_zone_image_wire_record_section(additionals, &mut response, &mut compressor);
 
-    if let Some(edns) = metadata.edns {
-        encode_opt_record(
-            edns,
-            metadata.extended_rcode,
-            metadata.extended_dns_error,
-            options,
-            metadata.udp_ceiling(options),
-            &mut response,
-        );
-    }
-
+    append_zone_image_response_edns(
+        &mut response,
+        metadata,
+        options,
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
     Some(response)
 }
 
-fn truncated_zone_image_dnssec_augmented(
-    metadata: &RequestMetadata,
-    answers: &[ZoneImageWireRecord<'_>],
-    authorities: &[ZoneImageWireRecord<'_>],
-    additionals: &[ZoneImageWireRecord<'_>],
-) -> bool {
-    metadata.dnssec_augmented
-        && answers
-            .iter()
-            .chain(authorities)
-            .chain(additionals)
-            .any(|record| {
-                matches!(
-                    record.rr_type,
-                    rr_type if rr_type == RecordType::Ds as u16
-                        || rr_type == RecordType::Rrsig as u16
-                        || rr_type == RecordType::Nsec as u16
-                        || rr_type == RecordType::Nsec3 as u16
-                )
-            })
+fn encode_zone_image_wire_record_section(
+    records: &[ZoneImageWireRecord<'_>],
+    response: &mut Vec<u8>,
+    compressor: &mut WireNameCompressor,
+) {
+    for record in records {
+        encode_zone_image_wire_record(*record, response, compressor);
+    }
+}
+
+fn zone_image_wire_record_uncompressed_len(record: ZoneImageWireRecord<'_>) -> usize {
+    record
+        .owner_wire
+        .len()
+        .saturating_add(10)
+        .saturating_add(usize::from(u16::from_be_bytes(record.rdlength_bytes)))
 }
 
 fn build_direct_zone_image_answer_response(
@@ -1544,105 +2339,49 @@ fn build_direct_zone_image_answer_response(
     plan: &ZoneImageLookupPlan,
     metadata: RequestMetadata,
     options: AnswerOptions,
+    response_sizing: ZoneImageResponseSizing,
 ) -> Option<Vec<u8>> {
-    if plan.rcode() != Rcode::NoError
-        || !plan.authoritative()
-        || metadata.dnssec_requested()
-        || !plan.authority_rrsets().is_empty()
-        || !plan.additional_rrsets().is_empty()
-        || plan.answer_rrsets().len() != 1
-    {
-        return None;
-    }
-
-    let rrset_id = plan.answer_rrsets()[0];
-    let rr_type = image.rrset_type(rrset_id)?;
-    if !zone_image_fast_direct_copy_rdata_type(rr_type) {
-        return None;
-    }
-
-    let rrset_wire = image.rrset_wire(rrset_id)?;
-    let rrset_owner_wire = image.rrset_owner_wire(rrset_id)?;
-    let question_name_len = name_wire_len(question.qname.labels());
-    let mut response =
-        Vec::with_capacity(DNS_HEADER_LEN + question_name_len + 4 + rrset_wire.len() + 64);
-    response.extend_from_slice(&header.id.to_be_bytes());
-    response.extend_from_slice(
-        &header
-            .response_flags(plan.rcode(), plan.authoritative(), false)
-            .to_be_bytes(),
+    debug_assert!(
+        !metadata.dnssec_requested(),
+        "direct ZoneImage answer builder is only called for non-DNSSEC requests"
     );
-    response.extend_from_slice(&1u16.to_be_bytes());
-    let answer_count_offset = response.len();
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&u16::from(metadata.edns.is_some()).to_be_bytes());
-    let question_name_offset = response.len();
+    if !plan.direct_answer_candidate() {
+        return None;
+    }
+
+    debug_assert_eq!(plan.rcode(), Rcode::NoError);
+    debug_assert!(plan.authoritative());
+    debug_assert!(plan.authority_rrsets().is_empty());
+    debug_assert!(plan.additional_rrsets().is_empty());
+    debug_assert!(!plan.has_custom_answer_items());
+    let [rrset_id] = plan.answer_rrsets() else {
+        return None;
+    };
+    let rrset = image.direct_rrset_wire(*rrset_id)?;
+    let response_capacity =
+        zone_image_response_capacity_hint(response_sizing, rrset.body_wire_len, false);
+    let mut response = zone_image_response_prefix(
+        header,
+        Rcode::NoError.response_flag_bits(true),
+        false,
+        rrset.section_count_header_bytes(response_sizing.edns.additional_count != 0),
+        response_capacity,
+    );
     encode_question(question, &mut response);
-    let question_name_end = question_name_offset.checked_add(question_name_len)?;
-    if !wire_names_equal_ignore_ascii_case(
-        rrset_owner_wire,
-        &response[question_name_offset..question_name_end],
-    ) {
-        return None;
-    }
 
-    let mut cursor = 0usize;
-    let mut appended = 0u16;
-    while cursor < rrset_wire.len() {
-        let owner_end = cursor.checked_add(rrset_owner_wire.len())?;
-        let header_end = owner_end.checked_add(10)?;
-        if header_end > rrset_wire.len() {
-            return None;
-        }
-        let rdlength =
-            u16::from_be_bytes([rrset_wire[header_end - 2], rrset_wire[header_end - 1]]) as usize;
-        let record_end = header_end.checked_add(rdlength)?;
-        if record_end > rrset_wire.len() {
-            return None;
-        }
-        response.extend_from_slice(&0xc00cu16.to_be_bytes());
-        response.extend_from_slice(&rrset_wire[owner_end..record_end]);
-        appended = appended.checked_add(1)?;
-        cursor = record_end;
-    }
-    if appended == 0 {
-        return None;
-    }
-    response[answer_count_offset..answer_count_offset + 2].copy_from_slice(&appended.to_be_bytes());
+    image.append_eligible_direct_answer_wire(&rrset, &mut response);
+    append_zone_image_response_edns(
+        &mut response,
+        &metadata,
+        options,
+        response_sizing.udp_ceiling,
+        response_sizing.edns,
+    );
 
-    if let Some(edns) = metadata.edns {
-        encode_opt_record(
-            edns,
-            metadata.extended_rcode,
-            metadata.extended_dns_error,
-            options,
-            metadata.udp_ceiling(options),
-            &mut response,
-        );
-    }
-
-    if options.transport == Transport::Udp && response.len() > metadata.udp_ceiling(options) {
+    if options.transport == Transport::Udp && response.len() > response_sizing.udp_ceiling {
         return None;
     }
     Some(response)
-}
-
-fn zone_image_fast_direct_copy_rdata_type(rr_type: u16) -> bool {
-    rr_type != RecordType::Ns as u16
-        && rr_type != RecordType::Cname as u16
-        && rr_type != RecordType::Ptr as u16
-        && rr_type != RecordType::Soa as u16
-        && rr_type != RecordType::Mx as u16
-        && rr_type != RecordType::Opt as u16
-        && rr_type != RecordType::Tkey as u16
-        && rr_type != RecordType::Tsig as u16
-        && rr_type != RecordType::Ixfr as u16
-        && rr_type != RecordType::Axfr as u16
-}
-
-fn wire_names_equal_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len() && left.eq_ignore_ascii_case(right)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1658,7 +2397,7 @@ fn build_response_inner(
     metadata: &RequestMetadata,
     options: AnswerOptions,
 ) -> Vec<u8> {
-    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question.map_or(0, question_wire_len));
+    let mut response = Vec::with_capacity(DNS_HEADER_LEN + question.map_or(0, Question::wire_len));
     let mut compressor = NameCompressor::default();
     response.extend_from_slice(&header.id.to_be_bytes());
     response.extend_from_slice(
@@ -1733,12 +2472,6 @@ fn build_truncated_response(
     }
 
     loop {
-        let response_metadata = metadata.with_dnssec_augmented(truncated_dnssec_augmented(
-            &metadata,
-            &kept_answers,
-            &kept_authorities,
-            &kept_additionals,
-        ));
         let response = build_response_inner(
             header,
             rcode,
@@ -1748,7 +2481,7 @@ fn build_truncated_response(
             &kept_answers,
             &kept_authorities,
             &kept_additionals,
-            &response_metadata,
+            &metadata,
             options,
         );
         if response.len() <= ceiling {
@@ -1771,28 +2504,6 @@ fn build_truncated_response(
             return response;
         }
     }
-}
-
-fn truncated_dnssec_augmented(
-    metadata: &RequestMetadata,
-    answers: &[ResourceRecord],
-    authorities: &[ResourceRecord],
-    additionals: &[ResourceRecord],
-) -> bool {
-    metadata.dnssec_augmented
-        && answers
-            .iter()
-            .chain(authorities)
-            .chain(additionals)
-            .any(|record| {
-                matches!(
-                    record.rr_type,
-                    rr_type if rr_type == RecordType::Ds as u16
-                        || rr_type == RecordType::Rrsig as u16
-                        || rr_type == RecordType::Nsec as u16
-                        || rr_type == RecordType::Nsec3 as u16
-                )
-            })
 }
 
 #[derive(Debug, Default)]
@@ -1847,10 +2558,17 @@ impl NameCompressor {
 
 #[derive(Debug, Default)]
 struct WireNameCompressor {
-    suffix_offsets: HashMap<Vec<u8>, u16>,
+    suffix_offsets: SmallVec<[WireSuffixOffset; 8]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WireSuffixOffset {
+    key: SmallVec<[u8; 64]>,
+    offset: u16,
 }
 
 impl WireNameCompressor {
+    #[cfg(test)]
     fn register_wire_name_at_offset(&mut self, wire_name: &[u8], start_offset: usize) {
         let Some(label_offsets) = wire_label_offsets(wire_name) else {
             return;
@@ -1863,35 +2581,48 @@ impl WireNameCompressor {
         }
     }
 
+    fn register_name_labels_at_offset(
+        &mut self,
+        labels: &[Vec<u8>],
+        name_wire_len: usize,
+        labels_are_ascii_lowercase: bool,
+        start_offset: usize,
+    ) {
+        debug_assert!(
+            self.suffix_offsets.is_empty(),
+            "question labels seed a fresh response compressor"
+        );
+        let mut offset = start_offset;
+        let mut suffix_wire_len = name_wire_len;
+        for index in 0..labels.len() {
+            if offset <= 0x3fff && suffix_wire_len > 2 {
+                self.push_label_suffix_offset(
+                    &labels[index..],
+                    suffix_wire_len,
+                    labels_are_ascii_lowercase,
+                    offset as u16,
+                );
+            }
+            let label_wire_len = 1 + labels[index].len();
+            offset += label_wire_len;
+            suffix_wire_len = suffix_wire_len.saturating_sub(label_wire_len);
+        }
+    }
+
     fn write_wire_name(&mut self, wire_name: &[u8], response: &mut Vec<u8>) {
-        let Some(label_offsets) = wire_label_offsets(wire_name) else {
+        if wire_name.len() > 2
+            && let Some(offset) = self.wire_suffix_offset(wire_name)
+        {
+            response.extend_from_slice(&(0xc000 | offset).to_be_bytes());
+            return;
+        }
+
+        let Some((write_end, pointer_suffix)) = self.wire_name_write_plan(wire_name, false) else {
             response.extend_from_slice(wire_name);
             return;
         };
-        let pointer_suffix = label_offsets.iter().find_map(|label_offset| {
-            let suffix = &wire_name[*label_offset..];
-            if suffix.len() <= 2 {
-                return None;
-            }
-            self.wire_suffix_offset(suffix)
-                .map(|offset| (*label_offset, offset))
-        });
-        let pointer_label_offset = pointer_suffix.map(|(label_offset, _)| label_offset);
-        let write_end = pointer_label_offset.unwrap_or(wire_name.len() - 1);
         let response_start = response.len();
-        for label_offset in label_offsets
-            .iter()
-            .copied()
-            .take_while(|label_offset| *label_offset < write_end)
-        {
-            let response_offset = response_start + label_offset;
-            if response_offset <= 0x3fff && wire_name.len().saturating_sub(label_offset) > 2 {
-                self.register_wire_suffix_offset(
-                    &wire_name[label_offset..],
-                    response_offset as u16,
-                );
-            }
-        }
+        self.register_pre_pointer_wire_suffixes(wire_name, write_end, response_start);
         response.extend_from_slice(&wire_name[..write_end]);
         if let Some((_, offset)) = pointer_suffix {
             response.extend_from_slice(&(0xc000 | offset).to_be_bytes());
@@ -1900,22 +2631,97 @@ impl WireNameCompressor {
         }
     }
 
-    fn wire_suffix_offset(&self, wire_suffix: &[u8]) -> Option<u16> {
-        let key = canonical_wire_suffix_key(wire_suffix);
-        self.suffix_offsets.get(key.as_ref()).copied()
+    fn wire_name_write_plan(
+        &self,
+        wire_name: &[u8],
+        check_full_suffix: bool,
+    ) -> Option<(usize, Option<(usize, u16)>)> {
+        let mut pointer_suffix = None;
+        let mut cursor = 0usize;
+        loop {
+            let len = *wire_name.get(cursor)? as usize;
+            if len & 0xc0 != 0 || len > 63 {
+                return None;
+            }
+            if len == 0 {
+                if cursor + 1 != wire_name.len() {
+                    return None;
+                }
+                let write_end = pointer_suffix.map_or(cursor, |(label_offset, _)| label_offset);
+                return Some((write_end, pointer_suffix));
+            }
+            if (cursor != 0 || check_full_suffix)
+                && pointer_suffix.is_none()
+                && wire_name.len().saturating_sub(cursor) > 2
+                && let Some(offset) = self.wire_suffix_offset(&wire_name[cursor..])
+            {
+                pointer_suffix = Some((cursor, offset));
+            }
+            cursor = cursor.checked_add(1)?.checked_add(len)?;
+            if cursor >= wire_name.len() {
+                return None;
+            }
+        }
     }
 
+    fn register_pre_pointer_wire_suffixes(
+        &mut self,
+        wire_name: &[u8],
+        write_end: usize,
+        response_start: usize,
+    ) {
+        let mut cursor = 0usize;
+        while cursor < write_end {
+            let response_offset = response_start + cursor;
+            if response_offset <= 0x3fff && wire_name.len().saturating_sub(cursor) > 2 {
+                self.push_wire_suffix_offset(&wire_name[cursor..], response_offset as u16);
+            }
+            cursor += 1 + wire_name[cursor] as usize;
+        }
+    }
+
+    fn wire_suffix_offset(&self, wire_suffix: &[u8]) -> Option<u16> {
+        for entry in &self.suffix_offsets {
+            if wire_suffix_matches_key(wire_suffix, &entry.key) {
+                return Some(entry.offset);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
     fn register_wire_suffix_offset(&mut self, wire_suffix: &[u8], offset: u16) {
-        let key = canonical_wire_suffix_key(wire_suffix);
-        if self.suffix_offsets.contains_key(key.as_ref()) {
+        if self.wire_suffix_offset(wire_suffix).is_some() {
             return;
         }
-        self.suffix_offsets.insert(key.into_owned(), offset);
+        self.push_wire_suffix_offset(wire_suffix, offset);
+    }
+
+    fn push_wire_suffix_offset(&mut self, wire_suffix: &[u8], offset: u16) {
+        self.suffix_offsets.push(WireSuffixOffset {
+            key: wire_suffix_small_key(wire_suffix),
+            offset,
+        });
+    }
+
+    fn push_label_suffix_offset(
+        &mut self,
+        labels: &[Vec<u8>],
+        wire_len: usize,
+        labels_are_ascii_lowercase: bool,
+        offset: u16,
+    ) {
+        self.suffix_offsets.push(WireSuffixOffset {
+            key: label_suffix_small_key(labels, wire_len, labels_are_ascii_lowercase),
+            offset,
+        });
     }
 }
 
+#[cfg(test)]
 type WireLabelOffsets = SmallVec<[usize; 8]>;
 
+#[cfg(test)]
 fn wire_label_offsets(wire_name: &[u8]) -> Option<WireLabelOffsets> {
     let mut offsets = SmallVec::new();
     let mut cursor = 0usize;
@@ -1935,7 +2741,7 @@ fn wire_label_offsets(wire_name: &[u8]) -> Option<WireLabelOffsets> {
     }
 }
 
-fn wire_name_len_at(bytes: &[u8], offset: usize) -> Option<usize> {
+pub(crate) fn wire_name_len_at(bytes: &[u8], offset: usize) -> Option<usize> {
     let mut cursor = offset;
     loop {
         let len = *bytes.get(cursor)? as usize;
@@ -1953,6 +2759,7 @@ fn wire_name_len_at(bytes: &[u8], offset: usize) -> Option<usize> {
     }
 }
 
+#[cfg(test)]
 fn wire_suffix_key(wire_suffix: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(wire_suffix.len());
     let mut cursor = 0usize;
@@ -1973,14 +2780,99 @@ fn wire_suffix_key(wire_suffix: &[u8]) -> Vec<u8> {
     key
 }
 
-fn canonical_wire_suffix_key(wire_suffix: &[u8]) -> Cow<'_, [u8]> {
-    if wire_suffix_is_ascii_lowercase(wire_suffix) {
-        Cow::Borrowed(wire_suffix)
+fn wire_suffix_small_key(wire_suffix: &[u8]) -> SmallVec<[u8; 64]> {
+    let mut key = SmallVec::with_capacity(wire_suffix.len());
+    let mut cursor = 0usize;
+    while cursor < wire_suffix.len() {
+        let len = wire_suffix[cursor] as usize;
+        key.push(wire_suffix[cursor]);
+        cursor += 1;
+        if len == 0 {
+            break;
+        }
+        let label = &wire_suffix[cursor..cursor + len];
+        if label.iter().any(u8::is_ascii_uppercase) {
+            key.extend(label.iter().map(u8::to_ascii_lowercase));
+        } else {
+            key.extend_from_slice(label);
+        }
+        cursor += len;
+    }
+    key
+}
+
+fn label_suffix_small_key(
+    labels: &[Vec<u8>],
+    wire_len: usize,
+    labels_are_ascii_lowercase: bool,
+) -> SmallVec<[u8; 64]> {
+    let mut key = SmallVec::with_capacity(wire_len);
+    if labels_are_ascii_lowercase {
+        for label in labels {
+            key.push(label.len() as u8);
+            key.extend_from_slice(label);
+        }
     } else {
-        Cow::Owned(wire_suffix_key(wire_suffix))
+        for label in labels {
+            key.push(label.len() as u8);
+            key.extend(label.iter().map(u8::to_ascii_lowercase));
+        }
+    }
+    key.push(0);
+    key
+}
+
+fn wire_suffix_matches_key(wire_suffix: &[u8], key: &[u8]) -> bool {
+    if wire_suffix == key {
+        return true;
+    }
+
+    let mut suffix_cursor = 0usize;
+    let mut key_cursor = 0usize;
+    loop {
+        let Some(&suffix_len) = wire_suffix.get(suffix_cursor) else {
+            return false;
+        };
+        let Some(&key_len) = key.get(key_cursor) else {
+            return false;
+        };
+        if suffix_len != key_len {
+            return false;
+        }
+        suffix_cursor += 1;
+        key_cursor += 1;
+        let label_len = suffix_len as usize;
+        if label_len == 0 {
+            return suffix_cursor == wire_suffix.len() && key_cursor == key.len();
+        }
+        let Some(suffix_label) = wire_suffix.get(suffix_cursor..suffix_cursor + label_len) else {
+            return false;
+        };
+        let Some(key_label) = key.get(key_cursor..key_cursor + label_len) else {
+            return false;
+        };
+        if !wire_label_matches_key(suffix_label, key_label) {
+            return false;
+        }
+        suffix_cursor += label_len;
+        key_cursor += label_len;
     }
 }
 
+fn wire_label_matches_key(label: &[u8], canonical_key_label: &[u8]) -> bool {
+    label == canonical_key_label || label.eq_ignore_ascii_case(canonical_key_label)
+}
+
+#[cfg(test)]
+fn canonical_wire_suffix_key(wire_suffix: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if wire_suffix_is_ascii_lowercase(wire_suffix) {
+        std::borrow::Cow::Borrowed(wire_suffix)
+    } else {
+        std::borrow::Cow::Owned(wire_suffix_key(wire_suffix))
+    }
+}
+
+#[cfg(test)]
 fn wire_suffix_is_ascii_lowercase(wire_suffix: &[u8]) -> bool {
     let mut cursor = 0usize;
     while cursor < wire_suffix.len() {
@@ -2000,14 +2892,9 @@ fn wire_suffix_is_ascii_lowercase(wire_suffix: &[u8]) -> bool {
     true
 }
 
-fn question_wire_len(question: &Question) -> usize {
-    name_wire_len(question.qname.labels()) + 4
-}
-
 fn encode_question(question: &Question, response: &mut Vec<u8>) {
     encode_name_labels(question.qname.labels(), response);
-    response.extend_from_slice(&question.qtype.to_be_bytes());
-    response.extend_from_slice(&question.qclass.to_be_bytes());
+    response.extend_from_slice(&question.qtype_qclass_wire);
 }
 
 fn encode_name_labels(labels: &[Vec<u8>], response: &mut Vec<u8>) {
@@ -2049,91 +2936,47 @@ fn encode_zone_image_wire_record(
     compressor: &mut WireNameCompressor,
 ) {
     compressor.write_wire_name(record.owner_wire, response);
-    response.extend_from_slice(&record.rr_type.to_be_bytes());
-    response.extend_from_slice(&record.class.to_be_bytes());
-    response.extend_from_slice(&record.ttl.to_be_bytes());
+    response.extend_from_slice(&record.fixed_fields);
+    if record.rdata_encoding.is_copy() {
+        debug_assert_eq!(
+            usize::from(u16::from_be_bytes(record.rdlength_bytes)),
+            record.rdata.len()
+        );
+        response.extend_from_slice(&record.rdlength_bytes);
+        response.extend_from_slice(record.rdata);
+        return;
+    }
+
     let rdlength_offset = response.len();
     response.extend_from_slice(&0u16.to_be_bytes());
     let rdata_offset = response.len();
-    encode_zone_image_wire_record_rdata(record.rr_type, record.rdata, response, compressor);
+    encode_zone_image_wire_record_rdata(record.rdata_encoding, record.rdata, response, compressor);
     let rdlength = response.len() - rdata_offset;
     response[rdlength_offset..rdlength_offset + 2]
         .copy_from_slice(&(rdlength as u16).to_be_bytes());
 }
 
 fn encode_zone_image_wire_record_rdata(
-    rr_type: u16,
+    rdata_encoding: PackedRdataEncoding,
     rdata: &[u8],
     response: &mut Vec<u8>,
     compressor: &mut WireNameCompressor,
 ) {
-    match rr_type {
-        rr_type
-            if rr_type == RecordType::Ns as u16
-                || rr_type == RecordType::Cname as u16
-                || rr_type == RecordType::Ptr as u16 =>
-        {
-            encode_wire_single_name_rdata(rdata, response, compressor)
-        }
-        rr_type if rr_type == RecordType::Soa as u16 => {
-            encode_wire_soa_rdata(rdata, response, compressor)
-        }
-        rr_type if rr_type == RecordType::Mx as u16 => {
-            encode_wire_mx_rdata(rdata, response, compressor)
-        }
-        _ => response.extend_from_slice(rdata),
-    }
-}
-
-fn encode_wire_single_name_rdata(
-    rdata: &[u8],
-    response: &mut Vec<u8>,
-    compressor: &mut WireNameCompressor,
-) {
-    if wire_name_len_at(rdata, 0) == Some(rdata.len()) {
+    if rdata_encoding.is_copy() {
+        response.extend_from_slice(rdata);
+    } else if rdata_encoding.is_single_name() {
         compressor.write_wire_name(rdata, response);
-    } else {
-        response.extend_from_slice(rdata);
-    }
-}
-
-fn encode_wire_soa_rdata(
-    rdata: &[u8],
-    response: &mut Vec<u8>,
-    compressor: &mut WireNameCompressor,
-) {
-    let Some(mname_len) = wire_name_len_at(rdata, 0) else {
-        response.extend_from_slice(rdata);
-        return;
-    };
-    let Some(rname_len) = wire_name_len_at(rdata, mname_len) else {
-        response.extend_from_slice(rdata);
-        return;
-    };
-    let timers_offset = mname_len + rname_len;
-    if timers_offset + 20 != rdata.len() {
-        response.extend_from_slice(rdata);
-        return;
-    }
-    compressor.write_wire_name(&rdata[..mname_len], response);
-    compressor.write_wire_name(&rdata[mname_len..timers_offset], response);
-    response.extend_from_slice(&rdata[timers_offset..]);
-}
-
-fn encode_wire_mx_rdata(rdata: &[u8], response: &mut Vec<u8>, compressor: &mut WireNameCompressor) {
-    if rdata.len() < 3 {
-        response.extend_from_slice(rdata);
-        return;
-    }
-    let Some(exchange_len) = wire_name_len_at(rdata, 2) else {
-        response.extend_from_slice(rdata);
-        return;
-    };
-    if 2 + exchange_len == rdata.len() {
+    } else if let Some((mname_len, rname_len)) = rdata_encoding.soa_lengths() {
+        let mname_len = usize::from(mname_len);
+        let rname_len = usize::from(rname_len);
+        debug_assert!(rname_len > 0);
+        debug_assert_eq!(mname_len + rname_len + 20, rdata.len());
+        compressor.write_wire_name(&rdata[..mname_len], response);
+        compressor.write_wire_name(&rdata[mname_len..mname_len + rname_len], response);
+        response.extend_from_slice(&rdata[mname_len + rname_len..]);
+    } else if rdata_encoding.is_mx() {
         response.extend_from_slice(&rdata[..2]);
         compressor.write_wire_name(&rdata[2..], response);
-    } else {
-        response.extend_from_slice(rdata);
     }
 }
 
@@ -2224,93 +3067,181 @@ fn encode_opt_record(
     udp_ceiling: usize,
     response: &mut Vec<u8>,
 ) {
-    let rdata = encode_edns_response_options(
+    let base_shape = edns_response_base_shape(edns, options, extended_dns_error);
+    encode_opt_record_with_base_shape(
+        edns,
+        extended_rcode,
+        extended_dns_error,
+        options,
+        udp_ceiling,
+        base_shape,
+        response,
+    );
+}
+
+fn encode_opt_record_with_base_shape(
+    edns: EdnsMetadata,
+    extended_rcode: u16,
+    extended_dns_error: Option<ExtendedDnsError>,
+    options: AnswerOptions,
+    udp_ceiling: usize,
+    base_shape: EdnsResponseBaseShape,
+    response: &mut Vec<u8>,
+) {
+    debug_assert_eq!(
+        base_shape.extended_dns_error,
+        if options.extended_dns_errors == ExtendedDnsErrorsMode::Minimal {
+            extended_dns_error
+        } else {
+            None
+        }
+    );
+    let shape = edns_response_options_shape_from_base(
         edns,
         options,
-        extended_dns_error,
+        base_shape,
         response.len(),
         udp_ceiling,
     );
-
-    response.push(0);
-    response.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
+    response.extend_from_slice(&OPT_OWNER_AND_TYPE_WIRE);
     response.extend_from_slice(&options.max_udp_payload.to_be_bytes());
     let ext_rcode = ((extended_rcode >> 4) as u32) << 24;
     let ttl = ext_rcode | u32::from(edns.do_bit) << 15;
     response.extend_from_slice(&ttl.to_be_bytes());
-    response.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
-    response.extend_from_slice(&rdata);
+    response.extend_from_slice(&(shape.rdata_len as u16).to_be_bytes());
+    let rdata_start = response.len();
+    append_edns_response_options(edns, options, shape, response);
+    debug_assert_eq!(response.len() - rdata_start, shape.rdata_len);
 }
 
-fn encode_edns_response_options(
+fn edns_response_base_shape(
     edns: EdnsMetadata,
     options: AnswerOptions,
     extended_dns_error: Option<ExtendedDnsError>,
+) -> EdnsResponseBaseShape {
+    let tcp_keepalive_response =
+        options.transport == Transport::Tcp && edns.tcp_keepalive_requested;
+    let nsid_len = if edns.nsid_requested && !options.nsid.is_empty() {
+        options.nsid.len()
+    } else {
+        0
+    };
+    let cookie_response = edns.cookie.is_some() && options.dns_cookie.is_some();
+    let extended_dns_error = if options.extended_dns_errors == ExtendedDnsErrorsMode::Minimal {
+        extended_dns_error
+    } else {
+        None
+    };
+
+    let mut rdata_len = 0usize;
+    if tcp_keepalive_response {
+        rdata_len = rdata_len.saturating_add(6);
+    }
+    if nsid_len > 0 {
+        rdata_len = rdata_len.saturating_add(4).saturating_add(nsid_len);
+    }
+    if cookie_response {
+        rdata_len = rdata_len
+            .saturating_add(4)
+            .saturating_add(DNS_COOKIE_CLIENT_LEN)
+            .saturating_add(DNS_COOKIE_SERVER_V1_LEN);
+    }
+    if extended_dns_error.is_some() {
+        rdata_len = rdata_len.saturating_add(6);
+    }
+
+    EdnsResponseBaseShape {
+        tcp_keepalive_response,
+        nsid_len,
+        cookie_response,
+        extended_dns_error,
+        rdata_len,
+    }
+}
+
+fn edns_response_options_shape_from_base(
+    edns: EdnsMetadata,
+    options: AnswerOptions,
+    base_shape: EdnsResponseBaseShape,
     response_len_before_opt: usize,
     udp_ceiling: usize,
-) -> Vec<u8> {
-    let mut rdata = Vec::new();
+) -> EdnsResponseOptionsShape {
+    let mut rdata_len = base_shape.rdata_len;
+    let padding_len = if edns.padding_requested && options.edns_padding_block_size > 0 {
+        let block_size = options.edns_padding_block_size as usize;
+        let total_before_padding_data = response_len_before_opt + 11 + rdata_len + 4;
+        let padding_len = (block_size - (total_before_padding_data % block_size)) % block_size;
+        let padded_response_len = total_before_padding_data + padding_len;
 
-    if options.transport == Transport::Tcp && edns.tcp_keepalive_requested {
+        if options.transport == Transport::Udp && padded_response_len > udp_ceiling {
+            None
+        } else {
+            rdata_len = rdata_len.saturating_add(4).saturating_add(padding_len);
+            Some(padding_len)
+        }
+    } else {
+        None
+    };
+
+    EdnsResponseOptionsShape {
+        tcp_keepalive_response: base_shape.tcp_keepalive_response,
+        nsid_len: base_shape.nsid_len,
+        cookie_response: base_shape.cookie_response,
+        extended_dns_error: base_shape.extended_dns_error,
+        padding_len,
+        rdata_len,
+    }
+}
+
+fn append_edns_response_options(
+    edns: EdnsMetadata,
+    options: AnswerOptions,
+    shape: EdnsResponseOptionsShape,
+    response: &mut Vec<u8>,
+) {
+    if shape.tcp_keepalive_response {
         let timeout_units = options
             .tcp_keepalive_timeout_secs
             .saturating_mul(10)
             .min(u64::from(u16::MAX)) as u16;
 
-        rdata.extend_from_slice(&EDNS_TCP_KEEPALIVE_OPTION.to_be_bytes());
-        rdata.extend_from_slice(&2u16.to_be_bytes());
-        rdata.extend_from_slice(&timeout_units.to_be_bytes());
+        response.extend_from_slice(&EDNS_TCP_KEEPALIVE_RESPONSE_OPTION_PREFIX);
+        response.extend_from_slice(&timeout_units.to_be_bytes());
     }
 
-    if edns.nsid_requested && !options.nsid.is_empty() {
-        rdata.extend_from_slice(&EDNS_NSID_OPTION.to_be_bytes());
-        rdata.extend_from_slice(&(options.nsid.len() as u16).to_be_bytes());
-        rdata.extend_from_slice(options.nsid);
+    if shape.nsid_len > 0 {
+        response.extend_from_slice(&EDNS_NSID_OPTION.to_be_bytes());
+        response.extend_from_slice(&(shape.nsid_len as u16).to_be_bytes());
+        response.extend_from_slice(options.nsid);
     }
 
-    if let (Some(cookie), Some(context)) = (edns.cookie, options.dns_cookie) {
+    if shape.cookie_response {
+        let cookie = edns
+            .cookie
+            .expect("EDNS response shape requires request cookie");
+        let context = options
+            .dns_cookie
+            .expect("EDNS response shape requires DNS Cookie context");
         let server_cookie = compute_dns_server_cookie(cookie.client, context);
-        rdata.extend_from_slice(&EDNS_COOKIE_OPTION.to_be_bytes());
-        rdata.extend_from_slice(
-            &((DNS_COOKIE_CLIENT_LEN + DNS_COOKIE_SERVER_V1_LEN) as u16).to_be_bytes(),
-        );
-        rdata.extend_from_slice(&cookie.client);
-        rdata.extend_from_slice(&server_cookie);
+        response.extend_from_slice(&EDNS_COOKIE_RESPONSE_OPTION_PREFIX);
+        response.extend_from_slice(&cookie.client);
+        response.extend_from_slice(&server_cookie);
     }
 
-    if options.extended_dns_errors == ExtendedDnsErrorsMode::Minimal
-        && let Some(error) = extended_dns_error
-    {
-        rdata.extend_from_slice(&EDNS_EXTENDED_DNS_ERROR_OPTION.to_be_bytes());
-        rdata.extend_from_slice(&2u16.to_be_bytes());
-        rdata.extend_from_slice(&error.info_code().to_be_bytes());
+    if let Some(error) = shape.extended_dns_error {
+        response.extend_from_slice(&EDNS_EXTENDED_DNS_ERROR_RESPONSE_OPTION_PREFIX);
+        response.extend_from_slice(&error.info_code().to_be_bytes());
     }
 
-    if edns.padding_requested && options.edns_padding_block_size > 0 {
-        append_edns_padding_if_it_fits(&mut rdata, options, response_len_before_opt, udp_ceiling);
+    if let Some(padding_len) = shape.padding_len {
+        append_edns_padding(response, padding_len);
     }
-
-    rdata
 }
 
-fn append_edns_padding_if_it_fits(
-    rdata: &mut Vec<u8>,
-    options: AnswerOptions,
-    response_len_before_opt: usize,
-    udp_ceiling: usize,
-) {
-    let block_size = options.edns_padding_block_size as usize;
-    let total_before_padding_data = response_len_before_opt + 11 + rdata.len() + 4;
-    let padding_len = (block_size - (total_before_padding_data % block_size)) % block_size;
-    let padded_response_len = total_before_padding_data + padding_len;
-
-    if options.transport == Transport::Udp && padded_response_len > udp_ceiling {
-        return;
-    }
-
-    rdata.extend_from_slice(&EDNS_PADDING_OPTION.to_be_bytes());
-    rdata.extend_from_slice(&(padding_len as u16).to_be_bytes());
-    rdata.resize(rdata.len() + padding_len, 0);
+fn append_edns_padding(response: &mut Vec<u8>, padding_len: usize) {
+    response.extend_from_slice(&EDNS_PADDING_OPTION.to_be_bytes());
+    response.extend_from_slice(&(padding_len as u16).to_be_bytes());
+    response.resize(response.len() + padding_len, 0);
 }
 
 pub fn request_has_valid_dns_server_cookie(packet: &[u8], context: DnsCookieContext) -> bool {
@@ -2452,7 +3383,6 @@ fn rejected_qtype(qtype: u16) -> Option<Rcode> {
 struct RequestMetadata {
     edns: Option<EdnsMetadata>,
     extended_rcode: u16,
-    dnssec_augmented: bool,
     extended_dns_error: Option<ExtendedDnsError>,
 }
 
@@ -2476,13 +3406,12 @@ impl RequestMetadata {
         Self {
             edns: None,
             extended_rcode: 0,
-            dnssec_augmented: false,
             extended_dns_error: None,
         }
     }
 
     fn parse(header: &Header, packet: &[u8], question: &Question) -> Result<Self, EdnsError> {
-        let mut offset = DNS_HEADER_LEN + question.wire().len();
+        let mut offset = DNS_HEADER_LEN + question.wire_len();
         for _ in 0..header.ancount {
             let (rr_type, consumed) = parse_record_header(packet, offset)?;
             if rr_type == RecordType::Opt as u16 {
@@ -2500,14 +3429,14 @@ impl RequestMetadata {
 
         let mut edns = None;
         for _ in 0..header.arcount {
-            let (record, consumed) = parse_additional_record(packet, offset)?;
+            let (record, consumed) = parse_record_view(packet, offset)?;
             offset += consumed;
             if record.rr_type == RecordType::Opt as u16 {
-                if edns.is_some() || record.owner != DomainName::root() {
+                if edns.is_some() || !record.owner_is_root {
                     return Err(EdnsError::FormErr);
                 }
 
-                let parsed_options = parse_edns_options(&record.rdata)?;
+                let parsed_options = parse_edns_options(record.rdata)?;
                 let metadata = EdnsMetadata {
                     payload_size: record.class.max(512),
                     version: ((record.ttl >> 16) & 0xff) as u8,
@@ -2521,7 +3450,6 @@ impl RequestMetadata {
                     return Err(EdnsError::BadVers(Self {
                         edns: Some(metadata),
                         extended_rcode: 0,
-                        dnssec_augmented: false,
                         extended_dns_error: None,
                     }));
                 }
@@ -2536,18 +3464,12 @@ impl RequestMetadata {
         Ok(Self {
             edns,
             extended_rcode: 0,
-            dnssec_augmented: false,
             extended_dns_error: None,
         })
     }
 
     fn with_extended_rcode(mut self, extended_rcode: u16) -> Self {
         self.extended_rcode = extended_rcode;
-        self
-    }
-
-    fn with_dnssec_augmented(mut self, dnssec_augmented: bool) -> Self {
-        self.dnssec_augmented = dnssec_augmented;
         self
     }
 
@@ -2582,6 +3504,25 @@ struct EdnsMetadata {
     padding_requested: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdnsResponseBaseShape {
+    tcp_keepalive_response: bool,
+    nsid_len: usize,
+    cookie_response: bool,
+    extended_dns_error: Option<ExtendedDnsError>,
+    rdata_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdnsResponseOptionsShape {
+    tcp_keepalive_response: bool,
+    nsid_len: usize,
+    cookie_response: bool,
+    extended_dns_error: Option<ExtendedDnsError>,
+    padding_len: Option<usize>,
+    rdata_len: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct EdnsOptions {
     tcp_keepalive_requested: bool,
@@ -2602,14 +3543,14 @@ struct EdnsServerCookie {
     bytes: [u8; 32],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedRecord {
-    owner: DomainName,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedRecordView<'a> {
+    owner_is_root: bool,
     rr_type: u16,
     class: u16,
     ttl: u32,
     rdata_offset: usize,
-    rdata: Vec<u8>,
+    rdata: &'a [u8],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2620,7 +3561,7 @@ enum EdnsError {
 
 fn parse_record_header(packet: &[u8], offset: usize) -> Result<(u16, usize), EdnsError> {
     let start = offset;
-    let (_, consumed) = DomainName::parse(packet, offset).map_err(|_| EdnsError::FormErr)?;
+    let consumed = skip_compressed_name(packet, offset).map_err(|_| EdnsError::FormErr)?;
     let offset = offset + consumed;
     if offset + 10 > packet.len() {
         return Err(EdnsError::FormErr);
@@ -2634,12 +3575,32 @@ fn parse_record_header(packet: &[u8], offset: usize) -> Result<(u16, usize), Edn
     Ok((rr_type, end - start))
 }
 
-fn parse_additional_record(
+fn parse_record_view(
     packet: &[u8],
     offset: usize,
-) -> Result<(ParsedRecord, usize), EdnsError> {
+) -> Result<(ParsedRecordView<'_>, usize), EdnsError> {
+    parse_record_view_inner(packet, offset, None).map(|(record, _, consumed)| (record, consumed))
+}
+
+fn parse_record_view_with_owner_match<'packet>(
+    packet: &'packet [u8],
+    offset: usize,
+    expected_owner: &DomainName,
+) -> Result<((ParsedRecordView<'packet>, bool), usize), EdnsError> {
+    parse_record_view_inner(packet, offset, Some(expected_owner)).map(
+        |(record, owner_matches_expected, consumed)| ((record, owner_matches_expected), consumed),
+    )
+}
+
+fn parse_record_view_inner<'packet>(
+    packet: &'packet [u8],
+    offset: usize,
+    expected_owner: Option<&DomainName>,
+) -> Result<(ParsedRecordView<'packet>, bool, usize), EdnsError> {
     let start = offset;
-    let (owner, consumed) = DomainName::parse(packet, offset).map_err(|_| EdnsError::FormErr)?;
+    let owner_scan =
+        scan_compressed_name(packet, offset, expected_owner).map_err(|_| EdnsError::FormErr)?;
+    let consumed = owner_scan.consumed;
     let mut offset = offset + consumed;
     if offset + 10 > packet.len() {
         return Err(EdnsError::FormErr);
@@ -2658,18 +3619,19 @@ fn parse_additional_record(
     if offset + rdlength > packet.len() {
         return Err(EdnsError::FormErr);
     }
-    let rdata = packet[offset..offset + rdlength].to_vec();
+    let rdata = &packet[offset..offset + rdlength];
     offset += rdlength;
 
     Ok((
-        ParsedRecord {
-            owner,
+        ParsedRecordView {
+            owner_is_root: owner_scan.label_count == 0,
             rr_type,
             class,
             ttl,
             rdata_offset,
             rdata,
         },
+        owner_scan.matches_expected,
         offset - start,
     ))
 }
@@ -2756,32 +3718,22 @@ pub struct LookupMetrics {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneImageServeFailureReason {
-    PlanError,
-    DnssecPlanError,
     ResponseBuildFailed,
 }
 
 impl ZoneImageServeFailureReason {
-    pub const COUNT: usize = 3;
-    pub const ALL: [Self; 3] = [
-        Self::PlanError,
-        Self::DnssecPlanError,
-        Self::ResponseBuildFailed,
-    ];
+    pub const COUNT: usize = 1;
+    pub const ALL: [Self; 1] = [Self::ResponseBuildFailed];
 
     pub const fn metric_label(self) -> &'static str {
         match self {
-            Self::PlanError => "plan_error",
-            Self::DnssecPlanError => "dnssec_plan_error",
             Self::ResponseBuildFailed => "response_build_failed",
         }
     }
 
     pub const fn metric_index(self) -> usize {
         match self {
-            Self::PlanError => 0,
-            Self::DnssecPlanError => 1,
-            Self::ResponseBuildFailed => 2,
+            Self::ResponseBuildFailed => 0,
         }
     }
 }
@@ -3046,8 +3998,12 @@ mod tests {
     }
 
     fn store_response_with_zone_image(packet: &[u8], store: &ZoneStore) -> Vec<u8> {
-        let provider = |published: &PublishedZone| published.active_zone_image();
-        store_response_with_zone_image_provider(packet, store, AnswerOptions::default(), &provider)
+        store_response_with_zone_image_provider(
+            packet,
+            store,
+            AnswerOptions::default(),
+            &default_zone_image_provider,
+        )
     }
 
     fn store_response_with_zone_image_provider(
@@ -3078,16 +4034,64 @@ mod tests {
         let header = Header::parse(packet).ok()?;
         let question = Question::parse(packet).ok()?;
         let metadata = RequestMetadata::parse(&header, packet, &question).ok()?;
-        let plan = image
-            .lookup_response_plan(
-                &question.qname,
-                question.qtype,
-                question.qclass,
-                8,
-                options.any_response,
-            )
-            .ok()?;
-        build_direct_zone_image_answer_response(&header, &question, image, &plan, metadata, options)
+        if metadata.dnssec_requested() {
+            return None;
+        }
+        let udp_ceiling = metadata.udp_ceiling(options);
+        let response_sizing =
+            zone_image_response_sizing(&question, udp_ceiling, &metadata, options);
+        let plan = image.lookup_response_plan(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            8,
+            options.any_response,
+        );
+        build_direct_zone_image_answer_response(
+            &header,
+            &question,
+            image,
+            &plan,
+            metadata,
+            options,
+            response_sizing,
+        )
+    }
+
+    #[test]
+    fn truncation_retry_counts_patch_preencoded_section_count_bytes() {
+        let response_shape = ZoneImagePlanResponseShape {
+            response_flag_bits: 0,
+            answer_count: 2,
+            authority_count: 1,
+            additional_count: 1,
+            section_count_header_bytes: zone_image_section_count_header_bytes(2, 1, 1),
+            body_wire_upper_bound: 0,
+        };
+        let mut counts = ZoneImageRetrySectionCounts::from_response_shape(response_shape);
+
+        assert_eq!(
+            counts.section_count_header_bytes_with_extra_additional(1),
+            Some(zone_image_section_count_header_bytes(2, 1, 2))
+        );
+
+        counts.decrement_answer();
+        assert_eq!(
+            counts.section_count_header_bytes_with_extra_additional(1),
+            Some(zone_image_section_count_header_bytes(1, 1, 2))
+        );
+
+        counts.decrement_authority();
+        assert_eq!(
+            counts.section_count_header_bytes_with_extra_additional(1),
+            Some(zone_image_section_count_header_bytes(1, 0, 2))
+        );
+
+        counts.decrement_additional();
+        assert_eq!(
+            counts.section_count_header_bytes_with_extra_additional(1),
+            Some(zone_image_section_count_header_bytes(1, 0, 1))
+        );
     }
 
     fn response_answer_types(response: &[u8]) -> Vec<u16> {
@@ -3571,11 +4575,15 @@ mod tests {
     }
 
     fn nsec3_rdata_with_iterations(hash_algorithm: u8, iterations: u16) -> Vec<u8> {
+        const TEST_NEXT_HASH: [u8; 20] = [
+            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad,
+            0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+        ];
         let mut rdata = vec![hash_algorithm, 0];
         rdata.extend_from_slice(&iterations.to_be_bytes());
         rdata.push(0);
-        rdata.push(4);
-        rdata.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        rdata.push(TEST_NEXT_HASH.len() as u8);
+        rdata.extend_from_slice(&TEST_NEXT_HASH);
         rdata.extend_from_slice(&[0, 1, 0x40]);
         rdata
     }
@@ -3664,8 +4672,13 @@ mod tests {
         let response = store_response(&packet, &store);
 
         assert_eq!(response[3] & 0x0f, Rcode::NotImp as u8);
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
         assert_eq!(
-            store.get("example.test.").expect("zone exists").serial,
+            store
+                .exact_snapshot_for_transfer(&origin)
+                .expect("zone exists")
+                .metadata()
+                .serial,
             Some(7)
         );
     }
@@ -3701,6 +4714,25 @@ mod tests {
         append_answer(
             &mut packet,
             "example.test.",
+            RecordType::Soa as u16,
+            1,
+            soa_rdata(),
+        );
+        let store = ZoneStore::new();
+        store.insert_loading(DomainName::from_absolute_str("example.test.").unwrap());
+
+        let response = store_response(&packet, &store);
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+    }
+
+    #[test]
+    fn notify_embedded_soa_owner_matches_case_insensitively() {
+        let mut packet = notify(&example_name(), RecordType::Soa as u16, 1);
+        append_answer(
+            &mut packet,
+            "EXAMPLE.TEST.",
             RecordType::Soa as u16,
             1,
             soa_rdata(),
@@ -3973,6 +5005,71 @@ mod tests {
     }
 
     #[test]
+    fn chaos_txt_response_uses_direct_question_owner_pointer() {
+        let mut packet = query(
+            &DomainName::from_absolute_str("version.bind.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+        append_opt(&mut packet, 4096, 0, &edns_option(EDNS_NSID_OPTION, &[]));
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                chaos: ChaosOptions {
+                    version: "OxideDNS",
+                    hostname: "",
+                },
+                nsid: b"dns-bud-1",
+                ..AnswerOptions::default()
+            },
+        );
+        let answer_offset = first_answer_offset(&response);
+
+        assert_eq!(&response[answer_offset..answer_offset + 2], b"\xc0\x0c");
+        assert_eq!(
+            response_answer_rdatas(&response, RecordType::Txt as u16),
+            vec![b"\x08OxideDNS".to_vec()]
+        );
+        assert_eq!(
+            response_opt_option(&response, EDNS_NSID_OPTION),
+            Some(b"dns-bud-1".to_vec())
+        );
+    }
+
+    #[test]
+    fn chaos_version_name_matches_case_insensitively_without_canonical_key() {
+        let packet = query(
+            &DomainName::from_absolute_str("VeRsIoN.BiNd.")
+                .unwrap()
+                .to_wire(),
+            RecordType::Txt as u16,
+            DNS_CLASS_CH,
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                chaos: ChaosOptions {
+                    version: "OxideDNS",
+                    hostname: "",
+                },
+                ..AnswerOptions::default()
+            },
+        );
+
+        assert_eq!(response[3] & 0x0f, Rcode::NoError as u8);
+        assert_eq!(
+            response_answer_rdatas(&response, RecordType::Txt as u16),
+            vec![b"\x08OxideDNS".to_vec()]
+        );
+    }
+
+    #[test]
     fn chaos_hostname_txt_uses_config_then_printable_nsid_fallback() {
         for (chaos, nsid, expected) in [
             (
@@ -4172,6 +5269,27 @@ mod tests {
     }
 
     #[test]
+    fn skip_compressed_name_matches_parser_consumed_length() {
+        let mut packet = query(&example_name(), 1, 1);
+        packet.extend_from_slice(&0x9999u16.to_be_bytes());
+        packet.extend_from_slice(&0x0100u16.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        let compressed_offset = packet.len();
+        packet.extend_from_slice(b"\xc0\x0c");
+
+        let (_, parsed_consumed) = DomainName::parse(&packet, compressed_offset).unwrap();
+
+        assert_eq!(parsed_consumed, 2);
+        assert_eq!(
+            skip_compressed_name(&packet, compressed_offset).unwrap(),
+            parsed_consumed
+        );
+    }
+
+    #[test]
     fn parses_nested_compression_without_consumed_underflow() {
         let packet = b"\x07example\x04test\x00\x02ns\xc0\x00\x04mail\xc0\x0e";
 
@@ -4179,6 +5297,119 @@ mod tests {
 
         assert_eq!(name.to_string(), "mail.ns.example.test.");
         assert_eq!(consumed, 7);
+    }
+
+    #[test]
+    fn skip_compressed_name_validates_without_materializing_labels() {
+        let packet = b"\x07example\x04test\x00\x02ns\xc0\x00\x04mail\xc0\x0e";
+
+        assert_eq!(skip_compressed_name(packet, 19).unwrap(), 7);
+    }
+
+    #[test]
+    fn skip_compressed_name_rejects_pointer_loop() {
+        let packet = b"\xc0\x00";
+
+        assert_eq!(
+            skip_compressed_name(packet, 0).expect_err("pointer loop must fail"),
+            DnsParseError::FormErr
+        );
+    }
+
+    #[test]
+    fn parse_record_view_matches_compressed_owner_in_one_scan() {
+        let mut packet = b"\x07example\x04test\x00".to_vec();
+        let record_offset = packet.len();
+        packet.extend_from_slice(b"\x03WWW\xc0\x00");
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&300u32.to_be_bytes());
+        packet.extend_from_slice(&4u16.to_be_bytes());
+        packet.extend_from_slice(&[192, 0, 2, 1]);
+        let expected = DomainName::from_absolute_str("www.example.test.").unwrap();
+
+        let ((record, matches), consumed) =
+            parse_record_view_with_owner_match(&packet, record_offset, &expected).unwrap();
+
+        assert!(matches);
+        assert_eq!(record.rr_type, 1);
+        assert_eq!(record.rdata, [192, 0, 2, 1]);
+        assert_eq!(consumed, 6 + 10 + 4);
+    }
+
+    #[test]
+    fn parse_record_view_rejects_compressed_owner_mismatch() {
+        let mut packet = b"\x07example\x04test\x00".to_vec();
+        let record_offset = packet.len();
+        packet.extend_from_slice(b"\x03api\xc0\x00");
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&300u32.to_be_bytes());
+        packet.extend_from_slice(&4u16.to_be_bytes());
+        packet.extend_from_slice(&[192, 0, 2, 1]);
+        let expected = DomainName::from_absolute_str("www.example.test.").unwrap();
+
+        let ((record, matches), consumed) =
+            parse_record_view_with_owner_match(&packet, record_offset, &expected).unwrap();
+
+        assert!(!matches);
+        assert_eq!(record.rr_type, 1);
+        assert_eq!(consumed, 6 + 10 + 4);
+    }
+
+    #[test]
+    fn parse_record_header_skips_compressed_owner() {
+        let mut packet = query(&example_name(), 1, 1);
+        let record_offset = packet.len();
+        packet.extend_from_slice(b"\xc0\x0c");
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&300u32.to_be_bytes());
+        packet.extend_from_slice(&4u16.to_be_bytes());
+        packet.extend_from_slice(&[192, 0, 2, 1]);
+
+        let (rr_type, consumed) = parse_record_header(&packet, record_offset).unwrap();
+
+        assert_eq!(rr_type, 1);
+        assert_eq!(consumed, 2 + 10 + 4);
+    }
+
+    #[test]
+    fn parse_record_view_detects_compressed_root_owner_without_materializing() {
+        let mut packet = query(&example_name(), 1, 1);
+        let root_offset = packet.len();
+        packet.push(0);
+        let record_offset = packet.len();
+        packet.push(0xc0);
+        packet.push(root_offset as u8);
+        packet.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
+        packet.extend_from_slice(&1232u16.to_be_bytes());
+        packet.extend_from_slice(&0u32.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+
+        let (record, consumed) = parse_record_view(&packet, record_offset).unwrap();
+
+        assert!(record.owner_is_root);
+        assert_eq!(record.rr_type, RecordType::Opt as u16);
+        assert_eq!(record.class, 1232);
+        assert_eq!(consumed, 2 + 10);
+    }
+
+    #[test]
+    fn parse_with_ascii_lowercase_tracks_nested_compressed_name() {
+        let lowercase = b"\x07example\x04test\x00\x02ns\xc0\x00\x04mail\xc0\x0e";
+        let (name, consumed, ascii_lowercase) =
+            DomainName::parse_with_ascii_lowercase(lowercase, 19).unwrap();
+        assert_eq!(name.to_string(), "mail.ns.example.test.");
+        assert_eq!(consumed, 7);
+        assert!(ascii_lowercase);
+
+        let mixed_case = b"\x07Example\x04test\x00\x02ns\xc0\x00\x04mail\xc0\x0e";
+        let (name, consumed, ascii_lowercase) =
+            DomainName::parse_with_ascii_lowercase(mixed_case, 19).unwrap();
+        assert_eq!(name.to_string(), "mail.ns.Example.test.");
+        assert_eq!(consumed, 7);
+        assert!(!ascii_lowercase);
     }
 
     #[test]
@@ -4280,6 +5511,183 @@ mod tests {
             response_opt_option(&direct, EDNS_NSID_OPTION),
             Some(b"dns-bud-1".to_vec())
         );
+        assert_eq!(
+            direct.capacity(),
+            direct.len(),
+            "direct EDNS response should reserve from exact OPT option shape, not fixed slack"
+        );
+    }
+
+    #[test]
+    fn zone_image_reuses_rejected_direct_plan_for_generic_response() {
+        let alias = DomainName::from_absolute_str("alias.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                alias.clone(),
+                RecordType::Cname as u16,
+                1,
+                300,
+                vec![cname_rdata("target.example.test.")],
+            )],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let direct_plan = image
+            .lookup_direct_answer_plan(&alias, RecordType::Cname as u16, 1)
+            .expect("CNAME has a valid exact direct semantic plan");
+        assert!(direct_plan.direct_answer_candidate());
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot);
+        let packet = query(
+            b"\x05alias\x07example\x04test\x00",
+            RecordType::Cname as u16,
+            1,
+        );
+        let header = Header::parse(&packet).unwrap();
+        let question = Question::parse(&packet).unwrap();
+        let metadata = RequestMetadata::parse(&header, &packet, &question).unwrap();
+        let options = AnswerOptions::default();
+        let udp_ceiling = metadata.udp_ceiling(options);
+        let response_sizing =
+            zone_image_response_sizing(&question, udp_ceiling, &metadata, options);
+
+        assert!(
+            build_direct_zone_image_answer_response(
+                &header,
+                &question,
+                &image,
+                &direct_plan,
+                metadata,
+                options,
+                response_sizing,
+            )
+            .is_none(),
+            "compressible CNAME RDATA should fall back to the generic composer"
+        );
+        let expected = build_zone_image_response(
+            &header,
+            &question,
+            &image,
+            &direct_plan,
+            metadata,
+            options,
+            false,
+            response_sizing,
+        )
+        .expect("generic response builds from rejected direct semantic plan");
+
+        let observed = std::cell::Cell::new(None);
+        let response = match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+            &packet,
+            &store,
+            options,
+            |_, _| true,
+            |_, _, _| {},
+            |lookup| observed.set(Some(lookup)),
+            &default_zone_image_provider,
+        ) {
+            DatagramAction::Discard => panic!("expected response"),
+            DatagramAction::Respond(response) => response,
+        };
+
+        assert_eq!(response, expected);
+        assert_eq!(
+            response_answer_types(&response),
+            vec![RecordType::Cname as u16]
+        );
+        let metrics = observed.get().expect("lookup metrics observed");
+        assert!(metrics.zone_image_used);
+        assert!(
+            !metrics.zone_image_direct_answer,
+            "generic composer handled the rejected direct plan"
+        );
+    }
+
+    #[test]
+    fn direct_answer_body_uses_compiled_record_metadata() {
+        let qname = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                qname.clone(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec(), [192, 0, 2, 11].to_vec()],
+            )],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let plan = image
+            .lookup_direct_answer_plan(&qname, RecordType::A as u16, 1)
+            .expect("direct A plan exists");
+        let rrset = image
+            .direct_rrset_wire(plan.answer_rrsets()[0])
+            .expect("direct RRset wire exists");
+
+        assert_eq!(rrset.record_count(), 2);
+        assert_eq!(rrset.body_wire_len, 32);
+
+        let mut direct_answer_wire = Vec::new();
+        image.append_eligible_direct_answer_wire(&rrset, &mut direct_answer_wire);
+        assert_eq!(direct_answer_wire.len(), 32);
+        assert_eq!(&direct_answer_wire[..2], &0xc00cu16.to_be_bytes());
+        assert_eq!(&direct_answer_wire[16..18], &0xc00cu16.to_be_bytes());
+    }
+
+    #[test]
+    fn zone_image_wire_record_uncompressed_len_uses_carried_rdlength() {
+        let owner = b"\x03www\x07example\x04test\x00";
+        let rdata = b"\xc0\x00\x02\x01";
+        let a = ZoneImageWireRecord {
+            owner_wire: owner,
+            fixed_fields: zone_image_record_fixed_fields(RecordType::A as u16, 1, 300),
+            rdlength_bytes: 4u16.to_be_bytes(),
+            rdata_encoding: PackedRdataEncoding::copy(),
+            rdata,
+        };
+
+        assert_eq!(
+            zone_image_wire_record_uncompressed_len(a),
+            owner.len() + 10 + rdata.len()
+        );
+        let carried_len = ZoneImageWireRecord {
+            rdlength_bytes: 1u16.to_be_bytes(),
+            ..a
+        };
+        assert_eq!(
+            zone_image_wire_record_uncompressed_len(carried_len),
+            owner.len() + 10 + 1,
+            "truncation accounting should read the carried prevalidated rdlength"
+        );
+    }
+
+    #[test]
+    fn zone_image_direct_answer_fast_path_handles_case_insensitive_owner() {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![Rrset::new(
+                DomainName::from_absolute_str("www.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                300,
+                vec![[192, 0, 2, 10].to_vec()],
+            )],
+        );
+        let image = ZoneImage::compile(&snapshot).unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot);
+        let packet = query(b"\x03WWW\x07Example\x04TEST\x00", RecordType::A as u16, 1);
+
+        let direct =
+            direct_zone_image_response_for_packet(&packet, &image, AnswerOptions::default())
+                .expect("direct fast path should accept case-insensitive owner match");
+        let snapshot_response = store_response(&packet, &store);
+
+        assert_eq!(direct, snapshot_response);
+        assert_eq!(direct[first_answer_offset(&direct)..][0] & 0xc0, 0xc0);
     }
 
     #[test]
@@ -4369,6 +5777,13 @@ mod tests {
                     vec![mx_rdata(10, "mail.example.test.")],
                 ),
                 Rrset::new(
+                    DomainName::from_absolute_str("*.wild.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("www.example.test.")],
+                ),
+                Rrset::new(
                     DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
                     1,
@@ -4396,6 +5811,11 @@ mod tests {
             query(b"\x07example\x04test\x00", RecordType::Soa as u16, 1);
         let mx_with_compressible_rdata =
             query(b"\x02mx\x07example\x04test\x00", RecordType::Mx as u16, 1);
+        let wildcard_cname_to_final_a = query(
+            b"\x04host\x04wild\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
 
         for (packet, options) in [
             (&cname, AnswerOptions::default()),
@@ -4405,6 +5825,7 @@ mod tests {
             (&do_bit, AnswerOptions::default()),
             (&soa_with_compressible_rdata, AnswerOptions::default()),
             (&mx_with_compressible_rdata, AnswerOptions::default()),
+            (&wildcard_cname_to_final_a, AnswerOptions::default()),
         ] {
             assert!(
                 direct_zone_image_response_for_packet(packet, &image, options).is_none(),
@@ -4679,6 +6100,96 @@ mod tests {
     }
 
     #[test]
+    fn zone_image_generic_response_capacity_uses_plan_wire_bound_before_udp_ceiling() {
+        let snapshot = ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("alias.example.test.").unwrap(),
+                    RecordType::Cname as u16,
+                    1,
+                    300,
+                    vec![cname_rdata("target.example.test.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("target.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![[192, 0, 2, 10].to_vec()],
+                ),
+            ],
+        );
+        let image = ZoneImage::compile(&snapshot).expect("zone image compiles");
+        let mut packet = query(b"\x05alias\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[]);
+        let header = Header::parse(&packet).expect("header parses");
+        let question = Question::parse(&packet).expect("question parses");
+        let metadata =
+            RequestMetadata::parse(&header, &packet, &question).expect("metadata parses");
+        let options = AnswerOptions::default();
+        let udp_ceiling = metadata.udp_ceiling(options);
+        let response_sizing =
+            zone_image_response_sizing(&question, udp_ceiling, &metadata, options);
+        let plan = image.lookup_response_plan(
+            &question.qname,
+            question.qtype,
+            question.qclass,
+            8,
+            options.any_response,
+        );
+        let response = build_zone_image_response(
+            &header,
+            &question,
+            &image,
+            &plan,
+            metadata,
+            options,
+            false,
+            response_sizing,
+        )
+        .expect("zone image response builds");
+        let lookup =
+            snapshot
+                .offline_oracle()
+                .lookup(&question.qname, question.qtype, question.qclass);
+        let snapshot_response = build_response_inner(
+            &header,
+            lookup.rcode,
+            lookup.authoritative,
+            false,
+            Some(&question),
+            &lookup.answers,
+            &lookup.authorities,
+            &lookup.additionals,
+            &metadata,
+            options,
+        );
+
+        assert_eq!(response, snapshot_response);
+        assert_eq!(
+            response.capacity(),
+            DNS_HEADER_LEN
+                .saturating_add(question.wire_len())
+                .saturating_add(plan.response_body_wire_upper_bound())
+                .saturating_add(response_sizing.edns.capacity_hint),
+            "ordinary unpadded generic UDP response should size from the carried plan wire bound"
+        );
+        assert!(
+            response.capacity() < 4096,
+            "ordinary unpadded generic UDP response should not reserve the whole EDNS ceiling"
+        );
+    }
+
+    #[test]
     fn zone_image_serving_handles_dnssec_do_queries() {
         let store = ZoneStore::new();
         store.insert_snapshot(ZoneSnapshot::active(
@@ -4703,23 +6214,32 @@ mod tests {
         ));
         let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         append_opt(&mut packet, 4096, 0x8000, &[]);
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
+        let observed = std::cell::Cell::new(None);
 
         let snapshot_response =
             store_response_with_options(&packet, &store, AnswerOptions::default());
-        let zone_image_response = store_response_with_zone_image_provider(
-            &packet,
-            &store,
-            AnswerOptions::default(),
-            &provider,
-        );
+        let zone_image_response =
+            match answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+                &packet,
+                &store,
+                AnswerOptions::default(),
+                |_, _| true,
+                |_, _, _| {},
+                |metrics| observed.set(Some(metrics)),
+                &default_zone_image_provider,
+            ) {
+                DatagramAction::Discard => panic!("expected response"),
+                DatagramAction::Respond(response) => response,
+            };
 
-        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
+        assert_eq!(
+            observed
+                .get()
+                .map(|metrics| metrics.zone_image_direct_answer),
+            Some(false),
+            "DO-bit responses should go directly to the generic DNSSEC composer"
+        );
         assert_eq!(
             response_answer_types(&zone_image_response),
             vec![RecordType::A as u16, RecordType::Rrsig as u16]
@@ -4792,11 +6312,6 @@ mod tests {
                 ),
             ],
         ));
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
 
         let mut positive = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         append_opt(&mut positive, 4096, 0x8000, &[]);
@@ -4820,7 +6335,7 @@ mod tests {
                 packet,
                 &store,
                 AnswerOptions::default(),
-                &provider,
+                &default_zone_image_provider,
             );
 
             assert_eq!(zone_image_response, snapshot_response);
@@ -4861,7 +6376,6 @@ mod tests {
                 RecordType::Rrsig as u16,
             ]
         );
-        assert_eq!(provider_calls.get(), 3);
     }
 
     #[test]
@@ -4995,11 +6509,6 @@ mod tests {
             append_opt(&mut packet, 4096, 0x8000, &[]);
             let store = ZoneStore::new();
             store.insert_snapshot(snapshot);
-            let provider_calls = std::cell::Cell::new(0);
-            let provider = |published: &PublishedZone| {
-                provider_calls.set(provider_calls.get() + 1);
-                published.active_zone_image()
-            };
 
             let snapshot_response =
                 store_response_with_options(&packet, &store, AnswerOptions::default());
@@ -5007,10 +6516,9 @@ mod tests {
                 &packet,
                 &store,
                 AnswerOptions::default(),
-                &provider,
+                &default_zone_image_provider,
             );
 
-            assert_eq!(provider_calls.get(), 1, "ZoneImage was not used for {case}");
             assert_eq!(
                 zone_image_response, snapshot_response,
                 "packet mismatch for {case}"
@@ -5054,11 +6562,6 @@ mod tests {
             any_response: AnyResponseMode::Full,
             ..AnswerOptions::default()
         };
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
         let observed = std::cell::Cell::new(None);
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -5070,13 +6573,12 @@ mod tests {
                 |_, _| true,
                 |_, _, _| {},
                 |metrics| observed.set(Some(metrics)),
-                &provider,
+                &default_zone_image_provider,
             ) {
                 DatagramAction::Discard => panic!("expected response"),
                 DatagramAction::Respond(response) => response,
             };
 
-        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(
             observed
@@ -5113,11 +6615,6 @@ mod tests {
             any_response: AnyResponseMode::Full,
             ..AnswerOptions::default()
         };
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
         let observed = std::cell::Cell::new(None);
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -5129,13 +6626,12 @@ mod tests {
                 |_, _| true,
                 |_, _, _| {},
                 |metrics| observed.set(Some(metrics)),
-                &provider,
+                &default_zone_image_provider,
             ) {
                 DatagramAction::Discard => panic!("expected response"),
                 DatagramAction::Respond(response) => response,
             };
 
-        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(
             observed
@@ -5161,11 +6657,6 @@ mod tests {
         ));
         let packet = query(b"\x03www\x07example\x04test\x00", RecordType::Txt as u16, 1);
         let options = AnswerOptions::udp(128);
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
         let observed = std::cell::Cell::new(None);
 
         let snapshot_response = store_response_with_options(&packet, &store, options);
@@ -5177,14 +6668,13 @@ mod tests {
                 |_, _| true,
                 |_, _, _| {},
                 |metrics| observed.set(Some(metrics)),
-                &provider,
+                &default_zone_image_provider,
             ) {
                 DatagramAction::Discard => panic!("expected response"),
                 DatagramAction::Respond(response) => response,
             };
         let flags = u16::from_be_bytes([zone_image_response[2], zone_image_response[3]]);
 
-        assert_eq!(provider_calls.get(), 1);
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(
             observed
@@ -5210,11 +6700,6 @@ mod tests {
                 vec![[192, 0, 2, 10].to_vec()],
             )],
         ));
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
 
         let mut nsid_packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         append_opt(
@@ -5228,7 +6713,12 @@ mod tests {
             ..AnswerOptions::default()
         };
         assert_eq!(
-            store_response_with_zone_image_provider(&nsid_packet, &store, nsid_options, &provider),
+            store_response_with_zone_image_provider(
+                &nsid_packet,
+                &store,
+                nsid_options,
+                &default_zone_image_provider,
+            ),
             store_response_with_options(&nsid_packet, &store, nsid_options)
         );
 
@@ -5251,7 +6741,7 @@ mod tests {
             &cookie_packet,
             &store,
             cookie_options,
-            &provider,
+            &default_zone_image_provider,
         );
         assert_eq!(
             cookie_response,
@@ -5279,14 +6769,13 @@ mod tests {
             &padding_packet,
             &store,
             padding_options,
-            &provider,
+            &default_zone_image_provider,
         );
         assert_eq!(
             padding_response,
             store_response_with_options(&padding_packet, &store, padding_options)
         );
         assert_eq!(padding_response.len() % 32, 0);
-        assert_eq!(provider_calls.get(), 3);
     }
 
     #[test]
@@ -5299,22 +6788,86 @@ mod tests {
             extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
             ..AnswerOptions::default()
         };
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
-
         let snapshot_response = store_response_with_options(&packet, &store, options);
-        let zone_image_response =
-            store_response_with_zone_image_provider(&packet, &store, options, &provider);
+        let zone_image_response = store_response_with_zone_image_provider(
+            &packet,
+            &store,
+            options,
+            &default_zone_image_provider,
+        );
 
-        assert_eq!(provider_calls.get(), 0);
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(zone_image_response[3] & 0x0f, Rcode::ServFail as u8);
         assert_eq!(
             response_ede_info_codes(&zone_image_response),
             vec![EDE_NOT_READY]
+        );
+    }
+
+    #[test]
+    fn zone_image_failure_response_uses_zone_image_prefix_path() {
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &[]);
+        let header = Header::parse(&packet).expect("header parses");
+        let question = Question::parse(&packet).expect("question parses");
+        let metadata = RequestMetadata::parse(&header, &packet, &question)
+            .expect("metadata parses")
+            .with_extended_dns_error(ExtendedDnsError::NotReady);
+        let options = AnswerOptions {
+            extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+            ..AnswerOptions::default()
+        };
+
+        let response = build_zone_image_failure_response(&header, &question, metadata, options);
+        let expected = build_response(
+            &header,
+            Rcode::ServFail,
+            true,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        );
+
+        assert_eq!(response, expected);
+        assert_eq!(response_ede_info_codes(&response), vec![EDE_NOT_READY]);
+    }
+
+    #[test]
+    fn empty_response_uses_zone_image_prefix_and_edns_path() {
+        let mut packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        append_opt(&mut packet, 4096, 0, &edns_option(EDNS_NSID_OPTION, &[]));
+        let header = Header::parse(&packet).expect("header parses");
+        let question = Question::parse(&packet).expect("question parses");
+        let metadata =
+            RequestMetadata::parse(&header, &packet, &question).expect("metadata parses");
+        let options = AnswerOptions {
+            nsid: b"dns-bud-1",
+            ..AnswerOptions::default()
+        };
+
+        let response = build_response(
+            &header,
+            Rcode::Refused,
+            false,
+            Some(&question),
+            &[],
+            &[],
+            &[],
+            metadata,
+            options,
+        );
+
+        assert_eq!(u16::from_be_bytes([response[4], response[5]]), 1);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0);
+        assert_eq!(u16::from_be_bytes([response[8], response[9]]), 0);
+        assert_eq!(u16::from_be_bytes([response[10], response[11]]), 1);
+        assert_eq!(response[3] & 0x0f, Rcode::Refused as u8);
+        assert_eq!(
+            response_opt_option(&response, EDNS_NSID_OPTION),
+            Some(b"dns-bud-1".to_vec())
         );
     }
 
@@ -5341,11 +6894,6 @@ mod tests {
                 ),
             ],
         ));
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
 
         let mut small_edns_512 = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
         append_opt(&mut small_edns_512, 512, 0, &[]);
@@ -5370,8 +6918,12 @@ mod tests {
             (big_edns_4096, AnswerOptions::udp(4096), false),
         ] {
             let snapshot_response = store_response_with_options(&packet, &store, options);
-            let zone_image_response =
-                store_response_with_zone_image_provider(&packet, &store, options, &provider);
+            let zone_image_response = store_response_with_zone_image_provider(
+                &packet,
+                &store,
+                options,
+                &default_zone_image_provider,
+            );
             let flags = u16::from_be_bytes([zone_image_response[2], zone_image_response[3]]);
 
             assert_eq!(zone_image_response, snapshot_response);
@@ -5380,8 +6932,6 @@ mod tests {
                 assert!(zone_image_response.len() <= options.max_udp_payload as usize);
             }
         }
-
-        assert_eq!(provider_calls.get(), 5);
     }
 
     #[test]
@@ -5548,7 +7098,15 @@ mod tests {
         packet.extend_from_slice(&1u16.to_be_bytes());
         let parsed_question = Question::parse(&packet).unwrap();
         assert_eq!(parsed_question.qname.to_string(), "www.");
+        assert_eq!(parsed_question.wire_len(), 10);
+        assert_eq!(parsed_question.qname_wire_len(), 6);
+        assert!(parsed_question.qname_ascii_lowercase());
         assert_eq!(parsed_question.qtype, RecordType::A as u16);
+        assert_eq!(
+            parsed_question.qtype_qclass_wire,
+            [0, RecordType::A as u8, 0, 1,],
+            "question stores parsed QTYPE/QCLASS wire bytes for response echo"
+        );
         assert_eq!(
             parsed_question.qname.canonical_key(),
             DomainName::from_absolute_str("www.")
@@ -5561,6 +7119,12 @@ mod tests {
                 .is_equal_or_subdomain_of(&DomainName::from_absolute_str("www.").unwrap())
         );
         assert!(store.find_published_zone(&parsed_question.qname).is_some());
+
+        let mut mixed_case_packet = packet.clone();
+        mixed_case_packet[13..16].copy_from_slice(b"WWW");
+        let mixed_case_question = Question::parse(&mixed_case_packet).unwrap();
+        assert_eq!(mixed_case_question.qname.to_string(), "WWW.");
+        assert!(!mixed_case_question.qname_ascii_lowercase());
 
         let response = store_response(&packet, &store);
         let answer_offset = first_answer_offset(&response);
@@ -5659,6 +7223,111 @@ mod tests {
     }
 
     #[test]
+    fn domain_name_replaces_borrowed_wire_suffix_without_parsing_domain() {
+        let qname = DomainName::from_absolute_str("leaf.subtree.example.test.").unwrap();
+        let suffix_wire = DomainName::from_absolute_str("subtree.example.test.")
+            .unwrap()
+            .to_wire();
+        let replacement = DomainName::from_absolute_str("target.example.test.").unwrap();
+        let expected = DomainName::from_absolute_str("leaf.target.example.test.").unwrap();
+
+        assert_eq!(
+            qname.with_replaced_wire_suffix(&suffix_wire, &replacement),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            qname.with_replaced_wire_suffix_and_wire(&suffix_wire, &replacement),
+            Some((expected.clone(), expected.to_wire()))
+        );
+        let replacement_wire = replacement.to_wire();
+        let suffix_label_count = wire_label_count(&suffix_wire).expect("suffix wire is valid");
+        let (wire_only, prefix_len) = qname
+            .with_replaced_wire_suffix_wire_counted(
+                &suffix_wire,
+                suffix_label_count,
+                &replacement_wire,
+            )
+            .expect("suffix replacement writes target wire");
+        assert_eq!(wire_only.as_slice(), expected.to_wire().as_slice());
+        assert_eq!(prefix_len, 1);
+
+        let mixed_case = DomainName::from_absolute_str("SubTree.Example.TEST.")
+            .unwrap()
+            .to_wire();
+        assert_eq!(
+            qname.with_replaced_wire_suffix(&mixed_case, &replacement),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            qname.with_replaced_wire_suffix_and_wire(&mixed_case, &replacement),
+            Some((expected.clone(), expected.to_wire()))
+        );
+    }
+
+    #[test]
+    fn domain_name_rejects_malformed_wire_suffix_replacement() {
+        let qname = DomainName::from_absolute_str("leaf.subtree.example.test.").unwrap();
+        let replacement = DomainName::from_absolute_str("target.example.test.").unwrap();
+
+        assert_eq!(
+            qname.with_replaced_wire_suffix(b"\x03bad\x00extra", &replacement),
+            None
+        );
+        assert_eq!(
+            qname.with_replaced_wire_suffix(b"\xc0\x0c", &replacement),
+            None
+        );
+        assert_eq!(
+            qname.with_replaced_wire_suffix(
+                &DomainName::from_absolute_str("other.example.test.")
+                    .unwrap()
+                    .to_wire(),
+                &replacement,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn domain_name_canonical_wire_lowercases_labels_without_reparse() {
+        let name = DomainName::from_absolute_str("WWW.Example.TEST.").unwrap();
+
+        assert_eq!(
+            name.to_canonical_wire(),
+            DomainName::from_absolute_str("www.example.test.")
+                .unwrap()
+                .to_wire()
+        );
+    }
+
+    #[test]
+    fn domain_name_wire_len_matches_serialized_wire() {
+        let name = DomainName::from_absolute_str("WWW.Example.TEST.").unwrap();
+        let mut wire = Vec::with_capacity(name.wire_len());
+
+        name.append_wire_to(&mut wire);
+
+        assert_eq!(name.wire_len(), wire.len());
+        assert_eq!(wire, name.to_wire());
+    }
+
+    #[test]
+    fn domain_name_suffix_from_label_index_clones_checked_suffix() {
+        let name = DomainName::from_absolute_str("leaf.subtree.example.test.").unwrap();
+
+        assert_eq!(
+            name.suffix_from_label_index(1),
+            Some(DomainName::from_absolute_str("subtree.example.test.").unwrap())
+        );
+        assert_eq!(
+            name.suffix_from_label_index(3),
+            Some(DomainName::from_absolute_str("test.").unwrap())
+        );
+        assert_eq!(name.suffix_from_label_index(4), Some(DomainName::root()));
+        assert_eq!(name.suffix_from_label_index(5), None);
+    }
+
+    #[test]
     fn wire_suffix_keys_borrow_canonical_lowercase_suffixes() {
         let lowercase = b"\x03www\x07example\x04test\x00";
         let mixed_case = b"\x03WWW\x07Example\x04test\x00";
@@ -5672,12 +7341,43 @@ mod tests {
             std::borrow::Cow::Owned(_)
         ));
         assert_eq!(wire_suffix_key(lowercase), wire_suffix_key(mixed_case));
+        assert_eq!(wire_suffix_small_key(lowercase).as_slice(), lowercase);
+        assert_eq!(
+            wire_suffix_small_key(mixed_case).as_slice(),
+            wire_suffix_key(mixed_case).as_slice()
+        );
+        let lowercase_labels = vec![b"www".to_vec(), b"example".to_vec(), b"test".to_vec()];
+        let mixed_case_labels = vec![b"WWW".to_vec(), b"Example".to_vec(), b"test".to_vec()];
+        assert_eq!(
+            label_suffix_small_key(&lowercase_labels, lowercase.len(), true).as_slice(),
+            lowercase
+        );
+        assert_eq!(
+            label_suffix_small_key(&mixed_case_labels, mixed_case.len(), false).as_slice(),
+            wire_suffix_key(mixed_case).as_slice()
+        );
+        assert!(wire_suffix_matches_key(
+            mixed_case,
+            wire_suffix_small_key(lowercase).as_slice()
+        ));
+        assert!(wire_suffix_matches_key(
+            lowercase,
+            wire_suffix_small_key(lowercase).as_slice()
+        ));
+        assert!(wire_label_matches_key(b"example", b"example"));
+        assert!(wire_label_matches_key(b"Example", b"example"));
+        assert!(!wire_label_matches_key(b"example", b"invalid"));
     }
 
     #[test]
     fn wire_name_compressor_copies_malformed_names_opaquely() {
         let mut compressor = WireNameCompressor::default();
         compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+        assert_eq!(compressor.suffix_offsets.len(), 2);
+        assert!(
+            !compressor.suffix_offsets.spilled(),
+            "common response suffix table remains inline"
+        );
 
         for wire_name in [
             b"\xc0\x0c".as_slice(),
@@ -5691,13 +7391,89 @@ mod tests {
     }
 
     #[test]
+    fn wire_name_compressor_skips_offsets_after_selected_pointer() {
+        let mut compressor = WireNameCompressor::default();
+        compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+
+        let (write_end, pointer_suffix) = compressor
+            .wire_name_write_plan(b"\x03www\x07example\x04test\x00", true)
+            .unwrap();
+        assert_eq!(write_end, 4);
+        assert_eq!(pointer_suffix, Some((4, 12)));
+
+        let (write_end, pointer_suffix) = compressor
+            .wire_name_write_plan(b"\x07example\x04test\x00", true)
+            .unwrap();
+        assert_eq!(write_end, 0);
+        assert_eq!(pointer_suffix, Some((0, 12)));
+    }
+
+    #[test]
+    fn wire_name_compressor_skips_duplicate_full_suffix_probe_after_miss() {
+        let mut compressor = WireNameCompressor::default();
+        compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+
+        let (write_end, pointer_suffix) = compressor
+            .wire_name_write_plan(b"\x03www\x07example\x04test\x00", false)
+            .unwrap();
+        assert_eq!(write_end, 4);
+        assert_eq!(pointer_suffix, Some((4, 12)));
+
+        let (write_end, pointer_suffix) = compressor
+            .wire_name_write_plan(b"\x07example\x04test\x00", false)
+            .unwrap();
+        assert_eq!(write_end, 8);
+        assert_eq!(pointer_suffix, Some((8, 20)));
+    }
+
+    #[test]
+    fn wire_name_compressor_registers_prechecked_suffixes_once() {
+        let mut compressor = WireNameCompressor::default();
+        compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
+
+        let mut exact = Vec::new();
+        compressor.write_wire_name(b"\x07example\x04test\x00", &mut exact);
+        assert_eq!(
+            exact, b"\xc0\x0c",
+            "exact full-name suffix emits the existing pointer immediately"
+        );
+        assert_eq!(
+            compressor.suffix_offsets.len(),
+            2,
+            "exact suffix pointer does not register duplicate suffixes"
+        );
+
+        let mut out = vec![0; 40];
+        compressor.write_wire_name(b"\x03www\x07example\x04test\x00", &mut out);
+        assert_eq!(
+            &out[40..],
+            b"\x03www\xc0\x0c",
+            "existing suffix is compressed"
+        );
+        assert_eq!(
+            compressor.suffix_offsets.len(),
+            3,
+            "only the missing pre-pointer suffix is registered"
+        );
+
+        out.resize(80, 0);
+        compressor.write_wire_name(b"\x03WWW\x07example\x04test\x00", &mut out);
+        assert_eq!(
+            &out[80..],
+            b"\xc0\x28",
+            "case-insensitive full-name suffix reuses the first registration"
+        );
+        assert_eq!(compressor.suffix_offsets.len(), 3);
+    }
+
+    #[test]
     fn zone_image_known_name_rdata_encoder_compresses_or_copies_safely() {
         let mut compressor = WireNameCompressor::default();
         compressor.register_wire_name_at_offset(b"\x07example\x04test\x00", 12);
 
         let mut single_name = Vec::new();
         encode_zone_image_wire_record_rdata(
-            RecordType::Cname as u16,
+            PackedRdataEncoding::single_name(),
             b"\x06target\x07example\x04test\x00",
             &mut single_name,
             &mut compressor,
@@ -5706,7 +7482,7 @@ mod tests {
 
         let mut mx = Vec::new();
         encode_zone_image_wire_record_rdata(
-            RecordType::Mx as u16,
+            PackedRdataEncoding::mx(),
             b"\x00\x0a\x04mail\x07example\x04test\x00",
             &mut mx,
             &mut compressor,
@@ -5718,7 +7494,7 @@ mod tests {
             b"\x02ns\x07example\x04test\x00\x0ahostmaster\x07example\x04test\x00".to_vec();
         soa_rdata.extend_from_slice(&[0; 20]);
         encode_zone_image_wire_record_rdata(
-            RecordType::Soa as u16,
+            PackedRdataEncoding::soa(17, 25),
             &soa_rdata,
             &mut soa,
             &mut compressor,
@@ -5727,19 +7503,36 @@ mod tests {
         expected_soa.extend_from_slice(&[0; 20]);
         assert_eq!(soa, expected_soa);
 
-        for (rr_type, malformed) in [
-            (RecordType::Ns as u16, b"\xc0\x0c".as_slice()),
-            (RecordType::Ptr as u16, b"\x03ww".as_slice()),
-            (RecordType::Mx as u16, b"\x00\x0a\x03ww".as_slice()),
-            (
-                RecordType::Soa as u16,
-                b"\x02ns\x00\x04host\x00short".as_slice(),
-            ),
+        for malformed in [
+            b"\xc0\x0c".as_slice(),
+            b"\x03ww".as_slice(),
+            b"\x00\x0a\x03ww".as_slice(),
+            b"\x02ns\x00\x04host\x00short".as_slice(),
         ] {
             let mut out = Vec::new();
-            encode_zone_image_wire_record_rdata(rr_type, malformed, &mut out, &mut compressor);
-            assert_eq!(out, malformed, "malformed RDATA changed for type {rr_type}");
+            encode_zone_image_wire_record_rdata(
+                PackedRdataEncoding::copy(),
+                malformed,
+                &mut out,
+                &mut compressor,
+            );
+            assert_eq!(out, malformed, "copy RDATA changed");
         }
+
+        let mut copy_record = Vec::new();
+        encode_zone_image_wire_record(
+            ZoneImageWireRecord {
+                owner_wire: b"\x00",
+                fixed_fields: zone_image_record_fixed_fields(RecordType::Txt as u16, 1, 300),
+                rdlength_bytes: 3u16.to_be_bytes(),
+                rdata_encoding: PackedRdataEncoding::copy(),
+                rdata: b"\x02ok",
+            },
+            &mut copy_record,
+            &mut WireNameCompressor::default(),
+        );
+        assert_eq!(&copy_record[9..11], &3u16.to_be_bytes());
+        assert_eq!(&copy_record[11..], b"\x02ok");
     }
 
     #[test]
@@ -6272,7 +8065,6 @@ mod tests {
         append_opt(&mut packet, 4096, 0x8000, &[]);
 
         let nsec3_iterations_exceeded = std::cell::Cell::new(false);
-        let provider = |published: &PublishedZone| published.active_zone_image();
         let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
             &packet,
             &store,
@@ -6284,7 +8076,7 @@ mod tests {
             |_, _| true,
             |_, _, _| {},
             |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
-            &provider,
+            &default_zone_image_provider,
         );
         let response = match action {
             DatagramAction::Discard => panic!("expected response"),
@@ -6354,11 +8146,6 @@ mod tests {
             extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
             ..AnswerOptions::udp(DEFAULT_MAX_UDP_PAYLOAD)
         };
-        let provider_calls = std::cell::Cell::new(0);
-        let provider = |published: &PublishedZone| {
-            provider_calls.set(provider_calls.get() + 1);
-            published.active_zone_image()
-        };
         let nsec3_iterations_exceeded = std::cell::Cell::new(false);
 
         let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
@@ -6368,7 +8155,7 @@ mod tests {
             |_, _| true,
             |_, _, _| {},
             |lookup| nsec3_iterations_exceeded.set(lookup.nsec3_iterations_exceeded),
-            &provider,
+            &default_zone_image_provider,
         );
         let zone_image_response = match action {
             DatagramAction::Discard => panic!("expected response"),
@@ -6376,7 +8163,6 @@ mod tests {
         };
         let snapshot_response = store_response_with_options(&packet, &store, options);
 
-        assert_eq!(provider_calls.get(), 1);
         assert!(nsec3_iterations_exceeded.get());
         assert_eq!(zone_image_response, snapshot_response);
         assert_eq!(zone_image_response[3] & 0x0f, Rcode::NxDomain as u8);
@@ -6388,6 +8174,71 @@ mod tests {
         assert_eq!(
             response_ede_info_codes(&zone_image_response),
             vec![EDE_UNSUPPORTED_NSEC3_ITERATIONS]
+        );
+    }
+
+    #[test]
+    fn zone_image_truncation_reuses_ede_stripped_edns_sizing() {
+        let missing_nsec3 = nsec3_owner("missing.example.test.", "example.test.");
+        let wildcard_nsec3 = nsec3_owner("*.example.test.", "example.test.");
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            DomainName::from_absolute_str("example.test.").unwrap(),
+            Some(1),
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("example.test.").unwrap(),
+                    RecordType::Soa as u16,
+                    1,
+                    3600,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    missing_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+                Rrset::new(
+                    wildcard_nsec3,
+                    RecordType::Nsec3 as u16,
+                    1,
+                    300,
+                    vec![nsec3_rdata_with_iterations(1, 1)],
+                ),
+            ],
+        ));
+        let mut packet = query(
+            b"\x07missing\x07example\x04test\x00",
+            RecordType::A as u16,
+            1,
+        );
+        append_opt(&mut packet, 80, 0x8000, &[]);
+        let options = AnswerOptions {
+            nsec3_max_iterations: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Minimal,
+            ..AnswerOptions::udp(80)
+        };
+
+        let zone_image_response = store_response_with_zone_image_provider(
+            &packet,
+            &store,
+            options,
+            &default_zone_image_provider,
+        );
+        let snapshot_response = store_response_with_options(&packet, &store, options);
+
+        assert_eq!(zone_image_response, snapshot_response);
+        assert!(zone_image_response[2] & 0x02 != 0, "TC bit must be set");
+        assert_eq!(
+            response_ede_info_codes(&zone_image_response),
+            Vec::<u16>::new(),
+            "EDE must remain stripped after truncation retry removes records"
+        );
+        assert!(
+            zone_image_response.len() <= 80,
+            "stripped truncated response must fit the advertised UDP ceiling"
         );
     }
 
@@ -6643,8 +8494,11 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Cname as u16, RecordType::Cname as u16]
         );
-        let zone = store.get("example.test.").expect("zone snapshot");
-        let lookup = zone.lookup(
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let zone = store
+            .exact_snapshot_for_transfer(&origin)
+            .expect("zone snapshot");
+        let lookup = zone.snapshot_for_transfer().offline_oracle().lookup(
             &DomainName::from_absolute_str("a.example.test.").unwrap(),
             RecordType::A as u16,
             1,
@@ -6712,14 +8566,20 @@ mod tests {
             response_answer_types(&response),
             vec![RecordType::Cname as u16]
         );
-        let zone = store.get("example.test.").expect("zone snapshot");
-        let lookup = zone.lookup_with_options(
-            &DomainName::from_absolute_str("a.example.test.").unwrap(),
-            RecordType::A as u16,
-            1,
-            1,
-            AnyResponseMode::Minimal,
-        );
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let zone = store
+            .exact_snapshot_for_transfer(&origin)
+            .expect("zone snapshot");
+        let lookup = zone
+            .snapshot_for_transfer()
+            .offline_oracle()
+            .lookup_with_options(
+                &DomainName::from_absolute_str("a.example.test.").unwrap(),
+                RecordType::A as u16,
+                1,
+                1,
+                AnyResponseMode::Minimal,
+            );
         assert_eq!(lookup.rcode, Rcode::ServFail);
         assert!(lookup.authoritative);
         assert!(lookup.authorities.is_empty());
@@ -6869,7 +8729,9 @@ mod tests {
                 ],
             )],
         );
-        let lookup = zone.lookup(&qname, RecordType::A as u16, 1);
+        let lookup = zone
+            .offline_oracle()
+            .lookup(&qname, RecordType::A as u16, 1);
 
         assert_eq!(lookup.rcode, Rcode::ServFail);
         assert_eq!(lookup.answers.len(), 2);

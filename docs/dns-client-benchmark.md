@@ -64,12 +64,99 @@ socket path, run the same UDP profile once with
 `udp_sent_datagrams` so the result can be checked against actual listener
 batching rather than only client-side throughput.
 
+For a reproducible local sweep across several UDP batch sizes, use:
+
+```bash
+OXIDEDNS_UDP_BATCH_SWEEP_SIZES="1 8 32 64" \
+scripts/sweep-udp-batch-benchmarks.sh
+```
+
+The sweep wrapper retains one artifact per batch size under a shared
+`target/evidence/udp-batch-sweep-*` directory and writes `summary.tsv` with
+QPS/latency ratios, drop/error counts, UDP receive/send batch counters, and
+ZoneImage serve counters. The first run generates or accepts the retained query
+trace; later runs replay the same `query-trace.tsv` so the sweep compares UDP
+adapter batching under one query mix. Use
+`OXIDEDNS_UDP_BATCH_SWEEP_PREFLIGHT_ONLY=true` to validate the profile without
+running it, and `OXIDEDNS_UDP_BATCH_SWEEP_TRACE_FILE=/path/to/query-trace.tsv`
+to supply an explicit trace.
+
+Validate the retained sweep summary with:
+
+```bash
+scripts/check-udp-batch-sweep.py \
+  --input target/evidence/udp-batch-sweep-*/summary.tsv \
+  --output target/evidence/udp-batch-sweep-*/check.tsv
+```
+
+The checker validates the summary schema, unique ascending batch sizes, zero
+drops/errors and ZoneImage failures by default, positive served-hit counters,
+ratio math, and at least one non-baseline batch size that increases both
+receive and send datagrams per UDP batch. It does not require a generic QPS win
+because local loopback throughput thresholds are host-sensitive.
+
+This sweep is local no-XDP evidence by default. It is not physical NIC
+promotion evidence unless the underlying benchmark profile also uses
+`OXIDEDNS_BENCH_CLIENT_MODE=ssh`,
+`OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true`, and non-loopback
+listen/client settings that satisfy the stricter comparator checks.
+Set `OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED=true` to retain a bounded UDP DNS
+capture for the selected `OXIDEDNS_BENCH_NETWORK_DEVICE`; the harness prefers
+`dumpcap` when available and falls back to `tcpdump`. Use
+`OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT=N` to control the stop count. Capture
+artifacts include `packet-capture/dns-udp.pcapng`, `dns-summary.tsv`, and
+`dns-sample.tsv`, and `benchmark-results.tsv` records capture status plus DNS
+query/response packet counts.
+
 Retained loopback UDP batch smoke from 2026-05-29:
 
 | Profile | UDP batch size | Responses/s | p50 us | p99 us | Dropped | Errors | Receive batches | Send batches | Artifact |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 4 clients x window 16 | 1 | 303,943 | 190.8 | 252.3 | 0 | 0 | 304,985 | 304,985 | `target/evidence/udp-batch-loopback-baseline-1` |
 | 4 clients x window 16 | 32 | 350,738 | 157.3 | 242.7 | 0 | 0 | 11,013 | 11,013 | `target/evidence/udp-batch-loopback-batch-32` |
+
+Retained current-layout trace replay from 2026-05-31, with 1,000 records,
+128 delegation/DNAME stress candidates, four server threads, four client
+threads, client window 16, and always-on `ZoneImage` serving:
+
+| Profile | UDP batch size | Responses/s | p50 us | p99 us | Dropped | Errors | Receive batches | Send batches | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| trace replay | 1 | 350,726 | 164.3 | 209.5 | 0 | 0 | 1,054,765 | 1,054,765 | `target/evidence/udp-batch-loopback-current-1` |
+| trace replay | 32 | 367,297 | 150.6 | 205.7 | 0 | 0 | 34,530 | 34,530 | `target/evidence/udp-batch-loopback-current-32` |
+
+The current-layout loopback run is still not physical NIC evidence, but it
+keeps standard UDP batching ahead of the one-datagram socket path locally:
+`udp_batch_size=32` recorded 1,104,781 received datagrams over 34,530 receive
+batches, while keeping `zone_image_serve_failures=0` and rollback count `0`.
+
+Retained checked UDP batch sweep from 2026-06-01, with 1,000 records,
+128 delegation/DNAME stress candidates, four server threads, four client
+threads, client window 16, three-second runs, and always-on `ZoneImage`
+serving:
+
+| UDP batch size | Responses/s | QPS ratio | p50 us | p50 ratio | p99 us | p99 ratio | Dropped | Errors | Receive datagrams/batch | Send datagrams/batch | ZoneImage failures | Artifact |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 347,390 | 1.000 | 166.8 | 1.000 | 204.7 | 1.000 | 0 | 0 | 1.000 | 1.000 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-1` |
+| 8 | 387,609 | 1.116 | 143.3 | 0.859 | 184.4 | 0.901 | 0 | 0 | 8.000 | 8.000 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-8` |
+| 32 | 382,367 | 1.101 | 145.6 | 0.873 | 183.6 | 0.897 | 0 | 0 | 31.993 | 31.993 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-32` |
+
+The sweep checker passed at
+`target/evidence/udp-batch-sweep-current-local/check.tsv` with
+`batching_gain_rows=2`, confirming that both larger batch sizes increased
+actual receive and send datagrams per UDP batch. This remains local loopback
+evidence only; it does not replace physical NIC promotion. Treat it as the
+current single-device no-XDP batch ceiling; rerun the sweep after code changes
+or on different hardware, not as a substitute for the separate-client NIC gate.
+
+Retained packet-capture sample from 2026-05-31:
+
+| Profile | UDP batch size | Client threads x window | DNS packets | DNS queries | DNS responses | Dropped | Errors | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| trace replay capture | 32 | 1 x 1 | 128 | 64 | 64 | 0 | 0 | `target/evidence/udp-batch-loopback-current-32-pcap-sampled` |
+
+This capture is intentionally low-window so the bounded packet sample contains
+matched responses rather than only the first client burst. The same artifact
+retains `packet-capture/dns-sample.tsv` with response rcodes and answer counts.
 
 To replay an explicit query trace through the live runtime path, set
 `OXIDEDNS_BENCH_TRACE_ENABLED=true`. The script generates and retains

@@ -19,6 +19,8 @@ pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
 requested_zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-true}"
 zone_image_serve_enabled="true"
+packet_capture_enabled="${OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED:-false}"
+packet_capture_count="${OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT:-256}"
 preflight_only="${OXIDEDNS_BENCH_PREFLIGHT_ONLY:-false}"
 trace_enabled="${OXIDEDNS_BENCH_TRACE_ENABLED:-false}"
 trace_file_override="${OXIDEDNS_BENCH_TRACE_FILE:-}"
@@ -139,6 +141,14 @@ true | false) ;;
     exit 64
     ;;
 esac
+case "$packet_capture_enabled" in
+true | false) ;;
+*)
+    printf 'OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED must be true or false, got %q\n' "$packet_capture_enabled" >&2
+    exit 64
+    ;;
+esac
+require_positive_integer "OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT" "$packet_capture_count"
 if [[ "$requested_zone_image_serve_enabled" != true ]]; then
     printf 'OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false was retired with the live snapshot-serving rollback path; ZoneImage serving is always enabled.\n' >&2
     exit 64
@@ -301,6 +311,8 @@ if [[ "$preflight_only" == true ]]; then
     printf 'git_revision=%s\n' "$git_revision"
     printf 'git_dirty=%s\n' "$git_dirty"
     printf 'zone_shape_metrics_enabled=%s\n' "$zone_shape_metrics_enabled"
+    printf 'packet_capture_enabled=%s\n' "$packet_capture_enabled"
+    printf 'packet_capture_count=%s\n' "$packet_capture_count"
     printf 'kernel_version=%s\n' "$kernel_version"
     printf 'rustc_version=%s\n' "$rustc_version"
     printf 'cargo_version=%s\n' "$cargo_version"
@@ -312,6 +324,10 @@ mkdir -p "$artifact_dir" "$workdir" "$repo_root/target/benchmark-tools"
 
 cleanup() {
     local status=$?
+    if [[ -n "${packet_capture_pid:-}" ]] && kill -0 "$packet_capture_pid" 2>/dev/null; then
+        kill "$packet_capture_pid" 2>/dev/null || true
+        wait "$packet_capture_pid" 2>/dev/null || true
+    fi
     if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
         kill "$oxidedns_pid" 2>/dev/null || true
         wait "$oxidedns_pid" 2>/dev/null || true
@@ -357,8 +373,15 @@ primary_log="$artifact_dir/fake-primary.log"
 server_log="$artifact_dir/oxidedns.log"
 client_log="$artifact_dir/client.log"
 network_dir="$artifact_dir/network"
+packet_capture_dir="$artifact_dir/packet-capture"
 trace_file=""
 trace_source="generated-name-mode"
+packet_capture_file="none"
+packet_capture_status="disabled"
+packet_capture_packets="0"
+packet_capture_dns_packets="0"
+packet_capture_dns_query_packets="0"
+packet_capture_dns_response_packets="0"
 
 : >"$primary_log"
 : >"$server_log"
@@ -494,6 +517,129 @@ for key in sorted(set(before) | set(after)):
         print(f"{key}\t{before[key]}\t{after[key]}\t{after[key] - before[key]}\tcount")
 PY
     fi
+}
+
+start_packet_capture() {
+    if [[ "$packet_capture_enabled" != true ]]; then
+        return
+    fi
+    if [[ "$transport" != udp ]]; then
+        mkdir -p "$packet_capture_dir"
+        {
+            printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            printf 'packet_capture_status=skipped-non-udp\n'
+            printf 'transport=%s\n' "$transport"
+        } >"$packet_capture_dir/packet-capture.env"
+        packet_capture_status="skipped-non-udp"
+        return
+    fi
+    if [[ "$network_device" == unknown || -z "$network_device" ]]; then
+        printf 'packet capture requested, but network_device=%q\n' "$network_device" >&2
+        exit 64
+    fi
+    local capture_tool
+    if command -v dumpcap >/dev/null 2>&1; then
+        capture_tool="dumpcap"
+    elif command -v tcpdump >/dev/null 2>&1; then
+        capture_tool="tcpdump"
+    else
+        printf 'packet capture requested, but neither dumpcap nor tcpdump is on PATH\n' >&2
+        exit 69
+    fi
+
+    mkdir -p "$packet_capture_dir"
+    packet_capture_file="$packet_capture_dir/dns-udp.pcapng"
+    packet_capture_status="started"
+    {
+        printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'tool=%s\n' "$capture_tool"
+        printf 'network_device=%s\n' "$network_device"
+        printf 'dns_port=%s\n' "$dns_port"
+        printf 'packet_capture_count=%s\n' "$packet_capture_count"
+        printf 'filter=udp and port %s\n' "$dns_port"
+        "$capture_tool" --version 2>&1 | head -1 || true
+    } >"$packet_capture_dir/packet-capture.env"
+
+    if [[ "$capture_tool" == dumpcap ]]; then
+        dumpcap -i "$network_device" -s 0 -p -c "$packet_capture_count" \
+            -f "udp and port $dns_port" -w "$packet_capture_file" \
+            >"$packet_capture_dir/dumpcap.stdout" 2>"$packet_capture_dir/dumpcap.stderr" &
+    else
+        tcpdump -i "$network_device" -s 0 -U -n -c "$packet_capture_count" \
+            -w "$packet_capture_file" "udp and port $dns_port" \
+            >"$packet_capture_dir/tcpdump.stdout" 2>"$packet_capture_dir/tcpdump.stderr" &
+    fi
+    packet_capture_pid=$!
+    sleep 0.25
+    if ! kill -0 "$packet_capture_pid" 2>/dev/null; then
+        packet_capture_status="start-failed"
+        printf 'packet capture failed to start; see %s\n' "$packet_capture_dir" >&2
+        exit 69
+    fi
+}
+
+finish_packet_capture() {
+    if [[ "$packet_capture_enabled" != true || "$packet_capture_status" == disabled ]]; then
+        return
+    fi
+    if [[ -n "${packet_capture_pid:-}" ]] && kill -0 "$packet_capture_pid" 2>/dev/null; then
+        for _ in {1..20}; do
+            if ! kill -0 "$packet_capture_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.05
+        done
+    fi
+    if [[ -n "${packet_capture_pid:-}" ]] && kill -0 "$packet_capture_pid" 2>/dev/null; then
+        kill "$packet_capture_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${packet_capture_pid:-}" ]]; then
+        wait "$packet_capture_pid" 2>/dev/null || true
+        packet_capture_pid=""
+    fi
+    if [[ -s "$packet_capture_file" ]]; then
+        packet_capture_status="captured"
+        if command -v capinfos >/dev/null 2>&1; then
+            packet_capture_packets="$(
+                capinfos -c -M "$packet_capture_file" 2>/dev/null |
+                    awk -F: '/Number of packets/ { gsub(/ /, "", $2); print $2; exit }'
+            )"
+        elif command -v tshark >/dev/null 2>&1; then
+            packet_capture_packets="$(tshark -r "$packet_capture_file" 2>/dev/null | wc -l | awk '{ print $1 }')"
+        else
+            packet_capture_packets="unknown"
+        fi
+        packet_capture_packets="${packet_capture_packets:-unknown}"
+        if command -v tshark >/dev/null 2>&1; then
+            {
+                printf 'metric\tvalue\tunit\n'
+                printf 'dns_packets\t%s\tpackets\n' "$(
+                    tshark -r "$packet_capture_file" -Y dns 2>/dev/null | wc -l | awk '{ print $1 }'
+                )"
+                printf 'dns_query_packets\t%s\tpackets\n' "$(
+                    tshark -r "$packet_capture_file" -Y 'dns && dns.flags.response == 0' 2>/dev/null | wc -l | awk '{ print $1 }'
+                )"
+                printf 'dns_response_packets\t%s\tpackets\n' "$(
+                    tshark -r "$packet_capture_file" -Y 'dns && dns.flags.response == 1' 2>/dev/null | wc -l | awk '{ print $1 }'
+                )"
+                printf 'dns_sample\t%s\tfile\n' "dns-sample.tsv"
+            } >"$packet_capture_dir/dns-summary.tsv"
+            tshark -r "$packet_capture_file" -Y dns -T fields \
+                -e frame.number -e ip.src -e udp.srcport -e ip.dst -e udp.dstport \
+                -e dns.flags.response -e dns.flags.rcode -e dns.count.answers -e dns.qry.name \
+                >"$packet_capture_dir/dns-sample.tsv" 2>/dev/null || true
+        fi
+    elif [[ "$packet_capture_status" == skipped-non-udp ]]; then
+        packet_capture_packets="0"
+    else
+        packet_capture_status="empty"
+        packet_capture_packets="0"
+    fi
+    {
+        printf 'packet_capture_status=%s\n' "$packet_capture_status"
+        printf 'packet_capture_packets=%s\n' "$packet_capture_packets"
+        printf 'packet_capture_file=%s\n' "$packet_capture_file"
+    } >>"$packet_capture_dir/packet-capture.env"
 }
 
 if [[ -n "$trace_file_override" ]]; then
@@ -775,6 +921,8 @@ response_timeout_ms=$response_timeout_ms
 pipeline_timing_enabled=$pipeline_timing_enabled
 zone_shape_metrics_enabled=$zone_shape_metrics_enabled
 zone_image_serve_enabled=$zone_image_serve_enabled
+packet_capture_enabled=$packet_capture_enabled
+packet_capture_count=$packet_capture_count
 listen_address=$listen_address
 client_server=$client_server
 client_bind=$client_bind
@@ -857,6 +1005,7 @@ fi
 curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
 capture_network_snapshot before
+start_packet_capture
 
 client_args=(
     --transport "$transport"
@@ -931,6 +1080,15 @@ else
     ssh "$remote_client_ssh" "$remote_command" | tee "$client_log"
 fi
 printf 'remote_client_bin_sha256=%s\n' "$remote_client_bin_sha256" >>"$artifact_dir/run.env"
+finish_packet_capture
+if [[ -f "$packet_capture_dir/dns-summary.tsv" ]]; then
+    packet_capture_dns_packets="$(awk -F'\t' '$1 == "dns_packets" { print $2; exit }' "$packet_capture_dir/dns-summary.tsv")"
+    packet_capture_dns_query_packets="$(awk -F'\t' '$1 == "dns_query_packets" { print $2; exit }' "$packet_capture_dir/dns-summary.tsv")"
+    packet_capture_dns_response_packets="$(awk -F'\t' '$1 == "dns_response_packets" { print $2; exit }' "$packet_capture_dir/dns-summary.tsv")"
+fi
+packet_capture_dns_packets="${packet_capture_dns_packets:-0}"
+packet_capture_dns_query_packets="${packet_capture_dns_query_packets:-0}"
+packet_capture_dns_response_packets="${packet_capture_dns_response_packets:-0}"
 
 capture_network_snapshot after
 write_network_counter_deltas
@@ -1030,6 +1188,13 @@ trace_queries	$trace_queries	queries
 pipeline_timing_enabled	$pipeline_timing_enabled	boolean
 zone_shape_metrics_enabled	$zone_shape_metrics_enabled	boolean
 zone_image_serve_enabled	$zone_image_serve_enabled	boolean
+packet_capture_enabled	$packet_capture_enabled	boolean
+packet_capture_status	$packet_capture_status	status
+packet_capture_file	$packet_capture_file	file
+packet_capture_packets	$packet_capture_packets	packets
+packet_capture_dns_packets	$packet_capture_dns_packets	packets
+packet_capture_dns_query_packets	$packet_capture_dns_query_packets	packets
+packet_capture_dns_response_packets	$packet_capture_dns_response_packets	packets
 zone_image_serve_hits	$zone_image_serve_hits	queries
 zone_image_serve_direct_hits	$zone_image_serve_direct_hits	queries
 zone_image_serve_semantic_hits	$zone_image_serve_semantic_hits	queries
@@ -1061,6 +1226,11 @@ The configured UDP batch size was \`$udp_batch_size\`; packet I/O counters
 recorded \`$udp_receive_batches\` receive batches, \`$udp_received_datagrams\`
 received datagrams, \`$udp_send_batches\` send batches, and
 \`$udp_sent_datagrams\` sent datagrams.
+Packet capture was configured as \`packet_capture_enabled=$packet_capture_enabled\`;
+status \`$packet_capture_status\`, packet count \`$packet_capture_packets\`,
+DNS packets \`$packet_capture_dns_packets\`, DNS query packets
+\`$packet_capture_dns_query_packets\`, DNS response packets
+\`$packet_capture_dns_response_packets\`, file \`$packet_capture_file\`.
 
 This is a local engineering benchmark, not the full SRS Reference
 Hardware/Profile acceptance campaign.

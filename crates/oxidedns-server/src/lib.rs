@@ -42,7 +42,8 @@ use oxidedns_core::{
         LookupTermination, Opcode, Question, Rcode, RecordType, Transport, ZoneImageProvider,
         ZoneImageServeFailureReason,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
-        chaos_query_observation, dns_cookie_request_status, request_has_valid_dns_server_cookie,
+        chaos_query_observation, default_zone_image_provider, dns_cookie_request_status,
+        request_has_valid_dns_server_cookie,
     },
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -51,7 +52,8 @@ use oxidedns_core::{
         sign_tsig_error_response,
     },
     zone::{
-        PublishedZone, SoaTimers, ZoneShapeHistogramBucket, ZoneSnapshot, ZoneState, ZoneStore,
+        CatalogZoneView, SoaTimers, ZoneMetadata, ZoneShapeHistogramBucket, ZoneSnapshot,
+        ZoneState, ZoneStore,
     },
 };
 use sha2::{Digest, Sha256};
@@ -1687,10 +1689,10 @@ async fn transfer_ixfr_from_primary_inner(
         connect_transfer_stream(primary, session.transfer_source, connect_timeout).await?;
 
     let current_soa = current_zone
-        .soa_record(qclass)
+        .soa_record_view(qclass)
         .ok_or(axfr::IxfrError::InvalidCurrentSoa)?;
     let query = maybe_sign_transfer_query(
-        axfr::build_ixfr_query(qid, zone_apex, qclass, &current_soa)?,
+        axfr::build_ixfr_query_from_soa_view(qid, zone_apex, qclass, current_soa)?,
         session.tsig,
     )?;
     let framed_query = axfr::frame_tcp_message(&query.message);
@@ -3043,7 +3045,6 @@ fn handle_udp_datagram(
     let lookup_observed = |lookup_metrics| {
         record_query_lookup_metrics(&query_metrics, lookup_metrics, &settings.metrics);
     };
-    let zone_image_provider = |published: &PublishedZone| published.active_zone_image();
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         &prepared.packet,
         zones,
@@ -3051,7 +3052,7 @@ fn handle_udp_datagram(
         notify_authorized,
         notify_accepted,
         lookup_observed,
-        &zone_image_provider as ZoneImageProvider<'_>,
+        &default_zone_image_provider as ZoneImageProvider<'_>,
     );
     let mut query_metrics = query_metrics;
     query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
@@ -3126,7 +3127,7 @@ struct QueryMetricObservation {
     transport: Transport,
     started_at: Instant,
     cookie_validated: bool,
-    zone_key: Option<String>,
+    zone_key: Option<Arc<str>>,
     parse_duration: Option<Duration>,
     lookup_duration: Option<Duration>,
     compose_duration: Option<Duration>,
@@ -3181,9 +3182,12 @@ fn observe_query_metrics(
     let Ok(question) = Question::parse(packet) else {
         return observed_query(None);
     };
-    if let Some(published_zone) = zones.find_published_zone(&question.qname) {
-        metrics.record_zone_query(published_zone.origin());
-        return observed_query(Some(published_zone.origin().canonical_key()));
+    if let Some(published_zone) = zones.find_published_zone_with_ascii_lowercase_hint(
+        &question.qname,
+        question.qname_ascii_lowercase(),
+    ) {
+        metrics.record_zone_query_key(published_zone.origin_key());
+        return observed_query(Some(published_zone.origin_key_arc()));
     }
     observed_query(None)
 }
@@ -4378,13 +4382,15 @@ fn rcode_label(rcode: u16) -> &'static str {
 }
 
 fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_seconds: u64) {
+    let zone_metadata = zones.zone_metadata();
+
     body.push_str(
         "# HELP oxidedns_zone_state Zone state, exposed as 1 for the current state and 0 for other states.\n\
          # TYPE oxidedns_zone_state gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        for (state, value) in zone_state_samples(snapshot.state) {
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        for (state, value) in zone_state_samples(metadata.state) {
             body.push_str(&format!(
                 "oxidedns_zone_state{{zone=\"{zone}\",state=\"{state}\"}} {value}\n"
             ));
@@ -4395,9 +4401,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
         "# HELP oxidedns_secondary_zone_state Zone state, exposed as 1 for the current state and 0 for other states.\n\
          # TYPE oxidedns_secondary_zone_state gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        for (state, value) in zone_state_samples(snapshot.state) {
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        for (state, value) in zone_state_samples(metadata.state) {
             body.push_str(&format!(
                 "oxidedns_secondary_zone_state{{zone=\"{zone}\",state=\"{state}\"}} {value}\n"
             ));
@@ -4408,9 +4414,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
         "# HELP oxidedns_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
          # TYPE oxidedns_zone_loading_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        let loading_seconds = zone_loading_seconds(snapshot.state, uptime_seconds);
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        let loading_seconds = zone_loading_seconds(metadata.state, uptime_seconds);
         body.push_str(&format!(
             "oxidedns_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
         ));
@@ -4420,9 +4426,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
         "# HELP oxidedns_secondary_zone_loading_seconds Seconds the zone has been in LOADING state during this process uptime.\n\
          # TYPE oxidedns_secondary_zone_loading_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        let loading_seconds = zone_loading_seconds(snapshot.state, uptime_seconds);
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        let loading_seconds = zone_loading_seconds(metadata.state, uptime_seconds);
         body.push_str(&format!(
             "oxidedns_secondary_zone_loading_seconds{{zone=\"{zone}\"}} {loading_seconds}\n"
         ));
@@ -4432,9 +4438,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
         "# HELP oxidedns_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
          # TYPE oxidedns_zone_soa_serial gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        if let Some(serial) = snapshot.serial {
-            let zone = prometheus_label_value(&snapshot.origin.to_string());
+    for metadata in &zone_metadata {
+        if let Some(serial) = metadata.serial {
+            let zone = prometheus_label_value(metadata.origin_name.as_ref());
             body.push_str(&format!(
                 "oxidedns_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
             ));
@@ -4445,9 +4451,9 @@ fn append_zone_status_metrics(body: &mut String, zones: &ZoneStore, uptime_secon
         "# HELP oxidedns_secondary_zone_soa_serial Current held SOA serial for zones with transferred data.\n\
          # TYPE oxidedns_secondary_zone_soa_serial gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        if let Some(serial) = snapshot.serial {
-            let zone = prometheus_label_value(&snapshot.origin.to_string());
+    for metadata in &zone_metadata {
+        if let Some(serial) = metadata.serial {
+            let zone = prometheus_label_value(metadata.origin_name.as_ref());
             body.push_str(&format!(
                 "oxidedns_secondary_zone_soa_serial{{zone=\"{zone}\"}} {serial}\n"
             ));
@@ -4499,12 +4505,14 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
          # TYPE oxidedns_zone_shape_rdata_payload_bytes_per_rrset gauge\n",
     );
 
-    for snapshot in zones.snapshots() {
-        if snapshot.state != ZoneState::Active {
+    for metadata in zones.zone_metadata() {
+        if metadata.state != ZoneState::Active {
             continue;
         }
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        let shape = snapshot.shape_summary();
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        let Some(shape) = metadata.shape else {
+            continue;
+        };
         for (metric, value) in [
             ("oxidedns_zone_shape_rrsets", shape.rrset_count),
             ("oxidedns_zone_shape_rdata_records", shape.rdata_count),
@@ -4549,7 +4557,9 @@ fn append_zone_shape_metrics(body: &mut String, zones: &ZoneStore) {
             body.push_str(&format!("{metric}{{zone=\"{zone}\"}} {value}\n"));
         }
 
-        let histograms = snapshot.shape_histogram_summary();
+        let Some(histograms) = metadata.shape_histograms.as_ref() else {
+            continue;
+        };
         append_zone_shape_histogram_metrics(
             body,
             "oxidedns_zone_shape_child_name_fanout_names",
@@ -4597,19 +4607,20 @@ fn append_zone_scheduler_metrics(
     refresh_registry: &ZoneRefreshRegistry,
 ) {
     let statuses = refresh_registry.snapshots_by_zone();
+    let zone_metadata = zones.zone_metadata();
 
     body.push_str(
         "# HELP oxidedns_zone_last_success_timestamp_seconds Unix timestamp of the most recent successful refresh or transfer.\n\
          # TYPE oxidedns_zone_last_success_timestamp_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+    for metadata in &zone_metadata {
+        let Some(status) = statuses.get(metadata.origin_key.as_ref()) else {
             continue;
         };
         let Some(last_success) = status.last_success_unix_secs else {
             continue;
         };
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         body.push_str(&format!(
             "oxidedns_zone_last_success_timestamp_seconds{{zone=\"{zone}\"}} {last_success}\n"
         ));
@@ -4619,14 +4630,14 @@ fn append_zone_scheduler_metrics(
         "# HELP oxidedns_secondary_zone_last_refresh_seconds Unix timestamp of the most recent successful refresh or transfer.\n\
          # TYPE oxidedns_secondary_zone_last_refresh_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+    for metadata in &zone_metadata {
+        let Some(status) = statuses.get(metadata.origin_key.as_ref()) else {
             continue;
         };
         let Some(last_success) = status.last_success_unix_secs else {
             continue;
         };
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         body.push_str(&format!(
             "oxidedns_secondary_zone_last_refresh_seconds{{zone=\"{zone}\"}} {last_success}\n"
         ));
@@ -4636,14 +4647,14 @@ fn append_zone_scheduler_metrics(
         "# HELP oxidedns_zone_next_refresh_timestamp_seconds Unix timestamp of the next scheduled refresh attempt.\n\
          # TYPE oxidedns_zone_next_refresh_timestamp_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+    for metadata in &zone_metadata {
+        let Some(status) = statuses.get(metadata.origin_key.as_ref()) else {
             continue;
         };
         let Some(next_refresh) = status.next_refresh_unix_secs else {
             continue;
         };
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         body.push_str(&format!(
             "oxidedns_zone_next_refresh_timestamp_seconds{{zone=\"{zone}\"}} {next_refresh}\n"
         ));
@@ -4653,14 +4664,14 @@ fn append_zone_scheduler_metrics(
         "# HELP oxidedns_secondary_zone_next_refresh_seconds Unix timestamp of the next scheduled refresh attempt.\n\
          # TYPE oxidedns_secondary_zone_next_refresh_seconds gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let Some(status) = statuses.get(&snapshot.origin.canonical_key()) else {
+    for metadata in &zone_metadata {
+        let Some(status) = statuses.get(metadata.origin_key.as_ref()) else {
             continue;
         };
         let Some(next_refresh) = status.next_refresh_unix_secs else {
             continue;
         };
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         body.push_str(&format!(
             "oxidedns_secondary_zone_next_refresh_seconds{{zone=\"{zone}\"}} {next_refresh}\n"
         ));
@@ -4670,10 +4681,10 @@ fn append_zone_scheduler_metrics(
         "# HELP oxidedns_zone_refresh_failures_since_success Refresh failures since the most recent successful refresh or transfer.\n\
          # TYPE oxidedns_zone_refresh_failures_since_success gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         let failures = statuses
-            .get(&snapshot.origin.canonical_key())
+            .get(metadata.origin_key.as_ref())
             .map_or(0, |status| status.failures_since_success);
         body.push_str(&format!(
             "oxidedns_zone_refresh_failures_since_success{{zone=\"{zone}\"}} {failures}\n"
@@ -4684,10 +4695,10 @@ fn append_zone_scheduler_metrics(
         "# HELP oxidedns_secondary_zone_refresh_failures Refresh failures since the most recent successful refresh or transfer.\n\
          # TYPE oxidedns_secondary_zone_refresh_failures gauge\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+    for metadata in &zone_metadata {
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         let failures = statuses
-            .get(&snapshot.origin.canonical_key())
+            .get(metadata.origin_key.as_ref())
             .map_or(0, |status| status.failures_since_success);
         body.push_str(&format!(
             "oxidedns_secondary_zone_refresh_failures{{zone=\"{zone}\"}} {failures}\n"
@@ -4698,14 +4709,15 @@ fn append_zone_scheduler_metrics(
 fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &RuntimeMetrics) {
     let query_counts = metrics.zone_query_counts();
     let rcode_counts = metrics.zone_query_rcode_counts();
+    let zone_metadata = zones.zone_metadata();
     body.push_str(
         "# HELP oxidedns_zone_queries_total Queries received for each configured zone.\n\
          # TYPE oxidedns_zone_queries_total counter\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone_key = snapshot.origin.canonical_key();
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        let count = query_counts.get(&zone_key).copied().unwrap_or_default();
+    for metadata in &zone_metadata {
+        let zone_key = metadata.origin_key.as_ref();
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        let count = query_counts.get(zone_key).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_zone_queries_total{{zone=\"{zone}\"}} {count}\n"
         ));
@@ -4715,10 +4727,10 @@ fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &Run
         "# HELP oxidedns_secondary_queries_total Queries received for each configured zone.\n\
          # TYPE oxidedns_secondary_queries_total counter\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone_key = snapshot.origin.canonical_key();
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
-        let count = query_counts.get(&zone_key).copied().unwrap_or_default();
+    for metadata in &zone_metadata {
+        let zone_key = metadata.origin_key.as_ref();
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
+        let count = query_counts.get(zone_key).copied().unwrap_or_default();
         body.push_str(&format!(
             "oxidedns_secondary_queries_total{{zone=\"{zone}\"}} {count}\n"
         ));
@@ -4728,20 +4740,20 @@ fn append_zone_query_metrics(body: &mut String, zones: &ZoneStore, metrics: &Run
         "# HELP oxidedns_zone_query_responses_total Query responses by configured zone and DNS RCODE.\n\
          # TYPE oxidedns_zone_query_responses_total counter\n",
     );
-    for snapshot in zones.snapshots() {
-        let zone_key = snapshot.origin.canonical_key();
-        let zone = prometheus_label_value(&snapshot.origin.to_string());
+    for metadata in &zone_metadata {
+        let zone_key = metadata.origin_key.as_ref();
+        let zone = prometheus_label_value(metadata.origin_name.as_ref());
         append_zone_rcode_metrics(
             body,
             "oxidedns_zone_query_responses_total",
-            &zone_key,
+            zone_key,
             &zone,
             &rcode_counts,
         );
         append_zone_rcode_metrics(
             body,
             "oxidedns_secondary_query_responses_total",
-            &zone_key,
+            zone_key,
             &zone,
             &rcode_counts,
         );
@@ -4876,8 +4888,8 @@ struct ZoneCounts {
 impl ZoneCounts {
     fn from_store(zones: &ZoneStore) -> Self {
         let mut counts = Self::default();
-        for snapshot in zones.snapshots() {
-            match snapshot.state {
+        for metadata in zones.zone_metadata() {
+            match metadata.state {
                 ZoneState::Loading => counts.loading += 1,
                 ZoneState::Active => counts.active += 1,
                 ZoneState::Expired => counts.expired += 1,
@@ -5837,14 +5849,17 @@ impl RuntimeMetrics {
         self.inner.latency_buckets.clone()
     }
 
-    fn record_zone_query(&self, zone: &DomainName) {
+    fn record_zone_query_key(&self, zone_key: &str) {
         let mut query_counts = self
             .inner
             .zone_queries
             .lock()
             .expect("runtime metrics query counter lock poisoned");
-        let counter = query_counts.entry(zone.canonical_key()).or_default();
-        *counter = counter.saturating_add(1);
+        if let Some(counter) = query_counts.get_mut(zone_key) {
+            *counter = counter.saturating_add(1);
+        } else {
+            query_counts.insert(zone_key.to_owned(), 1);
+        }
     }
 
     fn zone_query_counts(&self) -> HashMap<String, u64> {
@@ -6325,8 +6340,8 @@ impl CatalogManager {
         }
     }
 
-    fn is_catalog(&self, origin: &DomainName) -> bool {
-        self.catalogs_by_key.contains_key(&origin.canonical_key())
+    fn is_catalog_key(&self, origin_key: &str) -> bool {
+        self.catalogs_by_key.contains_key(origin_key)
     }
 
     fn member_metrics(&self) -> Vec<CatalogMemberMetric> {
@@ -6365,14 +6380,16 @@ impl CatalogManager {
 
     async fn apply_snapshot(
         &self,
-        snapshot: &ZoneSnapshot,
+        catalog_view: CatalogZoneView<'_>,
+        metadata: &ZoneMetadata,
         zones: &ZoneStore,
         transfer_plan: &TransferPlan,
         refresh_registry: &ZoneRefreshRegistry,
         notify_authority: &NotifyAuthority,
         refresh_tx: &mpsc::WeakSender<RefreshRequest>,
     ) {
-        let Some(catalog) = self.catalogs_by_key.get(&snapshot.origin.canonical_key()) else {
+        debug_assert_eq!(&metadata.origin, catalog_view.origin());
+        let Some(catalog) = self.catalogs_by_key.get(metadata.origin_key.as_ref()) else {
             return;
         };
 
@@ -6382,7 +6399,7 @@ impl CatalogManager {
             zones.hide_zone(&catalog.origin);
         }
 
-        let mut members = match parse_catalog_members(snapshot) {
+        let mut members = match parse_catalog_members(catalog_view) {
             Ok(members) => members,
             Err(error) => {
                 log_catalog_error(&error);
@@ -6468,7 +6485,7 @@ impl CatalogManager {
             }
             transfer_plan.insert(catalog_plan.for_member_origin(member_origin.clone()));
             notify_authority.add_zone_from_catalog(&member_origin, &catalog.config);
-            if zones.find_exact_zone(&member_origin).is_none() {
+            if !zones.contains_exact_zone_for_control(&member_origin) {
                 zones.insert_loading(member_origin.clone());
                 refresh_registry.record_loading_start(&member_origin);
             }
@@ -6737,23 +6754,38 @@ impl ZoneRefreshRegistry {
         }
     }
 
-    fn record_success(&self, snapshot: &ZoneSnapshot) {
-        self.record_success_at(snapshot, Instant::now());
+    #[cfg(test)]
+    fn record_success_at(&self, metadata: &ZoneMetadata, now: Instant) {
+        self.record_success_at_with_timestamp(metadata, now, unix_timestamp_seconds());
     }
 
-    fn record_success_at(&self, snapshot: &ZoneSnapshot, now: Instant) {
-        self.record_success_at_with_timestamp(snapshot, now, unix_timestamp_seconds());
-    }
-
+    #[cfg(test)]
     fn record_success_at_with_timestamp(
         &self,
-        snapshot: &ZoneSnapshot,
+        metadata: &ZoneMetadata,
         now: Instant,
         unix_secs: u64,
     ) {
-        let timers = snapshot.soa_timers;
+        self.record_success_metadata_at_with_timestamp(metadata, now, unix_secs);
+    }
+
+    fn record_success_from_metadata(&self, metadata: &ZoneMetadata) {
+        self.record_success_metadata_at_with_timestamp(
+            metadata,
+            Instant::now(),
+            unix_timestamp_seconds(),
+        );
+    }
+
+    fn record_success_metadata_at_with_timestamp(
+        &self,
+        metadata: &ZoneMetadata,
+        now: Instant,
+        unix_secs: u64,
+    ) {
+        let timers = metadata.soa_timers;
         if let Some(timers) = timers {
-            self.warn_near_max_soa_timers(&snapshot.origin, timers);
+            self.warn_near_max_soa_timers(&metadata.origin, timers);
         }
         let refresh_interval = timers.map(|timers| self.effective_interval(timers.refresh));
         let next_refresh = refresh_interval.map(|interval| now + interval);
@@ -6765,9 +6797,9 @@ impl ZoneRefreshRegistry {
             .lock()
             .expect("zone refresh registry lock poisoned");
         statuses.insert(
-            snapshot.origin.canonical_key(),
+            metadata.origin_key.to_string(),
             ZoneRefreshStatus {
-                origin: snapshot.origin.clone(),
+                origin: metadata.origin.clone(),
                 soa_timers: timers,
                 last_success_unix_secs: Some(unix_secs),
                 next_refresh,
@@ -6815,26 +6847,21 @@ impl ZoneRefreshRegistry {
     fn record_failure_with_cause(
         &self,
         origin: &DomainName,
-        current: Option<Arc<ZoneSnapshot>>,
+        current: Option<ZoneMetadata>,
         failure_cause: Option<String>,
     ) {
         self.record_failure_at_with_cause(origin, current, failure_cause, Instant::now());
     }
 
     #[cfg(test)]
-    fn record_failure_at(
-        &self,
-        origin: &DomainName,
-        current: Option<Arc<ZoneSnapshot>>,
-        now: Instant,
-    ) {
+    fn record_failure_at(&self, origin: &DomainName, current: Option<ZoneMetadata>, now: Instant) {
         self.record_failure_at_with_cause(origin, current, None, now);
     }
 
     fn record_failure_at_with_cause(
         &self,
         origin: &DomainName,
-        current: Option<Arc<ZoneSnapshot>>,
+        current: Option<ZoneMetadata>,
         failure_cause: Option<String>,
         now: Instant,
     ) {
@@ -6851,7 +6878,7 @@ impl ZoneRefreshRegistry {
     fn record_failure_at_with_timestamp(
         &self,
         origin: &DomainName,
-        current: Option<Arc<ZoneSnapshot>>,
+        current: Option<ZoneMetadata>,
         now: Instant,
         unix_secs: u64,
     ) {
@@ -6861,7 +6888,7 @@ impl ZoneRefreshRegistry {
     fn record_failure_at_with_timestamp_and_cause(
         &self,
         origin: &DomainName,
-        current: Option<Arc<ZoneSnapshot>>,
+        current: Option<ZoneMetadata>,
         failure_cause: Option<String>,
         now: Instant,
         unix_secs: u64,
@@ -6872,12 +6899,12 @@ impl ZoneRefreshRegistry {
             .expect("zone refresh registry lock poisoned");
         let failure_keeps_zone_loading = current
             .as_ref()
-            .is_none_or(|snapshot| snapshot.state == ZoneState::Loading);
+            .is_none_or(|metadata| metadata.state == ZoneState::Loading);
         let status = statuses
             .entry(origin.canonical_key())
             .or_insert_with(|| ZoneRefreshStatus {
                 origin: origin.clone(),
-                soa_timers: current.as_ref().and_then(|snapshot| snapshot.soa_timers),
+                soa_timers: current.as_ref().and_then(|metadata| metadata.soa_timers),
                 last_success_unix_secs: None,
                 next_refresh: None,
                 next_refresh_unix_secs: None,
@@ -6891,9 +6918,9 @@ impl ZoneRefreshRegistry {
                 expired: false,
             });
 
-        if let Some(snapshot) = current {
-            status.soa_timers = snapshot.soa_timers;
-            status.expired = snapshot.state == ZoneState::Expired;
+        if let Some(metadata) = current {
+            status.soa_timers = metadata.soa_timers;
+            status.expired = metadata.state == ZoneState::Expired;
         }
         if failure_keeps_zone_loading && status.loading_since.is_none() {
             status.loading_since = Some(now);
@@ -6930,8 +6957,8 @@ impl ZoneRefreshRegistry {
                 {
                     return None;
                 }
-                let snapshot = zones.find_exact_zone(&status.origin)?;
-                if snapshot.state != ZoneState::Loading {
+                let metadata = zones.exact_zone_control_metadata(&status.origin)?;
+                if metadata.state != ZoneState::Loading {
                     status.loading_since = None;
                     status.next_loading_warning = None;
                     return None;
@@ -7741,8 +7768,8 @@ async fn serve_refresh_requests(
 
                 if notify_serial_is_current(&zones, &request) {
                     let zone = &request.zone;
-                    if let Some(snapshot) = zones.find_exact_zone(zone) {
-                        catalog_runtime.refresh_registry.record_success(&snapshot);
+                    if let Some(metadata) = zones.exact_zone_control_metadata(zone) {
+                        catalog_runtime.refresh_registry.record_success_from_metadata(&metadata);
                     } else {
                         catalog_runtime.refresh_registry.cancel_in_progress(zone);
                     }
@@ -7783,14 +7810,24 @@ async fn serve_refresh_requests(
                         },
                     )
                     .await;
-                    match outcome.snapshot {
-                        Some(snapshot) => {
-                            catalog_runtime.refresh_registry.record_success(&snapshot);
-                            if catalog_runtime.manager.is_catalog(&snapshot.origin) {
+                    match outcome.success {
+                        Some(success) => {
+                            let (metadata, updated_snapshot) =
+                                success.into_metadata_and_updated_snapshot();
+                            catalog_runtime
+                                .refresh_registry
+                                .record_success_from_metadata(&metadata);
+                            if let Some(snapshot) = updated_snapshot
+                                .as_deref()
+                                .filter(|_| {
+                                    catalog_runtime.manager.is_catalog_key(metadata.origin_key.as_ref())
+                                })
+                            {
                                 catalog_runtime
                                     .manager
                                     .apply_snapshot(
-                                        &snapshot,
+                                        snapshot.catalog_zone_view(),
+                                        &metadata,
                                         &zones,
                                         &catalog_runtime.transfer_plan,
                                         &catalog_runtime.refresh_registry,
@@ -7802,7 +7839,7 @@ async fn serve_refresh_requests(
                         }
                         None => catalog_runtime.refresh_registry.record_failure_with_cause(
                             &request.zone,
-                            zones.find_exact_zone(&request.zone),
+                            zones.exact_zone_control_metadata(&request.zone),
                             outcome.failure_cause,
                         ),
                     }
@@ -7848,22 +7885,47 @@ struct RefreshAttemptContext<'a> {
 
 #[derive(Debug)]
 struct RefreshZoneOutcome {
-    snapshot: Option<ZoneSnapshot>,
+    success: Option<RefreshZoneSuccess>,
     failure_cause: Option<String>,
 }
 
+#[derive(Debug)]
+enum RefreshZoneSuccess {
+    Current(ZoneMetadata),
+    Updated {
+        snapshot: Arc<ZoneSnapshot>,
+        metadata: ZoneMetadata,
+    },
+}
+
 impl RefreshZoneOutcome {
-    fn success(snapshot: ZoneSnapshot) -> Self {
+    fn current(metadata: ZoneMetadata) -> Self {
         Self {
-            snapshot: Some(snapshot),
+            success: Some(RefreshZoneSuccess::Current(metadata)),
+            failure_cause: None,
+        }
+    }
+
+    fn updated(snapshot: Arc<ZoneSnapshot>, metadata: ZoneMetadata) -> Self {
+        Self {
+            success: Some(RefreshZoneSuccess::Updated { snapshot, metadata }),
             failure_cause: None,
         }
     }
 
     fn failure(failure_cause: Option<String>) -> Self {
         Self {
-            snapshot: None,
+            success: None,
             failure_cause,
+        }
+    }
+}
+
+impl RefreshZoneSuccess {
+    fn into_metadata_and_updated_snapshot(self) -> (ZoneMetadata, Option<Arc<ZoneSnapshot>>) {
+        match self {
+            Self::Current(metadata) => (metadata, None),
+            Self::Updated { snapshot, metadata } => (metadata, Some(snapshot)),
         }
     }
 }
@@ -7913,14 +7975,22 @@ async fn run_initial_zone_loads(
                 },
             )
             .await;
-            match outcome.snapshot {
-                Some(snapshot) => {
-                    catalog_runtime.refresh_registry.record_success(&snapshot);
-                    if catalog_runtime.manager.is_catalog(&snapshot.origin) {
+            match outcome.success {
+                Some(success) => {
+                    let (metadata, updated_snapshot) = success.into_metadata_and_updated_snapshot();
+                    catalog_runtime
+                        .refresh_registry
+                        .record_success_from_metadata(&metadata);
+                    if let Some(snapshot) = updated_snapshot.as_deref().filter(|_| {
+                        catalog_runtime
+                            .manager
+                            .is_catalog_key(metadata.origin_key.as_ref())
+                    }) {
                         catalog_runtime
                             .manager
                             .apply_snapshot(
-                                &snapshot,
+                                snapshot.catalog_zone_view(),
+                                &metadata,
                                 &zones,
                                 &catalog_runtime.transfer_plan,
                                 &catalog_runtime.refresh_registry,
@@ -7934,7 +8004,7 @@ async fn run_initial_zone_loads(
                     let zone_apex = &plan.origin;
                     catalog_runtime.refresh_registry.record_failure_with_cause(
                         zone_apex,
-                        zones.find_exact_zone(zone_apex),
+                        zones.exact_zone_control_metadata(zone_apex),
                         outcome.failure_cause,
                     );
                     warn!(zone = %zone_apex, "zone remains in LOADING state");
@@ -8008,10 +8078,10 @@ fn notify_serial_is_current(zones: &ZoneStore, request: &RefreshRequest) -> bool
     let Some(requested_serial) = request.requested_serial else {
         return false;
     };
-    let Some(snapshot) = zones.find_exact_zone(&request.zone) else {
+    let Some(metadata) = zones.exact_zone_control_metadata(&request.zone) else {
         return false;
     };
-    let Some(current_serial) = snapshot.serial else {
+    let Some(current_serial) = metadata.serial else {
         return false;
     };
 
@@ -8030,15 +8100,19 @@ fn ixfr_error_disables_ixfr(error: &TransferError) -> bool {
 }
 
 #[cfg(test)]
-async fn refresh_zone_from_primaries(
+async fn refresh_zone_metadata_from_primaries(
     zones: &ZoneStore,
     plan: &ZoneTransferPlan,
     primary_serial_hint: Option<u32>,
     context: RefreshAttemptContext<'_>,
-) -> Option<ZoneSnapshot> {
-    refresh_zone_from_primaries_with_outcome(zones, plan, primary_serial_hint, context)
-        .await
-        .snapshot
+) -> Option<ZoneMetadata> {
+    let outcome =
+        refresh_zone_from_primaries_with_outcome(zones, plan, primary_serial_hint, context).await;
+    outcome.success.map(|success| match success {
+        RefreshZoneSuccess::Current(metadata) | RefreshZoneSuccess::Updated { metadata, .. } => {
+            metadata
+        }
+    })
 }
 
 async fn refresh_zone_from_primaries_with_outcome(
@@ -8047,17 +8121,15 @@ async fn refresh_zone_from_primaries_with_outcome(
     primary_serial_hint: Option<u32>,
     context: RefreshAttemptContext<'_>,
 ) -> RefreshZoneOutcome {
-    let current_snapshot = zones
-        .find_exact_zone(&plan.origin)
-        .filter(|snapshot| snapshot.serial.is_some());
-    let current_serial = current_snapshot
+    let mut current_metadata = zones
+        .exact_zone_control_metadata(&plan.origin)
+        .filter(|metadata| metadata.serial.is_some());
+    let current_serial = current_metadata
         .as_ref()
-        .and_then(|snapshot| snapshot.serial);
+        .and_then(|metadata| metadata.serial);
     let mut last_failure_cause = None;
 
-    if let (Some(snapshot), Some(current_serial), Some(primary_serial)) =
-        (&current_snapshot, current_serial, primary_serial_hint)
-    {
+    if let (Some(current_serial), Some(primary_serial)) = (current_serial, primary_serial_hint) {
         if !serial_after(primary_serial, current_serial) {
             info!(
                 zone = %plan.origin,
@@ -8066,16 +8138,24 @@ async fn refresh_zone_from_primaries_with_outcome(
                 reason = %context.reason,
                 "SOA serial hint confirmed zone current"
             );
-            return RefreshZoneOutcome::success((**snapshot).clone());
+            if let Some(metadata) = current_metadata.take() {
+                return RefreshZoneOutcome::current(metadata);
+            }
+            last_failure_cause = Some("current zone disappeared after SOA serial hint".to_string());
+            warn!(
+                zone = %plan.origin,
+                reason = %context.reason,
+                "SOA serial hint matched a zone that is no longer present; continuing refresh"
+            );
+        } else {
+            info!(
+                zone = %plan.origin,
+                current_serial,
+                primary_serial,
+                reason = %context.reason,
+                "SOA serial hint found newer primary serial"
+            );
         }
-
-        info!(
-            zone = %plan.origin,
-            current_serial,
-            primary_serial,
-            reason = %context.reason,
-            "SOA serial hint found newer primary serial"
-        );
     }
 
     for primary_target in &plan.primaries {
@@ -8084,7 +8164,7 @@ async fn refresh_zone_from_primaries_with_outcome(
 
         if primary_target.transport == TransferTransportConfig::Tcp
             && primary_serial_hint.is_none()
-            && let (Some(snapshot), Some(current_serial)) = (&current_snapshot, current_serial)
+            && let Some(current_serial) = current_serial
         {
             let qid = match transfer_query_id() {
                 Ok(qid) => qid,
@@ -8121,7 +8201,18 @@ async fn refresh_zone_from_primaries_with_outcome(
                         reason = %context.reason,
                         "SOA poll confirmed zone current"
                     );
-                    return RefreshZoneOutcome::success((**snapshot).clone());
+                    if let Some(metadata) = current_metadata.take() {
+                        return RefreshZoneOutcome::current(metadata);
+                    }
+                    last_failure_cause =
+                        Some("current zone disappeared after SOA poll".to_string());
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        reason = %context.reason,
+                        "SOA poll matched a zone that is no longer present; continuing refresh"
+                    );
+                    continue;
                 }
                 Ok(primary_serial) => {
                     info!(
@@ -8148,7 +8239,7 @@ async fn refresh_zone_from_primaries_with_outcome(
             }
         }
 
-        if let Some(current_snapshot) = &current_snapshot {
+        if current_serial.is_some() {
             if context.ixfr_cooldowns.is_disabled(&plan.origin, primary) {
                 info!(
                     zone = %plan.origin,
@@ -8173,63 +8264,77 @@ async fn refresh_zone_from_primaries_with_outcome(
                         continue;
                     }
                 };
-                context.metrics.record_ixfr_started();
-                match transfer_ixfr_from_target_with_tsig(
-                    primary_target,
-                    &plan.origin,
-                    plan.qclass,
-                    qid,
-                    current_snapshot,
-                    TransferSession::new(
-                        TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
-                        plan.max_transfer_ingest_bytes,
+                if let Some(current) = zones.exact_snapshot_with_serial_for_transfer(&plan.origin) {
+                    let current_serial = current
+                        .metadata()
+                        .serial
+                        .expect("IXFR current snapshot metadata has a serial");
+                    context.metrics.record_ixfr_started();
+                    match transfer_ixfr_from_target_with_tsig(
+                        primary_target,
+                        &plan.origin,
+                        plan.qclass,
+                        qid,
+                        current.snapshot_for_transfer(),
+                        TransferSession::new(
+                            TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                            plan.max_transfer_ingest_bytes,
+                        )
+                        .with_transfer_source(transfer_source)
+                        .with_parse_options(plan.parse_options),
+                        context.ixfr_timeout,
+                        context.tcp_connect_timeout,
                     )
-                    .with_transfer_source(transfer_source)
-                    .with_parse_options(plan.parse_options),
-                    context.ixfr_timeout,
-                    context.tcp_connect_timeout,
-                )
-                .await
-                {
-                    Ok(IxfrResponse::Updated(snapshot)) => {
-                        context.metrics.record_ixfr_succeeded();
-                        let serial = snapshot.serial;
-                        zones.insert_snapshot((*snapshot).clone());
-                        info!(
-                            zone = %plan.origin,
-                            %primary,
-                            ?serial,
-                            reason = %context.reason,
-                            "IXFR completed"
-                        );
-                        return RefreshZoneOutcome::success(*snapshot);
-                    }
-                    Ok(IxfrResponse::Current) => {
-                        context.metrics.record_ixfr_succeeded();
-                        info!(
-                            zone = %plan.origin,
-                            %primary,
-                            current_serial,
-                            reason = %context.reason,
-                            "IXFR confirmed zone current"
-                        );
-                        return RefreshZoneOutcome::success((**current_snapshot).clone());
-                    }
-                    Err(error) => {
-                        context.metrics.record_ixfr_failed();
-                        if ixfr_error_disables_ixfr(&error) {
-                            context
-                                .ixfr_cooldowns
-                                .record_unsupported(&plan.origin, primary);
+                    .await
+                    {
+                        Ok(IxfrResponse::Updated(snapshot)) => {
+                            context.metrics.record_ixfr_succeeded();
+                            let snapshot: Arc<ZoneSnapshot> = Arc::from(snapshot);
+                            let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone());
+                            let serial = metadata.serial;
+                            info!(
+                                zone = %plan.origin,
+                                %primary,
+                                ?serial,
+                                reason = %context.reason,
+                                "IXFR completed"
+                            );
+                            return RefreshZoneOutcome::updated(snapshot, metadata);
                         }
-                        warn!(
-                            zone = %plan.origin,
-                            %primary,
-                            %error,
-                            reason = %context.reason,
-                            "IXFR failed; falling back to AXFR"
-                        );
+                        Ok(IxfrResponse::Current) => {
+                            context.metrics.record_ixfr_succeeded();
+                            info!(
+                                zone = %plan.origin,
+                                %primary,
+                                current_serial,
+                                reason = %context.reason,
+                                "IXFR confirmed zone current"
+                            );
+                            return RefreshZoneOutcome::current(current.into_metadata());
+                        }
+                        Err(error) => {
+                            context.metrics.record_ixfr_failed();
+                            if ixfr_error_disables_ixfr(&error) {
+                                context
+                                    .ixfr_cooldowns
+                                    .record_unsupported(&plan.origin, primary);
+                            }
+                            warn!(
+                                zone = %plan.origin,
+                                %primary,
+                                %error,
+                                reason = %context.reason,
+                                "IXFR failed; falling back to AXFR"
+                            );
+                        }
                     }
+                } else {
+                    warn!(
+                        zone = %plan.origin,
+                        %primary,
+                        reason = %context.reason,
+                        "IXFR skipped because current zone is no longer present; falling back to AXFR"
+                    );
                 }
             }
         }
@@ -8269,8 +8374,9 @@ async fn refresh_zone_from_primaries_with_outcome(
         {
             Ok(snapshot) => {
                 context.metrics.record_axfr_succeeded();
-                let serial = snapshot.serial;
-                zones.insert_snapshot(snapshot.clone());
+                let snapshot = Arc::new(snapshot);
+                let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone());
+                let serial = metadata.serial;
                 info!(
                     zone = %plan.origin,
                     %primary,
@@ -8278,7 +8384,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                     reason = %context.reason,
                     "AXFR completed"
                 );
-                return RefreshZoneOutcome::success(snapshot);
+                return RefreshZoneOutcome::updated(snapshot, metadata);
             }
             Err(error) => {
                 last_failure_cause = Some(format!("AXFR failed for primary {primary}: {error}"));
@@ -8684,7 +8790,6 @@ async fn handle_tcp_packet(
     };
     let lookup_observed =
         |lookup_metrics| record_query_lookup_metrics(&query_metrics, lookup_metrics, &metrics);
-    let zone_image_provider = |published: &PublishedZone| published.active_zone_image();
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         &prepared.packet,
         &zones,
@@ -8692,7 +8797,7 @@ async fn handle_tcp_packet(
         notify_authorized,
         notify_accepted,
         lookup_observed,
-        &zone_image_provider as ZoneImageProvider<'_>,
+        &default_zone_image_provider as ZoneImageProvider<'_>,
     );
     let mut query_metrics = query_metrics;
     query_metrics.compose_duration = compose_started.map(|started| started.elapsed());
@@ -8850,7 +8955,9 @@ mod tests {
             DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
             TSIG_ERROR_BADTIME, TSIG_ERROR_BADTRUNC, TsigError, TsigKey,
         },
-        zone::{ResourceRecord, Rrset, SoaTimers, ZoneSnapshot, ZoneState, ZoneStore},
+        zone::{
+            ResourceRecord, Rrset, SoaTimers, ZoneMetadata, ZoneSnapshot, ZoneState, ZoneStore,
+        },
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -8884,7 +8991,7 @@ mod tests {
         observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
         prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
         query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
-        refresh_zone_from_primaries, required_file_descriptor_limit, response_category,
+        refresh_zone_metadata_from_primaries, required_file_descriptor_limit, response_category,
         response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
         rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
         serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp,
@@ -8967,10 +9074,12 @@ mod tests {
         );
         let notify_authority = NotifyAuthority::from_config(&config);
         let (tx, mut rx) = mpsc::channel(1);
+        let metadata = zone_metadata_for(&snapshot);
 
         catalog_manager
             .apply_snapshot(
-                &snapshot,
+                snapshot.catalog_zone_view(),
+                &metadata,
                 &zones,
                 &transfer_plan,
                 &refresh_registry,
@@ -8983,8 +9092,9 @@ mod tests {
         assert!(transfer_plan.get(&member_origin).is_some());
         assert_eq!(
             zones
-                .find_exact_zone(&member_origin)
+                .exact_snapshot_for_transfer(&member_origin)
                 .expect("member zone loading snapshot")
+                .metadata()
                 .state,
             ZoneState::Loading
         );
@@ -9055,10 +9165,12 @@ mod tests {
         );
         let notify_authority = NotifyAuthority::from_config(&config);
         let (tx, mut rx) = mpsc::channel(1);
+        let metadata = zone_metadata_for(&snapshot);
 
         catalog_manager
             .apply_snapshot(
-                &snapshot,
+                snapshot.catalog_zone_view(),
+                &metadata,
                 &zones,
                 &transfer_plan,
                 &refresh_registry,
@@ -9140,10 +9252,12 @@ mod tests {
         );
         let notify_authority = NotifyAuthority::from_config(&config);
         let (tx, mut rx) = mpsc::channel(2);
+        let metadata = zone_metadata_for(&snapshot);
 
         catalog_manager
             .apply_snapshot(
-                &snapshot,
+                snapshot.catalog_zone_view(),
+                &metadata,
                 &zones,
                 &transfer_plan,
                 &refresh_registry,
@@ -9770,8 +9884,9 @@ mod tests {
         let metrics_state = RuntimeMetrics::new();
         metrics_state.record_axfr_started();
         metrics_state.record_axfr_succeeded();
-        metrics_state.record_zone_query(&active_origin);
-        metrics_state.record_zone_query(&active_origin);
+        let active_zone_key = active_origin.canonical_key();
+        metrics_state.record_zone_query_key(&active_zone_key);
+        metrics_state.record_zone_query_key(&active_zone_key);
         metrics_state.record_query_received();
         metrics_state.record_query_received();
         metrics_state.record_query_truncated();
@@ -9841,9 +9956,9 @@ mod tests {
         let refresh_unix = 1_700_000_000;
         refresh_registry.record_success_at_with_timestamp(
             zones
-                .find_exact_zone(&active_origin)
+                .exact_zone_control_metadata(&active_origin)
                 .as_ref()
-                .expect("active snapshot"),
+                .expect("active metadata"),
             refresh_now,
             refresh_unix,
         );
@@ -10936,6 +11051,19 @@ mod tests {
         )
     }
 
+    fn zone_metadata_for(snapshot: &ZoneSnapshot) -> ZoneMetadata {
+        ZoneMetadata {
+            origin: snapshot.origin.clone(),
+            origin_key: Arc::from(snapshot.origin.canonical_key()),
+            origin_name: Arc::from(snapshot.origin.to_string()),
+            state: snapshot.state,
+            serial: snapshot.serial,
+            soa_timers: snapshot.soa_timers,
+            shape: None,
+            shape_histograms: None,
+        }
+    }
+
     #[tokio::test]
     async fn transfer_axfr_from_primary_reads_tcp_messages() {
         let primary = spawn_axfr_primary().await;
@@ -10954,6 +11082,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(1));
         assert_eq!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -11044,6 +11173,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(2));
         assert_eq!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -11143,6 +11273,7 @@ mod tests {
         assert_eq!(snapshot.serial, Some(2));
         assert!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("old.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -11153,6 +11284,7 @@ mod tests {
         );
         assert_eq!(
             snapshot
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("new.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -11547,10 +11679,10 @@ mod tests {
             .expect("published zone");
         assert_eq!(published.origin(), &origin);
         assert_eq!(published.serial(), Some(1));
-        let first = published.zone_image().expect("zone image is published");
-        let second = published.zone_image().expect("zone image stays published");
+        let first = published.active_zone_image_ref();
+        let second = published.active_zone_image_ref();
 
-        assert!(Arc::ptr_eq(&first, &second));
+        assert!(std::ptr::eq(first, second));
     }
 
     #[test]
@@ -11571,10 +11703,10 @@ mod tests {
         let old_published = zones
             .find_published_zone(&DomainName::from_absolute_str("www.example.test.").unwrap())
             .expect("old published zone");
-        let old_snapshot = zones.find_exact_zone(&origin).expect("old snapshot");
-        let old_image = old_published
-            .zone_image()
-            .expect("old zone image is published");
+        let old_snapshot = zones
+            .exact_snapshot_for_transfer(&origin)
+            .expect("old snapshot");
+        let old_image = old_published.active_zone_image_ref();
 
         zones.insert_snapshot(ZoneSnapshot::active(
             origin.clone(),
@@ -11590,19 +11722,20 @@ mod tests {
         let new_published = zones
             .find_published_zone(&DomainName::from_absolute_str("www.example.test.").unwrap())
             .expect("new published zone");
-        let new_snapshot = zones.find_exact_zone(&origin).expect("new snapshot");
-        let new_image = new_published
-            .zone_image()
-            .expect("new zone image is published");
-        let new_image_again = new_published
-            .zone_image()
-            .expect("new zone image stays published");
+        let new_snapshot = zones
+            .exact_snapshot_for_transfer(&origin)
+            .expect("new snapshot");
+        let new_image = new_published.active_zone_image_ref();
+        let new_image_again = new_published.active_zone_image_ref();
 
         assert_eq!(new_published.origin(), &origin);
         assert_eq!(new_published.serial(), Some(2));
-        assert!(!Arc::ptr_eq(&old_snapshot, &new_snapshot));
-        assert!(!Arc::ptr_eq(&old_image, &new_image));
-        assert!(Arc::ptr_eq(&new_image, &new_image_again));
+        assert!(!Arc::ptr_eq(
+            old_snapshot.snapshot_arc_for_transfer(),
+            new_snapshot.snapshot_arc_for_transfer()
+        ));
+        assert!(!std::ptr::eq(old_image, new_image));
+        assert!(std::ptr::eq(new_image, new_image_again));
     }
 
     #[test]
@@ -12314,7 +12447,7 @@ mod tests {
             ],
         );
 
-        let lookup = zone.lookup(
+        let lookup = zone.offline_oracle().lookup(
             &DomainName::from_absolute_str("a.example.test.").unwrap(),
             RecordType::A as u16,
             1,
@@ -12669,7 +12802,7 @@ mod tests {
             )],
         );
 
-        registry.record_success_at(&snapshot, now);
+        registry.record_success_at(&zone_metadata_for(&snapshot), now);
         assert!(
             registry
                 .start_due_refreshes(now + std::time::Duration::from_secs(3599))
@@ -12687,7 +12820,7 @@ mod tests {
 
         registry.record_failure_at(
             &origin,
-            Some(Arc::new(snapshot)),
+            Some(zone_metadata_for(&snapshot)),
             now + std::time::Duration::from_secs(3600),
         );
         assert!(
@@ -12722,7 +12855,11 @@ mod tests {
             )],
         );
 
-        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+        registry.record_success_at_with_timestamp(
+            &zone_metadata_for(&snapshot),
+            now,
+            1_700_000_000,
+        );
         let status = registry
             .snapshots_by_zone()
             .remove(&origin.canonical_key())
@@ -12733,7 +12870,7 @@ mod tests {
 
         registry.record_failure_at_with_timestamp(
             &origin,
-            Some(Arc::new(snapshot.clone())),
+            Some(zone_metadata_for(&snapshot)),
             now + std::time::Duration::from_secs(3600),
             1_700_003_600,
         );
@@ -12746,7 +12883,7 @@ mod tests {
         assert_eq!(status.failures_since_success, 1);
 
         registry.record_success_at_with_timestamp(
-            &snapshot,
+            &zone_metadata_for(&snapshot),
             now + std::time::Duration::from_secs(4200),
             1_700_004_200,
         );
@@ -12788,7 +12925,11 @@ mod tests {
             minimum: 300,
         });
 
-        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+        registry.record_success_at_with_timestamp(
+            &zone_metadata_for(&snapshot),
+            now,
+            1_700_000_000,
+        );
         let status = registry
             .snapshots_by_zone()
             .remove(&origin.canonical_key())
@@ -12797,7 +12938,7 @@ mod tests {
 
         registry.record_failure_at_with_timestamp(
             &origin,
-            Some(Arc::new(snapshot)),
+            Some(zone_metadata_for(&snapshot)),
             now + std::time::Duration::from_secs(1_000),
             1_700_001_000,
         );
@@ -12841,7 +12982,11 @@ mod tests {
         let subscriber = CapturingSubscriber::new(captured.clone());
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        registry.record_success_at_with_timestamp(&snapshot, now, 1_700_000_000);
+        registry.record_success_at_with_timestamp(
+            &zone_metadata_for(&snapshot),
+            now,
+            1_700_000_000,
+        );
 
         assert!(captured.contains_all(&[
             "SOA timer approaches configured maximum effective ZSM interval",
@@ -12948,10 +13093,10 @@ mod tests {
         );
         zones.insert_snapshot(snapshot.clone());
 
-        registry.record_success_at(&snapshot, now);
+        registry.record_success_at(&zone_metadata_for(&snapshot), now);
         registry.record_failure_at_with_timestamp_and_cause(
             &origin,
-            Some(Arc::new(snapshot)),
+            Some(zone_metadata_for(&snapshot)),
             Some("AXFR failed for primary 192.0.2.53:53: timeout".to_owned()),
             now + std::time::Duration::from_secs(60),
             1_700_000_000,
@@ -13060,7 +13205,7 @@ mod tests {
             )],
         );
 
-        registry.record_success_at(&snapshot, now);
+        registry.record_success_at(&zone_metadata_for(&snapshot), now);
         assert!(
             registry
                 .expire_due_zones(now + std::time::Duration::from_secs(604799))
@@ -13157,10 +13302,10 @@ mod tests {
         .unwrap();
 
         let snapshot = zones
-            .get("example.test.")
+            .exact_snapshot_for_transfer(&DomainName::from_absolute_str("example.test.").unwrap())
             .expect("published refreshed snapshot");
-        assert_eq!(snapshot.state, ZoneState::Active);
-        assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(snapshot.metadata().state, ZoneState::Active);
+        assert_eq!(snapshot.metadata().serial, Some(2));
         assert_eq!(
             metrics.snapshot(),
             super::RuntimeMetricsSnapshot {
@@ -13261,10 +13406,21 @@ mod tests {
         worker.await.unwrap().unwrap();
 
         assert_eq!(
-            zones.get("alpha.test.").expect("alpha zone").serial,
+            zones
+                .exact_snapshot_for_transfer(&DomainName::from_absolute_str("alpha.test.").unwrap())
+                .expect("alpha zone")
+                .metadata()
+                .serial,
             Some(2)
         );
-        assert_eq!(zones.get("beta.test.").expect("beta zone").serial, Some(2));
+        assert_eq!(
+            zones
+                .exact_snapshot_for_transfer(&DomainName::from_absolute_str("beta.test.").unwrap())
+                .expect("beta zone")
+                .metadata()
+                .serial,
+            Some(2)
+        );
     }
 
     #[tokio::test]
@@ -13305,7 +13461,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13326,12 +13482,16 @@ mod tests {
             .expect("SOA primary should send peer address");
         let expected_ip: std::net::IpAddr = "127.0.0.2".parse().unwrap();
 
-        assert_eq!(snapshot.serial, Some(2));
+        assert_eq!(metadata.serial, Some(2));
         assert_eq!(peer.ip(), expected_ip);
         assert!(
             zones
-                .get("example.test.")
+                .exact_snapshot_for_transfer(
+                    &DomainName::from_absolute_str("example.test.").unwrap()
+                )
                 .expect("unchanged zone snapshot")
+                .snapshot_for_transfer()
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -13375,7 +13535,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13391,7 +13551,7 @@ mod tests {
         .await
         .expect("refresh success");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(metadata.serial, Some(1));
         let query = observed_query
             .lock()
             .expect("observed query lock poisoned")
@@ -13439,7 +13599,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13455,7 +13615,7 @@ mod tests {
         .await
         .expect("refresh success");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(metadata.serial, Some(1));
         let query = observed_query
             .lock()
             .expect("observed query lock poisoned")
@@ -13465,57 +13625,67 @@ mod tests {
         assert_query_has_tsig(&query, "transfer-key.", "hmac-sha256.");
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn xot_transfer_logs_tls_session_establishment_and_close() {
-        let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
-        let target = TransferPrimaryConfig {
-            addr: primary,
-            transport: TransferTransportConfig::Xot,
-            server_name: Some("primary.example.test".to_owned()),
-            trust_anchors: vec![trust_anchor],
-            client_cert: None,
-            client_key: None,
-            client_key_pem: None,
-        };
-        let apex = DomainName::from_absolute_str("example.test.").unwrap();
-        let captured = CapturedEvents::new();
-        let subscriber = CapturingSubscriber::new(captured.clone());
-        let _guard = tracing::subscriber::set_default(subscriber);
+    #[test]
+    fn xot_transfer_logs_tls_session_establishment_and_close() {
+        std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime")
+                .block_on(async {
+                    let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
+                    let target = TransferPrimaryConfig {
+                        addr: primary,
+                        transport: TransferTransportConfig::Xot,
+                        server_name: Some("primary.example.test".to_owned()),
+                        trust_anchors: vec![trust_anchor],
+                        client_cert: None,
+                        client_key: None,
+                        client_key_pem: None,
+                    };
+                    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+                    let captured = CapturedEvents::new();
+                    let subscriber = CapturingSubscriber::new(captured.clone());
+                    let _guard = tracing::subscriber::set_default(subscriber);
 
-        let snapshot = super::transfer_axfr_from_target_with_tsig(
-            &target,
-            &apex,
-            1,
-            0x1234,
-            TransferSession::default_unsigned(),
-            std::time::Duration::from_secs(5),
-        )
-        .await
-        .expect("XoT AXFR should succeed");
+                    let snapshot = super::transfer_axfr_from_target_with_tsig(
+                        &target,
+                        &apex,
+                        1,
+                        0x1234,
+                        TransferSession::default_unsigned(),
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await
+                    .expect("XoT AXFR should succeed");
 
-        assert_eq!(snapshot.serial, Some(1));
-        assert!(captured.contains_all(&[
-            "XoT TLS session established",
-            "category=\"xot\"",
-            "event=\"xot_tls_session_established\"",
-            &format!("primary={primary}"),
-            "peer_ip=127.0.0.1",
-            "sni=primary.example.test",
-            "tls_version=TLSv1_",
-            "cipher_suite=TLS",
-        ]));
-        assert!(captured.contains_all(&[
-            "XoT TLS session closed",
-            "category=\"xot\"",
-            "event=\"xot_tls_session_closed\"",
-            &format!("primary={primary}"),
-            "peer_ip=127.0.0.1",
-            "sni=primary.example.test",
-            "duration_ms=",
-            "bytes=",
-            "bytes_in=",
-            "bytes_out=",
-        ]));
+                    assert_eq!(snapshot.serial, Some(1));
+                    assert!(captured.contains_all(&[
+                        "XoT TLS session established",
+                        "category=\"xot\"",
+                        "event=\"xot_tls_session_established\"",
+                        &format!("primary={primary}"),
+                        "peer_ip=127.0.0.1",
+                        "sni=primary.example.test",
+                        "tls_version=TLSv1_",
+                        "cipher_suite=TLS",
+                    ]));
+                    assert!(captured.contains_all(&[
+                        "XoT TLS session closed",
+                        "category=\"xot\"",
+                        "event=\"xot_tls_session_closed\"",
+                        &format!("primary={primary}"),
+                        "peer_ip=127.0.0.1",
+                        "sni=primary.example.test",
+                        "duration_ms=",
+                        "bytes=",
+                        "bytes_in=",
+                        "bytes_out=",
+                    ]));
+                });
+        })
+        .join()
+        .expect("XoT logging test thread");
     }
 
     #[tokio::test]
@@ -13557,7 +13727,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13572,7 +13742,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         accepted_rx
             .recv()
             .await
@@ -13615,7 +13785,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13630,7 +13800,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         let query_result =
             tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
         assert!(
@@ -13672,7 +13842,7 @@ mod tests {
         let subscriber = CapturingSubscriber::new(captured.clone());
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13687,7 +13857,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         let query_result =
             tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
         assert!(
@@ -13740,7 +13910,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13755,7 +13925,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         let query_result =
             tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
         assert!(
@@ -13797,7 +13967,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13812,7 +13982,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         let query_result =
             tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
         assert!(
@@ -13857,7 +14027,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13873,7 +14043,7 @@ mod tests {
         .await
         .expect("mTLS XoT AXFR should publish a snapshot");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(metadata.serial, Some(1));
         assert_eq!(
             tokio::time::timeout(std::time::Duration::from_secs(1), query_seen.recv()).await,
             Ok(Some(()))
@@ -13912,7 +14082,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let refresh_result = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -13927,7 +14097,7 @@ mod tests {
         )
         .await;
 
-        assert!(snapshot.is_none());
+        assert!(refresh_result.is_none());
         let query_result =
             tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
         assert!(
@@ -14209,7 +14379,7 @@ mod tests {
         let metrics = RuntimeMetrics::new();
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
 
-        let snapshot = refresh_zone_from_primaries(
+        let metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             None,
@@ -14225,11 +14395,15 @@ mod tests {
         .await
         .expect("XoT AXFR should publish a snapshot");
 
-        assert_eq!(snapshot.serial, Some(1));
+        assert_eq!(metadata.serial, Some(1));
         assert!(
             zones
-                .get("example.test.")
+                .exact_snapshot_for_transfer(
+                    &DomainName::from_absolute_str("example.test.").unwrap()
+                )
                 .expect("published XoT zone")
+                .snapshot_for_transfer()
+                .offline_oracle()
                 .lookup(
                     &DomainName::from_absolute_str("www.example.test.").unwrap(),
                     RecordType::A as u16,
@@ -14277,7 +14451,7 @@ mod tests {
         let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
         let metrics = RuntimeMetrics::new();
 
-        let first = refresh_zone_from_primaries(
+        let first_metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             Some(2),
@@ -14292,9 +14466,9 @@ mod tests {
         )
         .await
         .expect("first refresh succeeds via AXFR fallback");
-        assert_eq!(first.serial, Some(2));
+        assert_eq!(first_metadata.serial, Some(2));
 
-        let second = refresh_zone_from_primaries(
+        let second_metadata = refresh_zone_metadata_from_primaries(
             &zones,
             &plan,
             Some(3),
@@ -14309,7 +14483,7 @@ mod tests {
         )
         .await
         .expect("second refresh skips IXFR and succeeds via AXFR");
-        assert_eq!(second.serial, Some(3));
+        assert_eq!(second_metadata.serial, Some(3));
 
         assert_eq!(
             *qtypes.lock().expect("qtype log lock poisoned"),
@@ -14359,7 +14533,7 @@ mod tests {
         );
         zones.insert_snapshot(snapshot.clone());
         registry.record_success_at(
-            &snapshot,
+            &zone_metadata_for(&snapshot),
             std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(604800))
                 .unwrap(),
@@ -14380,7 +14554,11 @@ mod tests {
         assert_eq!(request.zone, origin);
         assert_eq!(request.reason, super::RefreshReason::Scheduled);
         assert_eq!(
-            zones.find_exact_zone(&origin).expect("expired zone").state,
+            zones
+                .exact_snapshot_for_transfer(&origin)
+                .expect("expired zone")
+                .metadata()
+                .state,
             ZoneState::Expired
         );
         worker.abort();
@@ -14423,9 +14601,9 @@ mod tests {
 
         let snapshot = runtime
             .zones
-            .get("example.test.")
+            .exact_snapshot_for_transfer(&DomainName::from_absolute_str("example.test.").unwrap())
             .expect("published zone snapshot");
-        assert_eq!(snapshot.state, ZoneState::Active);
+        assert_eq!(snapshot.metadata().state, ZoneState::Active);
         assert_eq!(
             metrics.snapshot(),
             super::RuntimeMetricsSnapshot {
@@ -14497,11 +14675,19 @@ mod tests {
         loader.await.unwrap();
 
         assert_eq!(
-            zones.get("alpha.test.").expect("alpha zone").state,
+            zones
+                .exact_snapshot_for_transfer(&DomainName::from_absolute_str("alpha.test.").unwrap())
+                .expect("alpha zone")
+                .metadata()
+                .state,
             ZoneState::Active
         );
         assert_eq!(
-            zones.get("beta.test.").expect("beta zone").state,
+            zones
+                .exact_snapshot_for_transfer(&DomainName::from_absolute_str("beta.test.").unwrap())
+                .expect("beta zone")
+                .metadata()
+                .state,
             ZoneState::Active
         );
     }

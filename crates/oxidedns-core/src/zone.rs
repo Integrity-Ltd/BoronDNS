@@ -4,12 +4,11 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 use tracing::warn;
 
 use crate::dns::{
-    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination, Rcode,
+    AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
     RecordType,
 };
 use crate::zone_image::ZoneImage;
@@ -45,6 +44,12 @@ pub struct ZoneSnapshot {
     empty_non_terminal_classes: HashMap<NameKey, ClassSet>,
     delegation_rrsets: Vec<RrsetKey>,
     dname_rrsets: Vec<RrsetKey>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
+pub struct ZoneSnapshotOfflineOracle<'a> {
+    snapshot: &'a ZoneSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -169,12 +174,6 @@ const ZONE_SHAPE_BYTE_BUCKETS: &[ZoneShapeBucketDefinition] = &[
     },
 ];
 
-struct DnssecAugmentationState {
-    dnssec_augmented: bool,
-    nsec3_iterations_exceeded: bool,
-    nsec3_max_iterations: u16,
-}
-
 impl ZoneSnapshot {
     pub fn loading(origin: DomainName) -> Self {
         let origin_key = NameKey::from(origin.canonical_key());
@@ -239,13 +238,36 @@ impl ZoneSnapshot {
         }
     }
 
-    pub fn soa_record(&self, qclass: u16) -> Option<ResourceRecord> {
+    pub fn soa_record_view(&self, qclass: u16) -> Option<SoaRecordView<'_>> {
+        let rrset = self.soa_rrset(qclass)?;
+        let rdata = rrset.rdatas.first()?;
+        Some(SoaRecordView {
+            owner: &rrset.owner,
+            class: rrset.class,
+            ttl: rrset.ttl,
+            rdata,
+        })
+    }
+
+    pub(crate) fn transfer_soa_record(&self, qclass: u16) -> Option<ResourceRecord> {
         self.soa_rrset(qclass)
             .and_then(|rrset| rrset.records().into_iter().next())
     }
 
-    pub fn records(&self) -> Vec<ResourceRecord> {
+    pub(crate) fn transfer_records(&self) -> Vec<ResourceRecord> {
         self.rrsets.values().flat_map(Rrset::records).collect()
+    }
+
+    pub(crate) fn rrsets(&self) -> impl Iterator<Item = &Rrset> {
+        self.rrsets.values()
+    }
+
+    /// Return a narrow borrowed view for RFC 9432 catalog-zone parsing.
+    pub fn catalog_zone_view(&self) -> CatalogZoneView<'_> {
+        CatalogZoneView {
+            origin: &self.origin,
+            rrsets: &self.rrsets,
+        }
     }
 
     pub fn shape_summary(&self) -> ZoneShapeSummary {
@@ -352,8 +374,13 @@ impl ZoneSnapshot {
         }
     }
 
-    pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
-        self.lookup_with_options(
+    #[doc(hidden)]
+    pub fn offline_oracle(&self) -> ZoneSnapshotOfflineOracle<'_> {
+        ZoneSnapshotOfflineOracle { snapshot: self }
+    }
+
+    fn offline_oracle_lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
+        self.offline_oracle_lookup_with_options(
             qname,
             qtype,
             qclass,
@@ -362,7 +389,7 @@ impl ZoneSnapshot {
         )
     }
 
-    pub fn lookup_with_options(
+    fn offline_oracle_lookup_with_options(
         &self,
         qname: &DomainName,
         qtype: u16,
@@ -413,115 +440,6 @@ impl ZoneSnapshot {
             wildcard_result
         } else {
             LookupResult::nxdomain(self.soa_rrset(qclass))
-        }
-    }
-
-    pub fn augment_lookup_result_with_dnssec(
-        &self,
-        lookup: LookupResult,
-        qname: &DomainName,
-        qtype: u16,
-        qclass: u16,
-        nsec3_max_iterations: u16,
-    ) -> (LookupResult, bool, bool) {
-        let mut seen = HashSet::new();
-        let mut dnssec_state = DnssecAugmentationState {
-            dnssec_augmented: false,
-            nsec3_iterations_exceeded: false,
-            nsec3_max_iterations,
-        };
-        let nodata_candidate =
-            lookup.rcode == Rcode::NoError && lookup.authoritative && lookup.answers.is_empty();
-        let nxdomain_candidate =
-            lookup.rcode == Rcode::NxDomain && lookup.authoritative && lookup.answers.is_empty();
-        let wildcard_candidate = self.is_wildcard_synthesis(qname, qtype, qclass, &lookup);
-        let authorities =
-            self.add_referral_dnssec_augmentations(lookup.authorities, &mut dnssec_state);
-        let authorities = self.add_nodata_nsec_augmentations(
-            qname,
-            qtype,
-            qclass,
-            nodata_candidate,
-            authorities,
-            &mut dnssec_state,
-        );
-        let authorities = self.add_nxdomain_nsec_augmentations(
-            qname,
-            qclass,
-            nxdomain_candidate,
-            authorities,
-            &mut dnssec_state,
-        );
-        let authorities = self.add_wildcard_nsec_augmentations(
-            qname,
-            qclass,
-            wildcard_candidate,
-            authorities,
-            &mut dnssec_state,
-        );
-        let answers = self.add_rrsig_augmentations(
-            lookup.answers,
-            &mut seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-        let authorities = self.add_rrsig_augmentations(
-            authorities,
-            &mut seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-        let additionals = self.add_rrsig_augmentations(
-            lookup.additionals,
-            &mut seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-
-        (
-            LookupResult {
-                answers,
-                authorities,
-                additionals,
-                nsec3_iterations_exceeded: dnssec_state.nsec3_iterations_exceeded,
-                ..lookup
-            },
-            dnssec_state.dnssec_augmented,
-            dnssec_state.nsec3_iterations_exceeded,
-        )
-    }
-
-    fn is_wildcard_synthesis(
-        &self,
-        qname: &DomainName,
-        qtype: u16,
-        qclass: u16,
-        lookup: &LookupResult,
-    ) -> bool {
-        if lookup.rcode != Rcode::NoError
-            || !lookup.authoritative
-            || lookup.answers.is_empty()
-            || lookup
-                .answers
-                .first()
-                .is_none_or(|record| record.owner != *qname)
-            || self.name_exists(qname, qclass)
-        {
-            return false;
-        }
-
-        let Some(wildcard) = self
-            .closest_encloser(qname, qclass)
-            .map(|closest| closest.wildcard_child())
-        else {
-            return false;
-        };
-
-        if qtype == 255 {
-            !self.rrsets_at_name(&wildcard, qclass).is_empty()
-        } else {
-            self.rrset(&wildcard, qtype, qclass).is_some()
-                || (qtype != RecordType::Cname as u16
-                    && self
-                        .rrset(&wildcard, RecordType::Cname as u16, qclass)
-                        .is_some())
         }
     }
 
@@ -827,296 +745,6 @@ impl ZoneSnapshot {
         additionals
     }
 
-    fn add_referral_dnssec_augmentations(
-        &self,
-        authorities: Vec<ResourceRecord>,
-        dnssec_state: &mut DnssecAugmentationState,
-    ) -> Vec<ResourceRecord> {
-        let mut augmented = authorities.clone();
-        let mut seen = authorities
-            .iter()
-            .map(record_identity)
-            .collect::<HashSet<_>>();
-        for record in &authorities {
-            if record.rr_type != RecordType::Ns as u16 {
-                continue;
-            }
-
-            let proof_rrset = self
-                .rrset(&record.owner, RecordType::Ds as u16, record.class)
-                .or_else(|| self.rrset(&record.owner, RecordType::Nsec as u16, record.class));
-
-            if let Some(proof_rrset) = proof_rrset {
-                push_rrset_records(
-                    proof_rrset,
-                    &mut augmented,
-                    &mut seen,
-                    &mut dnssec_state.dnssec_augmented,
-                );
-            } else {
-                self.push_nsec3_for_name(
-                    &record.owner,
-                    record.class,
-                    &mut augmented,
-                    &mut seen,
-                    dnssec_state,
-                );
-            }
-        }
-        augmented
-    }
-
-    fn add_nodata_nsec_augmentations(
-        &self,
-        qname: &DomainName,
-        qtype: u16,
-        qclass: u16,
-        nodata_candidate: bool,
-        authorities: Vec<ResourceRecord>,
-        dnssec_state: &mut DnssecAugmentationState,
-    ) -> Vec<ResourceRecord> {
-        if !nodata_candidate
-            || !authorities
-                .iter()
-                .any(|record| record.rr_type == RecordType::Soa as u16)
-            || self.rrset(qname, qtype, qclass).is_some()
-        {
-            return authorities;
-        }
-
-        let mut augmented = authorities.clone();
-        let mut seen = authorities
-            .iter()
-            .map(record_identity)
-            .collect::<HashSet<_>>();
-        if let Some(nsec_rrset) = self.rrset(qname, RecordType::Nsec as u16, qclass) {
-            push_rrset_records(
-                nsec_rrset,
-                &mut augmented,
-                &mut seen,
-                &mut dnssec_state.dnssec_augmented,
-            );
-        } else {
-            self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
-        }
-        augmented
-    }
-
-    fn add_nxdomain_nsec_augmentations(
-        &self,
-        qname: &DomainName,
-        qclass: u16,
-        nxdomain_candidate: bool,
-        authorities: Vec<ResourceRecord>,
-        dnssec_state: &mut DnssecAugmentationState,
-    ) -> Vec<ResourceRecord> {
-        if !nxdomain_candidate
-            || !authorities
-                .iter()
-                .any(|record| record.rr_type == RecordType::Soa as u16)
-        {
-            return authorities;
-        }
-
-        let mut augmented = authorities.clone();
-        let mut seen = authorities
-            .iter()
-            .map(record_identity)
-            .collect::<HashSet<_>>();
-        self.push_nsec_covering_name(
-            qname,
-            qclass,
-            &mut augmented,
-            &mut seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
-        if let Some(closest_encloser) = self.closest_encloser(qname, qclass) {
-            self.push_nsec_covering_name(
-                &closest_encloser.wildcard_child(),
-                qclass,
-                &mut augmented,
-                &mut seen,
-                &mut dnssec_state.dnssec_augmented,
-            );
-            self.push_nsec3_for_name(
-                &closest_encloser,
-                qclass,
-                &mut augmented,
-                &mut seen,
-                dnssec_state,
-            );
-            self.push_nsec3_for_name(
-                &closest_encloser.wildcard_child(),
-                qclass,
-                &mut augmented,
-                &mut seen,
-                dnssec_state,
-            );
-        }
-        augmented
-    }
-
-    fn push_nsec_covering_name(
-        &self,
-        name: &DomainName,
-        qclass: u16,
-        records: &mut Vec<ResourceRecord>,
-        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
-        dnssec_augmented: &mut bool,
-    ) {
-        let Some(nsec_rrset) = self.nsec_rrset_covering_name(name, qclass) else {
-            return;
-        };
-
-        for nsec in nsec_rrset.records() {
-            if seen.insert(record_identity(&nsec)) {
-                records.push(nsec);
-                *dnssec_augmented = true;
-            }
-        }
-    }
-
-    fn nsec_rrset_covering_name(&self, name: &DomainName, qclass: u16) -> Option<&Rrset> {
-        self.rrsets.values().find(|rrset| {
-            rrset.rr_type == RecordType::Nsec as u16
-                && (qclass == 255 || rrset.class == qclass)
-                && rrset
-                    .rdatas
-                    .iter()
-                    .any(|rdata| nsec_covers_name(&rrset.owner, rdata, name))
-        })
-    }
-
-    fn add_wildcard_nsec_augmentations(
-        &self,
-        qname: &DomainName,
-        qclass: u16,
-        wildcard_candidate: bool,
-        authorities: Vec<ResourceRecord>,
-        dnssec_state: &mut DnssecAugmentationState,
-    ) -> Vec<ResourceRecord> {
-        if !wildcard_candidate {
-            return authorities;
-        }
-
-        let mut augmented = authorities.clone();
-        let mut seen = authorities
-            .iter()
-            .map(record_identity)
-            .collect::<HashSet<_>>();
-        self.push_nsec_covering_name(
-            qname,
-            qclass,
-            &mut augmented,
-            &mut seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-        self.push_nsec3_for_name(qname, qclass, &mut augmented, &mut seen, dnssec_state);
-        augmented
-    }
-
-    fn push_nsec3_for_name(
-        &self,
-        name: &DomainName,
-        qclass: u16,
-        records: &mut Vec<ResourceRecord>,
-        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
-        dnssec_state: &mut DnssecAugmentationState,
-    ) {
-        let Some(nsec3_rrset) = self.nsec3_rrset_for_name(
-            name,
-            qclass,
-            &mut dnssec_state.nsec3_iterations_exceeded,
-            dnssec_state.nsec3_max_iterations,
-        ) else {
-            return;
-        };
-
-        push_rrset_records(
-            nsec3_rrset,
-            records,
-            seen,
-            &mut dnssec_state.dnssec_augmented,
-        );
-    }
-
-    fn nsec3_rrset_for_name(
-        &self,
-        name: &DomainName,
-        qclass: u16,
-        nsec3_iterations_exceeded: &mut bool,
-        nsec3_max_iterations: u16,
-    ) -> Option<&Rrset> {
-        let candidates = self
-            .rrsets
-            .values()
-            .filter(|rrset| rrset.rr_type == RecordType::Nsec3 as u16)
-            .filter(|rrset| qclass == 255 || rrset.class == qclass)
-            .filter_map(|rrset| {
-                let rdata = rrset.rdatas.first()?;
-                let params = nsec3_params_from_rdata(rdata)?;
-                if params.iterations > nsec3_max_iterations {
-                    *nsec3_iterations_exceeded = true;
-                    return None;
-                }
-                let hash = nsec3_hash_name(name, &params)?;
-                let owner_hash = nsec3_owner_hash_label(&rrset.owner, &self.origin)?;
-                let next_hash = nsec3_next_hash_label(rdata)?;
-                Some((rrset, hash, owner_hash, next_hash))
-            })
-            .collect::<Vec<_>>();
-
-        candidates
-            .iter()
-            .find(|(_, hash, owner_hash, _)| hash == owner_hash)
-            .map(|(rrset, _, _, _)| *rrset)
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .find(|(_, hash, owner_hash, next_hash)| {
-                        nsec3_range_covers_hash(owner_hash, next_hash, hash)
-                    })
-                    .map(|(rrset, _, _, _)| *rrset)
-            })
-    }
-
-    fn add_rrsig_augmentations(
-        &self,
-        records: Vec<ResourceRecord>,
-        seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
-        dnssec_augmented: &mut bool,
-    ) -> Vec<ResourceRecord> {
-        let mut augmented = records.clone();
-        for record in &records {
-            if record.rr_type == RecordType::Rrsig as u16 {
-                continue;
-            }
-            let Some(rrsig_rrset) =
-                self.rrset(&record.owner, RecordType::Rrsig as u16, record.class)
-            else {
-                continue;
-            };
-
-            for rrsig in rrsig_rrset.records() {
-                if rrsig_type_covered(&rrsig.rdata) != Some(record.rr_type) {
-                    continue;
-                }
-                let key = (
-                    rrsig.owner.canonical_key(),
-                    rrsig.rr_type,
-                    rrsig.class,
-                    rrsig.rdata.clone(),
-                );
-                if seen.insert(key) {
-                    augmented.push(rrsig);
-                    *dnssec_augmented = true;
-                }
-            }
-        }
-        augmented
-    }
-
     fn closest_encloser(&self, qname: &DomainName, qclass: u16) -> Option<DomainName> {
         let mut candidate = qname.parent()?;
         loop {
@@ -1231,6 +859,29 @@ impl ZoneSnapshot {
             RecordType::Soa as u16,
             class,
         ))
+    }
+}
+
+impl ZoneSnapshotOfflineOracle<'_> {
+    pub fn lookup(&self, qname: &DomainName, qtype: u16, qclass: u16) -> LookupResult {
+        self.snapshot.offline_oracle_lookup(qname, qtype, qclass)
+    }
+
+    pub fn lookup_with_options(
+        &self,
+        qname: &DomainName,
+        qtype: u16,
+        qclass: u16,
+        max_cname_chain: usize,
+        any_response: AnyResponseMode,
+    ) -> LookupResult {
+        self.snapshot.offline_oracle_lookup_with_options(
+            qname,
+            qtype,
+            qclass,
+            max_cname_chain,
+            any_response,
+        )
     }
 }
 
@@ -1423,167 +1074,6 @@ fn soa_timers(rdata: &[u8]) -> Option<SoaTimers> {
     })
 }
 
-fn rrsig_type_covered(rdata: &[u8]) -> Option<u16> {
-    if rdata.len() < 2 {
-        return None;
-    }
-
-    Some(u16::from_be_bytes([rdata[0], rdata[1]]))
-}
-
-fn nsec_covers_name(owner: &DomainName, rdata: &[u8], name: &DomainName) -> bool {
-    let Ok((next_owner, _)) = DomainName::parse(rdata, 0) else {
-        return false;
-    };
-
-    canonical_nsec_range_covers(owner, &next_owner, name)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Nsec3Params {
-    hash_algorithm: u8,
-    iterations: u16,
-    salt: Vec<u8>,
-}
-
-fn nsec3_params_from_rdata(rdata: &[u8]) -> Option<Nsec3Params> {
-    if rdata.len() < 5 {
-        return None;
-    }
-
-    let salt_len = rdata[4] as usize;
-    if rdata.len() < 5 + salt_len + 1 {
-        return None;
-    }
-
-    Some(Nsec3Params {
-        hash_algorithm: rdata[0],
-        iterations: u16::from_be_bytes([rdata[2], rdata[3]]),
-        salt: rdata[5..5 + salt_len].to_vec(),
-    })
-}
-
-fn nsec3_next_hash_label(rdata: &[u8]) -> Option<String> {
-    let params = nsec3_params_from_rdata(rdata)?;
-    let hash_len_offset = 5 + params.salt.len();
-    let hash_len = *rdata.get(hash_len_offset)? as usize;
-    let hash_start = hash_len_offset + 1;
-    let hash_end = hash_start.checked_add(hash_len)?;
-    if hash_end > rdata.len() {
-        return None;
-    }
-
-    Some(base32hex_no_padding_lower(&rdata[hash_start..hash_end]))
-}
-
-fn nsec3_hash_name(name: &DomainName, params: &Nsec3Params) -> Option<String> {
-    if params.hash_algorithm != 1 {
-        return None;
-    }
-
-    let canonical = DomainName::from_absolute_str(&name.canonical_key())
-        .ok()?
-        .to_wire();
-    let mut digest = Sha1::new();
-    digest.update(&canonical);
-    digest.update(&params.salt);
-    let mut hash = digest.finalize().to_vec();
-
-    for _ in 0..params.iterations {
-        let mut digest = Sha1::new();
-        digest.update(&hash);
-        digest.update(&params.salt);
-        hash = digest.finalize().to_vec();
-    }
-
-    Some(base32hex_no_padding_lower(&hash))
-}
-
-fn nsec3_owner_hash_label(owner: &DomainName, origin: &DomainName) -> Option<String> {
-    let owner_key = owner.canonical_key();
-    let origin_key = origin.canonical_key();
-    let prefix = owner_key.strip_suffix(&origin_key)?;
-    let hash_label = prefix.strip_suffix('.')?;
-    if hash_label.is_empty() || hash_label.contains('.') {
-        return None;
-    }
-
-    Some(hash_label.to_owned())
-}
-
-fn nsec3_range_covers_hash(owner_hash: &str, next_hash: &str, hash: &str) -> bool {
-    if owner_hash < next_hash {
-        owner_hash < hash && hash < next_hash
-    } else if owner_hash > next_hash {
-        owner_hash < hash || hash < next_hash
-    } else {
-        hash != owner_hash
-    }
-}
-
-fn base32hex_no_padding_lower(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 32] = b"0123456789abcdefghijklmnopqrstuv";
-    let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
-    let mut buffer = 0u16;
-    let mut bits = 0u8;
-
-    for byte in bytes {
-        buffer = (buffer << 8) | u16::from(*byte);
-        bits += 8;
-        while bits >= 5 {
-            let index = ((buffer >> (bits - 5)) & 0x1f) as usize;
-            out.push(ALPHABET[index] as char);
-            bits -= 5;
-        }
-    }
-
-    if bits > 0 {
-        let index = ((buffer << (5 - bits)) & 0x1f) as usize;
-        out.push(ALPHABET[index] as char);
-    }
-
-    out
-}
-
-fn canonical_nsec_range_covers(
-    owner: &DomainName,
-    next_owner: &DomainName,
-    name: &DomainName,
-) -> bool {
-    let owner_key = owner.canonical_order_key();
-    let next_key = next_owner.canonical_order_key();
-    let name_key = name.canonical_order_key();
-
-    if owner_key < next_key {
-        owner_key < name_key && name_key < next_key
-    } else {
-        owner_key < name_key || name_key < next_key
-    }
-}
-
-fn record_identity(record: &ResourceRecord) -> (String, u16, u16, Vec<u8>) {
-    (
-        record.owner.canonical_key(),
-        record.rr_type,
-        record.class,
-        record.rdata.clone(),
-    )
-}
-
-fn push_rrset_records(
-    rrset: &Rrset,
-    records: &mut Vec<ResourceRecord>,
-    seen: &mut HashSet<(String, u16, u16, Vec<u8>)>,
-    dnssec_augmented: &mut bool,
-) {
-    for record in rrset.records() {
-        if seen.insert(record_identity(&record)) {
-            records.push(record);
-            *dnssec_augmented = true;
-        }
-    }
-}
-
 fn is_dnssec_proof_or_signature_type(rr_type: u16) -> bool {
     rr_type == RecordType::Rrsig as u16
         || rr_type == RecordType::Nsec as u16
@@ -1695,6 +1185,7 @@ fn parse_single_name_rdata(record: &ResourceRecord) -> Option<DomainName> {
 struct ZoneDirectory {
     by_origin: HashMap<String, Arc<ZoneStoreEntry>>,
     suffix_index: HashMap<Vec<u8>, Arc<ZoneStoreEntry>>,
+    active_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1708,10 +1199,103 @@ pub struct PublishedZone {
     entry: Arc<ZoneStoreEntry>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TransferZoneSnapshot {
+    snapshot: Arc<ZoneSnapshot>,
+    metadata: ZoneMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub struct OfflineZoneSnapshot {
+    snapshot: Arc<ZoneSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneMetadata {
+    pub origin: DomainName,
+    pub origin_key: Arc<str>,
+    pub origin_name: Arc<str>,
+    pub state: ZoneState,
+    pub serial: Option<u32>,
+    pub soa_timers: Option<SoaTimers>,
+    pub shape: Option<ZoneShapeSummary>,
+    pub shape_histograms: Option<ZoneShapeHistogramSummary>,
+}
+
+impl TransferZoneSnapshot {
+    /// Return cached control metadata for scalar transfer decisions.
+    pub fn metadata(&self) -> &ZoneMetadata {
+        &self.metadata
+    }
+
+    /// Consume the transfer view and return cached control metadata.
+    pub fn into_metadata(self) -> ZoneMetadata {
+        self.metadata
+    }
+
+    /// Borrow the old snapshot layout only for transfer/oracle work that still
+    /// genuinely needs builder-state records.
+    pub fn snapshot_for_transfer(&self) -> &ZoneSnapshot {
+        &self.snapshot
+    }
+
+    /// Return the shared old-layout handle for tests and identity checks.
+    pub fn snapshot_arc_for_transfer(&self) -> &Arc<ZoneSnapshot> {
+        &self.snapshot
+    }
+}
+
+impl OfflineZoneSnapshot {
+    /// Return the offline snapshot origin.
+    pub fn origin(&self) -> &DomainName {
+        &self.snapshot.origin
+    }
+
+    /// Return the offline snapshot publication state.
+    pub fn state(&self) -> ZoneState {
+        self.snapshot.state
+    }
+
+    /// Return the offline snapshot serial.
+    pub fn serial(&self) -> Option<u32> {
+        self.snapshot.serial
+    }
+
+    /// Borrow the old snapshot layout only for offline oracle/baseline work.
+    pub fn snapshot_for_offline_oracle(&self) -> &ZoneSnapshot {
+        &self.snapshot
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogZoneView<'a> {
+    origin: &'a DomainName,
+    rrsets: &'a HashMap<RrsetKey, Rrset>,
+}
+
+impl<'a> CatalogZoneView<'a> {
+    pub fn origin(&self) -> &'a DomainName {
+        self.origin
+    }
+
+    pub(crate) fn rrsets(&self) -> impl Iterator<Item = &'a Rrset> {
+        self.rrsets.values()
+    }
+}
+
 #[derive(Debug)]
 struct ZoneStoreEntry {
+    origin: DomainName,
+    origin_label_count: usize,
+    origin_key: Arc<str>,
+    origin_name: Arc<str>,
+    state: ZoneState,
+    serial: Option<u32>,
+    soa_timers: Option<SoaTimers>,
     snapshot: Arc<ZoneSnapshot>,
     image: Option<Arc<ZoneImage>>,
+    shape: Option<ZoneShapeSummary>,
+    shape_histograms: Option<ZoneShapeHistogramSummary>,
     hidden: bool,
 }
 
@@ -1742,6 +1326,15 @@ impl ZoneStore {
     pub fn insert_snapshot(&self, snapshot: ZoneSnapshot) {
         let snapshot = Arc::new(snapshot);
         self.replace_snapshot(snapshot, false);
+    }
+
+    /// Publish a transfer-built snapshot that already has shared ownership.
+    ///
+    /// This is for transfer/catalog control paths that need to publish the
+    /// snapshot and retain a handle for follow-up control work without cloning
+    /// the full old layout.
+    pub fn insert_snapshot_arc_for_transfer(&self, snapshot: Arc<ZoneSnapshot>) -> ZoneMetadata {
+        self.replace_snapshot(snapshot, false).control_metadata()
     }
 
     pub fn remove_zone(&self, origin: &DomainName) -> bool {
@@ -1786,48 +1379,110 @@ impl ZoneStore {
         let Some(entry) = current.get(&key) else {
             return false;
         };
-        if entry.snapshot.state == ZoneState::Expired {
+        if entry.state == ZoneState::Expired {
             return false;
         }
 
-        let expired = Arc::new(entry.snapshot.with_state(ZoneState::Expired));
         let mut next = current.as_ref().clone();
-        next.insert(key, Arc::new(ZoneStoreEntry::new(expired, entry.hidden)));
+        next.insert(key, Arc::new(entry.with_state(ZoneState::Expired)));
         self.zones.store(Arc::new(next));
         true
     }
 
-    pub fn get(&self, origin: &str) -> Option<Arc<ZoneSnapshot>> {
-        self.zones
-            .load()
-            .get(origin)
-            .map(|entry| entry.snapshot.clone())
-    }
-
-    pub fn find_exact_zone(&self, origin: &DomainName) -> Option<Arc<ZoneSnapshot>> {
+    /// Return the exact-origin snapshot plus cached control metadata for IXFR
+    /// transfer work that still genuinely needs the old builder/oracle layout.
+    pub fn exact_snapshot_for_transfer(&self, origin: &DomainName) -> Option<TransferZoneSnapshot> {
         self.zones
             .load()
             .get(&origin.canonical_key())
-            .map(|entry| entry.snapshot.clone())
+            .map(|entry| TransferZoneSnapshot {
+                snapshot: entry.snapshot_for_control(),
+                metadata: entry.control_metadata(),
+            })
+    }
+
+    /// Return the exact-origin snapshot for IXFR transfer work only when the
+    /// cached control metadata has a serial that can seed an IXFR query.
+    pub fn exact_snapshot_with_serial_for_transfer(
+        &self,
+        origin: &DomainName,
+    ) -> Option<TransferZoneSnapshot> {
+        self.zones
+            .load()
+            .get(&origin.canonical_key())
+            .filter(|entry| entry.serial.is_some())
+            .map(|entry| TransferZoneSnapshot {
+                snapshot: entry.snapshot_for_control(),
+                metadata: entry.control_metadata(),
+            })
+    }
+
+    /// Check exact-origin presence for transfer/catalog/NOTIFY control work
+    /// without cloning the underlying snapshot. Query serving should use
+    /// `find_published_zone` and answer from the published `ZoneImage`.
+    pub fn contains_exact_zone_for_control(&self, origin: &DomainName) -> bool {
+        self.zones.load().contains_key(&origin.canonical_key())
+    }
+
+    /// Return exact-origin metadata without cloning the underlying snapshot.
+    pub fn exact_zone_metadata(&self, origin: &DomainName) -> Option<ZoneMetadata> {
+        self.zones
+            .load()
+            .get(&origin.canonical_key())
+            .map(|entry| entry.metadata())
+    }
+
+    /// Return exact-origin control metadata without status-only shape fields.
+    pub fn exact_zone_control_metadata(&self, origin: &DomainName) -> Option<ZoneMetadata> {
+        self.zones
+            .load()
+            .get(&origin.canonical_key())
+            .map(|entry| entry.control_metadata())
     }
 
     pub fn find_published_zone(&self, qname: &DomainName) -> Option<PublishedZone> {
+        self.find_published_zone_with_ascii_lowercase_hint(qname, false)
+    }
+
+    /// Return the most-specific published zone for a query name.
+    ///
+    /// Set `qname_ascii_lowercase` only when the caller already proved every
+    /// query-name label byte is lowercase ASCII, for example while parsing the
+    /// DNS packet. Call `find_published_zone` when that fact is not available.
+    pub fn find_published_zone_with_ascii_lowercase_hint(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+    ) -> Option<PublishedZone> {
         let zones = self.zones.load();
         zones
-            .find_best_match(qname)
-            .filter(|entry| !entry.hidden)
+            .find_best_match(qname, qname_ascii_lowercase)
             .map(|entry| PublishedZone { entry })
     }
 
-    pub fn snapshots(&self) -> Vec<Arc<ZoneSnapshot>> {
-        let mut snapshots = self
-            .zones
-            .load()
-            .values()
-            .map(|entry| entry.snapshot.clone())
-            .collect::<Vec<_>>();
-        snapshots.sort_by_key(|snapshot| snapshot.origin.canonical_key());
-        snapshots
+    /// Return cheap published-zone metadata for status and metrics without
+    /// cloning the underlying snapshots. Query serving should use
+    /// `find_published_zone` and answer from the published `ZoneImage`.
+    pub fn zone_metadata(&self) -> Vec<ZoneMetadata> {
+        let zones = self.zones.load();
+        let mut entries = zones.values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.origin_key.cmp(&right.origin_key));
+        entries.into_iter().map(|entry| entry.metadata()).collect()
+    }
+
+    /// Return all snapshots for offline evidence collection and test oracles.
+    /// Query serving, status, metrics, and catalog membership paths should use
+    /// narrower published-zone, metadata, or exact-presence views.
+    pub fn offline_snapshots(&self) -> Vec<OfflineZoneSnapshot> {
+        let zones = self.zones.load();
+        let mut entries = zones.values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.origin_key.cmp(&right.origin_key));
+        entries
+            .into_iter()
+            .map(|entry| OfflineZoneSnapshot {
+                snapshot: entry.snapshot_for_control(),
+            })
+            .collect()
     }
 
     pub fn len(&self) -> usize {
@@ -1835,11 +1490,7 @@ impl ZoneStore {
     }
 
     pub fn active_count(&self) -> usize {
-        self.zones
-            .load()
-            .values()
-            .filter(|entry| entry.snapshot.state == ZoneState::Active)
-            .count()
+        self.zones.load().active_count()
     }
 
     pub fn has_active_zone(&self) -> bool {
@@ -1850,7 +1501,11 @@ impl ZoneStore {
         self.zones.load().is_empty()
     }
 
-    fn replace_snapshot(&self, snapshot: Arc<ZoneSnapshot>, force_hidden: bool) {
+    fn replace_snapshot(
+        &self,
+        snapshot: Arc<ZoneSnapshot>,
+        force_hidden: bool,
+    ) -> Arc<ZoneStoreEntry> {
         let key = snapshot.origin.canonical_key();
         let _publish_guard = self
             .publish_lock
@@ -1859,8 +1514,10 @@ impl ZoneStore {
         let current = self.zones.load_full();
         let hidden = force_hidden || current.get(&key).is_some_and(|entry| entry.hidden);
         let mut next = current.as_ref().clone();
-        next.insert(key, Arc::new(ZoneStoreEntry::new(snapshot, hidden)));
+        let entry = Arc::new(ZoneStoreEntry::new(key.clone(), snapshot, hidden));
+        next.insert(key.clone(), entry.clone());
         self.zones.store(Arc::new(next));
+        entry
     }
 
     fn set_hidden(&self, origin: &DomainName, hidden: bool) {
@@ -1885,41 +1542,59 @@ impl ZoneStore {
 
 impl PublishedZone {
     pub fn origin(&self) -> &DomainName {
-        &self.entry.snapshot.origin
+        &self.entry.origin
+    }
+
+    pub fn origin_key(&self) -> &str {
+        &self.entry.origin_key
+    }
+
+    pub fn origin_label_count(&self) -> usize {
+        self.entry.origin_label_count
+    }
+
+    pub fn origin_key_arc(&self) -> Arc<str> {
+        self.entry.origin_key.clone()
     }
 
     pub fn serial(&self) -> Option<u32> {
-        self.entry.snapshot.serial
+        self.entry.serial
     }
 
     pub fn state(&self) -> ZoneState {
-        self.entry.snapshot.state
+        self.entry.state
     }
 
-    pub fn zone_image(&self) -> Option<Arc<ZoneImage>> {
-        self.entry.image.clone()
-    }
-
-    pub fn active_zone_image(&self) -> Arc<ZoneImage> {
-        debug_assert_eq!(self.entry.snapshot.state, ZoneState::Active);
+    pub fn active_zone_image_ref(&self) -> &ZoneImage {
+        debug_assert_eq!(self.entry.state, ZoneState::Active);
         self.entry
             .image
-            .clone()
+            .as_deref()
             .expect("active published zone must include a compiled ZoneImage")
     }
 }
 
 impl ZoneDirectory {
     fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
-        let suffix_key = canonical_reverse_label_key(&entry.snapshot.origin);
-        self.by_origin.insert(key.clone(), entry.clone());
+        let suffix_key = canonical_reverse_label_key(&entry.origin);
+        if let Some(previous) = self.by_origin.insert(key.clone(), entry.clone()) {
+            self.active_count = self
+                .active_count
+                .saturating_sub(usize::from(previous.state == ZoneState::Active));
+        }
+        self.active_count = self
+            .active_count
+            .saturating_add(usize::from(entry.state == ZoneState::Active));
         self.suffix_index.insert(suffix_key, entry);
     }
 
     fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
         let entry = self.by_origin.remove(key)?;
+        self.active_count = self
+            .active_count
+            .saturating_sub(usize::from(entry.state == ZoneState::Active));
         self.suffix_index
-            .remove(canonical_reverse_label_key(&entry.snapshot.origin).as_slice());
+            .remove(canonical_reverse_label_key(&entry.origin).as_slice());
         Some(entry)
     }
 
@@ -1939,12 +1614,21 @@ impl ZoneDirectory {
         self.by_origin.len()
     }
 
+    fn active_count(&self) -> usize {
+        self.active_count
+    }
+
     fn is_empty(&self) -> bool {
         self.by_origin.is_empty()
     }
 
-    fn find_best_match(&self, qname: &DomainName) -> Option<Arc<ZoneStoreEntry>> {
-        let (qname_key, prefix_lengths) = canonical_reverse_label_key_with_prefixes(qname);
+    fn find_best_match(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+    ) -> Option<Arc<ZoneStoreEntry>> {
+        let (qname_key, prefix_lengths) =
+            canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
         for prefix_len in prefix_lengths.into_iter().rev() {
             if let Some(entry) = self.suffix_index.get(&qname_key[..prefix_len])
                 && !entry.hidden
@@ -1962,24 +1646,35 @@ impl ZoneDirectory {
 }
 
 fn canonical_reverse_label_key(name: &DomainName) -> Vec<u8> {
-    let (key, _) = canonical_reverse_label_key_with_prefixes(name);
-    key
+    let (key, _) = canonical_reverse_label_key_with_prefixes(name, false);
+    key.to_vec()
 }
 
-fn canonical_reverse_label_key_with_prefixes(name: &DomainName) -> (Vec<u8>, Vec<usize>) {
+fn canonical_reverse_label_key_with_prefixes(
+    name: &DomainName,
+    labels_are_ascii_lowercase: bool,
+) -> (SmallVec<[u8; 128]>, SmallVec<[usize; 8]>) {
     let key_capacity = name.labels().iter().map(|label| label.len() + 1).sum();
-    let mut key = Vec::with_capacity(key_capacity);
-    let mut prefix_lengths = Vec::with_capacity(name.label_count());
-    for label in name.labels().iter().rev() {
-        key.push(label.len() as u8);
-        key.extend(label.iter().map(u8::to_ascii_lowercase));
-        prefix_lengths.push(key.len());
+    let mut key = SmallVec::<[u8; 128]>::with_capacity(key_capacity);
+    let mut prefix_lengths = SmallVec::<[usize; 8]>::new();
+    if labels_are_ascii_lowercase {
+        for label in name.labels().iter().rev() {
+            key.push(label.len() as u8);
+            key.extend_from_slice(label);
+            prefix_lengths.push(key.len());
+        }
+    } else {
+        for label in name.labels().iter().rev() {
+            key.push(label.len() as u8);
+            key.extend(label.iter().map(u8::to_ascii_lowercase));
+            prefix_lengths.push(key.len());
+        }
     }
     (key, prefix_lengths)
 }
 
 impl ZoneStoreEntry {
-    fn new(snapshot: Arc<ZoneSnapshot>, hidden: bool) -> Self {
+    fn new(origin_key: String, snapshot: Arc<ZoneSnapshot>, hidden: bool) -> Self {
         let image = if snapshot.state == ZoneState::Active {
             Some(Arc::new(
                 ZoneImage::compile(&snapshot).expect("active zone image compiles"),
@@ -1987,18 +1682,94 @@ impl ZoneStoreEntry {
         } else {
             None
         };
+        let shape = (snapshot.state == ZoneState::Active).then(|| snapshot.shape_summary());
+        let shape_histograms =
+            (snapshot.state == ZoneState::Active).then(|| snapshot.shape_histogram_summary());
         Self {
+            origin: snapshot.origin.clone(),
+            origin_label_count: snapshot.origin.label_count(),
+            origin_key: Arc::from(origin_key),
+            origin_name: Arc::from(snapshot.origin.to_string()),
+            state: snapshot.state,
+            serial: snapshot.serial,
+            soa_timers: snapshot.soa_timers,
             snapshot,
             image,
+            shape,
+            shape_histograms,
             hidden,
+        }
+    }
+
+    fn metadata(&self) -> ZoneMetadata {
+        ZoneMetadata {
+            origin: self.origin.clone(),
+            origin_key: self.origin_key.clone(),
+            origin_name: self.origin_name.clone(),
+            state: self.state,
+            serial: self.serial,
+            soa_timers: self.soa_timers,
+            shape: self.shape,
+            shape_histograms: self.shape_histograms.clone(),
+        }
+    }
+
+    fn control_metadata(&self) -> ZoneMetadata {
+        ZoneMetadata {
+            origin: self.origin.clone(),
+            origin_key: self.origin_key.clone(),
+            origin_name: self.origin_name.clone(),
+            state: self.state,
+            serial: self.serial,
+            soa_timers: self.soa_timers,
+            shape: None,
+            shape_histograms: None,
+        }
+    }
+
+    fn snapshot_for_control(&self) -> Arc<ZoneSnapshot> {
+        if self.snapshot.state == self.state {
+            self.snapshot.clone()
+        } else {
+            Arc::new(self.snapshot.with_state(self.state))
         }
     }
 
     fn with_hidden(&self, hidden: bool) -> Self {
         Self {
+            origin: self.origin.clone(),
+            origin_label_count: self.origin_label_count,
+            origin_key: self.origin_key.clone(),
+            origin_name: self.origin_name.clone(),
+            state: self.state,
+            serial: self.serial,
+            soa_timers: self.soa_timers,
             snapshot: self.snapshot.clone(),
             image: self.image.clone(),
+            shape: self.shape,
+            shape_histograms: self.shape_histograms.clone(),
             hidden,
+        }
+    }
+
+    fn with_state(&self, state: ZoneState) -> Self {
+        Self {
+            origin: self.origin.clone(),
+            origin_label_count: self.origin_label_count,
+            origin_key: self.origin_key.clone(),
+            origin_name: self.origin_name.clone(),
+            state,
+            serial: self.serial,
+            soa_timers: self.soa_timers,
+            snapshot: self.snapshot.clone(),
+            image: (state == ZoneState::Active)
+                .then(|| self.image.clone())
+                .flatten(),
+            shape: (state == ZoneState::Active).then_some(self.shape).flatten(),
+            shape_histograms: (state == ZoneState::Active)
+                .then(|| self.shape_histograms.clone())
+                .flatten(),
+            hidden: self.hidden,
         }
     }
 }
@@ -2010,6 +1781,14 @@ pub struct ResourceRecord {
     pub class: u16,
     pub ttl: u32,
     pub rdata: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoaRecordView<'a> {
+    pub owner: &'a DomainName,
+    pub class: u16,
+    pub ttl: u32,
+    pub rdata: &'a [u8],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2038,11 +1817,11 @@ impl Rrset {
         }
     }
 
-    pub fn records(&self) -> Vec<ResourceRecord> {
+    pub(crate) fn records(&self) -> Vec<ResourceRecord> {
         self.records_with_owner(&self.owner)
     }
 
-    pub fn records_with_owner(&self, owner: &DomainName) -> Vec<ResourceRecord> {
+    pub(crate) fn records_with_owner(&self, owner: &DomainName) -> Vec<ResourceRecord> {
         self.rdatas
             .iter()
             .map(|rdata| ResourceRecord {
@@ -2053,6 +1832,10 @@ impl Rrset {
                 rdata: rdata.clone(),
             })
             .collect()
+    }
+
+    pub(crate) fn rdatas(&self) -> &[Vec<u8>] {
+        self.rdatas.as_slice()
     }
 }
 
@@ -2248,7 +2031,34 @@ mod tests {
 
         assert!(store.expire_zone(&origin));
         assert_eq!(
-            store.find_exact_zone(&origin).expect("expired zone").state,
+            store
+                .exact_snapshot_for_transfer(&origin)
+                .expect("expired zone")
+                .metadata()
+                .state,
+            ZoneState::Expired
+        );
+        assert_eq!(
+            store
+                .exact_zone_control_metadata(&origin)
+                .expect("expired metadata")
+                .state,
+            ZoneState::Expired
+        );
+        assert_eq!(
+            store
+                .offline_snapshots()
+                .into_iter()
+                .find(|snapshot| snapshot.origin() == &origin)
+                .expect("expired offline snapshot")
+                .state(),
+            ZoneState::Expired
+        );
+        assert_eq!(
+            store
+                .find_published_zone(&origin)
+                .expect("expired zone remains published for not-ready response")
+                .state(),
             ZoneState::Expired
         );
         assert!(!store.expire_zone(&origin));
@@ -2271,21 +2081,157 @@ mod tests {
         assert!(store.expire_zone(&active));
         assert_eq!(store.active_count(), 0);
         assert!(!store.has_active_zone());
+
+        store.insert_snapshot(ZoneSnapshot::active(active.clone(), Some(2), Vec::new()));
+        assert_eq!(store.active_count(), 1);
+        store.insert_loading(active.clone());
+        assert_eq!(store.active_count(), 0);
+        store.insert_snapshot(ZoneSnapshot::active(active.clone(), Some(3), Vec::new()));
+        assert_eq!(store.active_count(), 1);
+        assert!(store.remove_zone(&active));
+        assert_eq!(store.active_count(), 0);
     }
 
     #[test]
-    fn snapshots_returns_zones_in_stable_order() {
+    fn offline_snapshots_returns_zones_in_stable_order() {
         let store = ZoneStore::new();
         store.insert_loading(DomainName::from_absolute_str("z.test.").unwrap());
         store.insert_loading(DomainName::from_absolute_str("a.test.").unwrap());
 
         let origins = store
-            .snapshots()
+            .offline_snapshots()
             .into_iter()
-            .map(|snapshot| snapshot.origin.to_string())
+            .map(|snapshot| snapshot.origin().to_string())
             .collect::<Vec<_>>();
 
         assert_eq!(origins, vec!["a.test.", "z.test."]);
+    }
+
+    #[test]
+    fn zone_metadata_returns_cached_shape_without_snapshot_clone_or_sort_key_rebuild() {
+        let store = ZoneStore::new();
+        let loading = DomainName::from_absolute_str("loading.test.").unwrap();
+        let active = DomainName::from_absolute_str("active.test.").unwrap();
+        store.insert_loading(loading);
+        store.insert_snapshot(ZoneSnapshot::active(
+            active.clone(),
+            Some(7),
+            vec![Rrset::new(
+                active.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        let metadata = store.zone_metadata();
+        assert_eq!(
+            metadata
+                .iter()
+                .map(|zone| zone.origin.to_string())
+                .collect::<Vec<_>>(),
+            vec!["active.test.", "loading.test."]
+        );
+        let active_metadata = &metadata[0];
+        assert_eq!(active_metadata.origin_key.as_ref(), "active.test.");
+        assert_eq!(active_metadata.origin_name.as_ref(), "active.test.");
+        assert_eq!(active_metadata.state, ZoneState::Active);
+        assert_eq!(active_metadata.serial, Some(7));
+        assert_eq!(
+            active_metadata
+                .shape
+                .expect("active shape is cached")
+                .rrset_count,
+            1
+        );
+        assert!(active_metadata.shape_histograms.is_some());
+        assert!(metadata[1].shape.is_none());
+        let active_control_metadata = store
+            .exact_zone_control_metadata(&active)
+            .expect("active control metadata");
+        assert_eq!(active_control_metadata.state, ZoneState::Active);
+        assert_eq!(active_control_metadata.serial, Some(7));
+        assert!(active_control_metadata.shape.is_none());
+        assert!(active_control_metadata.shape_histograms.is_none());
+
+        assert!(store.expire_zone(&active));
+        let expired = store
+            .zone_metadata()
+            .into_iter()
+            .find(|zone| zone.origin == active)
+            .expect("expired zone metadata");
+        assert_eq!(expired.state, ZoneState::Expired);
+        assert!(expired.shape.is_none());
+        assert!(expired.shape_histograms.is_none());
+    }
+
+    #[test]
+    fn transfer_snapshot_view_carries_cached_control_metadata() {
+        let store = ZoneStore::new();
+        let origin = DomainName::from_absolute_str("transfer.example.").unwrap();
+        store.insert_snapshot(ZoneSnapshot::active(
+            origin.clone(),
+            Some(42),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        ));
+
+        let view = store
+            .exact_snapshot_for_transfer(&origin)
+            .expect("transfer snapshot view");
+        let metadata = view.metadata();
+        assert_eq!(view.snapshot_for_transfer().serial, Some(42));
+        assert_eq!(metadata.origin, origin);
+        assert_eq!(metadata.origin_key.as_ref(), "transfer.example.");
+        assert_eq!(metadata.origin_name.as_ref(), "transfer.example.");
+        assert_eq!(metadata.serial, Some(42));
+        assert_eq!(metadata.state, ZoneState::Active);
+        assert!(metadata.shape.is_none());
+        assert!(metadata.shape_histograms.is_none());
+    }
+
+    #[test]
+    fn serial_gated_transfer_snapshot_skips_zones_without_current_serial() {
+        let store = ZoneStore::new();
+        let serial_origin = DomainName::from_absolute_str("serial.example.").unwrap();
+        let no_serial_origin = DomainName::from_absolute_str("no-serial.example.").unwrap();
+        store.insert_snapshot(ZoneSnapshot::active(
+            serial_origin.clone(),
+            Some(42),
+            Vec::new(),
+        ));
+        store.insert_snapshot(ZoneSnapshot::active(
+            no_serial_origin.clone(),
+            None,
+            Vec::new(),
+        ));
+
+        let serial_view = store
+            .exact_snapshot_with_serial_for_transfer(&serial_origin)
+            .expect("serial-bearing transfer snapshot view");
+        assert_eq!(serial_view.snapshot_for_transfer().serial, Some(42));
+        assert_eq!(serial_view.metadata().serial, Some(42));
+        assert!(serial_view.metadata().shape.is_none());
+        assert!(serial_view.metadata().shape_histograms.is_none());
+
+        assert!(
+            store
+                .exact_snapshot_with_serial_for_transfer(&no_serial_origin)
+                .is_none(),
+            "serial-gated IXFR view must not expose old-layout snapshots that cannot seed IXFR"
+        );
+        assert!(
+            store
+                .exact_snapshot_for_transfer(&no_serial_origin)
+                .is_some(),
+            "broader transfer/oracle view remains available for callers that genuinely need it"
+        );
     }
 
     #[test]
@@ -2296,7 +2242,7 @@ mod tests {
 
         store.insert_loading_hidden(origin.clone());
 
-        assert!(store.find_exact_zone(&origin).is_some());
+        assert!(store.exact_snapshot_for_transfer(&origin).is_some());
         assert!(store.find_published_zone(&origin).is_none());
         assert!(store.find_published_zone(&child).is_none());
         assert!(store.is_hidden(&origin));
@@ -2311,14 +2257,21 @@ mod tests {
         let parent = DomainName::from_absolute_str("example.test.").unwrap();
         let child = DomainName::from_absolute_str("child.example.test.").unwrap();
         let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+        let mixed_case_qname = DomainName::from_absolute_str("WWW.Child.Example.Test.").unwrap();
 
         store.insert_snapshot(ZoneSnapshot::active(parent.clone(), Some(1), Vec::new()));
         store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(1), Vec::new()));
 
         let published = store
-            .find_published_zone(&qname)
+            .find_published_zone_with_ascii_lowercase_hint(&qname, true)
             .expect("published child zone");
         assert_eq!(published.origin(), &child);
+        assert_eq!(published.origin_key(), "child.example.test.");
+
+        let mixed_case_published = store
+            .find_published_zone_with_ascii_lowercase_hint(&mixed_case_qname, false)
+            .expect("published child zone for mixed case query");
+        assert_eq!(mixed_case_published.origin(), &child);
     }
 
     #[test]
@@ -2369,6 +2322,32 @@ mod tests {
                 .origin(),
             &parent
         );
+    }
+
+    #[test]
+    fn zone_directory_suffix_prefixes_stay_inline_for_common_qnames() {
+        let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+
+        let (key, prefix_lengths) = canonical_reverse_label_key_with_prefixes(&qname, true);
+
+        assert!(!key.spilled());
+        assert!(!prefix_lengths.spilled());
+        assert_eq!(key.as_slice(), b"\x04test\x07example\x05child\x03www");
+        assert_eq!(prefix_lengths.as_slice(), &[5, 13, 19, 23]);
+    }
+
+    #[test]
+    fn zone_directory_suffix_key_uses_lowercase_hint_only_when_safe() {
+        let lowercase = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+        let mixed_case = DomainName::from_absolute_str("WWW.Child.Example.Test.").unwrap();
+
+        let (lowercase_key, lowercase_prefixes) =
+            canonical_reverse_label_key_with_prefixes(&lowercase, true);
+        let (mixed_case_key, mixed_case_prefixes) =
+            canonical_reverse_label_key_with_prefixes(&mixed_case, false);
+
+        assert_eq!(lowercase_key, mixed_case_key);
+        assert_eq!(lowercase_prefixes, mixed_case_prefixes);
     }
 
     fn soa_rdata() -> Vec<u8> {

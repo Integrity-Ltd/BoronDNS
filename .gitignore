@@ -1,6 +1,7 @@
 # Rust build output
 /target/
 /fuzz/target/
+/fuzz/corpus/
 
 # Editor and tool backups
 *~

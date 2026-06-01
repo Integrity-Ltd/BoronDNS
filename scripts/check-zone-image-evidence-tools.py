@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPARATOR = REPO_ROOT / "scripts" / "compare-zone-image-benchmarks.py"
 ZONE_IMAGE_GATE = REPO_ROOT / "scripts" / "zone-image-evidence-gate.sh"
 DNS_CLIENT_BENCHMARK = REPO_ROOT / "scripts" / "benchmark-dns-clients.sh"
+UDP_BATCH_SWEEP_CHECKER = REPO_ROOT / "scripts" / "check-udp-batch-sweep.py"
 
 
 BASE_RESULTS = {
@@ -229,6 +230,61 @@ def run_compare(
     return subprocess.run(command, text=True, capture_output=True, check=False)
 
 
+SWEEP_SUMMARY_HEADER = [
+    "udp_batch_size",
+    "artifact_dir",
+    "responses_per_second",
+    "qps_ratio_to_baseline",
+    "latency_us_p50",
+    "p50_ratio_to_baseline",
+    "latency_us_p99",
+    "p99_ratio_to_baseline",
+    "dropped",
+    "errors",
+    "udp_receive_batches",
+    "udp_received_datagrams",
+    "receive_datagrams_per_batch",
+    "udp_send_batches",
+    "udp_sent_datagrams",
+    "send_datagrams_per_batch",
+    "zone_image_serve_hits",
+    "zone_image_serve_direct_hits",
+    "zone_image_serve_semantic_hits",
+    "zone_image_serve_failures",
+    "network_device",
+    "network_rx_packets_delta",
+    "network_tx_packets_delta",
+]
+
+
+def write_sweep_summary(path: Path, rows: list[dict[str, str]]) -> None:
+    path.write_text(
+        "\t".join(SWEEP_SUMMARY_HEADER)
+        + "\n"
+        + "".join(
+            "\t".join(row[column] for column in SWEEP_SUMMARY_HEADER) + "\n"
+            for row in rows
+        ),
+        encoding="utf-8",
+    )
+
+
+def run_sweep_check(input_path: Path, output_path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(UDP_BATCH_SWEEP_CHECKER),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def assert_status(
     name: str,
     result: subprocess.CompletedProcess[str],
@@ -372,6 +428,136 @@ def assert_stderr_contains(name: str, result: subprocess.CompletedProcess[str], 
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="zone-image-evidence-tools-") as temp_name:
         temp = Path(temp_name)
+
+        sweep_summary = temp / "udp-batch-summary.tsv"
+        write_sweep_summary(
+            sweep_summary,
+            [
+                {
+                    "udp_batch_size": "1",
+                    "artifact_dir": "batch-1",
+                    "responses_per_second": "100000",
+                    "qps_ratio_to_baseline": "1.000",
+                    "latency_us_p50": "20.0",
+                    "p50_ratio_to_baseline": "1.000",
+                    "latency_us_p99": "40.0",
+                    "p99_ratio_to_baseline": "1.000",
+                    "dropped": "0",
+                    "errors": "0",
+                    "udp_receive_batches": "100000",
+                    "udp_received_datagrams": "100000",
+                    "receive_datagrams_per_batch": "1.000",
+                    "udp_send_batches": "100000",
+                    "udp_sent_datagrams": "100000",
+                    "send_datagrams_per_batch": "1.000",
+                    "zone_image_serve_hits": "100000",
+                    "zone_image_serve_direct_hits": "90000",
+                    "zone_image_serve_semantic_hits": "10000",
+                    "zone_image_serve_failures": "0",
+                    "network_device": "lo",
+                    "network_rx_packets_delta": "200000",
+                    "network_tx_packets_delta": "200000",
+                },
+                {
+                    "udp_batch_size": "32",
+                    "artifact_dir": "batch-32",
+                    "responses_per_second": "110000",
+                    "qps_ratio_to_baseline": "1.100",
+                    "latency_us_p50": "18.0",
+                    "p50_ratio_to_baseline": "0.900",
+                    "latency_us_p99": "36.0",
+                    "p99_ratio_to_baseline": "0.900",
+                    "dropped": "0",
+                    "errors": "0",
+                    "udp_receive_batches": "50000",
+                    "udp_received_datagrams": "110000",
+                    "receive_datagrams_per_batch": "2.200",
+                    "udp_send_batches": "50000",
+                    "udp_sent_datagrams": "110000",
+                    "send_datagrams_per_batch": "2.200",
+                    "zone_image_serve_hits": "110000",
+                    "zone_image_serve_direct_hits": "99000",
+                    "zone_image_serve_semantic_hits": "11000",
+                    "zone_image_serve_failures": "0",
+                    "network_device": "lo",
+                    "network_rx_packets_delta": "220000",
+                    "network_tx_packets_delta": "220000",
+                },
+            ],
+        )
+        sweep_check = temp / "udp-batch-summary-check.tsv"
+        result = run_sweep_check(sweep_summary, sweep_check)
+        assert_status("UDP batch sweep summary check", result, expected_success=True)
+        assert_output_contains(sweep_check, "status\tpassed")
+        assert_output_contains(sweep_check, "batching_gain_rows\t1")
+
+        bad_sweep_summary = temp / "bad-udp-batch-summary.tsv"
+        write_sweep_summary(
+            bad_sweep_summary,
+            [
+                {
+                    "udp_batch_size": "1",
+                    "artifact_dir": "batch-1",
+                    "responses_per_second": "100000",
+                    "qps_ratio_to_baseline": "1.000",
+                    "latency_us_p50": "20.0",
+                    "p50_ratio_to_baseline": "1.000",
+                    "latency_us_p99": "40.0",
+                    "p99_ratio_to_baseline": "1.000",
+                    "dropped": "0",
+                    "errors": "0",
+                    "udp_receive_batches": "100000",
+                    "udp_received_datagrams": "100000",
+                    "receive_datagrams_per_batch": "1.000",
+                    "udp_send_batches": "100000",
+                    "udp_sent_datagrams": "100000",
+                    "send_datagrams_per_batch": "1.000",
+                    "zone_image_serve_hits": "100000",
+                    "zone_image_serve_direct_hits": "90000",
+                    "zone_image_serve_semantic_hits": "10000",
+                    "zone_image_serve_failures": "0",
+                    "network_device": "lo",
+                    "network_rx_packets_delta": "200000",
+                    "network_tx_packets_delta": "200000",
+                },
+                {
+                    "udp_batch_size": "32",
+                    "artifact_dir": "batch-32",
+                    "responses_per_second": "100000",
+                    "qps_ratio_to_baseline": "1.000",
+                    "latency_us_p50": "20.0",
+                    "p50_ratio_to_baseline": "1.000",
+                    "latency_us_p99": "40.0",
+                    "p99_ratio_to_baseline": "1.000",
+                    "dropped": "0",
+                    "errors": "0",
+                    "udp_receive_batches": "100000",
+                    "udp_received_datagrams": "100000",
+                    "receive_datagrams_per_batch": "1.000",
+                    "udp_send_batches": "100000",
+                    "udp_sent_datagrams": "100000",
+                    "send_datagrams_per_batch": "1.000",
+                    "zone_image_serve_hits": "100000",
+                    "zone_image_serve_direct_hits": "90000",
+                    "zone_image_serve_semantic_hits": "10000",
+                    "zone_image_serve_failures": "0",
+                    "network_device": "lo",
+                    "network_rx_packets_delta": "200000",
+                    "network_tx_packets_delta": "200000",
+                },
+            ],
+        )
+        bad_sweep_check = temp / "bad-udp-batch-summary-check.tsv"
+        result = run_sweep_check(bad_sweep_summary, bad_sweep_check)
+        assert_status(
+            "UDP batch sweep summary no-batching-gain rejection",
+            result,
+            expected_success=False,
+        )
+        assert_output_contains(
+            bad_sweep_check,
+            "no non-baseline row increased both receive and send datagrams per batch",
+        )
 
         loop_current = temp / "loop-current"
         loop_zone = temp / "loop-zone"

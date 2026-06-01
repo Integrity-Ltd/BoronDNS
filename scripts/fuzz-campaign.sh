@@ -12,12 +12,14 @@ Options:
   --target TARGET        Add a fuzz target to run; may be repeated
   --duration SECONDS     Per-target fuzz duration (default: 10)
   --evidence-dir DIR     Output directory (default: target/fuzz-evidence/<timestamp>)
+  --toolchain TOOLCHAIN  Run cargo through rustup with this toolchain
   --dry-run              Write config and print commands without running cargo fuzz
   --list-targets         Print known targets and exit
   -h, --help             Show this help
 
 Environment:
   CARGO                  Cargo executable to use (default: cargo)
+  CARGO_TOOLCHAIN        Optional rustup toolchain, for example nightly
 EOF
 }
 
@@ -36,6 +38,7 @@ dry_run=0
 list_targets=0
 all_targets=0
 cargo_bin="${CARGO:-cargo}"
+cargo_toolchain="${CARGO_TOOLCHAIN:-}"
 selected_targets=()
 known_targets=()
 
@@ -63,15 +66,38 @@ require_positive_integer() {
     [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$name must be a positive integer: $value"
 }
 
+cargo_path_prefix_dir() {
+    if [[ "$cargo_bin" == */* ]]; then
+        cd "$(dirname "$cargo_bin")" && pwd
+    elif [[ -n "$cargo_toolchain" ]] && command -v rustup >/dev/null 2>&1; then
+        local selected_cargo
+        selected_cargo="$(rustup which --toolchain "$cargo_toolchain" cargo 2>/dev/null || true)"
+        if [[ -n "$selected_cargo" ]]; then
+            cd "$(dirname "$selected_cargo")" && pwd
+        fi
+    fi
+}
+
 record_versions() {
     local versions_file="$1"
+    local cargo_dir
+    cargo_dir="$(cargo_path_prefix_dir)"
     {
         printf 'date_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf 'repo_root=%s\n' "$repo_root"
         printf 'cargo=%s\n' "$cargo_bin"
-        if command -v "$cargo_bin" >/dev/null 2>&1; then
-            "$cargo_bin" --version
-            "$cargo_bin" fuzz --version 2>&1 || true
+        printf 'cargo_toolchain=%s\n' "${cargo_toolchain:-default}"
+        if [[ -n "$cargo_toolchain" ]]; then
+            if command -v rustup >/dev/null 2>&1; then
+                PATH="${cargo_dir:+$cargo_dir:}$PATH" rustup run "$cargo_toolchain" "$cargo_bin" --version
+                PATH="${cargo_dir:+$cargo_dir:}$PATH" rustup run "$cargo_toolchain" "$cargo_bin" fuzz --version 2>&1 || true
+                rustup run "$cargo_toolchain" rustc --version 2>&1 || true
+            else
+                printf 'rustup not found on PATH\n'
+            fi
+        elif command -v "$cargo_bin" >/dev/null 2>&1; then
+            PATH="${cargo_dir:+$cargo_dir:}$PATH" "$cargo_bin" --version
+            PATH="${cargo_dir:+$cargo_dir:}$PATH" "$cargo_bin" fuzz --version 2>&1 || true
         else
             printf '%s not found on PATH\n' "$cargo_bin"
         fi
@@ -112,6 +138,8 @@ write_config() {
         printf 'duration_seconds=%s\n' "$duration"
         printf 'evidence_dir=%s\n' "$evidence_dir"
         printf 'dry_run=%s\n' "$dry_run"
+        printf 'cargo=%s\n' "$cargo_bin"
+        printf 'cargo_toolchain=%s\n' "${cargo_toolchain:-default}"
         printf 'targets=%s\n' "${selected_targets[*]}"
     } >"$config_file"
 }
@@ -136,6 +164,11 @@ parse_args() {
         --evidence-dir)
             (($# >= 2)) || die "--evidence-dir requires a value"
             evidence_dir="$2"
+            shift 2
+            ;;
+        --toolchain)
+            (($# >= 2)) || die "--toolchain requires a value"
+            cargo_toolchain="$2"
             shift 2
             ;;
         --dry-run)
@@ -196,12 +229,21 @@ run_target() {
     local -a cmd
 
     mkdir -p "$artifact_dir"
-    cmd=(
-        "$cargo_bin" fuzz run "$target"
-        --
-        "-max_total_time=$duration"
-        "-artifact_prefix=$artifact_dir/"
-    )
+    if [[ -n "$cargo_toolchain" ]]; then
+        cmd=(
+            rustup run "$cargo_toolchain" "$cargo_bin" fuzz run "$target"
+            --
+            "-max_total_time=$duration"
+            "-artifact_prefix=$artifact_dir/"
+        )
+    else
+        cmd=(
+            "$cargo_bin" fuzz run "$target"
+            --
+            "-max_total_time=$duration"
+            "-artifact_prefix=$artifact_dir/"
+        )
+    fi
 
     {
         printf 'target=%s\n' "$target"
@@ -221,10 +263,15 @@ run_target() {
     printf 'Running %s for %ss; log: %s\n' "$target" "$duration" "$target_log"
     (
         cd "$repo_root"
-        "${cmd[@]}"
+        local cargo_dir
+        cargo_dir="$(cargo_path_prefix_dir)"
+        if [[ -n "$cargo_dir" ]]; then
+            env PATH="$cargo_dir:$PATH" "${cmd[@]}"
+        else
+            "${cmd[@]}"
+        fi
     ) >"$target_log" 2>&1 || {
-        local status
-        status=$?
+        local status=$?
         append_summary_row "$target" "failed" "$status" "$target_log" "$artifact_dir" "$command_file"
         printf 'target failed: %s (exit %s)\n' "$target" "$status" >&2
         printf -- '---- %s tail ----\n' "$target_log" >&2
@@ -246,8 +293,18 @@ main() {
     write_summary_header
 
     if ((!dry_run)); then
-        command -v "$cargo_bin" >/dev/null 2>&1 || die "$cargo_bin not found on PATH"
-        "$cargo_bin" fuzz --version >/dev/null 2>&1 || die "cargo-fuzz is not installed or not runnable"
+        local cargo_dir
+        cargo_dir="$(cargo_path_prefix_dir)"
+        if [[ -n "$cargo_toolchain" ]]; then
+            command -v rustup >/dev/null 2>&1 || die "rustup not found on PATH"
+            env PATH="${cargo_dir:+$cargo_dir:}$PATH" \
+                rustup run "$cargo_toolchain" "$cargo_bin" fuzz --version >/dev/null 2>&1 ||
+                die "cargo-fuzz is not installed or not runnable with toolchain $cargo_toolchain"
+        else
+            command -v "$cargo_bin" >/dev/null 2>&1 || die "$cargo_bin not found on PATH"
+            env PATH="${cargo_dir:+$cargo_dir:}$PATH" "$cargo_bin" fuzz --version >/dev/null 2>&1 ||
+                die "cargo-fuzz is not installed or not runnable"
+        fi
     fi
 
     local target
