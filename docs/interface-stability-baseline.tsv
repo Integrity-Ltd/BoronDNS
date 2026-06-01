@@ -9,9 +9,12 @@ configuration	[process].disable_core_dumps	stable	0.1	config/oxidedns.example.to
 configuration	[process].no_new_privileges	stable	0.1	config/oxidedns.example.toml	major	Linux startup hardening toggle for PR_SET_NO_NEW_PRIVS; defaults to true.
 configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
+configuration	[metrics].hot_path_detail	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional full or reduced hot-path metrics detail; full is the default operational profile.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
 configuration	[limits].max_tcp_connections	stable	0.1	config/oxidedns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
 configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.
+configuration	[limits].udp_reuseport_workers	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional standard UDP SO_REUSEPORT worker count; default is one worker.
+configuration	[limits].udp_worker_cpu_affinity	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional Linux CPU id list for standard UDP workers; length must match udp_reuseport_workers.
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/oxidedns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
 configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.

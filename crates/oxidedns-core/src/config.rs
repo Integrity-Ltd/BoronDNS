@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     fmt, fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -70,6 +70,8 @@ pub struct ServerConfig {
     pub transfer: TransferConfig,
     #[serde(default)]
     pub limits: Limits,
+    #[serde(default)]
+    pub xdp: XdpConfig,
     #[serde(default)]
     pub zones: Vec<ZoneConfig>,
     #[serde(default)]
@@ -154,6 +156,8 @@ impl ServerConfig {
                 "limits.udp_batch_size must be at least 1".to_owned(),
             ));
         }
+        self.xdp.validate(self.limits.udp_backend)?;
+        self.limits.validate_udp_worker_settings()?;
         if self.limits.max_cname_chain == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_cname_chain must be at least 1".to_owned(),
@@ -916,6 +920,8 @@ pub struct MetricsConfig {
     #[serde(default = "default_latency_histogram_buckets")]
     pub latency_histogram_buckets: Vec<LatencyHistogramBucketSeconds>,
     #[serde(default)]
+    pub hot_path_detail: MetricsHotPathDetail,
+    #[serde(default)]
     pub pipeline_timing_enabled: bool,
     #[serde(default)]
     pub zone_shape_enabled: bool,
@@ -925,6 +931,7 @@ impl Default for MetricsConfig {
     fn default() -> Self {
         Self {
             latency_histogram_buckets: default_latency_histogram_buckets(),
+            hot_path_detail: MetricsHotPathDetail::default(),
             pipeline_timing_enabled: false,
             zone_shape_enabled: false,
         }
@@ -965,6 +972,20 @@ impl MetricsConfig {
             .iter()
             .map(|bucket| bucket.seconds())
             .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum MetricsHotPathDetail {
+    #[serde(rename = "full")]
+    Full,
+    #[serde(rename = "reduced")]
+    Reduced,
+}
+
+impl Default for MetricsHotPathDetail {
+    fn default() -> Self {
+        Self::Full
     }
 }
 
@@ -1254,6 +1275,12 @@ pub struct Limits {
     pub max_udp_payload: u16,
     #[serde(default = "default_udp_batch_size")]
     pub udp_batch_size: usize,
+    #[serde(default = "default_udp_reuseport_workers")]
+    pub udp_reuseport_workers: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_worker_cpu_affinity: Option<Vec<usize>>,
+    #[serde(default)]
+    pub udp_backend: UdpBackend,
     #[serde(default = "default_max_cname_chain")]
     pub max_cname_chain: usize,
     #[serde(default = "default_tcp_idle_timeout_secs")]
@@ -1307,6 +1334,9 @@ impl Default for Limits {
         Self {
             max_udp_payload: default_max_udp_payload(),
             udp_batch_size: default_udp_batch_size(),
+            udp_reuseport_workers: default_udp_reuseport_workers(),
+            udp_worker_cpu_affinity: None,
+            udp_backend: UdpBackend::default(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
             tcp_read_timeout_secs: default_tcp_read_timeout_secs(),
@@ -1332,6 +1362,196 @@ impl Default for Limits {
             zsm_initial_retry_max_secs: default_zsm_initial_retry_max_secs(),
             zsm_loading_warning_threshold_secs: default_zsm_loading_warning_threshold_secs(),
         }
+    }
+}
+
+impl Limits {
+    fn validate_udp_worker_settings(&self) -> Result<(), ConfigError> {
+        if self.udp_reuseport_workers == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.udp_reuseport_workers must be at least 1".to_owned(),
+            ));
+        }
+        if self.udp_backend == UdpBackend::AfXdp && self.udp_reuseport_workers != 1 {
+            return Err(ConfigError::Invalid(
+                "limits.udp_reuseport_workers must be 1 when limits.udp_backend = \"af_xdp\""
+                    .to_owned(),
+            ));
+        }
+        if let Some(cpus) = &self.udp_worker_cpu_affinity {
+            if cpus.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "limits.udp_worker_cpu_affinity must not be empty when configured".to_owned(),
+                ));
+            }
+            if self.udp_backend == UdpBackend::AfXdp {
+                return Err(ConfigError::Invalid(
+                    "limits.udp_worker_cpu_affinity is only supported by the standard UDP backend"
+                        .to_owned(),
+                ));
+            }
+            if cpus.len() != self.udp_reuseport_workers {
+                return Err(ConfigError::Invalid(
+                    "limits.udp_worker_cpu_affinity length must match limits.udp_reuseport_workers"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum UdpBackend {
+    #[serde(rename = "std")]
+    Std,
+    #[serde(rename = "af_xdp")]
+    AfXdp,
+}
+
+impl Default for UdpBackend {
+    fn default() -> Self {
+        Self::Std
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct XdpConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_object: Option<PathBuf>,
+    #[serde(default)]
+    pub mode: XdpMode,
+    #[serde(default)]
+    pub queue_id: u32,
+    #[serde(default = "default_xdp_umem_frame_count")]
+    pub umem_frame_count: u32,
+    #[serde(default = "default_xdp_rx_ring_size")]
+    pub rx_ring_size: u32,
+    #[serde(default = "default_xdp_tx_ring_size")]
+    pub tx_ring_size: u32,
+    #[serde(default = "default_xdp_fill_ring_size")]
+    pub fill_ring_size: u32,
+    #[serde(default = "default_xdp_completion_ring_size")]
+    pub completion_ring_size: u32,
+    #[serde(default = "default_xdp_batch_size")]
+    pub batch_size: usize,
+    #[serde(default)]
+    pub zero_copy: XdpZeroCopyMode,
+}
+
+impl Default for XdpConfig {
+    fn default() -> Self {
+        Self {
+            interface: None,
+            redirect_object: None,
+            mode: XdpMode::default(),
+            queue_id: 0,
+            umem_frame_count: default_xdp_umem_frame_count(),
+            rx_ring_size: default_xdp_rx_ring_size(),
+            tx_ring_size: default_xdp_tx_ring_size(),
+            fill_ring_size: default_xdp_fill_ring_size(),
+            completion_ring_size: default_xdp_completion_ring_size(),
+            batch_size: default_xdp_batch_size(),
+            zero_copy: XdpZeroCopyMode::default(),
+        }
+    }
+}
+
+impl XdpConfig {
+    fn validate(&self, udp_backend: UdpBackend) -> Result<(), ConfigError> {
+        if self.interface.as_deref().is_some_and(str::is_empty) {
+            return Err(ConfigError::Invalid(
+                "xdp.interface must not be empty when configured".to_owned(),
+            ));
+        }
+        if udp_backend == UdpBackend::AfXdp && self.interface.is_none() {
+            return Err(ConfigError::Invalid(
+                "xdp.interface must be set when limits.udp_backend = \"af_xdp\"".to_owned(),
+            ));
+        }
+        if udp_backend == UdpBackend::AfXdp && self.redirect_object.is_none() {
+            return Err(ConfigError::Invalid(
+                "xdp.redirect_object must be set when limits.udp_backend = \"af_xdp\"".to_owned(),
+            ));
+        }
+        if self.umem_frame_count == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.umem_frame_count must be at least 1".to_owned(),
+            ));
+        }
+        if self.rx_ring_size == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.rx_ring_size must be at least 1".to_owned(),
+            ));
+        }
+        if self.tx_ring_size == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.tx_ring_size must be at least 1".to_owned(),
+            ));
+        }
+        if self.fill_ring_size == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.fill_ring_size must be at least 1".to_owned(),
+            ));
+        }
+        if self.completion_ring_size == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.completion_ring_size must be at least 1".to_owned(),
+            ));
+        }
+        for (parameter, value) in [
+            ("xdp.rx_ring_size", self.rx_ring_size),
+            ("xdp.tx_ring_size", self.tx_ring_size),
+            ("xdp.fill_ring_size", self.fill_ring_size),
+            ("xdp.completion_ring_size", self.completion_ring_size),
+        ] {
+            if !value.is_power_of_two() {
+                return Err(ConfigError::Invalid(format!(
+                    "{parameter} must be a power of two"
+                )));
+            }
+        }
+        if self.batch_size == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.batch_size must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum XdpMode {
+    #[serde(rename = "skb")]
+    Skb,
+    #[serde(rename = "drv")]
+    Drv,
+    #[serde(rename = "hw")]
+    Hw,
+}
+
+impl Default for XdpMode {
+    fn default() -> Self {
+        Self::Skb
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum XdpZeroCopyMode {
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "require")]
+    Require,
+    #[serde(rename = "disable")]
+    Disable,
+}
+
+impl Default for XdpZeroCopyMode {
+    fn default() -> Self {
+        Self::Auto
     }
 }
 
@@ -1856,6 +2076,34 @@ fn default_udp_batch_size() -> usize {
     1
 }
 
+fn default_udp_reuseport_workers() -> usize {
+    1
+}
+
+fn default_xdp_umem_frame_count() -> u32 {
+    4096
+}
+
+fn default_xdp_rx_ring_size() -> u32 {
+    1024
+}
+
+fn default_xdp_tx_ring_size() -> u32 {
+    1024
+}
+
+fn default_xdp_fill_ring_size() -> u32 {
+    2048
+}
+
+fn default_xdp_completion_ring_size() -> u32 {
+    1024
+}
+
+fn default_xdp_batch_size() -> usize {
+    64
+}
+
 fn default_max_cname_chain() -> usize {
     8
 }
@@ -2033,6 +2281,7 @@ mod tests {
                 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1
             ]
         );
+        assert_eq!(config.metrics.hot_path_detail, MetricsHotPathDetail::Full);
         assert!(!config.metrics.pipeline_timing_enabled);
         assert!(!config.metrics.zone_shape_enabled);
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Lenient);
@@ -2054,6 +2303,10 @@ mod tests {
         assert_eq!(config.zones[0].class, "IN");
         assert_eq!(config.limits.max_udp_payload, 1232);
         assert_eq!(config.limits.udp_batch_size, 1);
+        assert_eq!(config.limits.udp_reuseport_workers, 1);
+        assert!(config.limits.udp_worker_cpu_affinity.is_none());
+        assert_eq!(config.limits.udp_backend, UdpBackend::Std);
+        assert_eq!(config.xdp, XdpConfig::default());
         assert_eq!(config.limits.max_cname_chain, 8);
         assert_eq!(config.limits.tcp_idle_timeout_secs, 30);
         assert_eq!(config.limits.tcp_read_timeout_secs, 30);
@@ -3536,6 +3789,7 @@ mod tests {
 
                 [metrics]
                 latency_histogram_buckets = [0.0002, 0.001, 0.01]
+                hot_path_detail = "reduced"
                 pipeline_timing_enabled = true
                 zone_shape_enabled = true
 
@@ -3549,6 +3803,10 @@ mod tests {
         assert_eq!(
             config.metrics.latency_histogram_buckets_seconds(),
             vec![0.0002, 0.001, 0.01]
+        );
+        assert_eq!(
+            config.metrics.hot_path_detail,
+            MetricsHotPathDetail::Reduced
         );
         assert!(config.metrics.pipeline_timing_enabled);
         assert!(config.metrics.zone_shape_enabled);
@@ -3757,6 +4015,254 @@ mod tests {
         .expect("custom UDP batch size is valid");
 
         assert_eq!(config.limits.udp_batch_size, 32);
+    }
+
+    #[test]
+    fn parses_udp_reuseport_worker_settings() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_batch_size = 32
+                udp_reuseport_workers = 4
+                udp_worker_cpu_affinity = [0, 1, 2, 3]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("custom UDP worker settings are valid");
+
+        assert_eq!(config.limits.udp_batch_size, 32);
+        assert_eq!(config.limits.udp_reuseport_workers, 4);
+        assert_eq!(
+            config.limits.udp_worker_cpu_affinity.as_deref(),
+            Some([0, 1, 2, 3].as_slice())
+        );
+    }
+
+    #[test]
+    fn rejects_zero_udp_reuseport_workers() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_reuseport_workers = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero UDP worker count must fail");
+
+        assert!(error.to_string().contains("udp_reuseport_workers"));
+    }
+
+    #[test]
+    fn rejects_udp_worker_cpu_affinity_length_mismatch() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_reuseport_workers = 4
+                udp_worker_cpu_affinity = [0, 1]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("CPU affinity list must match UDP worker count");
+
+        assert!(error.to_string().contains("udp_worker_cpu_affinity"));
+    }
+
+    #[test]
+    fn rejects_af_xdp_with_reuseport_workers() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_backend = "af_xdp"
+                udp_reuseport_workers = 2
+
+                [xdp]
+                interface = "lo"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("AF_XDP backend owns queue binding instead of SO_REUSEPORT workers");
+
+        assert!(error.to_string().contains("udp_reuseport_workers"));
+    }
+
+    #[test]
+    fn parses_udp_backend_selection() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_backend = "af_xdp"
+
+                [xdp]
+                interface = "lo"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("AF_XDP UDP backend selection is valid configuration");
+
+        assert_eq!(config.limits.udp_backend, UdpBackend::AfXdp);
+        assert_eq!(config.xdp.interface.as_deref(), Some("lo"));
+        assert_eq!(
+            config.xdp.redirect_object.as_deref(),
+            Some(Path::new("target/oxidedns-xdp-redirect.bpf.o"))
+        );
+    }
+
+    #[test]
+    fn parses_xdp_tuning_settings() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                interface = "eth0"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+                mode = "drv"
+                queue_id = 2
+                umem_frame_count = 8192
+                rx_ring_size = 2048
+                tx_ring_size = 2048
+                fill_ring_size = 4096
+                completion_ring_size = 2048
+                batch_size = 128
+                zero_copy = "require"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("XDP tuning settings are valid configuration");
+
+        assert_eq!(config.xdp.interface.as_deref(), Some("eth0"));
+        assert_eq!(
+            config.xdp.redirect_object.as_deref(),
+            Some(Path::new("target/oxidedns-xdp-redirect.bpf.o"))
+        );
+        assert_eq!(config.xdp.mode, XdpMode::Drv);
+        assert_eq!(config.xdp.queue_id, 2);
+        assert_eq!(config.xdp.umem_frame_count, 8192);
+        assert_eq!(config.xdp.rx_ring_size, 2048);
+        assert_eq!(config.xdp.tx_ring_size, 2048);
+        assert_eq!(config.xdp.fill_ring_size, 4096);
+        assert_eq!(config.xdp.completion_ring_size, 2048);
+        assert_eq!(config.xdp.batch_size, 128);
+        assert_eq!(config.xdp.zero_copy, XdpZeroCopyMode::Require);
+    }
+
+    #[test]
+    fn rejects_af_xdp_backend_without_interface() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_backend = "af_xdp"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("AF_XDP backend must name an interface");
+
+        assert!(error.to_string().contains("xdp.interface"));
+    }
+
+    #[test]
+    fn rejects_af_xdp_backend_without_redirect_object() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_backend = "af_xdp"
+
+                [xdp]
+                interface = "lo"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("AF_XDP backend must name a redirect object");
+
+        assert!(error.to_string().contains("xdp.redirect_object"));
+    }
+
+    #[test]
+    fn rejects_zero_xdp_ring_size() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                rx_ring_size = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero XDP ring size must fail");
+
+        assert!(error.to_string().contains("xdp.rx_ring_size"));
+    }
+
+    #[test]
+    fn rejects_non_power_of_two_xdp_ring_size() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                tx_ring_size = 1536
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("non-power-of-two XDP ring size must fail");
+
+        assert!(error.to_string().contains("xdp.tx_ring_size"));
     }
 
     #[test]

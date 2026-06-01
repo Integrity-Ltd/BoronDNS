@@ -14,10 +14,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "af-xdp")]
+mod af_xdp;
 mod privilege;
 mod process_hardening;
 mod process_signals;
 mod resource_limits;
+mod std_udp_socket;
 
 use axum::{
     Router,
@@ -32,8 +35,9 @@ use oxidedns_core::{
     axfr::{self, AxfrError, IxfrResponse},
     catalog::{CatalogError, parse_catalog_members},
     config::{
-        CatalogZoneConfig, CookieConfig, CookiePolicyConfig, HealthConfig, RrlConfig,
-        TransferPrimaryConfig, TransferTransportConfig, ZoneConfig,
+        CatalogZoneConfig, CookieConfig, CookiePolicyConfig, HealthConfig, MetricsHotPathDetail,
+        RrlConfig, TransferPrimaryConfig, TransferTransportConfig, UdpBackend, XdpConfig,
+        ZoneConfig,
     },
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, ChaosQueryOutcome,
@@ -124,6 +128,12 @@ pub enum RuntimeError {
 
     #[error("UDP listener failed: {0}")]
     Udp(std::io::Error),
+
+    #[error("UDP backend {backend} is not available: {reason}")]
+    UdpBackendUnavailable {
+        backend: &'static str,
+        reason: &'static str,
+    },
 
     #[error("TCP listener failed: {0}")]
     Tcp(std::io::Error),
@@ -327,6 +337,7 @@ impl Runtime {
             self.config.rrl.max_keys,
             self.config.metrics.latency_histogram_buckets_seconds(),
             self.config.metrics.pipeline_timing_enabled,
+            self.config.metrics.hot_path_detail,
         );
         let startup_warning_count = self.config.configuration_warnings().len().saturating_add(
             runtime_config_warnings(&self.config)
@@ -388,12 +399,17 @@ impl Runtime {
             health_shutdown.push(health_shutdown_tx);
             bound_health_listeners.push((listener, health_shutdown_rx));
         }
-        let mut bound_udp_sockets = Vec::new();
+        let mut bound_udp_listeners = Vec::new();
         for addr in self.config.udp_listeners() {
-            let socket = UdpSocket::bind(addr)
-                .await
-                .map_err(|source| RuntimeError::BindUdp { addr, source })?;
-            bound_udp_sockets.push(socket);
+            let mut listeners = bind_udp_listeners(
+                addr,
+                self.config.limits.udp_backend,
+                &self.config.xdp,
+                self.config.limits.udp_reuseport_workers,
+                self.config.limits.udp_worker_cpu_affinity.as_deref(),
+            )
+            .await?;
+            bound_udp_listeners.append(&mut listeners);
         }
         let mut bound_tcp_listeners = Vec::new();
         for addr in self.config.tcp_listeners() {
@@ -503,10 +519,12 @@ impl Runtime {
                 },
             ));
         }
-        for socket in bound_udp_sockets {
+        for udp_listener in bound_udp_listeners {
             let zones = self.zones.clone();
             let max_udp_payload = self.config.limits.max_udp_payload;
             let udp_batch_size = self.config.limits.udp_batch_size;
+            let udp_backend = self.config.limits.udp_backend;
+            let xdp = self.config.xdp.clone();
             let max_cname_chain = self.config.limits.max_cname_chain;
             let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
             let edns_padding_block_size = self.config.limits.edns_padding_block_size;
@@ -524,6 +542,8 @@ impl Runtime {
             let udp_settings = UdpServerSettings {
                 max_udp_payload,
                 udp_batch_size,
+                udp_backend,
+                xdp,
                 max_cname_chain,
                 nsec3_max_iterations,
                 edns_padding_block_size,
@@ -542,7 +562,8 @@ impl Runtime {
                 metrics,
                 rrl,
             };
-            listeners.spawn(async move { serve_udp(socket, zones, udp_settings).await });
+            listeners
+                .spawn(async move { serve_bound_udp(udp_listener, zones, udp_settings).await });
         }
         for listener in bound_tcp_listeners {
             let zones = self.zones.clone();
@@ -2810,14 +2831,163 @@ fn response_opt_record<'a>(response: &'a [u8], header: &Header) -> Option<&'a [u
     None
 }
 
+enum BoundUdpListener {
+    Std {
+        socket: UdpSocket,
+        worker_id: usize,
+        worker_count: usize,
+        cpu_affinity: Option<usize>,
+    },
+    #[cfg(feature = "af-xdp")]
+    AfXdp(af_xdp::AfXdpPacketIo),
+}
+
+async fn bind_udp_listeners(
+    addr: SocketAddr,
+    backend: UdpBackend,
+    xdp: &XdpConfig,
+    worker_count: usize,
+    cpu_affinity: Option<&[usize]>,
+) -> Result<Vec<BoundUdpListener>, RuntimeError> {
+    match backend {
+        UdpBackend::Std => bind_std_udp_listeners(addr, worker_count, cpu_affinity)
+            .map_err(|source| RuntimeError::BindUdp { addr, source }),
+        UdpBackend::AfXdp => {
+            let socket = UdpSocket::bind(addr)
+                .await
+                .map_err(|source| RuntimeError::BindUdp { addr, source })?;
+            bind_af_xdp_udp_listener(socket, xdp).map(|listener| vec![listener])
+        }
+    }
+}
+
+fn bind_std_udp_listeners(
+    addr: SocketAddr,
+    worker_count: usize,
+    cpu_affinity: Option<&[usize]>,
+) -> std::io::Result<Vec<BoundUdpListener>> {
+    let worker_count = worker_count.max(1);
+    let reuseport = worker_count > 1;
+    let mut listeners = Vec::with_capacity(worker_count);
+    let mut bind_addr = addr;
+    for worker_id in 0..worker_count {
+        let socket = std_udp_socket::bind(bind_addr, reuseport)?;
+        if worker_id == 0 {
+            bind_addr = socket.local_addr()?;
+        }
+        listeners.push(BoundUdpListener::Std {
+            socket,
+            worker_id,
+            worker_count,
+            cpu_affinity: cpu_affinity.and_then(|cpus| cpus.get(worker_id)).copied(),
+        });
+    }
+    Ok(listeners)
+}
+
+#[cfg(not(feature = "af-xdp"))]
+fn bind_af_xdp_udp_listener(
+    _socket: UdpSocket,
+    _xdp: &XdpConfig,
+) -> Result<BoundUdpListener, RuntimeError> {
+    Err(RuntimeError::UdpBackendUnavailable {
+        backend: "af_xdp",
+        reason: "oxidedns-server was built without the af-xdp feature",
+    })
+}
+
+#[cfg(feature = "af-xdp")]
+fn bind_af_xdp_udp_listener(
+    socket: UdpSocket,
+    xdp: &XdpConfig,
+) -> Result<BoundUdpListener, RuntimeError> {
+    af_xdp::AfXdpPacketIo::bind(socket, xdp)
+        .map(BoundUdpListener::AfXdp)
+        .map_err(RuntimeError::Udp)
+}
+
+async fn serve_bound_udp(
+    listener: BoundUdpListener,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+) -> Result<(), RuntimeError> {
+    match listener {
+        BoundUdpListener::Std {
+            socket,
+            worker_id,
+            worker_count,
+            cpu_affinity,
+        } => {
+            if let Some(cpu) = cpu_affinity {
+                std_udp_socket::pin_current_thread_to_cpu(cpu).map_err(RuntimeError::Udp)?;
+                info!(
+                    worker_id,
+                    worker_count, cpu, "UDP worker CPU affinity applied"
+                );
+            }
+            let packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
+            serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await
+        }
+        #[cfg(feature = "af-xdp")]
+        BoundUdpListener::AfXdp(packet_io) => {
+            serve_udp_packet_io(packet_io, zones, settings, 0, 1).await
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 async fn serve_udp(
     socket: UdpSocket,
     zones: ZoneStore,
     settings: UdpServerSettings,
 ) -> Result<(), RuntimeError> {
-    let mut packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
+    match settings.udp_backend {
+        UdpBackend::Std => {
+            let packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
+            serve_udp_packet_io(packet_io, zones, settings, 0, 1).await
+        }
+        UdpBackend::AfXdp => serve_af_xdp_udp(socket, zones, settings).await,
+    }
+}
+
+#[cfg(not(feature = "af-xdp"))]
+#[cfg_attr(not(test), allow(dead_code))]
+async fn serve_af_xdp_udp(
+    _socket: UdpSocket,
+    _zones: ZoneStore,
+    settings: UdpServerSettings,
+) -> Result<(), RuntimeError> {
+    let _xdp = &settings.xdp;
+    Err(RuntimeError::UdpBackendUnavailable {
+        backend: "af_xdp",
+        reason: "oxidedns-server was built without the af-xdp feature",
+    })
+}
+
+#[cfg(feature = "af-xdp")]
+#[cfg_attr(not(test), allow(dead_code))]
+async fn serve_af_xdp_udp(
+    socket: UdpSocket,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+) -> Result<(), RuntimeError> {
+    let packet_io =
+        af_xdp::AfXdpPacketIo::bind(socket, &settings.xdp).map_err(RuntimeError::Udp)?;
+    serve_udp_packet_io(packet_io, zones, settings, 0, 1).await
+}
+
+async fn serve_udp_packet_io<I>(
+    mut packet_io: I,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+    udp_worker_id: usize,
+    udp_worker_count: usize,
+) -> Result<(), RuntimeError>
+where
+    I: PacketIo,
+{
     let local_addr = packet_io.local_addr().map_err(RuntimeError::Udp)?;
-    info!(%local_addr, "UDP listener bound");
+    info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
 
     loop {
         let outbound = {
@@ -2829,7 +2999,7 @@ async fn serve_udp(
                 if let Some(response) =
                     handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
                 {
-                    outbound.push(response);
+                    outbound.push(response.with_target(packet.target()));
                 }
             }
             outbound
@@ -2839,6 +3009,18 @@ async fn serve_udp(
             .await
             .map_err(RuntimeError::Udp)?;
     }
+}
+
+trait PacketIo {
+    fn local_addr(&self) -> std::io::Result<SocketAddr>;
+
+    async fn recv_batch(&mut self) -> std::io::Result<&[UdpInbound]>;
+
+    async fn send_batch(
+        &mut self,
+        outbound: &[UdpOutbound],
+        metrics: &RuntimeMetrics,
+    ) -> std::io::Result<()>;
 }
 
 struct StdUdpBatchIo {
@@ -2851,12 +3033,22 @@ struct UdpInbound {
     buffer: Vec<u8>,
     len: usize,
     peer: SocketAddr,
+    target: UdpPacketTarget,
 }
 
 struct UdpOutbound {
     response: Vec<u8>,
-    peer: SocketAddr,
+    target: UdpPacketTarget,
     query_metrics: Option<QueryMetricObservation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UdpPacketTarget {
+    Socket(SocketAddr),
+    #[cfg(feature = "af-xdp")]
+    AfXdp {
+        frame_index: usize,
+    },
 }
 
 impl StdUdpBatchIo {
@@ -2869,7 +3061,9 @@ impl StdUdpBatchIo {
             inbound,
         }
     }
+}
 
+impl PacketIo for StdUdpBatchIo {
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.socket.local_addr()
     }
@@ -2878,6 +3072,7 @@ impl StdUdpBatchIo {
         let (len, peer) = self.socket.recv_from(&mut self.inbound[0].buffer).await?;
         self.inbound[0].len = len;
         self.inbound[0].peer = peer;
+        self.inbound[0].target = UdpPacketTarget::Socket(peer);
         let mut active = 1;
 
         while active < self.batch_size {
@@ -2885,6 +3080,7 @@ impl StdUdpBatchIo {
                 Ok((len, peer)) => {
                     self.inbound[active].len = len;
                     self.inbound[active].peer = peer;
+                    self.inbound[active].target = UdpPacketTarget::Socket(peer);
                     active += 1;
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => break,
@@ -2896,7 +3092,7 @@ impl StdUdpBatchIo {
     }
 
     async fn send_batch(
-        &self,
+        &mut self,
         outbound: &[UdpOutbound],
         metrics: &RuntimeMetrics,
     ) -> std::io::Result<()> {
@@ -2910,7 +3106,17 @@ impl StdUdpBatchIo {
                 .query_metrics
                 .as_ref()
                 .and_then(|_| metrics.start_pipeline_timer());
-            self.socket.send_to(&packet.response, packet.peer).await?;
+            let peer = match packet.target {
+                UdpPacketTarget::Socket(peer) => peer,
+                #[cfg(feature = "af-xdp")]
+                UdpPacketTarget::AfXdp { .. } => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "standard UDP backend cannot send AF_XDP packet target",
+                    ));
+                }
+            };
+            self.socket.send_to(&packet.response, peer).await?;
             sent += 1;
             if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, send_started) {
                 record_query_send_metric(
@@ -2932,11 +3138,23 @@ impl UdpInbound {
             buffer: vec![0; UDP_PACKET_BUFFER_LEN],
             len: 0,
             peer: SocketAddr::from(([0, 0, 0, 0], 0)),
+            target: UdpPacketTarget::Socket(SocketAddr::from(([0, 0, 0, 0], 0))),
         }
     }
 
     fn payload(&self) -> &[u8] {
         &self.buffer[..self.len]
+    }
+
+    fn target(&self) -> UdpPacketTarget {
+        self.target
+    }
+}
+
+impl UdpOutbound {
+    fn with_target(mut self, target: UdpPacketTarget) -> Self {
+        self.target = target;
+        self
     }
 }
 
@@ -2971,7 +3189,7 @@ fn handle_udp_datagram(
     if let Some(response) = prepared.immediate_response {
         return Some(UdpOutbound {
             response,
-            peer,
+            target: UdpPacketTarget::Socket(peer),
             query_metrics: None,
         });
     }
@@ -3111,7 +3329,7 @@ fn handle_udp_datagram(
                     );
                     Some(UdpOutbound {
                         response,
-                        peer,
+                        target: UdpPacketTarget::Socket(peer),
                         query_metrics: Some(query_metrics),
                     })
                 }
@@ -3176,6 +3394,9 @@ fn observe_query_metrics(
     }
 
     metrics.record_query_received();
+    if !metrics.hot_path_detail_enabled() {
+        return observed_query(None);
+    }
     if header.qdcount != 1 {
         return observed_query(None);
     }
@@ -3550,6 +3771,10 @@ fn skip_response_record(response: &[u8], offset: usize) -> Option<usize> {
 struct UdpServerSettings {
     max_udp_payload: u16,
     udp_batch_size: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    udp_backend: UdpBackend,
+    #[cfg_attr(not(test), allow(dead_code))]
+    xdp: XdpConfig,
     max_cname_chain: usize,
     nsec3_max_iterations: u16,
     edns_padding_block_size: u16,
@@ -5165,6 +5390,7 @@ struct RuntimeMetricsInner {
     latency_buckets: Vec<f64>,
     query_latency: Mutex<HashMap<QueryLatencyCategory, QueryLatencyHistogram>>,
     pipeline_timing_enabled: bool,
+    hot_path_detail: MetricsHotPathDetail,
     query_pipeline_latency: Mutex<HashMap<QueryPipelineKey, QueryLatencyHistogram>>,
     response_cache_candidates: Mutex<HashMap<ResponseCacheCandidateCategory, u64>>,
     response_cache_ineligible: Mutex<HashMap<ResponseCacheIneligibleReason, u64>>,
@@ -5463,6 +5689,7 @@ impl RuntimeMetrics {
             DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
             DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
             false,
+            MetricsHotPathDetail::Full,
         )
     }
 
@@ -5470,15 +5697,27 @@ impl RuntimeMetrics {
         cookie_prefix_limit: usize,
         latency_buckets: Vec<f64>,
         pipeline_timing_enabled: bool,
+        hot_path_detail: MetricsHotPathDetail,
     ) -> Self {
         Self {
             inner: Arc::new(RuntimeMetricsInner {
                 dns_cookie_prefixes: Mutex::new(CookiePrefixMetrics::new(cookie_prefix_limit)),
                 latency_buckets,
                 pipeline_timing_enabled,
+                hot_path_detail,
                 ..RuntimeMetricsInner::default()
             }),
         }
+    }
+
+    #[cfg(test)]
+    fn new_reduced_for_test() -> Self {
+        Self::new_with_settings(
+            DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+            DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+            true,
+            MetricsHotPathDetail::Reduced,
+        )
     }
 
     fn record_axfr_started(&self) {
@@ -5623,6 +5862,9 @@ impl RuntimeMetrics {
             DnsCookieRequestStatus::InvalidServerCookie => &self.inner.dns_cookie_invalid_server,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         self.inner
             .dns_cookie_prefixes
             .lock()
@@ -5692,6 +5934,9 @@ impl RuntimeMetrics {
         source: IpAddr,
         prefix_settings: CookiePrefixMetricSettings,
     ) {
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         self.inner
             .dns_cookie_prefixes
             .lock()
@@ -5708,6 +5953,9 @@ impl RuntimeMetrics {
     }
 
     fn record_query_response_rcode(&self, rcode: u16) {
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         let mut rcodes = self
             .inner
             .query_rcodes
@@ -5718,6 +5966,9 @@ impl RuntimeMetrics {
     }
 
     fn record_zone_query_response_rcode(&self, zone_key: &str, rcode: u16) {
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         let mut rcodes = self
             .inner
             .zone_query_rcodes
@@ -5728,6 +5979,9 @@ impl RuntimeMetrics {
     }
 
     fn record_query_latency(&self, category: QueryLatencyCategory, duration: Duration) {
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         let latency_buckets = self.inner.latency_buckets.as_slice();
         let mut histograms = self
             .inner
@@ -5741,11 +5995,15 @@ impl RuntimeMetrics {
     }
 
     fn pipeline_timing_enabled(&self) -> bool {
-        self.inner.pipeline_timing_enabled
+        self.inner.pipeline_timing_enabled && self.hot_path_detail_enabled()
     }
 
     fn start_pipeline_timer(&self) -> Option<Instant> {
         self.pipeline_timing_enabled().then(Instant::now)
+    }
+
+    fn hot_path_detail_enabled(&self) -> bool {
+        self.inner.hot_path_detail == MetricsHotPathDetail::Full
     }
 
     fn record_query_pipeline_latency(
@@ -5850,6 +6108,9 @@ impl RuntimeMetrics {
     }
 
     fn record_zone_query_key(&self, zone_key: &str) {
+        if !self.hot_path_detail_enabled() {
+            return;
+        }
         let mut query_counts = self
             .inner
             .zone_queries
@@ -8945,7 +9206,10 @@ mod tests {
     use oxidedns_core::{
         ServerConfig,
         axfr::{IxfrResponse, frame_tcp_message},
-        config::{HealthConfig, RrlConfig, TransferPrimaryConfig, TransferTransportConfig},
+        config::{
+            HealthConfig, MetricsHotPathDetail, RrlConfig, TransferPrimaryConfig,
+            TransferTransportConfig, UdpBackend, XdpConfig,
+        },
         dns::{
             AnyResponseMode, ChaosQueryOutcome, DnsCookiePolicy, DnsCookieRequestStatus,
             DomainName, ExtendedDnsErrorsMode, Header, LookupMetrics, LookupTermination, Opcode,
@@ -8973,17 +9237,17 @@ mod tests {
     };
 
     use super::{
-        CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
+        BoundUdpListener, CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
         DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS,
         DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
         LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
-        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PreparedDnsMessage,
+        NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PacketIo, PreparedDnsMessage,
         QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation,
         QueryObservationOptions, QueryPipelineStage, RefreshAttemptContext, RefreshRequest,
         RefreshWorkerSettings, ResponseCacheCandidateCategory, ResponseCacheIneligibleReason,
         RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
         RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError, TransferPlan,
-        TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry,
+        TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry, bind_udp_listeners,
         dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
         load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
@@ -11581,6 +11845,67 @@ mod tests {
     }
 
     #[test]
+    fn reduced_hot_path_metrics_skip_mutex_backed_query_detail() {
+        let zones = ZoneStore::new();
+        let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            active_origin.clone(),
+            Some(1),
+            Vec::new(),
+        ));
+        let metrics = RuntimeMetrics::new_reduced_for_test();
+
+        let observation = observe_query_metrics(
+            &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+            &zones,
+            &metrics,
+            query_observation_options(),
+        );
+
+        assert!(observation.is_query);
+        assert!(observation.zone_key.is_none());
+        assert_eq!(metrics.snapshot().queries_received, 1);
+        assert!(metrics.zone_query_counts().is_empty());
+
+        let mut truncated = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+        truncated[2] |= 0x82;
+        record_query_response_metric(&observation, &truncated, &metrics);
+
+        assert_eq!(metrics.snapshot().queries_truncated, 1);
+        assert!(metrics.query_rcode_counts().is_empty());
+        assert!(metrics.zone_query_rcode_counts().is_empty());
+        assert!(metrics.query_latency_histograms().is_empty());
+
+        let prefix_settings = cookie_prefix_metrics_for_test();
+        metrics.record_dns_cookie_status(
+            DnsCookieRequestStatus::ClientCookieOnly,
+            "192.0.2.10".parse().unwrap(),
+            prefix_settings,
+        );
+        metrics.record_dns_cookie_badcookie();
+        metrics
+            .record_dns_cookie_badcookie_for_source("192.0.2.10".parse().unwrap(), prefix_settings);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.dns_cookie_client_only, 1);
+        assert_eq!(snapshot.dns_cookie_badcookie, 1);
+        assert!(metrics.dns_cookie_prefix_counts().is_empty());
+
+        assert!(!metrics.pipeline_timing_enabled());
+        metrics.record_query_pipeline_latency(
+            QueryPipelineStage::Compose,
+            QueryLatencyCategory::UdpDirect,
+            std::time::Duration::from_micros(100),
+        );
+        metrics.record_response_cache_candidate(ResponseCacheCandidateCategory::Direct);
+        metrics.record_response_cache_ineligible(ResponseCacheIneligibleReason::Cookie);
+
+        assert!(metrics.query_pipeline_latency_histograms().is_empty());
+        assert!(metrics.response_cache_candidate_counts().is_empty());
+        assert!(metrics.response_cache_ineligible_counts().is_empty());
+    }
+
+    #[test]
     fn query_metrics_count_response_rcodes_for_queries_only() {
         let zones = ZoneStore::new();
         let metrics = RuntimeMetrics::new();
@@ -11740,8 +12065,12 @@ mod tests {
 
     #[test]
     fn dns_cookie_prefix_metrics_use_rrl_prefixes_and_evict_at_cap() {
-        let metrics =
-            RuntimeMetrics::new_with_settings(1, DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(), false);
+        let metrics = RuntimeMetrics::new_with_settings(
+            1,
+            DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+            false,
+            MetricsHotPathDetail::Full,
+        );
         let prefix_settings = cookie_prefix_metrics_for_test();
 
         metrics.record_dns_cookie_status(
@@ -11910,6 +12239,7 @@ mod tests {
             DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
             vec![0.001, 0.01],
             false,
+            MetricsHotPathDetail::Full,
         );
 
         metrics.record_query_latency(
@@ -11947,6 +12277,7 @@ mod tests {
             DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
             vec![0.001, 0.01],
             true,
+            MetricsHotPathDetail::Full,
         );
 
         metrics.record_query_pipeline_latency(
@@ -12287,6 +12618,8 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
+                udp_backend: UdpBackend::Std,
+                xdp: XdpConfig::default(),
                 max_cname_chain: 1,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -12384,6 +12717,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn std_udp_reuseport_binds_multiple_workers_to_one_effective_port() {
+        let listeners = match bind_udp_listeners(
+            "127.0.0.1:0".parse().unwrap(),
+            UdpBackend::Std,
+            &XdpConfig::default(),
+            2,
+            Some(&[0, 1]),
+        )
+        .await
+        {
+            Ok(listeners) => listeners,
+            Err(RuntimeError::BindUdp { source, .. })
+                if source.kind() == std::io::ErrorKind::Unsupported =>
+            {
+                return;
+            }
+            Err(error) => panic!("unexpected SO_REUSEPORT bind error: {error:?}"),
+        };
+
+        assert_eq!(listeners.len(), 2);
+        let mut observed = Vec::new();
+        for listener in listeners {
+            match listener {
+                BoundUdpListener::Std {
+                    socket,
+                    worker_id,
+                    worker_count,
+                    cpu_affinity,
+                } => observed.push((
+                    socket.local_addr().unwrap(),
+                    worker_id,
+                    worker_count,
+                    cpu_affinity,
+                )),
+                #[cfg(feature = "af-xdp")]
+                BoundUdpListener::AfXdp(_) => panic!("standard backend must not bind AF_XDP"),
+            }
+        }
+
+        assert_eq!(observed[0].0, observed[1].0);
+        assert_eq!(observed[0].1, 0);
+        assert_eq!(observed[1].1, 1);
+        assert_eq!(observed[0].2, 2);
+        assert_eq!(observed[1].2, 2);
+        assert_eq!(observed[0].3, Some(0));
+        assert_eq!(observed[1].3, Some(1));
+    }
+
+    #[tokio::test]
     async fn udp_batch_listener_records_packet_io_metrics() {
         let zones = active_example_zone();
         let metrics = RuntimeMetrics::new();
@@ -12411,6 +12793,35 @@ mod tests {
         assert_eq!(snapshot.udp_sent_datagrams, 3);
         assert!((1..=3).contains(&snapshot.udp_receive_batches));
         assert!((1..=3).contains(&snapshot.udp_send_batches));
+    }
+
+    #[tokio::test]
+    async fn udp_af_xdp_backend_selection_has_clean_fallback_or_preflight_error() {
+        let zones = active_example_zone();
+        let metrics = RuntimeMetrics::new();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut settings = udp_settings_for_test(metrics, RrlConfig::default());
+        settings.udp_backend = UdpBackend::AfXdp;
+
+        let error = serve_udp(socket, zones, settings)
+            .await
+            .expect_err("AF_XDP backend requires feature support and interface configuration");
+
+        #[cfg(not(feature = "af-xdp"))]
+        match error {
+            RuntimeError::UdpBackendUnavailable { backend, reason } => {
+                assert_eq!(backend, "af_xdp");
+                assert!(reason.contains("without the af-xdp feature"));
+            }
+            other => panic!("unexpected AF_XDP backend error: {other:?}"),
+        }
+        #[cfg(feature = "af-xdp")]
+        match error {
+            RuntimeError::Udp(error) => {
+                assert!(error.to_string().contains("xdp.interface"));
+            }
+            other => panic!("unexpected AF_XDP backend error: {other:?}"),
+        }
     }
 
     #[test]
@@ -12493,6 +12904,8 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
+                udp_backend: UdpBackend::Std,
+                xdp: XdpConfig::default(),
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -12583,6 +12996,8 @@ mod tests {
             UdpServerSettings {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
+                udp_backend: UdpBackend::Std,
+                xdp: XdpConfig::default(),
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
                 edns_padding_block_size: 0,
@@ -16605,6 +17020,8 @@ mod tests {
         UdpServerSettings {
             max_udp_payload: 1232,
             udp_batch_size: 1,
+            udp_backend: UdpBackend::Std,
+            xdp: XdpConfig::default(),
             max_cname_chain: 8,
             nsec3_max_iterations: 100,
             edns_padding_block_size: 0,

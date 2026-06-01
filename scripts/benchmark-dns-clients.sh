@@ -14,9 +14,12 @@ server_threads="${OXIDEDNS_BENCH_SERVER_THREADS:-4}"
 client_threads="${OXIDEDNS_BENCH_CLIENT_THREADS:-8}"
 client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
 udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
+udp_reuseport_workers="${OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
+udp_worker_cpu_affinity="${OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
 response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
+hot_path_detail="${OXIDEDNS_BENCH_HOT_PATH_DETAIL:-full}"
 requested_zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-true}"
 zone_image_serve_enabled="true"
 packet_capture_enabled="${OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED:-false}"
@@ -116,9 +119,20 @@ for pair in \
     "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
     "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
     "OXIDEDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
+    "OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
     "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
+if [[ -n "$udp_worker_cpu_affinity" ]]; then
+    IFS=',' read -r -a udp_worker_cpus <<<"$udp_worker_cpu_affinity"
+    if [[ "${#udp_worker_cpus[@]}" -ne "$udp_reuseport_workers" ]]; then
+        printf 'OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY must contain one comma-separated CPU per UDP reuseport worker\n' >&2
+        exit 64
+    fi
+    for cpu in "${udp_worker_cpus[@]}"; do
+        require_nonnegative_integer "OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY" "$cpu"
+    done
+fi
 require_nonnegative_integer "OXIDEDNS_BENCH_STRESS_CANDIDATES" "$stress_candidates"
 case "$transport" in
 udp | tcp) ;;
@@ -138,6 +152,13 @@ case "$zone_shape_metrics_enabled" in
 true | false) ;;
 *)
     printf 'OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED must be true or false, got %q\n' "$zone_shape_metrics_enabled" >&2
+    exit 64
+    ;;
+esac
+case "$hot_path_detail" in
+full | reduced) ;;
+*)
+    printf 'OXIDEDNS_BENCH_HOT_PATH_DETAIL must be full or reduced, got %q\n' "$hot_path_detail" >&2
     exit 64
     ;;
 esac
@@ -891,15 +912,25 @@ policy = "disabled"
 enabled = false
 
 [metrics]
+hot_path_detail = "$hot_path_detail"
 pipeline_timing_enabled = $pipeline_timing_enabled
 zone_shape_enabled = $zone_shape_metrics_enabled
 
 [limits]
 max_udp_payload = 1232
 udp_batch_size = $udp_batch_size
+udp_reuseport_workers = $udp_reuseport_workers
 max_concurrent_transfers = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
+
+EOF
+
+if [[ -n "$udp_worker_cpu_affinity" ]]; then
+    printf 'udp_worker_cpu_affinity = [%s]\n' "$udp_worker_cpu_affinity" >>"$config"
+fi
+
+cat >>"$config" <<EOF
 
 [[zones]]
 name = "perf.test."
@@ -916,10 +947,13 @@ server_threads=$server_threads
 client_threads=$client_threads
 client_window=$client_window
 udp_batch_size=$udp_batch_size
+udp_reuseport_workers=$udp_reuseport_workers
+udp_worker_cpu_affinity=${udp_worker_cpu_affinity:-none}
 duration_seconds=$duration
 response_timeout_ms=$response_timeout_ms
 pipeline_timing_enabled=$pipeline_timing_enabled
 zone_shape_metrics_enabled=$zone_shape_metrics_enabled
+hot_path_detail=$hot_path_detail
 zone_image_serve_enabled=$zone_image_serve_enabled
 packet_capture_enabled=$packet_capture_enabled
 packet_capture_count=$packet_capture_count
@@ -1156,6 +1190,8 @@ server_threads	$server_threads	cpus
 client_threads	$client_threads	threads
 client_window	$client_window	queries_per_thread
 udp_batch_size	$udp_batch_size	datagrams
+udp_reuseport_workers	$udp_reuseport_workers	workers
+udp_worker_cpu_affinity	${udp_worker_cpu_affinity:-none}	cpus
 udp_receive_batches	$udp_receive_batches	batches
 udp_received_datagrams	$udp_received_datagrams	datagrams
 udp_send_batches	$udp_send_batches	batches
@@ -1187,6 +1223,7 @@ query_mode	$query_mode	mode
 trace_queries	$trace_queries	queries
 pipeline_timing_enabled	$pipeline_timing_enabled	boolean
 zone_shape_metrics_enabled	$zone_shape_metrics_enabled	boolean
+hot_path_detail	$hot_path_detail	mode
 zone_image_serve_enabled	$zone_image_serve_enabled	boolean
 packet_capture_enabled	$packet_capture_enabled	boolean
 packet_capture_status	$packet_capture_status	status
@@ -1237,5 +1274,5 @@ Hardware/Profile acceptance campaign.
 EOF
 
 printf 'dns_client_benchmark_dir=%s\n' "$artifact_dir"
-printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_batch_size=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
-    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_batch_size" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"
+printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_batch_size=%s udp_reuseport_workers=%s udp_worker_cpu_affinity=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
+    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_batch_size" "$udp_reuseport_workers" "${udp_worker_cpu_affinity:-none}" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"

@@ -1113,6 +1113,49 @@ layout can be phased out.
 - [ ] Run separate-client non-loopback physical gate.
 - [ ] Run multi-queue NIC profile with CPU/RSS/IRQ affinity recorded.
 - [ ] Decide whether io_uring is worth implementing.
+- [x] Add server AF_XDP scaffolding behind the UDP backend boundary:
+  configuration accepts `limits.udp_backend = "std" | "af_xdp"` plus an
+  optional `[xdp]` interface/queue/UMEM/ring/batch/zero-copy/mode/redirect-
+  object section, and selecting `af_xdp` requires `xdp.interface` and
+  `xdp.redirect_object`. The standard UDP listener now runs through a mutable
+  private `PacketIo` batch interface. With the feature enabled, the server
+  binds an AF_XDP socket, loads the project-built `oxidedns_xdp_redirect`
+  object, configures the redirect destination port and XSK map, and attaches in
+  the configured XDP mode. The feature-gated helper module has local tests for
+  Ethernet/IPv4/UDP DNS payload classification, peer/target metadata
+  extraction, fragmented IPv4 rejection, AF_XDP frame target construction,
+  response header rewriting, owned-packet response writes with tail resize
+  coverage, and UMEM/ring builder preparation against the real `xdp` crate
+  APIs. The eBPF object builds locally, and the root-only veth/generic smoke
+  passed on 2026-06-01 with evidence retained under
+  `target/oxidedns-af-xdp-veth-smoke/`. This is local structure only, not
+  physical NIC evidence.
+- [x] Add reduced hot-path metrics mode for high-rate packet-path experiments:
+  `[metrics].hot_path_detail = "full"` remains the default, while
+  `"reduced"` keeps coarse process-wide counters and skips mutex-backed
+  per-zone query maps, RCODE maps, query latency histograms, DNS Cookie
+  source-prefix maps, and pipeline/cache-planning histograms from the normal
+  query path. Local tests cover reduced-mode suppression while preserving full
+  metrics behavior. A retained 2026-06-02 local loopback comparison using four
+  server threads, four client threads, client window 16, UDP batch size 32, and
+  three-second runs measured a two-run average of about 411k responses/s with
+  full detail and about 479k responses/s with reduced detail, or about 103k and
+  120k responses/s per configured server thread. This is local loopback
+  evidence only, not physical NIC evidence.
+- [x] Add standard UDP `SO_REUSEPORT` worker scaffolding:
+  `[limits].udp_reuseport_workers` defaults to `1`, preserving the current
+  single standard UDP listener per configured address, and values above `1`
+  bind multiple same-address standard UDP sockets before privilege drop.
+  `[limits].udp_worker_cpu_affinity` can request a Linux CPU id per standard
+  UDP worker when its length matches the worker count. Local tests cover
+  multi-worker reuseport binding to one effective port. A retained 2026-06-02
+  local loopback comparison with reduced hot-path metrics, four server threads,
+  four client threads, client window 16, and UDP batch size 32 measured one
+  worker at about 482k responses/s, two four-worker no-affinity runs at about
+  951k and 845k responses/s, and a four-worker `0,1,2,3` affinity run at about
+  782k responses/s. Explicit affinity was slower in that local Tokio profile,
+  and the default remains one worker until target-host evidence justifies a
+  change.
 - [ ] Decide whether AF_XDP is worth implementing for the server.
 
 ## Phase 8: Layout Tuning Experiments

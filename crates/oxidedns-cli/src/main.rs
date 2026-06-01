@@ -581,6 +581,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | RuntimeError::FileDescriptorLimit(_)
                 | RuntimeError::ProcessHardening(_)
                 | RuntimeError::PrivilegeDrop(_) => EX_OSERR,
+                RuntimeError::UdpBackendUnavailable { .. } => EX_CONFIG_INVALID,
                 RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
             };
         }

@@ -23,5 +23,9 @@ oxidedns-server = { path = "../oxidedns-server", version = "0.1.3" }
 getrandom.workspace = true
 rcgen.workspace = true
 
+[features]
+default = []
+af-xdp = ["oxidedns-server/af-xdp"]
+
 [lints]
 workspace = true

@@ -592,6 +592,22 @@ Implement and measure standard UDP batching before AF_XDP:
 This path is the practical production baseline because it improves syscall and
 runtime overhead while preserving ordinary Linux socket behavior.
 
+The standard UDP backend now has the first `SO_REUSEPORT` worker scaffold:
+`[limits].udp_reuseport_workers` creates multiple same-address UDP sockets for
+each configured UDP listener when the standard backend is selected, and
+`[limits].udp_worker_cpu_affinity` can request a Linux CPU id per worker.
+Defaults preserve one socket and no affinity. The benchmark harness records
+both settings so one-worker and multi-worker profiles can be compared without
+changing the release default.
+
+On 2026-06-02, the local loopback profile with reduced hot-path metrics,
+`udp_batch_size=32`, four server threads, four client threads, and client
+window 16 measured about 482k responses/s with one UDP worker. Two
+four-worker no-affinity runs measured about 951k and 845k responses/s; a
+four-worker `0,1,2,3` affinity run measured about 782k responses/s. This
+confirms local parallel packet-loop value but also shows that affinity is
+host/runtime specific. It is not physical NIC evidence.
+
 ### io_uring Evaluation
 
 io_uring belongs behind `PacketIo` as an evaluation path. It may be useful for
@@ -602,6 +618,24 @@ assumed portable.
 TCP ordering remains a hard constraint. Do not overlap multiple sends or
 receives on the same TCP stream unless the implementation explicitly proves
 ordering.
+
+### Reduced Hot-Path Metrics
+
+The DNS data path is designed around immutable `ZoneImage` snapshots and
+per-listener packet processing, but detailed observability can still introduce
+shared synchronization when every query records per-zone maps, RCODE maps,
+latency histograms, DNS Cookie prefix maps, or pipeline/cache-planning
+histograms. The default `[metrics].hot_path_detail = "full"` keeps that
+operator detail.
+
+High-rate packet-path experiments may use
+`[metrics].hot_path_detail = "reduced"`. Reduced mode keeps coarse fixed
+counters on the query path, including received queries, truncation, DNS Cookie
+case totals, UDP batch/datagram totals, and ZoneImage serve counters. It skips
+mutex-backed detailed series on the hot path and disables pipeline timing
+collection internally even if `pipeline_timing_enabled` is set. Reduced mode is
+an observability/performance tradeoff for benchmarking and does not change DNS
+answer behavior.
 
 ### AF_XDP Evaluation
 
@@ -628,6 +662,40 @@ The userspace AF_XDP worker owns UMEM frame lifetime, RX/TX descriptor handling,
 safe DNS parsing, lookup, composition, and fallback behavior. Physical-NIC
 zero-copy evidence is required before claiming a production benefit; veth or
 generic-mode tests are useful only for smoke and fault coverage.
+
+The first server-side AF_XDP scaffold keeps that boundary explicit. The
+configuration model now has `limits.udp_backend = "std" | "af_xdp"` and an
+optional `[xdp]` section for interface, queue, UMEM frame count, RX/TX/fill/
+completion ring sizes, batch size, zero-copy policy, XDP attach mode, and the
+project-built redirect object. Selecting `af_xdp` requires `xdp.interface` and
+`xdp.redirect_object`, and ring sizes are validated as non-zero powers of two
+before runtime setup reaches the lower-level AF_XDP crate. The default backend
+remains `std`.
+
+The standard UDP path is routed through a private mutable `PacketIo` boundary
+so the common DNS batch loop can later consume either ordinary socket batches
+or AF_XDP RX/TX ring batches while allowing the AF_XDP backend to own and
+release UMEM frames after each batch. Selecting `af_xdp` currently fails with
+an explicit `UdpBackendUnavailable` runtime error; without the
+`oxidedns-server/af-xdp` feature the error reports that the binary lacks AF_XDP
+support. With the feature, the server binds an AF_XDP socket, loads the
+project-built `oxidedns_xdp_redirect` object, configures its destination-port
+selector and XSK map, and attaches the program in the configured mode. The
+feature-gated `af_xdp` helper module has safe local coverage for parsing
+Ethernet/IPv4/UDP DNS frames, extracting source/destination socket metadata,
+rejecting fragmented IPv4 UDP packets, constructing AF_XDP frame targets, and
+rewriting Ethernet, IPv4, and UDP response headers with a valid IPv4 header
+checksum. The same module also has a tested send-side primitive that writes
+larger or smaller DNS responses into an owned AF_XDP packet, resizes the packet
+tail, and avoids transmitting stale bytes.
+
+`crates/oxidedns-server-ebpf` owns the excluded Rust eBPF redirect object, and
+`scripts/oxidedns-server-build-ebpf.sh` builds it with `bpf-linker`. The local
+root-only smoke path is `scripts/oxidedns-af-xdp-veth-smoke.sh`, which creates
+a veth pair and verifies generic-mode AF_XDP bind/attach startup. On
+2026-06-01 that smoke passed locally with evidence under
+`target/oxidedns-af-xdp-veth-smoke/`. This is intentional local scaffolding,
+not a packet-bypass performance result.
 
 ## Unsafe And Dependency Policy
 

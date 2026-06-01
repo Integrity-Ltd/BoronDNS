@@ -364,6 +364,11 @@ Production configuration notes:
   artifact shows that the standard UDP batch path improves throughput or tail
   latency without increasing drops. Benchmark artifacts record UDP receive/send
   batch counters for this comparison.
+- Keep `[limits].udp_reuseport_workers = 1` unless a benchmark artifact shows
+  that multiple standard UDP `SO_REUSEPORT` workers improve the target host.
+  When increasing it on Linux, `[limits].udp_worker_cpu_affinity = [..]` can pin
+  the worker start threads to explicit CPU IDs; the list length must match the
+  worker count. Treat affinity as host-specific tuning, not a portable default.
 - Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
   diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
   downgrades. The `minimal` profile emits numeric EDE codes only, with no
@@ -489,7 +494,11 @@ The metrics catalogue, gzip behavior, and opt-in expensive diagnostic metric
 families are documented in
 [`health-metrics-interface.md`](health-metrics-interface.md#metrics). Keep
 `[metrics].zone_shape_enabled` and `[metrics].pipeline_timing_enabled` disabled
-outside benchmark or diagnostic captures.
+outside benchmark or diagnostic captures. For high-rate local packet-path
+experiments, `[metrics].hot_path_detail = "reduced"` can remove detailed
+mutex-backed query, RCODE, latency, and cookie-prefix metric updates from the
+query path while preserving coarse counters; leave it at the default `"full"`
+for ordinary operations.
 
 Query serving uses the immutable `ZoneImage` response path. Internal plan,
 DNSSEC-plan, or response-build failures return SERVFAIL and increment fixed

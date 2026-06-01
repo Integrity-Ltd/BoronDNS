@@ -20,8 +20,10 @@ OXIDEDNS_BENCH_TRANSPORT=udp \
 OXIDEDNS_BENCH_CLIENT_THREADS=8 \
 OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
 OXIDEDNS_BENCH_UDP_BATCH_SIZE=1 \
+OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS=1 \
 OXIDEDNS_BENCH_RECORDS=10000 \
 OXIDEDNS_BENCH_DURATION_SECONDS=10 \
+OXIDEDNS_BENCH_HOT_PATH_DETAIL=full \
 OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED=false \
 OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED=false \
 OXIDEDNS_BENCH_TRACE_ENABLED=false \
@@ -51,6 +53,12 @@ To capture scrape-time zone-shape gauges and histograms for layout tuning, set
 throughput-only runs because the metric family walks active zone snapshots
 during metrics scrapes.
 
+To measure detailed hot-path metric overhead, run the same profile once with
+`OXIDEDNS_BENCH_HOT_PATH_DETAIL=full` and once with
+`OXIDEDNS_BENCH_HOT_PATH_DETAIL=reduced`. The reduced profile keeps coarse
+process-wide counters but suppresses detailed mutex-backed query, RCODE,
+latency, and cookie-prefix metric updates.
+
 Immutable `ZoneImage` serving is always enabled in live runtime benchmarks. The
 generated `run.env`, `benchmark-results.tsv`, and capability summary retain the
 `zone_image_serve_enabled=true` evidence field for historical comparator
@@ -63,6 +71,13 @@ socket path, run the same UDP profile once with
 `udp_receive_batches`, `udp_received_datagrams`, `udp_send_batches`, and
 `udp_sent_datagrams` so the result can be checked against actual listener
 batching rather than only client-side throughput.
+
+To compare one standard UDP listener against multiple `SO_REUSEPORT` workers,
+run the same UDP profile with `OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS=1` and
+then with a larger value such as `4`. On Linux, set
+`OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY=0,1,2,3` to request explicit CPU
+affinity for four workers. Retained artifacts record `udp_reuseport_workers`
+and `udp_worker_cpu_affinity`.
 
 For a reproducible local sweep across several UDP batch sizes, use:
 
@@ -139,6 +154,40 @@ serving:
 | 1 | 347,390 | 1.000 | 166.8 | 1.000 | 204.7 | 1.000 | 0 | 0 | 1.000 | 1.000 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-1` |
 | 8 | 387,609 | 1.116 | 143.3 | 0.859 | 184.4 | 0.901 | 0 | 0 | 8.000 | 8.000 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-8` |
 | 32 | 382,367 | 1.101 | 145.6 | 0.873 | 183.6 | 0.897 | 0 | 0 | 31.993 | 31.993 | 0 | `target/evidence/udp-batch-sweep-current-local/batch-32` |
+
+Retained hot-path metrics comparison from 2026-06-02, with 1,000 records,
+128 delegation/DNAME stress candidates, four server threads, four client
+threads, client window 16, three-second runs, UDP batch size 32, and always-on
+`ZoneImage` serving:
+
+| Metrics detail | Run | Responses/s | Per core responses/s | p50 us | p99 us | Dropped | Errors | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| full | 1 | 398,924 | 99,731 | 139.7 | 191.0 | 0 | 0 | `target/evidence/hot-path-metrics-full` |
+| reduced | 1 | 471,893 | 117,973 | 115.8 | 135.6 | 0 | 0 | `target/evidence/hot-path-metrics-reduced` |
+| full | 2 | 423,405 | 105,851 | 130.3 | 177.7 | 0 | 0 | `target/evidence/hot-path-metrics-full-r2` |
+| reduced | 2 | 486,006 | 121,502 | 110.8 | 130.1 | 0 | 0 | `target/evidence/hot-path-metrics-reduced-r2` |
+
+The two-run local average was about 411,165 responses/s for full detail and
+478,950 responses/s for reduced detail, or about 102,791 and 119,737
+responses/s per configured server thread. That is a local loopback gain of
+about 16.5% for this profile, not physical NIC evidence.
+
+Retained standard UDP `SO_REUSEPORT` worker comparison from 2026-06-02, with
+reduced hot-path metrics, 1,000 records, 128 delegation/DNAME stress
+candidates, four server threads, four client threads, client window 16,
+three-second runs, UDP batch size 32, and always-on `ZoneImage` serving:
+
+| UDP workers | Affinity | Responses/s | Per worker responses/s | p50 us | p99 us | Dropped | Errors | Artifact |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | none | 482,351 | 482,351 | 109.3 | 170.3 | 0 | 0 | `target/evidence/reuseport-workers-baseline-1` |
+| 4 | none | 951,119 | 237,780 | 34.1 | 174.0 | 0 | 0 | `target/evidence/reuseport-workers-4` |
+| 4 | none | 844,600 | 211,150 | 42.8 | 177.5 | 0 | 0 | `target/evidence/reuseport-workers-4-r2` |
+| 4 | `0,1,2,3` | 781,915 | 195,479 | 45.2 | 220.2 | 0 | 0 | `target/evidence/reuseport-workers-4-affinity` |
+
+The two no-affinity four-worker runs averaged about 898k responses/s locally,
+or about 224k responses/s per UDP worker. Explicit affinity was slower on this
+Tokio runtime profile, so treat affinity as host-specific tuning rather than a
+default recommendation. This remains loopback evidence only.
 
 The sweep checker passed at
 `target/evidence/udp-batch-sweep-current-local/check.tsv` with
@@ -465,6 +514,12 @@ Interpretation:
   lookup, compose, and send time. These are the main evidence source for deciding
   whether a tuning pass should target data layout, response composition,
   transport, or client/kernel effects.
+- For hot packet-path experiments where detailed observability is itself a
+  suspected bottleneck, set `[metrics].hot_path_detail = "reduced"` in the
+  generated or edited server config. That keeps coarse process-wide counters but
+  suppresses per-zone query maps, RCODE maps, query latency histograms, DNS
+  Cookie prefix maps, and pipeline/cache-planning histograms. Do not compare a
+  reduced-detail run against a full-detail run without noting the metrics mode.
 - The `zone_shape_single_rdata_rrsets`, `zone_shape_multi_rdata_rrsets`, and
   `zone_shape_spilled_rdata_rrsets` rows show whether `SmallVec<[T; 1]>` matches
   the loaded corpus or whether a wider inline capacity should be tested. The

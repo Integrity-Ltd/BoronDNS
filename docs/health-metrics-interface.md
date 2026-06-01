@@ -116,6 +116,16 @@ The metrics endpoint exposes these implemented metric families:
 - immutable-zone-image serving counters under `oxidedns_zone_image_serve_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
 
+`[metrics].hot_path_detail = "full"` is the default and preserves all detailed
+query, RCODE, latency, zone, and DNS Cookie prefix metric series. For high-rate
+benchmark or packet-I/O experiments, `[metrics].hot_path_detail = "reduced"`
+keeps coarse process-wide counters such as received queries, truncation,
+DNS Cookie case totals, UDP batch/datagram totals, and ZoneImage serve
+counters, but suppresses mutex-backed hot-path detail: per-zone query maps,
+global and per-zone RCODE maps, query latency histograms, DNS Cookie
+source-prefix maps, and pipeline/cache-planning histograms. Reduced mode is an
+observability/performance tradeoff and does not change DNS answer behavior.
+
 The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
 driven by lookup-time NSEC3 proof-omission observation rather than serialized
 EDE options. Over-cap NSEC3 proof omissions remain counted with
@@ -125,8 +135,10 @@ the response.
 The opt-in metric families may walk active zone snapshots or collect extra
 pipeline timing. Keep `[metrics].zone_shape_enabled` and
 `[metrics].pipeline_timing_enabled` disabled outside benchmark or diagnostic
-captures. These metrics do not enable a response cache or change the served
-answer path. Supported query shapes are served from immutable `ZoneImage` wire
+captures, and use `[metrics].hot_path_detail = "reduced"` only when the loss of
+detailed hot-path series is acceptable. These metrics do not enable a response
+cache or change the served answer path. Supported query shapes are served from
+immutable `ZoneImage` wire
 sections; plan, DNSSEC-plan, or response-build failures return an explicit
 ZoneImage SERVFAIL instead of falling back to the ordinary active-snapshot
 response path, while oversized supported UDP responses are truncated directly by

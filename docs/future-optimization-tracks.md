@@ -20,12 +20,15 @@ the relevant unsafe-boundary/dependency rows are moved from `deferred` to
 
 Future deployment may attach an XDP program to the OxideDNS server DNS query
 interface and use AF_XDP or another audited packet-I/O backend for packets that
-need userspace processing. The current OxideDNS server runtime uses Tokio
-UDP/TCP sockets and has no server XDP/eBPF or AF_XDP packet backend.
+need userspace processing. The default OxideDNS server runtime uses Tokio
+UDP/TCP sockets. An experimental, feature-gated server AF_XDP backend now
+exists for local structure and smoke testing, but it is not part of the default
+runtime path, not formal MVP acceptance evidence, and not a production
+performance claim.
 
 The `oxide-gun` crate has an AF_XDP backend for Linux lab load generation. That
-backend is test-tool scope only and does not satisfy or activate this OxideDNS
-server optimization track.
+backend remains test-tool scope only; server-side AF_XDP evidence must come
+from the OxideDNS server backend and its own smoke or physical-NIC runs.
 
 Entry condition for re-evaluation: benchmarks of the current implementation
 show that the kernel socket path, rather than zone lookup or response assembly,
