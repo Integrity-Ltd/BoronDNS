@@ -595,18 +595,34 @@ runtime overhead while preserving ordinary Linux socket behavior.
 The standard UDP backend now has the first `SO_REUSEPORT` worker scaffold:
 `[limits].udp_reuseport_workers` creates multiple same-address UDP sockets for
 each configured UDP listener when the standard backend is selected, and
-`[limits].udp_worker_cpu_affinity` can request a Linux CPU id per worker.
-Defaults preserve one socket and no affinity. The benchmark harness records
-both settings so one-worker and multi-worker profiles can be compared without
-changing the release default.
+`[limits].udp_runtime = "dedicated"` selects one OS thread per UDP worker
+instead of the stable Tokio socket path. On Linux, dedicated workers use a
+tightly scoped unsafe `recvmmsg`/`sendmmsg` module with reusable mmsghdr/iovec/
+sockaddr slabs, `MSG_DONTWAIT`, bounded partial-send retry, and a 1024-message
+batch cap matching the Linux mmsg limit. Off Linux, the same worker falls back
+to the safe `recv_from`/`send_to` loop. Dedicated workers own their socket,
+bounded packet buffers, parser/lookup/compose loop, and optional per-thread CPU
+affinity. `[limits].udp_worker_cpu_affinity` can request a Linux CPU id per
+dedicated worker. Defaults preserve one socket, Tokio runtime ownership, and no
+affinity. The benchmark harness records the runtime, worker count, and affinity
+settings so Tokio and dedicated profiles can be compared without changing the
+release default.
 
 On 2026-06-02, the local loopback profile with reduced hot-path metrics,
 `udp_batch_size=32`, four server threads, four client threads, and client
 window 16 measured about 482k responses/s with one UDP worker. Two
-four-worker no-affinity runs measured about 951k and 845k responses/s; a
-four-worker `0,1,2,3` affinity run measured about 782k responses/s. This
-confirms local parallel packet-loop value but also shows that affinity is
-host/runtime specific. It is not physical NIC evidence.
+four-worker Tokio no-affinity runs measured about 951k and 845k responses/s,
+and a four-worker Tokio `0,1,2,3` affinity run measured about 782k
+responses/s. A later same-profile runtime comparison measured four-worker
+Tokio at about 936k responses/s, four-worker dedicated pre-mmsg standard UDP at
+about 879k responses/s, and four-worker dedicated with CPU affinity `0,1,2,3`
+at about 641k responses/s, all with zero drops/errors. After adding Linux mmsg,
+small batches were still slower, but larger batches improved the local profile:
+batch 128 measured about 1.21M responses/s, batch 256 about 1.24M responses/s,
+batch 512 about 1.47M responses/s, and batch 1024 fell back to about 1.19M
+responses/s. A batch-512 affinity run measured about 898k responses/s, so
+affinity remains host/runtime specific and evidence-gated. This is not physical
+NIC evidence.
 
 ### io_uring Evaluation
 
@@ -664,13 +680,15 @@ zero-copy evidence is required before claiming a production benefit; veth or
 generic-mode tests are useful only for smoke and fault coverage.
 
 The first server-side AF_XDP scaffold keeps that boundary explicit. The
-configuration model now has `limits.udp_backend = "std" | "af_xdp"` and an
+configuration model now has `limits.udp_backend = "std" | "af_xdp"`,
+`limits.udp_runtime = "tokio" | "dedicated"` for the standard backend, and an
 optional `[xdp]` section for interface, queue, UMEM frame count, RX/TX/fill/
 completion ring sizes, batch size, zero-copy policy, XDP attach mode, and the
 project-built redirect object. Selecting `af_xdp` requires `xdp.interface` and
 `xdp.redirect_object`, and ring sizes are validated as non-zero powers of two
 before runtime setup reaches the lower-level AF_XDP crate. The default backend
-remains `std`.
+remains `std`, and AF_XDP keeps its own packet worker model rather than sharing
+the standard UDP runtime toggle.
 
 The standard UDP path is routed through a private mutable `PacketIo` boundary
 so the common DNS batch loop can later consume either ordinary socket batches
@@ -1109,9 +1127,8 @@ Tasks:
 
 - implement `PacketIo` and `StdUdpBatchIo`;
 - keep the initial `StdUdpBatchIo` baseline in safe Rust using ordinary Tokio
-  socket readiness and `try_recv_from`; isolate syscall unsafe in one
-  registered adapter only if a later `recvmmsg`/`sendmmsg` experiment is
-  justified by evidence;
+  socket readiness and `try_recv_from`; isolate Linux `recvmmsg`/`sendmmsg`
+  syscall unsafe in the dedicated standard UDP mmsg adapter;
 - add batch parse/lookup/compose/send pipeline;
 - retain existing socket path as fallback.
 

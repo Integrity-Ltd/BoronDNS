@@ -16,6 +16,7 @@ client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
 udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
 udp_reuseport_workers="${OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
 udp_worker_cpu_affinity="${OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
+udp_runtime="${OXIDEDNS_BENCH_UDP_RUNTIME:-tokio}"
 response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
 pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
 zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
@@ -124,6 +125,10 @@ for pair in \
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
 if [[ -n "$udp_worker_cpu_affinity" ]]; then
+    if [[ "$udp_runtime" != dedicated ]]; then
+        printf 'OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY requires OXIDEDNS_BENCH_UDP_RUNTIME=dedicated\n' >&2
+        exit 64
+    fi
     IFS=',' read -r -a udp_worker_cpus <<<"$udp_worker_cpu_affinity"
     if [[ "${#udp_worker_cpus[@]}" -ne "$udp_reuseport_workers" ]]; then
         printf 'OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY must contain one comma-separated CPU per UDP reuseport worker\n' >&2
@@ -134,6 +139,13 @@ if [[ -n "$udp_worker_cpu_affinity" ]]; then
     done
 fi
 require_nonnegative_integer "OXIDEDNS_BENCH_STRESS_CANDIDATES" "$stress_candidates"
+case "$udp_runtime" in
+tokio | dedicated) ;;
+*)
+    printf 'OXIDEDNS_BENCH_UDP_RUNTIME must be tokio or dedicated, got %q\n' "$udp_runtime" >&2
+    exit 64
+    ;;
+esac
 case "$transport" in
 udp | tcp) ;;
 *)
@@ -920,6 +932,7 @@ zone_shape_enabled = $zone_shape_metrics_enabled
 max_udp_payload = 1232
 udp_batch_size = $udp_batch_size
 udp_reuseport_workers = $udp_reuseport_workers
+udp_runtime = "$udp_runtime"
 max_concurrent_transfers = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
@@ -948,6 +961,7 @@ client_threads=$client_threads
 client_window=$client_window
 udp_batch_size=$udp_batch_size
 udp_reuseport_workers=$udp_reuseport_workers
+udp_runtime=$udp_runtime
 udp_worker_cpu_affinity=${udp_worker_cpu_affinity:-none}
 duration_seconds=$duration
 response_timeout_ms=$response_timeout_ms
@@ -1191,6 +1205,7 @@ client_threads	$client_threads	threads
 client_window	$client_window	queries_per_thread
 udp_batch_size	$udp_batch_size	datagrams
 udp_reuseport_workers	$udp_reuseport_workers	workers
+udp_runtime	$udp_runtime	mode
 udp_worker_cpu_affinity	${udp_worker_cpu_affinity:-none}	cpus
 udp_receive_batches	$udp_receive_batches	batches
 udp_received_datagrams	$udp_received_datagrams	datagrams
@@ -1259,7 +1274,8 @@ scrape-time zone-shape gauges and histograms were collected.
 \`zone_image_serve_enabled=$zone_image_serve_enabled\`.
 Query mode was \`$query_mode\`; when this is \`trace\`, the retained
 \`query-trace.tsv\` file is the exact replay input.
-The configured UDP batch size was \`$udp_batch_size\`; packet I/O counters
+The configured UDP runtime was \`$udp_runtime\`, and the configured UDP batch
+size was \`$udp_batch_size\`; packet I/O counters
 recorded \`$udp_receive_batches\` receive batches, \`$udp_received_datagrams\`
 received datagrams, \`$udp_send_batches\` send batches, and
 \`$udp_sent_datagrams\` sent datagrams.
@@ -1274,5 +1290,5 @@ Hardware/Profile acceptance campaign.
 EOF
 
 printf 'dns_client_benchmark_dir=%s\n' "$artifact_dir"
-printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_batch_size=%s udp_reuseport_workers=%s udp_worker_cpu_affinity=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
-    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_batch_size" "$udp_reuseport_workers" "${udp_worker_cpu_affinity:-none}" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"
+printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_runtime=%s udp_batch_size=%s udp_reuseport_workers=%s udp_worker_cpu_affinity=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
+    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_runtime" "$udp_batch_size" "$udp_reuseport_workers" "${udp_worker_cpu_affinity:-none}" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"

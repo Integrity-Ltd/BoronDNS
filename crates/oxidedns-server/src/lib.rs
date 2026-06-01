@@ -20,6 +20,7 @@ mod privilege;
 mod process_hardening;
 mod process_signals;
 mod resource_limits;
+mod std_udp_mmsg;
 mod std_udp_socket;
 
 use axum::{
@@ -36,8 +37,8 @@ use oxidedns_core::{
     catalog::{CatalogError, parse_catalog_members},
     config::{
         CatalogZoneConfig, CookieConfig, CookiePolicyConfig, HealthConfig, MetricsHotPathDetail,
-        RrlConfig, TransferPrimaryConfig, TransferTransportConfig, UdpBackend, XdpConfig,
-        ZoneConfig,
+        RrlConfig, TransferPrimaryConfig, TransferTransportConfig, UdpBackend, UdpRuntime,
+        XdpConfig, ZoneConfig,
     },
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, ChaosQueryOutcome,
@@ -524,6 +525,7 @@ impl Runtime {
             let max_udp_payload = self.config.limits.max_udp_payload;
             let udp_batch_size = self.config.limits.udp_batch_size;
             let udp_backend = self.config.limits.udp_backend;
+            let udp_runtime = self.config.limits.udp_runtime;
             let xdp = self.config.xdp.clone();
             let max_cname_chain = self.config.limits.max_cname_chain;
             let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
@@ -543,6 +545,7 @@ impl Runtime {
                 max_udp_payload,
                 udp_batch_size,
                 udp_backend,
+                udp_runtime,
                 xdp,
                 max_cname_chain,
                 nsec3_max_iterations,
@@ -2918,12 +2921,16 @@ async fn serve_bound_udp(
             worker_count,
             cpu_affinity,
         } => {
-            if let Some(cpu) = cpu_affinity {
-                std_udp_socket::pin_current_thread_to_cpu(cpu).map_err(RuntimeError::Udp)?;
-                info!(
+            if settings.udp_runtime == UdpRuntime::Dedicated {
+                return serve_dedicated_std_udp_worker(
+                    socket,
+                    zones,
+                    settings,
                     worker_id,
-                    worker_count, cpu, "UDP worker CPU affinity applied"
-                );
+                    worker_count,
+                    cpu_affinity,
+                )
+                .await;
             }
             let packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
             serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await
@@ -3008,6 +3015,208 @@ where
             .send_batch(&outbound, &settings.metrics)
             .await
             .map_err(RuntimeError::Udp)?;
+    }
+}
+
+async fn serve_dedicated_std_udp_worker(
+    socket: UdpSocket,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+    worker_id: usize,
+    worker_count: usize,
+    cpu_affinity: Option<usize>,
+) -> Result<(), RuntimeError> {
+    let socket = socket.into_std().map_err(RuntimeError::Udp)?;
+    socket.set_nonblocking(true).map_err(RuntimeError::Udp)?;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (result_tx, result_rx) = oneshot::channel();
+    let thread_stop = stop.clone();
+    let thread_name = format!("oxidedns-udp-{worker_id}");
+    let handle = std::thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let result = run_dedicated_std_udp_worker(
+                socket,
+                zones,
+                settings,
+                thread_stop,
+                worker_id,
+                worker_count,
+                cpu_affinity,
+            );
+            let _ = result_tx.send(result);
+        })
+        .map_err(RuntimeError::Udp)?;
+    let thread = handle.thread().clone();
+    let mut guard = DedicatedUdpWorkerGuard {
+        stop,
+        thread,
+        handle: Some(handle),
+    };
+
+    let result = match result_rx.await {
+        Ok(result) => result,
+        Err(_) => Err(RuntimeError::Udp(std::io::Error::other(
+            "dedicated UDP worker exited without reporting status",
+        ))),
+    };
+    if let Some(handle) = guard.handle.take() {
+        if handle.join().is_err() {
+            return Err(RuntimeError::Udp(std::io::Error::other(
+                "dedicated UDP worker panicked",
+            )));
+        }
+    }
+    result
+}
+
+struct DedicatedUdpWorkerGuard {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::Thread,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for DedicatedUdpWorkerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        self.thread.unpark();
+    }
+}
+
+fn run_dedicated_std_udp_worker(
+    socket: std::net::UdpSocket,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    worker_id: usize,
+    worker_count: usize,
+    cpu_affinity: Option<usize>,
+) -> Result<(), RuntimeError> {
+    if let Some(cpu) = cpu_affinity {
+        std_udp_socket::pin_current_thread_to_cpu(cpu).map_err(RuntimeError::Udp)?;
+        info!(
+            worker_id,
+            worker_count, cpu, "dedicated UDP worker CPU affinity applied"
+        );
+    }
+    let local_addr = socket.local_addr().map_err(RuntimeError::Udp)?;
+    info!(%local_addr, worker_id, worker_count, "dedicated UDP worker bound");
+
+    let batch_size = settings.udp_batch_size.max(1);
+    let mut inbound = (0..batch_size)
+        .map(|_| UdpInbound::new())
+        .collect::<Vec<_>>();
+    let mut outbound = Vec::with_capacity(batch_size);
+    let mut packet_io = std_udp_mmsg::StdUdpMmsg::new(batch_size);
+    let mut idle_spins = 0usize;
+
+    while !stop.load(std::sync::atomic::Ordering::Acquire) {
+        let active = match packet_io.recv_batch(&socket, &mut inbound) {
+            Ok(0) => {
+                idle_dedicated_udp_worker(&mut idle_spins);
+                continue;
+            }
+            Ok(active) => active,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                idle_dedicated_udp_worker(&mut idle_spins);
+                continue;
+            }
+            Err(error) => return Err(RuntimeError::Udp(error)),
+        };
+        idle_spins = 0;
+        settings.metrics.record_udp_receive_batch(active);
+
+        outbound.clear();
+        for packet in &inbound[..active] {
+            if let Some(response) =
+                handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
+            {
+                outbound.push(response.with_target(packet.target()));
+            }
+        }
+        send_std_udp_batch(&mut packet_io, &socket, &outbound, &settings.metrics)?;
+    }
+
+    Ok(())
+}
+
+fn send_std_udp_batch(
+    packet_io: &mut std_udp_mmsg::StdUdpMmsg,
+    socket: &std::net::UdpSocket,
+    outbound: &[UdpOutbound],
+    metrics: &RuntimeMetrics,
+) -> Result<(), RuntimeError> {
+    if outbound.is_empty() {
+        return Ok(());
+    }
+
+    let send_started = outbound
+        .iter()
+        .map(|packet| {
+            packet
+                .query_metrics
+                .as_ref()
+                .and_then(|_| metrics.start_pipeline_timer())
+        })
+        .collect::<Vec<_>>();
+    let sent = packet_io
+        .send_batch(socket, outbound)
+        .map_err(RuntimeError::Udp)?;
+
+    for (packet, started) in outbound.iter().zip(send_started).take(sent) {
+        if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
+            record_query_send_metric(query_metrics, &packet.response, metrics, started.elapsed());
+        }
+    }
+    metrics.record_udp_send_batch(sent);
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_std_udp_batch_fallback(
+    socket: &std::net::UdpSocket,
+    outbound: &[UdpOutbound],
+) -> std::io::Result<usize> {
+    let mut sent = 0usize;
+    for packet in outbound {
+        let peer = match packet.target {
+            UdpPacketTarget::Socket(peer) => peer,
+            #[cfg(feature = "af-xdp")]
+            UdpPacketTarget::AfXdp { .. } => {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "standard UDP backend cannot send AF_XDP packet target",
+                ));
+            }
+        };
+        let mut send_ok = false;
+        for _ in 0..64 {
+            match socket.send_to(&packet.response, peer) {
+                Ok(_) => {
+                    send_ok = true;
+                    break;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    std::thread::yield_now();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if !send_ok {
+            continue;
+        }
+        sent += 1;
+    }
+    Ok(sent)
+}
+
+fn idle_dedicated_udp_worker(idle_spins: &mut usize) {
+    if *idle_spins < 64 {
+        *idle_spins += 1;
+        std::hint::spin_loop();
+    } else {
+        *idle_spins = 0;
+        std::thread::park_timeout(Duration::from_micros(50));
     }
 }
 
@@ -3773,6 +3982,8 @@ struct UdpServerSettings {
     udp_batch_size: usize,
     #[cfg_attr(not(test), allow(dead_code))]
     udp_backend: UdpBackend,
+    #[cfg_attr(not(test), allow(dead_code))]
+    udp_runtime: UdpRuntime,
     #[cfg_attr(not(test), allow(dead_code))]
     xdp: XdpConfig,
     max_cname_chain: usize,
@@ -9247,8 +9458,8 @@ mod tests {
         RefreshWorkerSettings, ResponseCacheCandidateCategory, ResponseCacheIneligibleReason,
         RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics,
         RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError, TransferPlan,
-        TransferSession, TransferTsig, UdpServerSettings, ZoneRefreshRegistry, bind_udp_listeners,
-        dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
+        TransferSession, TransferTsig, UdpRuntime, UdpServerSettings, ZoneRefreshRegistry,
+        bind_udp_listeners, dns_cookie_secret_fingerprint, drain_task_set, drain_tcp_connections,
         handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval,
         load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
         log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
@@ -12619,6 +12830,7 @@ mod tests {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
                 udp_backend: UdpBackend::Std,
+                udp_runtime: UdpRuntime::Tokio,
                 xdp: XdpConfig::default(),
                 max_cname_chain: 1,
                 nsec3_max_iterations: 100,
@@ -12905,6 +13117,7 @@ mod tests {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
                 udp_backend: UdpBackend::Std,
+                udp_runtime: UdpRuntime::Tokio,
                 xdp: XdpConfig::default(),
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
@@ -12997,6 +13210,7 @@ mod tests {
                 max_udp_payload: 1232,
                 udp_batch_size: 1,
                 udp_backend: UdpBackend::Std,
+                udp_runtime: UdpRuntime::Tokio,
                 xdp: XdpConfig::default(),
                 max_cname_chain: 8,
                 nsec3_max_iterations: 100,
@@ -17021,6 +17235,7 @@ mod tests {
             max_udp_payload: 1232,
             udp_batch_size: 1,
             udp_backend: UdpBackend::Std,
+            udp_runtime: UdpRuntime::Tokio,
             xdp: XdpConfig::default(),
             max_cname_chain: 8,
             nsec3_max_iterations: 100,

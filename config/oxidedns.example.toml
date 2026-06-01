@@ -137,15 +137,21 @@ accept_out_of_zone_glue = false
 [limits]
 # EDNS UDP payload ceiling. Default: 1232.
 max_udp_payload = 1232
-# UDP datagrams to drain per standard socket readiness wakeup. Default: 1,
+# UDP datagrams to drain per standard socket readiness wakeup, or per Linux
+# recvmmsg/sendmmsg batch when udp_runtime = "dedicated". Default: 1,
 # preserving one-datagram-at-a-time behavior; raise only with retained benchmark
 # evidence for the target host.
 udp_batch_size = 1
 # Standard UDP SO_REUSEPORT worker sockets per configured UDP listener.
 # Default: 1. Raise only with retained local or physical benchmark evidence.
 udp_reuseport_workers = 1
-# Optional Linux CPU affinity list for standard UDP workers. Length must match
-# udp_reuseport_workers. Leave unset unless benchmark evidence justifies it.
+# Standard UDP runtime. "tokio" preserves the stable async socket path;
+# "dedicated" uses one blocking OS thread per UDP worker for data-plane
+# experiments and later AF_XDP-shaped worker ownership.
+udp_runtime = "tokio"
+# Optional Linux CPU affinity list for dedicated standard UDP workers. Length
+# must match udp_reuseport_workers and requires udp_runtime = "dedicated".
+# Leave unset unless benchmark evidence justifies it.
 # udp_worker_cpu_affinity = [0, 1, 2, 3]
 # Maximum followed CNAME/DNAME chain depth. Default: 8.
 max_cname_chain = 8

@@ -366,9 +366,13 @@ Production configuration notes:
   batch counters for this comparison.
 - Keep `[limits].udp_reuseport_workers = 1` unless a benchmark artifact shows
   that multiple standard UDP `SO_REUSEPORT` workers improve the target host.
-  When increasing it on Linux, `[limits].udp_worker_cpu_affinity = [..]` can pin
-  the worker start threads to explicit CPU IDs; the list length must match the
-  worker count. Treat affinity as host-specific tuning, not a portable default.
+- Keep `[limits].udp_runtime = "tokio"` unless benchmarking the dedicated
+  standard UDP data-plane worker path. On Linux, dedicated workers use
+  `recvmmsg`/`sendmmsg`, so larger `[limits].udp_batch_size` values such as
+  `256` or `512` may be worth comparing on the target host. Dedicated workers
+  can use `[limits].udp_worker_cpu_affinity = [..]` to pin worker threads to
+  explicit CPU IDs; the list length must match the worker count. Treat both
+  large batches and affinity as host-specific tuning, not portable defaults.
 - Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
   diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
   downgrades. The `minimal` profile emits numeric EDE codes only, with no

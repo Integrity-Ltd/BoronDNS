@@ -1146,16 +1146,29 @@ layout can be phased out.
   `[limits].udp_reuseport_workers` defaults to `1`, preserving the current
   single standard UDP listener per configured address, and values above `1`
   bind multiple same-address standard UDP sockets before privilege drop.
-  `[limits].udp_worker_cpu_affinity` can request a Linux CPU id per standard
-  UDP worker when its length matches the worker count. Local tests cover
-  multi-worker reuseport binding to one effective port. A retained 2026-06-02
-  local loopback comparison with reduced hot-path metrics, four server threads,
-  four client threads, client window 16, and UDP batch size 32 measured one
-  worker at about 482k responses/s, two four-worker no-affinity runs at about
-  951k and 845k responses/s, and a four-worker `0,1,2,3` affinity run at about
-  782k responses/s. Explicit affinity was slower in that local Tokio profile,
-  and the default remains one worker until target-host evidence justifies a
-  change.
+  Local tests cover multi-worker reuseport binding to one effective port. A
+  retained 2026-06-02 local loopback comparison with
+  reduced hot-path metrics, four server threads, four client threads, client
+  window 16, and UDP batch size 32 measured one Tokio worker at about 482k
+  responses/s, two four-worker Tokio no-affinity runs at about 951k and 845k
+  responses/s, and a four-worker Tokio `0,1,2,3` affinity run at about 782k
+  responses/s. Explicit affinity was slower in that local Tokio profile,
+  so it remains evidence-gated tuning.
+- [x] Add dedicated standard UDP data-plane worker mode:
+  `[limits].udp_runtime = "dedicated"` keeps the standard UDP socket backend
+  but moves each `SO_REUSEPORT` worker socket onto its own OS thread with a
+  private packet loop, bounded inbound/outbound vectors, and optional
+  per-worker Linux CPU affinity. On Linux, the dedicated path now uses a
+  tightly scoped unsafe `recvmmsg`/`sendmmsg` module with reusable message
+  slabs, `MSG_DONTWAIT`, bounded partial-send retry, and a 1024-message batch
+  cap. The stable default remains `[limits].udp_runtime = "tokio"`. A retained
+  2026-06-01 local loopback comparison with reduced hot-path metrics, four
+  server threads, four client threads, client window 16, and four reuseport
+  workers measured Tokio batch 32 at about 936k responses/s, dedicated pre-mmsg
+  batch 32 at about 879k responses/s, and dedicated mmsg batch 512 at about
+  1.47M responses/s, all with zero drops/errors. Batch 1024 fell back to about
+  1.19M responses/s, and a dedicated mmsg batch-512 affinity run measured about
+  898k responses/s, so affinity remains evidence-gated.
 - [ ] Decide whether AF_XDP is worth implementing for the server.
 
 ## Phase 8: Layout Tuning Experiments

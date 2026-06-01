@@ -1280,6 +1280,8 @@ pub struct Limits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_worker_cpu_affinity: Option<Vec<usize>>,
     #[serde(default)]
+    pub udp_runtime: UdpRuntime,
+    #[serde(default)]
     pub udp_backend: UdpBackend,
     #[serde(default = "default_max_cname_chain")]
     pub max_cname_chain: usize,
@@ -1336,6 +1338,7 @@ impl Default for Limits {
             udp_batch_size: default_udp_batch_size(),
             udp_reuseport_workers: default_udp_reuseport_workers(),
             udp_worker_cpu_affinity: None,
+            udp_runtime: UdpRuntime::default(),
             udp_backend: UdpBackend::default(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
@@ -1378,6 +1381,12 @@ impl Limits {
                     .to_owned(),
             ));
         }
+        if self.udp_backend == UdpBackend::AfXdp && self.udp_runtime != UdpRuntime::Tokio {
+            return Err(ConfigError::Invalid(
+                "limits.udp_runtime must be \"tokio\" when limits.udp_backend = \"af_xdp\""
+                    .to_owned(),
+            ));
+        }
         if let Some(cpus) = &self.udp_worker_cpu_affinity {
             if cpus.is_empty() {
                 return Err(ConfigError::Invalid(
@@ -1390,6 +1399,12 @@ impl Limits {
                         .to_owned(),
                 ));
             }
+            if self.udp_runtime != UdpRuntime::Dedicated {
+                return Err(ConfigError::Invalid(
+                    "limits.udp_worker_cpu_affinity requires limits.udp_runtime = \"dedicated\""
+                        .to_owned(),
+                ));
+            }
             if cpus.len() != self.udp_reuseport_workers {
                 return Err(ConfigError::Invalid(
                     "limits.udp_worker_cpu_affinity length must match limits.udp_reuseport_workers"
@@ -1398,6 +1413,20 @@ impl Limits {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum UdpRuntime {
+    #[serde(rename = "tokio")]
+    Tokio,
+    #[serde(rename = "dedicated")]
+    Dedicated,
+}
+
+impl Default for UdpRuntime {
+    fn default() -> Self {
+        Self::Tokio
     }
 }
 
@@ -2305,6 +2334,7 @@ mod tests {
         assert_eq!(config.limits.udp_batch_size, 1);
         assert_eq!(config.limits.udp_reuseport_workers, 1);
         assert!(config.limits.udp_worker_cpu_affinity.is_none());
+        assert_eq!(config.limits.udp_runtime, UdpRuntime::Tokio);
         assert_eq!(config.limits.udp_backend, UdpBackend::Std);
         assert_eq!(config.xdp, XdpConfig::default());
         assert_eq!(config.limits.max_cname_chain, 8);
@@ -4028,6 +4058,7 @@ mod tests {
                 udp_batch_size = 32
                 udp_reuseport_workers = 4
                 udp_worker_cpu_affinity = [0, 1, 2, 3]
+                udp_runtime = "dedicated"
 
                 [[zones]]
                 name = "example.test."
@@ -4042,6 +4073,7 @@ mod tests {
             config.limits.udp_worker_cpu_affinity.as_deref(),
             Some([0, 1, 2, 3].as_slice())
         );
+        assert_eq!(config.limits.udp_runtime, UdpRuntime::Dedicated);
     }
 
     #[test]
@@ -4074,6 +4106,7 @@ mod tests {
                 [limits]
                 udp_reuseport_workers = 4
                 udp_worker_cpu_affinity = [0, 1]
+                udp_runtime = "dedicated"
 
                 [[zones]]
                 name = "example.test."
@@ -4083,6 +4116,27 @@ mod tests {
         .expect_err("CPU affinity list must match UDP worker count");
 
         assert!(error.to_string().contains("udp_worker_cpu_affinity"));
+    }
+
+    #[test]
+    fn rejects_udp_worker_cpu_affinity_without_dedicated_runtime() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_reuseport_workers = 2
+                udp_worker_cpu_affinity = [0, 1]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("CPU affinity requires dedicated UDP runtime");
+
+        assert!(error.to_string().contains("udp_runtime"));
     }
 
     #[test]
@@ -4108,6 +4162,31 @@ mod tests {
         .expect_err("AF_XDP backend owns queue binding instead of SO_REUSEPORT workers");
 
         assert!(error.to_string().contains("udp_reuseport_workers"));
+    }
+
+    #[test]
+    fn rejects_af_xdp_with_dedicated_udp_runtime() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_backend = "af_xdp"
+                udp_runtime = "dedicated"
+
+                [xdp]
+                interface = "lo"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("AF_XDP uses its own packet worker model");
+
+        assert!(error.to_string().contains("udp_runtime"));
     }
 
     #[test]

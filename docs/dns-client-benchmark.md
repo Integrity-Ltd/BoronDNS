@@ -67,17 +67,22 @@ compatibility.
 To compare the standard UDP batch adapter against the original one-datagram
 socket path, run the same UDP profile once with
 `OXIDEDNS_BENCH_UDP_BATCH_SIZE=1` and once with a larger value such as `32` or
-`64`. Retained artifacts record `udp_batch_size`,
+`64`. For `OXIDEDNS_BENCH_UDP_RUNTIME=dedicated` on Linux, the batch size feeds
+the `recvmmsg`/`sendmmsg` slab size; local loopback evidence has favored larger
+values such as `256` or `512`, but this is host and workload specific. Retained
+artifacts record `udp_batch_size`,
 `udp_receive_batches`, `udp_received_datagrams`, `udp_send_batches`, and
 `udp_sent_datagrams` so the result can be checked against actual listener
 batching rather than only client-side throughput.
 
 To compare one standard UDP listener against multiple `SO_REUSEPORT` workers,
 run the same UDP profile with `OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS=1` and
-then with a larger value such as `4`. On Linux, set
+then with a larger value such as `4`. Set `OXIDEDNS_BENCH_UDP_RUNTIME=dedicated`
+to run standard UDP workers on dedicated OS threads instead of Tokio tasks. On
+Linux, dedicated workers can also use
 `OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY=0,1,2,3` to request explicit CPU
-affinity for four workers. Retained artifacts record `udp_reuseport_workers`
-and `udp_worker_cpu_affinity`.
+affinity for four workers. Retained artifacts record `udp_runtime`,
+`udp_reuseport_workers`, and `udp_worker_cpu_affinity`.
 
 For a reproducible local sweep across several UDP batch sizes, use:
 
