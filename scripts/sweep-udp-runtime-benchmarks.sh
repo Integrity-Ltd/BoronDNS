@@ -115,7 +115,7 @@ fi
 mkdir -p "$sweep_dir"
 
 summary_path="$sweep_dir/summary.tsv"
-printf 'udp_runtime\tudp_reuseport_workers\tudp_batch_size\tudp_client_sockets_per_thread\tudp_worker_cpu_affinity\tartifact_dir\tresponses_per_second\tlatency_us_p50\tlatency_us_p99\tlatency_us_p999\tdropped\terrors\tudp_receive_batches\tudp_received_datagrams\treceive_datagrams_per_batch\tudp_send_batches\tudp_sent_datagrams\tsend_datagrams_per_batch\tudp_mmsg_receive_syscalls\tmmsg_receive_datagrams_per_syscall\tudp_mmsg_send_syscalls\tmmsg_send_datagrams_per_syscall\tudp_mmsg_send_partial_syscalls\tudp_mmsg_send_wouldblock_retries\tudp_worker_receive_slots\tudp_worker_received_datagrams_imbalance_ratio\tudp_worker_send_slots\tudp_worker_sent_datagrams_imbalance_ratio\tnetwork_device\tnetwork_rx_packets_delta\tnetwork_tx_packets_delta\n' >"$summary_path"
+printf 'udp_runtime\tudp_reuseport_workers\tudp_batch_size\tudp_client_sockets_per_thread\tudp_worker_cpu_affinity\tartifact_dir\tresponses_per_second\tlatency_us_p50\tlatency_us_p99\tlatency_us_p999\tdropped\terrors\tudp_receive_batches\tudp_received_datagrams\treceive_datagrams_per_batch\tudp_send_batches\tudp_sent_datagrams\tsend_datagrams_per_batch\tudp_mmsg_receive_syscalls\tmmsg_receive_datagrams_per_syscall\tudp_mmsg_send_syscalls\tmmsg_send_datagrams_per_syscall\tudp_mmsg_send_partial_syscalls\tudp_mmsg_send_wouldblock_retries\tudp_worker_receive_slots\tudp_worker_received_datagrams_imbalance_ratio\tudp_worker_send_slots\tudp_worker_sent_datagrams_imbalance_ratio\tnetwork_device\tnetwork_rx_packets_delta\tnetwork_tx_packets_delta\tnetwork_rx_gbps\tnetwork_tx_gbps\tnetwork_sum_gbps\tnetwork_rx_gigabytes_per_second\tnetwork_tx_gigabytes_per_second\tnetwork_sum_gigabytes_per_second\tnetwork_rx_bytes_per_response\tnetwork_tx_bytes_per_response\tnetwork_sum_bytes_per_response\tnetwork_throughput_scope\n' >"$summary_path"
 
 tsv_value() {
     local path="$1"
@@ -201,7 +201,7 @@ for runtime in "${runtimes[@]}"; do
                 udp_mmsg_received_datagrams="$(tsv_value "$results" udp_mmsg_received_datagrams)"
                 udp_mmsg_send_syscalls="$(tsv_value "$results" udp_mmsg_send_syscalls)"
                 udp_mmsg_sent_datagrams="$(tsv_value "$results" udp_mmsg_sent_datagrams)"
-                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                     "$runtime" \
                     "$workers" \
                     "$batch_size" \
@@ -233,6 +233,16 @@ for runtime in "${runtimes[@]}"; do
                     "$(tsv_value "$results" network_device)" \
                     "$(tsv_value "$results" network_rx_packets_delta)" \
                     "$(tsv_value "$results" network_tx_packets_delta)" \
+                    "$(tsv_value "$results" network_rx_gbps)" \
+                    "$(tsv_value "$results" network_tx_gbps)" \
+                    "$(tsv_value "$results" network_sum_gbps)" \
+                    "$(tsv_value "$results" network_rx_gigabytes_per_second)" \
+                    "$(tsv_value "$results" network_tx_gigabytes_per_second)" \
+                    "$(tsv_value "$results" network_sum_gigabytes_per_second)" \
+                    "$(tsv_value "$results" network_rx_bytes_per_response)" \
+                    "$(tsv_value "$results" network_tx_bytes_per_response)" \
+                    "$(tsv_value "$results" network_sum_bytes_per_response)" \
+                    "$(tsv_value "$results" network_throughput_scope)" \
                     >>"$summary_path"
                 done
             done

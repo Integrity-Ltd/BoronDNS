@@ -1284,10 +1284,75 @@ query_mode="$(summary_value query_mode)"
 trace_queries="$(summary_value trace_queries)"
 client_bind_summary="$(summary_value bind)"
 records_served="$(awk -F= '/TCP AXFR served records=/ { print $2; exit }' "$primary_log")"
+network_rx_bytes_delta="$(awk -F'\t' '$1 == "rx_bytes" { print $4; exit }' "$network_dir/proc-net-dev-delta.tsv")"
+network_tx_bytes_delta="$(awk -F'\t' '$1 == "tx_bytes" { print $4; exit }' "$network_dir/proc-net-dev-delta.tsv")"
 network_rx_packets_delta="$(awk -F'\t' '$1 == "rx_packets" { print $4; exit }' "$network_dir/proc-net-dev-delta.tsv")"
 network_tx_packets_delta="$(awk -F'\t' '$1 == "tx_packets" { print $4; exit }' "$network_dir/proc-net-dev-delta.tsv")"
+network_rx_bytes_delta="${network_rx_bytes_delta:-unknown}"
+network_tx_bytes_delta="${network_tx_bytes_delta:-unknown}"
 network_rx_packets_delta="${network_rx_packets_delta:-unknown}"
 network_tx_packets_delta="${network_tx_packets_delta:-unknown}"
+throughput_summary() {
+    python3 - "$duration" "$responses_per_second" "$network_rx_bytes_delta" "$network_tx_bytes_delta" "$network_device" <<'PY'
+import math
+import sys
+
+duration, qps, rx_bytes, tx_bytes, device = sys.argv[1:]
+
+def number(value):
+    try:
+        return float(value)
+    except ValueError:
+        return math.nan
+
+duration = number(duration)
+qps = number(qps)
+rx = number(rx_bytes)
+tx = number(tx_bytes)
+
+def fmt(value):
+    return "unknown" if math.isnan(value) else f"{value:.6f}"
+
+def bytes_per_second(value):
+    return math.nan if math.isnan(value) or duration <= 0 else value / duration
+
+rx_bps = bytes_per_second(rx)
+tx_bps = bytes_per_second(tx)
+sum_bps = rx_bps + tx_bps if not math.isnan(rx_bps) and not math.isnan(tx_bps) else math.nan
+rx_gbps = rx_bps * 8 / 1_000_000_000 if not math.isnan(rx_bps) else math.nan
+tx_gbps = tx_bps * 8 / 1_000_000_000 if not math.isnan(tx_bps) else math.nan
+sum_gbps = sum_bps * 8 / 1_000_000_000 if not math.isnan(sum_bps) else math.nan
+rx_gBps = rx_bps / 1_000_000_000 if not math.isnan(rx_bps) else math.nan
+tx_gBps = tx_bps / 1_000_000_000 if not math.isnan(tx_bps) else math.nan
+sum_gBps = sum_bps / 1_000_000_000 if not math.isnan(sum_bps) else math.nan
+rx_bytes_per_response = rx_bps / qps if qps > 0 and not math.isnan(rx_bps) else math.nan
+tx_bytes_per_response = tx_bps / qps if qps > 0 and not math.isnan(tx_bps) else math.nan
+sum_bytes_per_response = sum_bps / qps if qps > 0 and not math.isnan(sum_bps) else math.nan
+scope = "loopback-summed-not-wire-rate" if device == "lo" else "interface-counter"
+
+values = [
+    rx_bps,
+    tx_bps,
+    sum_bps,
+    rx_gbps,
+    tx_gbps,
+    sum_gbps,
+    rx_gBps,
+    tx_gBps,
+    sum_gBps,
+    rx_bytes_per_response,
+    tx_bytes_per_response,
+    sum_bytes_per_response,
+]
+print("\t".join([*(fmt(value) for value in values), scope]))
+PY
+}
+IFS=$'\t' read -r network_rx_bytes_per_second network_tx_bytes_per_second network_sum_bytes_per_second \
+    network_rx_gbps network_tx_gbps network_sum_gbps \
+    network_rx_gigabytes_per_second network_tx_gigabytes_per_second network_sum_gigabytes_per_second \
+    network_rx_bytes_per_response network_tx_bytes_per_response network_sum_bytes_per_response \
+    network_throughput_scope \
+    <<<"$(throughput_summary)"
 prom_metric_value() {
     local metric="$1"
     awk -v metric="$metric" '$1 == metric { print $2; exit }' "$artifact_dir/metrics-after.prom"
@@ -1404,8 +1469,23 @@ remote_client_local_host_id	$remote_client_local_host_id	sha256
 remote_client_remote_host_id	$remote_client_remote_host_id	sha256
 remote_client_same_host	$remote_client_same_host	boolean
 remote_client_allow_arch_mismatch	$([[ "$client_mode" == ssh ]] && echo "$remote_client_allow_arch_mismatch" || echo none)	boolean
+network_rx_bytes_delta	$network_rx_bytes_delta	bytes
+network_tx_bytes_delta	$network_tx_bytes_delta	bytes
 network_rx_packets_delta	$network_rx_packets_delta	packets
 network_tx_packets_delta	$network_tx_packets_delta	packets
+network_rx_bytes_per_second	$network_rx_bytes_per_second	bytes_per_second
+network_tx_bytes_per_second	$network_tx_bytes_per_second	bytes_per_second
+network_sum_bytes_per_second	$network_sum_bytes_per_second	bytes_per_second
+network_rx_gbps	$network_rx_gbps	gigabits_per_second
+network_tx_gbps	$network_tx_gbps	gigabits_per_second
+network_sum_gbps	$network_sum_gbps	gigabits_per_second
+network_rx_gigabytes_per_second	$network_rx_gigabytes_per_second	gigabytes_per_second
+network_tx_gigabytes_per_second	$network_tx_gigabytes_per_second	gigabytes_per_second
+network_sum_gigabytes_per_second	$network_sum_gigabytes_per_second	gigabytes_per_second
+network_rx_bytes_per_response	$network_rx_bytes_per_response	bytes_per_response
+network_tx_bytes_per_response	$network_tx_bytes_per_response	bytes_per_response
+network_sum_bytes_per_response	$network_sum_bytes_per_response	bytes_per_response
+network_throughput_scope	$network_throughput_scope	scope
 duration_seconds	$duration	seconds
 responses_per_second	$responses_per_second	qps
 latency_us_p50	$latency_us_p50	microseconds

@@ -1185,6 +1185,13 @@ layout can be phased out.
   benchmark `perf stat`/`perf record` runs on hosts where direct attach is
   blocked by kernel perf policy. Benchmark runs opt into it with
   `OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER=true`.
+- [x] Add Knot-aligned comparison prep:
+  `docs/knot-comparison-benchmark.md` records the source-derived kxdpgun and
+  Knot benchmark contract, while
+  `scripts/prepare-knot-comparison-benchmark.sh` generates shared `querydb` and
+  OxideDNS trace inputs, stages a Knot-primary/OxideDNS-secondary AXFR
+  comparison runbook, and normalizes retained kxdpgun/OxideDNS outputs into a
+  common throughput table.
 - [ ] Decide whether AF_XDP is worth implementing for the server.
 
 ## Phase 8: Layout Tuning Experiments

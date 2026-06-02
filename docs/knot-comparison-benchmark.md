@@ -1,0 +1,219 @@
+# Knot Comparison Benchmark Plan
+
+This document defines how to compare OxideDNS against Knot DNS without mixing
+different benchmark units or query mixes.
+
+## Source-Derived Baseline
+
+Knot's published response-rate benchmark uses two physical servers directly
+connected by 40GbE. One server runs the authoritative implementation under
+test; the other replays prepared DNS queries with `kxdpgun`.
+
+The published setup records these control points:
+
+- AMD EPYC 7702P server hardware and Intel XL710 40GbE NICs.
+- SMT disabled.
+- 64 active CPU cores, NIC channels, and nameserver threads for UDP.
+- 16 active CPU cores, NIC channels, and nameserver threads for TCP.
+- `CFLAGS="-O2 -g -DNDEBUG"` for source-built servers.
+- `SO_REUSEPORT`, socket affinity, and minimal responses for Knot DNS.
+- One server thread or process pinned to one CPU core.
+- UDP measurement windows of 15 seconds.
+- Deactivated connection tracking.
+
+The `dns-benchmarking` source repository implements this as a three-host
+workflow: controller, nameserver target, and traffic player. The UDP response
+module runs:
+
+```bash
+sudo kxdpgun -t "$duration" -p "$PORT" -b 10 -Q "$rate" -i "$querydb" "$target" $KXDPGUN_OPTS
+```
+
+The dataset contains zone files, generated server configs, and a `querydb`
+file. For NOERROR mixes, `querydb` is generated from zone contents by selecting
+unique `NS`, `DS`, `A`, `AAAA`, `PTR`, `MX`, `SOA`, and `DNSKEY` rows.
+
+## kxdpgun Semantics To Mirror
+
+From Knot DNS `src/utils/kxdpgun`:
+
+- kxdpgun sends and receives through XDP.
+- It autodetects the number of parallel threads from the number of combined
+  queues on the selected network interface.
+- Total `--qps` is divided by detected thread count.
+- Threads are pinned with `--affinity`; the default is CPU `0s1`.
+- UDP default batch is 10.
+- Source UDP/TCP ports are allocated from `2000..65535`.
+- `--local ip/prefix` can vary source IPs across a subnet.
+- Text query input is `qname qtype [flags]`, where `E` means EDNS and `D`
+  means EDNS plus DO.
+- Responses are counted and rcodes are tracked, but kxdpgun does not fully
+  match each response to its original query.
+- Plain output reports average DNS reply size, average L2 throughput, and
+  average L1 throughput. L1 adds 20 bytes per received packet.
+- JSON output reports counts and rcodes but not the plain throughput fields, so
+  comparison runs should retain plaintext logs.
+
+## OxideDNS Comparison Contract
+
+Use the same zone data and query mix for both servers:
+
+1. Generate or import a Knot-style `querydb`.
+2. Use `querydb` directly for kxdpgun.
+3. Convert `querydb` to OxideDNS `query-trace.tsv`.
+4. Run OxideDNS and Knot DNS with the same destination IP, port, query rate,
+   duration, and EDNS/DO mix.
+5. Record both packet-rate and byte-rate metrics.
+
+For quick local synthetic runs, use `scripts/benchmark-dns-clients.sh` with:
+
+- `OXIDEDNS_BENCH_TRACE_FILE` pointing at the converted trace.
+- `OXIDEDNS_BENCH_DURATION_SECONDS=15` for Knot-aligned UDP windows.
+- `OXIDEDNS_BENCH_CLIENT_MODE=ssh` when using a separate traffic host.
+- `OXIDEDNS_BENCH_NETWORK_DEVICE` set to the physical NIC.
+- `OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true` for any hardware claim.
+
+For Knot-aligned comparison runs, stage Knot as the primary and OxideDNS as a
+secondary:
+
+1. Start Knot with the benchmark zone and use it as the reference authoritative
+   target.
+2. Let OxideDNS transfer the same zone by AXFR from Knot.
+3. Verify OxideDNS readiness and SOA response.
+4. Stop Knot so OxideDNS is idle and serving from the transferred in-memory
+   snapshot.
+5. Benchmark OxideDNS with the same query mix.
+
+This shape keeps the zone source, query input, and Knot tooling close to the
+Knot reference benchmark while isolating OxideDNS serving performance from
+primary-transfer activity.
+
+## Prepared Helpers
+
+Create a kxdpgun query file from a zone file:
+
+```bash
+scripts/prepare-knot-comparison-benchmark.sh querydb \
+  --zone zones/example.zone \
+  --out target/knot-comparison/example \
+  --shuffle
+```
+
+Convert that file to the OxideDNS load-client trace format:
+
+```bash
+scripts/prepare-knot-comparison-benchmark.sh trace \
+  --querydb target/knot-comparison/example/querydb \
+  --out target/knot-comparison/example
+```
+
+Stage Knot as primary and OxideDNS as a secondary from one zone file:
+
+```bash
+scripts/prepare-knot-comparison-benchmark.sh stage-knot-primary \
+  --zone zones/example.zone \
+  --zone-name example. \
+  --out target/knot-comparison/example \
+  --workers 64 \
+  --udp-runtime dedicated \
+  --udp-batch-size 32 \
+  --shuffle
+```
+
+The staged directory contains:
+
+- `knot.conf`: Knot primary config for the source zone.
+- `oxidedns.toml`: OxideDNS secondary config pointing at Knot.
+- `querydb`: kxdpgun input.
+- `query-trace.tsv`: equivalent OxideDNS `dns-load-client` trace.
+- `runbook.sh`: validates configs, starts Knot, waits for OxideDNS AXFR
+  readiness, stops Knot, and optionally runs the direct OxideDNS idle benchmark.
+
+Run the staged transfer and idle benchmark:
+
+```bash
+cd target/knot-comparison/example
+RUN_IDLE_BENCHMARK=true \
+BENCH_DURATION=15 \
+BENCH_THREADS=64 \
+BENCH_WINDOW=64 \
+BENCH_NETWORK_DEVICE=eth0 \
+./runbook.sh
+```
+
+For a Knot reference run against the same staged zone and query mix, start Knot
+with `knot.conf` and run kxdpgun from the player host:
+
+```bash
+sudo kxdpgun -t 15 -p 5301 -b 10 -Q "$rate" -i querydb "$target_ip" \
+  2>&1 | tee kxdpgun-knot.log
+```
+
+For an OxideDNS kxdpgun run on the dedicated hardware, use the same `querydb`,
+the OxideDNS service port, and the same `-t`, `-b`, `-Q`, source-address, and
+affinity settings as the Knot reference run. The generated `runbook.sh` local
+load-client path is useful for local and preflight evidence; physical
+Knot-comparison claims should use kxdpgun/NIC counters.
+
+Normalize an OxideDNS benchmark artifact:
+
+```bash
+scripts/prepare-knot-comparison-benchmark.sh normalize-oxidedns \
+  --artifact target/knot-comparison/example/evidence/oxidedns-idle-after-knot-transfer \
+  --out target/knot-comparison/example/oxidedns-normalized.tsv
+```
+
+Normalize a retained kxdpgun plaintext log:
+
+```bash
+scripts/prepare-knot-comparison-benchmark.sh normalize-kxdpgun \
+  --log target/knot-comparison/example/kxdpgun-knot.log \
+  --duration 15 \
+  --out target/knot-comparison/example/knot-normalized.tsv
+```
+
+## Metrics
+
+The comparison table uses these fields:
+
+- `qps`: sent queries per second for kxdpgun, received responses per second for
+  OxideDNS local harness rows unless an external sender reports offered load.
+- `responses_per_second`: answered responses per second.
+- `rx_gbps`: received L2 or interface-counter throughput.
+- `sum_gbps`: kxdpgun L1 throughput or summed interface-counter throughput.
+- `rx_gigabytes_per_second`: GB/s equivalent of received throughput.
+- `sum_gigabytes_per_second`: GB/s equivalent of L1 or summed throughput.
+- `rx_bytes_per_response`: average received DNS payload or interface-counter
+  bytes per response.
+- `drops_or_lost`: dropped responses or kxdpgun lost sends.
+- `errors`: client/generator socket errors.
+- `throughput_scope`: metric provenance.
+
+For physical NIC claims, prefer kxdpgun L1/L2 output plus NIC byte/packet
+counters. Loopback `rx+tx` sums are useful only as engineering diagnostics and
+must not be described as wire throughput.
+
+## Dedicated Hardware Run Shape
+
+On the server host:
+
+1. Disable SMT for the formal profile, or record that it stayed enabled.
+2. Disable connection tracking for the benchmark interface.
+3. Disable `irqbalance`.
+4. Set NIC combined queues equal to the worker count.
+5. Pin NIC IRQs and server workers deliberately.
+6. Fix CPU governor and power policy.
+7. Record `uname`, NIC driver/firmware, `ethtool -i`, `ethtool -k`,
+   `ethtool -l`, `ethtool -S`, `/proc/interrupts`, and `/proc/softirqs`.
+
+On the player host:
+
+1. Install kxdpgun and verify native or zero-copy XDP mode.
+2. Use the same `querydb` for Knot and OxideDNS runs.
+3. Sweep offered rates rather than reporting one point.
+4. Keep the same `-b`, `-F`, source IP range, target port, and duration across
+   implementations.
+
+The meaningful result is the saturation knee: the highest offered rate where
+response percentage, drops/errors, p99/p999 latency, and byte throughput remain
+inside the claimed acceptance envelope.

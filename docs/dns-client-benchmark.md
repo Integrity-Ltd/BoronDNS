@@ -145,6 +145,12 @@ OXIDEDNS_BENCH_PERF_STAT=true \
 scripts/benchmark-dns-clients.sh
 ```
 
+For Knot DNS/kxdpgun-aligned hardware comparisons, use
+[Knot Comparison Benchmark Plan](knot-comparison-benchmark.md). That plan keeps
+the query mix, duration, rate ladder, byte-throughput definitions, and
+kxdpgun/OxideDNS normalization explicit so Knot GB/s-style results are not
+compared against OxideDNS small-response QPS in isolation.
+
 The sweep wrapper retains one artifact per batch size under a shared
 `target/evidence/udp-batch-sweep-*` directory and writes `summary.tsv` with
 QPS/latency ratios, drop/error counts, UDP receive/send batch counters, and
