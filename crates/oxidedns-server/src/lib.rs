@@ -3125,6 +3125,9 @@ fn run_dedicated_std_udp_worker(
         };
         idle_spins = 0;
         settings.metrics.record_udp_receive_batch(active);
+        settings
+            .metrics
+            .record_udp_worker_receive_batch(worker_id, active);
 
         outbound.clear();
         for packet in &inbound[..active] {
@@ -3134,7 +3137,16 @@ fn run_dedicated_std_udp_worker(
                 outbound.push(response.with_target(packet.target()));
             }
         }
-        send_std_udp_batch(&mut packet_io, &socket, &outbound, &settings.metrics)?;
+        send_std_udp_batch(
+            &mut packet_io,
+            &socket,
+            &outbound,
+            worker_id,
+            &settings.metrics,
+        )?;
+        settings
+            .metrics
+            .record_udp_mmsg_stats(packet_io.take_stats());
     }
 
     Ok(())
@@ -3144,6 +3156,7 @@ fn send_std_udp_batch(
     packet_io: &mut std_udp_mmsg::StdUdpMmsg,
     socket: &std::net::UdpSocket,
     outbound: &[UdpOutbound],
+    worker_id: usize,
     metrics: &RuntimeMetrics,
 ) -> Result<(), RuntimeError> {
     if outbound.is_empty() {
@@ -3169,6 +3182,7 @@ fn send_std_udp_batch(
         }
     }
     metrics.record_udp_send_batch(sent);
+    metrics.record_udp_worker_send_batch(worker_id, sent);
     Ok(())
 }
 
@@ -4360,6 +4374,8 @@ fn metrics_body(
     );
     append_build_info_metric(&mut body);
     append_udp_packet_io_metrics(&mut body, snapshot);
+    append_udp_mmsg_metrics(&mut body, metrics);
+    append_udp_worker_packet_io_metrics(&mut body, metrics);
     append_query_rcode_metrics(&mut body, metrics);
     append_query_latency_metrics(&mut body, metrics);
     append_query_pipeline_latency_metrics(&mut body, metrics);
@@ -4417,6 +4433,87 @@ fn append_udp_packet_io_metrics(body: &mut String, snapshot: RuntimeMetricsSnaps
         snapshot.udp_send_batches,
         snapshot.udp_sent_datagrams,
     ));
+}
+
+fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    body.push_str(
+        "# HELP oxidedns_udp_mmsg_receive_syscalls_total Linux recvmmsg syscalls issued by dedicated UDP workers.\n\
+         # TYPE oxidedns_udp_mmsg_receive_syscalls_total counter\n\
+         # HELP oxidedns_udp_mmsg_received_datagrams_total UDP datagrams returned by Linux recvmmsg dedicated-worker calls.\n\
+         # TYPE oxidedns_udp_mmsg_received_datagrams_total counter\n\
+         # HELP oxidedns_udp_mmsg_send_syscalls_total Linux sendmmsg syscalls issued by dedicated UDP workers.\n\
+         # TYPE oxidedns_udp_mmsg_send_syscalls_total counter\n\
+         # HELP oxidedns_udp_mmsg_sent_datagrams_total UDP datagrams accepted by Linux sendmmsg dedicated-worker calls.\n\
+         # TYPE oxidedns_udp_mmsg_sent_datagrams_total counter\n\
+         # HELP oxidedns_udp_mmsg_send_partial_syscalls_total Linux sendmmsg calls that accepted fewer datagrams than requested.\n\
+         # TYPE oxidedns_udp_mmsg_send_partial_syscalls_total counter\n\
+         # HELP oxidedns_udp_mmsg_send_wouldblock_retries_total Dedicated UDP worker sendmmsg WouldBlock retry attempts.\n\
+         # TYPE oxidedns_udp_mmsg_send_wouldblock_retries_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_udp_mmsg_receive_syscalls_total {}\n\
+         oxidedns_udp_mmsg_received_datagrams_total {}\n\
+         oxidedns_udp_mmsg_send_syscalls_total {}\n\
+         oxidedns_udp_mmsg_sent_datagrams_total {}\n\
+         oxidedns_udp_mmsg_send_partial_syscalls_total {}\n\
+         oxidedns_udp_mmsg_send_wouldblock_retries_total {}\n",
+        metrics
+            .inner
+            .udp_mmsg_receive_syscalls
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_received_datagrams
+            .load(Ordering::Relaxed),
+        metrics.inner.udp_mmsg_send_syscalls.load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_sent_datagrams
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_send_partial_syscalls
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_send_wouldblock_retries
+            .load(Ordering::Relaxed),
+    ));
+}
+
+fn append_udp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    body.push_str(
+        "# HELP oxidedns_udp_worker_receive_batches_total UDP receive batches processed per worker slot.\n\
+         # TYPE oxidedns_udp_worker_receive_batches_total counter\n\
+         # HELP oxidedns_udp_worker_received_datagrams_total UDP datagrams received per worker slot.\n\
+         # TYPE oxidedns_udp_worker_received_datagrams_total counter\n\
+         # HELP oxidedns_udp_worker_send_batches_total UDP send batches emitted per worker slot.\n\
+         # TYPE oxidedns_udp_worker_send_batches_total counter\n\
+         # HELP oxidedns_udp_worker_sent_datagrams_total UDP datagrams sent per worker slot.\n\
+         # TYPE oxidedns_udp_worker_sent_datagrams_total counter\n",
+    );
+    for worker_id in 0..UDP_WORKER_METRIC_SLOTS {
+        let receive_batches =
+            metrics.inner.udp_worker_receive_batches[worker_id].load(Ordering::Relaxed);
+        let received_datagrams =
+            metrics.inner.udp_worker_received_datagrams[worker_id].load(Ordering::Relaxed);
+        let send_batches = metrics.inner.udp_worker_send_batches[worker_id].load(Ordering::Relaxed);
+        let sent_datagrams =
+            metrics.inner.udp_worker_sent_datagrams[worker_id].load(Ordering::Relaxed);
+        if receive_batches == 0
+            && received_datagrams == 0
+            && send_batches == 0
+            && sent_datagrams == 0
+        {
+            continue;
+        }
+        body.push_str(&format!(
+            "oxidedns_udp_worker_receive_batches_total{{worker=\"{worker_id}\"}} {receive_batches}\n\
+             oxidedns_udp_worker_received_datagrams_total{{worker=\"{worker_id}\"}} {received_datagrams}\n\
+             oxidedns_udp_worker_send_batches_total{{worker=\"{worker_id}\"}} {send_batches}\n\
+             oxidedns_udp_worker_sent_datagrams_total{{worker=\"{worker_id}\"}} {sent_datagrams}\n",
+        ));
+    }
 }
 
 fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
@@ -5542,6 +5639,7 @@ struct RuntimeMetrics {
 }
 
 const DEFAULT_COOKIE_PREFIX_METRIC_LIMIT: usize = 100_000;
+const UDP_WORKER_METRIC_SLOTS: usize = 32;
 #[cfg(test)]
 const DEFAULT_LATENCY_HISTOGRAM_BUCKETS: [f64; 9] = [
     0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1,
@@ -5557,6 +5655,16 @@ struct RuntimeMetricsInner {
     udp_received_datagrams: AtomicU64,
     udp_send_batches: AtomicU64,
     udp_sent_datagrams: AtomicU64,
+    udp_mmsg_receive_syscalls: AtomicU64,
+    udp_mmsg_received_datagrams: AtomicU64,
+    udp_mmsg_send_syscalls: AtomicU64,
+    udp_mmsg_sent_datagrams: AtomicU64,
+    udp_mmsg_send_partial_syscalls: AtomicU64,
+    udp_mmsg_send_wouldblock_retries: AtomicU64,
+    udp_worker_receive_batches: [AtomicU64; UDP_WORKER_METRIC_SLOTS],
+    udp_worker_received_datagrams: [AtomicU64; UDP_WORKER_METRIC_SLOTS],
+    udp_worker_send_batches: [AtomicU64; UDP_WORKER_METRIC_SLOTS],
+    udp_worker_sent_datagrams: [AtomicU64; UDP_WORKER_METRIC_SLOTS],
     axfr_started: AtomicU64,
     axfr_succeeded: AtomicU64,
     axfr_failed: AtomicU64,
@@ -5989,6 +6097,57 @@ impl RuntimeMetrics {
         self.inner
             .udp_sent_datagrams
             .fetch_add(datagrams as u64, Ordering::Relaxed);
+    }
+
+    fn record_udp_mmsg_stats(&self, stats: std_udp_mmsg::StdUdpMmsgStats) {
+        if stats.receive_syscalls != 0 {
+            self.inner
+                .udp_mmsg_receive_syscalls
+                .fetch_add(stats.receive_syscalls, Ordering::Relaxed);
+        }
+        if stats.received_datagrams != 0 {
+            self.inner
+                .udp_mmsg_received_datagrams
+                .fetch_add(stats.received_datagrams, Ordering::Relaxed);
+        }
+        if stats.send_syscalls != 0 {
+            self.inner
+                .udp_mmsg_send_syscalls
+                .fetch_add(stats.send_syscalls, Ordering::Relaxed);
+        }
+        if stats.sent_datagrams != 0 {
+            self.inner
+                .udp_mmsg_sent_datagrams
+                .fetch_add(stats.sent_datagrams, Ordering::Relaxed);
+        }
+        if stats.send_partial_syscalls != 0 {
+            self.inner
+                .udp_mmsg_send_partial_syscalls
+                .fetch_add(stats.send_partial_syscalls, Ordering::Relaxed);
+        }
+        if stats.send_wouldblock_retries != 0 {
+            self.inner
+                .udp_mmsg_send_wouldblock_retries
+                .fetch_add(stats.send_wouldblock_retries, Ordering::Relaxed);
+        }
+    }
+
+    fn record_udp_worker_receive_batch(&self, worker_id: usize, datagrams: usize) {
+        if let Some(counter) = self.inner.udp_worker_receive_batches.get(worker_id) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(counter) = self.inner.udp_worker_received_datagrams.get(worker_id) {
+            counter.fetch_add(datagrams as u64, Ordering::Relaxed);
+        }
+    }
+
+    fn record_udp_worker_send_batch(&self, worker_id: usize, datagrams: usize) {
+        if let Some(counter) = self.inner.udp_worker_send_batches.get(worker_id) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(counter) = self.inner.udp_worker_sent_datagrams.get(worker_id) {
+            counter.fetch_add(datagrams as u64, Ordering::Relaxed);
+        }
     }
 
     fn record_notify_received(&self) {
@@ -12540,6 +12699,46 @@ mod tests {
 
         assert!(!body.contains("oxidedns_query_pipeline_duration_seconds"));
         assert!(!body.contains("oxidedns_response_cache_candidate_total"));
+    }
+
+    #[test]
+    fn udp_mmsg_and_worker_metrics_are_reported() {
+        let zones = ZoneStore::new();
+        let refresh_registry = ZoneRefreshRegistry::without_jitter(
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(3600),
+        );
+        let metrics = RuntimeMetrics::new();
+        metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
+            receive_syscalls: 3,
+            received_datagrams: 30,
+            send_syscalls: 4,
+            sent_datagrams: 28,
+            send_partial_syscalls: 1,
+            send_wouldblock_retries: 2,
+        });
+        metrics.record_udp_worker_receive_batch(1, 17);
+        metrics.record_udp_worker_send_batch(1, 16);
+
+        let body = metrics_body(
+            &zones,
+            &metrics,
+            &CatalogManager::default(),
+            &refresh_registry,
+            0,
+            false,
+        );
+
+        assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 3"));
+        assert!(body.contains("oxidedns_udp_mmsg_received_datagrams_total 30"));
+        assert!(body.contains("oxidedns_udp_mmsg_send_syscalls_total 4"));
+        assert!(body.contains("oxidedns_udp_mmsg_sent_datagrams_total 28"));
+        assert!(body.contains("oxidedns_udp_mmsg_send_partial_syscalls_total 1"));
+        assert!(body.contains("oxidedns_udp_mmsg_send_wouldblock_retries_total 2"));
+        assert!(body.contains("oxidedns_udp_worker_received_datagrams_total{worker=\"1\"} 17"));
+        assert!(body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"1\"} 16"));
+        assert!(!body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"2\"}"));
     }
 
     #[test]

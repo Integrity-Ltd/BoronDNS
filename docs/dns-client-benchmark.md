@@ -73,7 +73,16 @@ values such as `256` or `512`, but this is host and workload specific. Retained
 artifacts record `udp_batch_size`,
 `udp_receive_batches`, `udp_received_datagrams`, `udp_send_batches`, and
 `udp_sent_datagrams` so the result can be checked against actual listener
-batching rather than only client-side throughput.
+batching rather than only client-side throughput. Dedicated Linux runs also
+record `udp_mmsg_*` syscall counters plus per-worker active-slot and imbalance
+summary rows, which make it easier to distinguish syscall batching from
+`SO_REUSEPORT` distribution effects.
+
+To make local `SO_REUSEPORT` tests use more UDP 4-tuples, set
+`OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD` above `1`. The load client then
+opens that many connected UDP sockets per worker thread and round-robins sends
+across them. This is especially useful on loopback, where one client socket per
+thread can hash to fewer server workers than configured.
 
 To compare one standard UDP listener against multiple `SO_REUSEPORT` workers,
 run the same UDP profile with `OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS=1` and
@@ -89,6 +98,51 @@ For a reproducible local sweep across several UDP batch sizes, use:
 ```bash
 OXIDEDNS_UDP_BATCH_SWEEP_SIZES="1 8 32 64" \
 scripts/sweep-udp-batch-benchmarks.sh
+```
+
+For a broader local data-plane sweep across runtimes, worker counts, batch
+sizes, and optional affinity, use:
+
+```bash
+OXIDEDNS_UDP_RUNTIME_SWEEP_RUNTIMES="tokio dedicated" \
+OXIDEDNS_UDP_RUNTIME_SWEEP_WORKERS="1 4" \
+OXIDEDNS_UDP_RUNTIME_SWEEP_BATCH_SIZES="32 128 256 512" \
+OXIDEDNS_UDP_RUNTIME_SWEEP_CLIENT_SOCKETS_PER_THREAD="1 4" \
+OXIDEDNS_UDP_RUNTIME_SWEEP_AFFINITY_MODES="none auto" \
+scripts/sweep-udp-runtime-benchmarks.sh
+```
+
+The runtime sweep writes `summary.tsv` for the full matrix and `best.tsv` for
+the highest-throughput rows. Affinity mode `auto` is only applied to dedicated
+standard UDP workers and expands to CPU IDs `0..workers-1`. Client socket
+counts control UDP source-port diversity in the load generator.
+
+To retain Linux profiler evidence for a selected local profile, set
+`OXIDEDNS_BENCH_PERF_STAT=true` and optionally
+`OXIDEDNS_BENCH_PERF_RECORD=true`. `OXIDEDNS_BENCH_PERF_EVENTS` defaults to
+`cycles,instructions,branches,branch-misses`. The benchmark attaches `perf` to
+the OxideDNS server process for the client load window and retains
+`perf-stat.txt`, `perf.data`, `perf.script`, and, when Inferno tools are
+installed, `flamegraph.svg`. These captures are local engineering evidence and
+are still subject to the host kernel's `perf_event_paranoid` policy.
+
+On hosts where direct `perf -p` attach is blocked, install the narrow
+root-owned helper once:
+
+```bash
+scripts/install-oxidedns-perf-helper.sh
+```
+
+The installer uses one `pkexec` authorization, installs
+`/usr/local/libexec/oxidedns-perf-capture`, and adds a sudoers rule for the
+current user to run only that helper without a password. The helper validates
+that the profiled PID is owned by the invoking user and that output is written
+under a directory owned by that user. To use it in benchmark runs:
+
+```bash
+OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER=true \
+OXIDEDNS_BENCH_PERF_STAT=true \
+scripts/benchmark-dns-clients.sh
 ```
 
 The sweep wrapper retains one artifact per batch size under a shared

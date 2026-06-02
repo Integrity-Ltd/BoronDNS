@@ -13,6 +13,7 @@ transport="${OXIDEDNS_BENCH_TRANSPORT:-udp}"
 server_threads="${OXIDEDNS_BENCH_SERVER_THREADS:-4}"
 client_threads="${OXIDEDNS_BENCH_CLIENT_THREADS:-8}"
 client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
+udp_client_sockets_per_thread="${OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:-1}"
 udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
 udp_reuseport_workers="${OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
 udp_worker_cpu_affinity="${OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
@@ -25,6 +26,12 @@ requested_zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-t
 zone_image_serve_enabled="true"
 packet_capture_enabled="${OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED:-false}"
 packet_capture_count="${OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT:-256}"
+perf_stat_enabled="${OXIDEDNS_BENCH_PERF_STAT:-false}"
+perf_record_enabled="${OXIDEDNS_BENCH_PERF_RECORD:-false}"
+perf_frequency="${OXIDEDNS_BENCH_PERF_FREQUENCY:-99}"
+perf_events="${OXIDEDNS_BENCH_PERF_EVENTS:-cycles,instructions,branches,branch-misses}"
+perf_privileged_helper_enabled="${OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER:-false}"
+perf_helper_path="${OXIDEDNS_BENCH_PERF_HELPER_PATH:-/usr/local/libexec/oxidedns-perf-capture}"
 preflight_only="${OXIDEDNS_BENCH_PREFLIGHT_ONLY:-false}"
 trace_enabled="${OXIDEDNS_BENCH_TRACE_ENABLED:-false}"
 trace_file_override="${OXIDEDNS_BENCH_TRACE_FILE:-}"
@@ -119,6 +126,7 @@ for pair in \
     "OXIDEDNS_BENCH_SERVER_THREADS:$server_threads" \
     "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
     "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
+    "OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:$udp_client_sockets_per_thread" \
     "OXIDEDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
     "OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
     "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
@@ -182,6 +190,44 @@ true | false) ;;
     ;;
 esac
 require_positive_integer "OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT" "$packet_capture_count"
+case "$perf_stat_enabled" in
+true | false) ;;
+*)
+    printf 'OXIDEDNS_BENCH_PERF_STAT must be true or false, got %q\n' "$perf_stat_enabled" >&2
+    exit 64
+    ;;
+esac
+case "$perf_record_enabled" in
+true | false) ;;
+*)
+    printf 'OXIDEDNS_BENCH_PERF_RECORD must be true or false, got %q\n' "$perf_record_enabled" >&2
+    exit 64
+    ;;
+esac
+case "$perf_privileged_helper_enabled" in
+true | false) ;;
+*)
+    printf 'OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER must be true or false, got %q\n' "$perf_privileged_helper_enabled" >&2
+    exit 64
+    ;;
+esac
+require_positive_integer "OXIDEDNS_BENCH_PERF_FREQUENCY" "$perf_frequency"
+if [[ "$perf_stat_enabled" == true || "$perf_record_enabled" == true ]]; then
+    if [[ "$perf_privileged_helper_enabled" == true ]]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            printf 'privileged perf helper requested but sudo is not available in PATH\n' >&2
+            exit 64
+        fi
+        if [[ ! -x "$perf_helper_path" ]]; then
+            printf 'privileged perf helper requested but helper is not executable: %s\n' "$perf_helper_path" >&2
+            printf 'Install it with scripts/install-oxidedns-perf-helper.sh\n' >&2
+            exit 64
+        fi
+    elif ! command -v perf >/dev/null 2>&1; then
+        printf 'perf capture requested but perf is not available in PATH\n' >&2
+        exit 64
+    fi
+fi
 if [[ "$requested_zone_image_serve_enabled" != true ]]; then
     printf 'OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false was retired with the live snapshot-serving rollback path; ZoneImage serving is always enabled.\n' >&2
     exit 64
@@ -332,6 +378,7 @@ if [[ "$preflight_only" == true ]]; then
     printf 'listen_address=%s\n' "$listen_address"
     printf 'client_server=%s\n' "$client_server"
     printf 'client_bind=%s\n' "$client_bind"
+    printf 'udp_client_sockets_per_thread=%s\n' "$udp_client_sockets_per_thread"
     printf 'network_device=%s\n' "$network_device"
     printf 'require_non_loopback_device=%s\n' "$require_non_loopback_device"
     printf 'remote_client_ssh=%s\n' "${remote_client_ssh:-none}"
@@ -346,6 +393,12 @@ if [[ "$preflight_only" == true ]]; then
     printf 'zone_shape_metrics_enabled=%s\n' "$zone_shape_metrics_enabled"
     printf 'packet_capture_enabled=%s\n' "$packet_capture_enabled"
     printf 'packet_capture_count=%s\n' "$packet_capture_count"
+    printf 'perf_stat_enabled=%s\n' "$perf_stat_enabled"
+    printf 'perf_record_enabled=%s\n' "$perf_record_enabled"
+    printf 'perf_privileged_helper_enabled=%s\n' "$perf_privileged_helper_enabled"
+    printf 'perf_helper_path=%s\n' "$perf_helper_path"
+    printf 'perf_frequency=%s\n' "$perf_frequency"
+    printf 'perf_events=%s\n' "$perf_events"
     printf 'kernel_version=%s\n' "$kernel_version"
     printf 'rustc_version=%s\n' "$rustc_version"
     printf 'cargo_version=%s\n' "$cargo_version"
@@ -357,6 +410,14 @@ mkdir -p "$artifact_dir" "$workdir" "$repo_root/target/benchmark-tools"
 
 cleanup() {
     local status=$?
+    if [[ -n "${perf_stat_pid:-}" ]] && kill -0 "$perf_stat_pid" 2>/dev/null; then
+        kill "$perf_stat_pid" 2>/dev/null || true
+        wait "$perf_stat_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${perf_record_pid:-}" ]] && kill -0 "$perf_record_pid" 2>/dev/null; then
+        kill "$perf_record_pid" 2>/dev/null || true
+        wait "$perf_record_pid" 2>/dev/null || true
+    fi
     if [[ -n "${packet_capture_pid:-}" ]] && kill -0 "$packet_capture_pid" 2>/dev/null; then
         kill "$packet_capture_pid" 2>/dev/null || true
         wait "$packet_capture_pid" 2>/dev/null || true
@@ -675,6 +736,59 @@ finish_packet_capture() {
     } >>"$packet_capture_dir/packet-capture.env"
 }
 
+start_perf_capture() {
+    perf_stat_status="disabled"
+    perf_record_status="disabled"
+    if [[ "$perf_stat_enabled" == true ]]; then
+        perf_stat_status="started"
+        if [[ "$perf_privileged_helper_enabled" == true ]]; then
+            sudo -n "$perf_helper_path" stat \
+                --pid "$oxidedns_pid" \
+                --duration "$duration" \
+                --events "$perf_events" \
+                --output "$artifact_dir/perf-stat.txt" \
+                >"$artifact_dir/perf-stat.stdout" 2>"$artifact_dir/perf-stat.stderr" &
+        else
+            perf stat -e "$perf_events" -p "$oxidedns_pid" -o "$artifact_dir/perf-stat.txt" -- sleep "$duration" \
+                >"$artifact_dir/perf-stat.stdout" 2>"$artifact_dir/perf-stat.stderr" &
+        fi
+        perf_stat_pid=$!
+    fi
+    if [[ "$perf_record_enabled" == true ]]; then
+        perf_record_status="started"
+        if [[ "$perf_privileged_helper_enabled" == true ]]; then
+            sudo -n "$perf_helper_path" record \
+                --pid "$oxidedns_pid" \
+                --duration "$duration" \
+                --frequency "$perf_frequency" \
+                --output "$artifact_dir/perf.data" \
+                >"$artifact_dir/perf-record.stdout" 2>"$artifact_dir/perf-record.stderr" &
+        else
+            perf record -F "$perf_frequency" -g -p "$oxidedns_pid" -o "$artifact_dir/perf.data" -- sleep "$duration" \
+                >"$artifact_dir/perf-record.stdout" 2>"$artifact_dir/perf-record.stderr" &
+        fi
+        perf_record_pid=$!
+    fi
+}
+
+finish_perf_capture() {
+    if [[ -n "${perf_stat_pid:-}" ]]; then
+        wait "$perf_stat_pid" 2>/dev/null && perf_stat_status="captured" || perf_stat_status="failed"
+        perf_stat_pid=""
+    fi
+    if [[ -n "${perf_record_pid:-}" ]]; then
+        wait "$perf_record_pid" 2>/dev/null && perf_record_status="captured" || perf_record_status="failed"
+        perf_record_pid=""
+        if [[ "$perf_record_status" == captured && -s "$artifact_dir/perf.data" ]]; then
+            perf script -i "$artifact_dir/perf.data" >"$artifact_dir/perf.script" 2>"$artifact_dir/perf-script.stderr" || true
+            if command -v inferno-collapse-perf >/dev/null 2>&1 && command -v inferno-flamegraph >/dev/null 2>&1; then
+                inferno-collapse-perf "$artifact_dir/perf.script" >"$artifact_dir/perf.folded" 2>"$artifact_dir/inferno-collapse.stderr" || true
+                inferno-flamegraph "$artifact_dir/perf.folded" >"$artifact_dir/flamegraph.svg" 2>"$artifact_dir/inferno-flamegraph.stderr" || true
+            fi
+        fi
+    fi
+}
+
 if [[ -n "$trace_file_override" ]]; then
     trace_file="$artifact_dir/query-trace.tsv"
     cp "$trace_file_override" "$trace_file"
@@ -959,6 +1073,7 @@ transport=$transport
 server_threads=$server_threads
 client_threads=$client_threads
 client_window=$client_window
+udp_client_sockets_per_thread=$udp_client_sockets_per_thread
 udp_batch_size=$udp_batch_size
 udp_reuseport_workers=$udp_reuseport_workers
 udp_runtime=$udp_runtime
@@ -971,6 +1086,12 @@ hot_path_detail=$hot_path_detail
 zone_image_serve_enabled=$zone_image_serve_enabled
 packet_capture_enabled=$packet_capture_enabled
 packet_capture_count=$packet_capture_count
+perf_stat_enabled=$perf_stat_enabled
+perf_record_enabled=$perf_record_enabled
+perf_privileged_helper_enabled=$perf_privileged_helper_enabled
+perf_helper_path=$perf_helper_path
+perf_frequency=$perf_frequency
+perf_events=$perf_events
 listen_address=$listen_address
 client_server=$client_server
 client_bind=$client_bind
@@ -1054,6 +1175,7 @@ curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.j
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom"
 capture_network_snapshot before
 start_packet_capture
+start_perf_capture
 
 client_args=(
     --transport "$transport"
@@ -1061,6 +1183,7 @@ client_args=(
     --port "$dns_port"
     --bind "$client_bind"
     --threads "$client_threads"
+    --udp-sockets-per-thread "$udp_client_sockets_per_thread"
     --duration "$duration"
     --window "$client_window"
     --names "$records"
@@ -1099,6 +1222,7 @@ else
         --port "$dns_port"
         --bind "$client_bind"
         --threads "$client_threads"
+        --udp-sockets-per-thread "$udp_client_sockets_per_thread"
         --duration "$duration"
         --window "$client_window"
         --names "$records"
@@ -1128,6 +1252,7 @@ else
     ssh "$remote_client_ssh" "$remote_command" | tee "$client_log"
 fi
 printf 'remote_client_bin_sha256=%s\n' "$remote_client_bin_sha256" >>"$artifact_dir/run.env"
+finish_perf_capture
 finish_packet_capture
 if [[ -f "$packet_capture_dir/dns-summary.tsv" ]]; then
     packet_capture_dns_packets="$(awk -F'\t' '$1 == "dns_packets" { print $2; exit }' "$packet_capture_dir/dns-summary.tsv")"
@@ -1175,6 +1300,39 @@ udp_receive_batches="$(prom_metric_value oxidedns_udp_receive_batches_total)"
 udp_received_datagrams="$(prom_metric_value oxidedns_udp_received_datagrams_total)"
 udp_send_batches="$(prom_metric_value oxidedns_udp_send_batches_total)"
 udp_sent_datagrams="$(prom_metric_value oxidedns_udp_sent_datagrams_total)"
+udp_mmsg_receive_syscalls="$(prom_metric_value oxidedns_udp_mmsg_receive_syscalls_total)"
+udp_mmsg_received_datagrams="$(prom_metric_value oxidedns_udp_mmsg_received_datagrams_total)"
+udp_mmsg_send_syscalls="$(prom_metric_value oxidedns_udp_mmsg_send_syscalls_total)"
+udp_mmsg_sent_datagrams="$(prom_metric_value oxidedns_udp_mmsg_sent_datagrams_total)"
+udp_mmsg_send_partial_syscalls="$(prom_metric_value oxidedns_udp_mmsg_send_partial_syscalls_total)"
+udp_mmsg_send_wouldblock_retries="$(prom_metric_value oxidedns_udp_mmsg_send_wouldblock_retries_total)"
+worker_metric_summary() {
+    local metric="$1"
+    python3 - "$artifact_dir/metrics-after.prom" "$metric" <<'PY'
+import re
+import sys
+
+path, metric = sys.argv[1], sys.argv[2]
+pattern = re.compile(rf"^{re.escape(metric)}\{{worker=\"(\d+)\"\}}\s+([0-9.]+)")
+values = []
+with open(path, encoding="utf-8") as handle:
+    for line in handle:
+        match = pattern.match(line)
+        if match:
+            values.append(float(match.group(2)))
+if not values:
+    print("0\t0\t0\tnan")
+else:
+    low = min(values)
+    high = max(values)
+    ratio = "nan" if low == 0 else f"{high / low:.3f}"
+    print(f"{len(values)}\t{int(low)}\t{int(high)}\t{ratio}")
+PY
+}
+IFS=$'\t' read -r udp_worker_receive_slots udp_worker_received_datagrams_min udp_worker_received_datagrams_max udp_worker_received_datagrams_imbalance_ratio \
+    <<<"$(worker_metric_summary oxidedns_udp_worker_received_datagrams_total)"
+IFS=$'\t' read -r udp_worker_send_slots udp_worker_sent_datagrams_min udp_worker_sent_datagrams_max udp_worker_sent_datagrams_imbalance_ratio \
+    <<<"$(worker_metric_summary oxidedns_udp_worker_sent_datagrams_total)"
 zone_image_serve_hits="${zone_image_serve_hits:-unknown}"
 zone_image_serve_direct_hits="${zone_image_serve_direct_hits:-unknown}"
 zone_image_serve_semantic_hits="${zone_image_serve_semantic_hits:-unknown}"
@@ -1184,6 +1342,12 @@ udp_receive_batches="${udp_receive_batches:-unknown}"
 udp_received_datagrams="${udp_received_datagrams:-unknown}"
 udp_send_batches="${udp_send_batches:-unknown}"
 udp_sent_datagrams="${udp_sent_datagrams:-unknown}"
+udp_mmsg_receive_syscalls="${udp_mmsg_receive_syscalls:-0}"
+udp_mmsg_received_datagrams="${udp_mmsg_received_datagrams:-0}"
+udp_mmsg_send_syscalls="${udp_mmsg_send_syscalls:-0}"
+udp_mmsg_sent_datagrams="${udp_mmsg_sent_datagrams:-0}"
+udp_mmsg_send_partial_syscalls="${udp_mmsg_send_partial_syscalls:-0}"
+udp_mmsg_send_wouldblock_retries="${udp_mmsg_send_wouldblock_retries:-0}"
 
 cat >"$artifact_dir/benchmark-results.tsv" <<EOF
 metric	value	unit
@@ -1203,6 +1367,7 @@ axfr_records_served	${records_served:-unknown}	records
 server_threads	$server_threads	cpus
 client_threads	$client_threads	threads
 client_window	$client_window	queries_per_thread
+udp_client_sockets_per_thread	$udp_client_sockets_per_thread	sockets
 udp_batch_size	$udp_batch_size	datagrams
 udp_reuseport_workers	$udp_reuseport_workers	workers
 udp_runtime	$udp_runtime	mode
@@ -1211,6 +1376,20 @@ udp_receive_batches	$udp_receive_batches	batches
 udp_received_datagrams	$udp_received_datagrams	datagrams
 udp_send_batches	$udp_send_batches	batches
 udp_sent_datagrams	$udp_sent_datagrams	datagrams
+udp_mmsg_receive_syscalls	$udp_mmsg_receive_syscalls	syscalls
+udp_mmsg_received_datagrams	$udp_mmsg_received_datagrams	datagrams
+udp_mmsg_send_syscalls	$udp_mmsg_send_syscalls	syscalls
+udp_mmsg_sent_datagrams	$udp_mmsg_sent_datagrams	datagrams
+udp_mmsg_send_partial_syscalls	$udp_mmsg_send_partial_syscalls	syscalls
+udp_mmsg_send_wouldblock_retries	$udp_mmsg_send_wouldblock_retries	retries
+udp_worker_receive_slots	$udp_worker_receive_slots	workers
+udp_worker_received_datagrams_min	$udp_worker_received_datagrams_min	datagrams
+udp_worker_received_datagrams_max	$udp_worker_received_datagrams_max	datagrams
+udp_worker_received_datagrams_imbalance_ratio	$udp_worker_received_datagrams_imbalance_ratio	ratio
+udp_worker_send_slots	$udp_worker_send_slots	workers
+udp_worker_sent_datagrams_min	$udp_worker_sent_datagrams_min	datagrams
+udp_worker_sent_datagrams_max	$udp_worker_sent_datagrams_max	datagrams
+udp_worker_sent_datagrams_imbalance_ratio	$udp_worker_sent_datagrams_imbalance_ratio	ratio
 listen_address	$listen_address	address
 client_server	$client_server	address
 client_bind	$client_bind_summary	address
@@ -1247,6 +1426,17 @@ packet_capture_packets	$packet_capture_packets	packets
 packet_capture_dns_packets	$packet_capture_dns_packets	packets
 packet_capture_dns_query_packets	$packet_capture_dns_query_packets	packets
 packet_capture_dns_response_packets	$packet_capture_dns_response_packets	packets
+perf_stat_enabled	$perf_stat_enabled	boolean
+perf_stat_status	$perf_stat_status	status
+perf_stat_file	$([[ "$perf_stat_enabled" == true ]] && echo perf-stat.txt || echo none)	file
+perf_privileged_helper_enabled	$perf_privileged_helper_enabled	boolean
+perf_helper_path	$perf_helper_path	path
+perf_events	$perf_events	events
+perf_record_enabled	$perf_record_enabled	boolean
+perf_record_status	$perf_record_status	status
+perf_record_file	$([[ "$perf_record_enabled" == true ]] && echo perf.data || echo none)	file
+perf_script_file	$([[ "$perf_record_status" == captured && -s "$artifact_dir/perf.script" ]] && echo perf.script || echo none)	file
+flamegraph_file	$([[ -s "$artifact_dir/flamegraph.svg" ]] && echo flamegraph.svg || echo none)	file
 zone_image_serve_hits	$zone_image_serve_hits	queries
 zone_image_serve_direct_hits	$zone_image_serve_direct_hits	queries
 zone_image_serve_semantic_hits	$zone_image_serve_semantic_hits	queries
@@ -1263,8 +1453,9 @@ The run starts a synthetic TCP AXFR primary, loads \`$records\` A records into
 OxideDNS, pins OxideDNS to CPU affinity \`$server_affinity\` when \`taskset\` is
 available, then drives \`$transport\` direct-hit A queries against
 \`$client_server:$dns_port\` with UDP client bind setting
-\`$client_bind_summary\` and the checked-in \`tools/dns-load-client.rs\` client
-in \`client_mode=$client_mode\`.
+\`$client_bind_summary\`, UDP client sockets per thread
+\`$udp_client_sockets_per_thread\`, and the checked-in
+\`tools/dns-load-client.rs\` client in \`client_mode=$client_mode\`.
 TCP source address selection is left to the OS. Network device was recorded as
 \`$network_device\`; route, link, /proc, optional ethtool snapshots, and quick
 counter deltas are retained under \`network/\`. Query pipeline timing metrics
@@ -1284,11 +1475,14 @@ status \`$packet_capture_status\`, packet count \`$packet_capture_packets\`,
 DNS packets \`$packet_capture_dns_packets\`, DNS query packets
 \`$packet_capture_dns_query_packets\`, DNS response packets
 \`$packet_capture_dns_response_packets\`, file \`$packet_capture_file\`.
+Perf stat was configured as \`perf_stat_enabled=$perf_stat_enabled\` with status
+\`$perf_stat_status\`; perf record was configured as
+\`perf_record_enabled=$perf_record_enabled\` with status \`$perf_record_status\`.
 
 This is a local engineering benchmark, not the full SRS Reference
 Hardware/Profile acceptance campaign.
 EOF
 
 printf 'dns_client_benchmark_dir=%s\n' "$artifact_dir"
-printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_runtime=%s udp_batch_size=%s udp_reuseport_workers=%s udp_worker_cpu_affinity=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
-    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_runtime" "$udp_batch_size" "$udp_reuseport_workers" "${udp_worker_cpu_affinity:-none}" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"
+printf 'capability_summary transport=%s query_mode=%s trace_queries=%s zone_image_serve_enabled=%s udp_runtime=%s udp_batch_size=%s udp_reuseport_workers=%s udp_worker_cpu_affinity=%s udp_client_sockets_per_thread=%s listen_address=%s client_server=%s client_bind=%s network_device=%s require_non_loopback_device=%s network_rx_packets_delta=%s network_tx_packets_delta=%s server_threads=%s client_threads=%s records=%s responses_per_second=%s latency_us_p50=%s latency_us_p99=%s latency_us_p999=%s dropped=%s errors=%s\n' \
+    "$transport" "$query_mode" "$trace_queries" "$zone_image_serve_enabled" "$udp_runtime" "$udp_batch_size" "$udp_reuseport_workers" "${udp_worker_cpu_affinity:-none}" "$udp_client_sockets_per_thread" "$listen_address" "$client_server" "$client_bind_summary" "$network_device" "$require_non_loopback_device" "$network_rx_packets_delta" "$network_tx_packets_delta" "$server_threads" "$client_threads" "$records" "$responses_per_second" "$latency_us_p50" "$latency_us_p99" "$latency_us_p999" "$dropped" "$errors"

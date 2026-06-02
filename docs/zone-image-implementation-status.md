@@ -1169,6 +1169,22 @@ layout can be phased out.
   1.47M responses/s, all with zero drops/errors. Batch 1024 fell back to about
   1.19M responses/s, and a dedicated mmsg batch-512 affinity run measured about
   898k responses/s, so affinity remains evidence-gated.
+- [x] Add local data-plane tuning observability:
+  dedicated Linux UDP workers now export mmsg receive/send syscall counters,
+  mmsg datagram counters, partial-send counters, WouldBlock retry counters, and
+  labelled per-worker UDP batch/datagram counters. The DNS client benchmark
+  retains aggregate mmsg rows plus active-worker and worker-imbalance summary
+  rows in `benchmark-results.tsv`.
+- [x] Add local UDP runtime sweep automation:
+  `scripts/sweep-udp-runtime-benchmarks.sh` compares UDP runtime, reuseport
+  worker count, batch size, and optional dedicated-worker CPU affinity under
+  one retained query trace, then writes both full `summary.tsv` and sorted
+  `best.tsv` artifacts.
+- [x] Add optional privileged perf capture setup:
+  `scripts/install-oxidedns-perf-helper.sh` installs one root-owned helper for
+  benchmark `perf stat`/`perf record` runs on hosts where direct attach is
+  blocked by kernel perf policy. Benchmark runs opt into it with
+  `OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER=true`.
 - [ ] Decide whether AF_XDP is worth implementing for the server.
 
 ## Phase 8: Layout Tuning Experiments

@@ -4,8 +4,8 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ struct Config {
     port: u16,
     bind: String,
     threads: usize,
+    udp_sockets_per_thread: usize,
     duration: Duration,
     window: usize,
     names: usize,
@@ -137,7 +138,7 @@ fn main() {
             "transport={transport} ",
             "duration_seconds={elapsed:.3} ",
             "server={server} port={port} bind={bind} ",
-            "threads={threads} window={window} names={names} ",
+            "threads={threads} udp_sockets_per_thread={udp_sockets_per_thread} window={window} names={names} ",
             "zones={zones} big_zones={big_zones} big_names={big_names} small_names={small_names} randomize={randomize} ",
             "query_mode={query_mode} trace_queries={trace_queries} ",
             "sent={sent} received={received} errors={errors} dropped={dropped} ",
@@ -156,6 +157,7 @@ fn main() {
         port = config.port,
         bind = config.bind,
         threads = config.threads,
+        udp_sockets_per_thread = config.udp_sockets_per_thread,
         window = config.window,
         names = config.names,
         zones = config.zones,
@@ -188,17 +190,23 @@ fn run_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStat
 }
 
 fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
-    let socket = UdpSocket::bind(&config.bind).expect("bind UDP client socket");
-    socket
-        .connect((config.server.as_str(), config.port))
-        .expect("connect UDP client socket");
-    socket
-        .set_nonblocking(true)
-        .expect("set client socket nonblocking");
+    let sockets = (0..config.udp_sockets_per_thread)
+        .map(|_| {
+            let socket = UdpSocket::bind(&config.bind).expect("bind UDP client socket");
+            socket
+                .connect((config.server.as_str(), config.port))
+                .expect("connect UDP client socket");
+            socket
+                .set_nonblocking(true)
+                .expect("set client socket nonblocking");
+            socket
+        })
+        .collect::<Vec<_>>();
 
     let mut stats = WorkerStats::default();
     let mut qid = (worker_id as u16).wrapping_mul(997);
     let mut next_name = worker_id;
+    let mut next_socket = 0usize;
     let mut rng = XorShift64::new(worker_id as u64 + 0x9e3779b97f4a7c15);
     let mut sent_at: Vec<Option<PendingQuery>> = vec![None; 65536];
     let mut in_flight = 0usize;
@@ -211,7 +219,8 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                 continue;
             }
             let query = query_packet(qid, next_name, &config, &mut rng);
-            match socket.send(&query.bytes) {
+            let socket_index = next_socket % sockets.len();
+            match sockets[socket_index].send(&query.bytes) {
                 Ok(_) => {
                     sent_at[qid as usize] = Some(PendingQuery {
                         sent: Instant::now(),
@@ -222,6 +231,7 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
                     in_flight += 1;
                     qid = qid.wrapping_add(1);
                     next_name += config.threads;
+                    next_socket = next_socket.wrapping_add(1);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => {
@@ -232,27 +242,14 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
         }
 
         let mut received_any = false;
-        loop {
-            match socket.recv(&mut receive_buffer) {
-                Ok(len) => {
-                    received_any = true;
-                    if len < 12 {
-                        stats.errors += 1;
-                        continue;
-                    }
-                    handle_response(
-                        &receive_buffer[..len],
-                        &mut sent_at,
-                        &mut in_flight,
-                        &mut stats,
-                    );
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => {
-                    stats.errors += 1;
-                    break;
-                }
-            }
+        for socket in &sockets {
+            received_any |= drain_udp_socket(
+                socket,
+                &mut receive_buffer,
+                &mut sent_at,
+                &mut in_flight,
+                &mut stats,
+            );
         }
 
         expire_old(&mut sent_at, &mut in_flight, config.timeout);
@@ -263,26 +260,51 @@ fn run_udp_worker(worker_id: usize, config: Config, deadline: Instant) -> Worker
 
     let drain_until = Instant::now() + Duration::from_millis(500);
     while in_flight > 0 && Instant::now() < drain_until {
-        match socket.recv(&mut receive_buffer) {
-            Ok(len) if len >= 12 => {
-                handle_response(
-                    &receive_buffer[..len],
-                    &mut sent_at,
-                    &mut in_flight,
-                    &mut stats,
-                );
-            }
-            Ok(_) => stats.errors += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::yield_now(),
-            Err(_) => {
-                stats.errors += 1;
-                break;
-            }
+        let mut received_any = false;
+        for socket in &sockets {
+            received_any |= drain_udp_socket(
+                socket,
+                &mut receive_buffer,
+                &mut sent_at,
+                &mut in_flight,
+                &mut stats,
+            );
+        }
+        if !received_any {
+            thread::yield_now();
         }
         expire_old(&mut sent_at, &mut in_flight, config.timeout);
     }
 
     stats
+}
+
+fn drain_udp_socket(
+    socket: &UdpSocket,
+    receive_buffer: &mut [u8; 2048],
+    sent_at: &mut [Option<PendingQuery>],
+    in_flight: &mut usize,
+    stats: &mut WorkerStats,
+) -> bool {
+    let mut received_any = false;
+    loop {
+        match socket.recv(receive_buffer) {
+            Ok(len) => {
+                received_any = true;
+                if len < 12 {
+                    stats.errors += 1;
+                    continue;
+                }
+                handle_response(&receive_buffer[..len], sent_at, in_flight, stats);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => {
+                stats.errors += 1;
+                break;
+            }
+        }
+    }
+    received_any
 }
 
 fn run_tcp_worker(worker_id: usize, config: Config, deadline: Instant) -> WorkerStats {
@@ -633,6 +655,7 @@ fn parse_args() -> Result<Config, String> {
         port: 5300,
         bind: "127.0.0.1:0".to_owned(),
         threads: 8,
+        udp_sockets_per_thread: 1,
         duration: Duration::from_secs(10),
         window: 64,
         names: 10_000,
@@ -663,6 +686,9 @@ fn parse_args() -> Result<Config, String> {
             "--port" => config.port = parse_value("--port", &value()?)?,
             "--bind" => config.bind = value()?,
             "--threads" => config.threads = parse_value("--threads", &value()?)?,
+            "--udp-sockets-per-thread" => {
+                config.udp_sockets_per_thread = parse_value("--udp-sockets-per-thread", &value()?)?;
+            }
             "--duration" => {
                 let seconds: u64 = parse_value("--duration", &value()?)?;
                 config.duration = Duration::from_secs(seconds);
@@ -692,6 +718,9 @@ fn parse_args() -> Result<Config, String> {
     }
     if config.window == 0 {
         return Err("--window must be greater than zero".to_owned());
+    }
+    if config.udp_sockets_per_thread == 0 || config.udp_sockets_per_thread > 1024 {
+        return Err("--udp-sockets-per-thread must be between 1 and 1024".to_owned());
     }
     if config.names == 0 || config.names > 100_000_000 {
         return Err("--names must be between 1 and 100000000".to_owned());
@@ -795,7 +824,11 @@ fn canonical_trace_name(value: &str) -> Option<String> {
                 }
             })?
     };
-    if wire_len <= 255 { Some(name) } else { None }
+    if wire_len <= 255 {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 fn parse_rr_type(value: &str) -> Option<u16> {
@@ -875,6 +908,7 @@ fn usage() {
         "  --port <PORT>       DNS server UDP port, default 5300\n",
         "  --bind <ADDR:PORT>  UDP client source bind address, default 127.0.0.1:0\n",
         "  --threads <N>       client worker threads, default 8\n",
+        "  --udp-sockets-per-thread <N>  UDP source sockets per worker thread, default 1\n",
         "  --duration <SEC>    benchmark duration, default 10\n",
         "  --window <N>        outstanding queries per worker, default 64\n",
         "  --names <N>         host000000..hostNNNNNN names, default 10000\n",

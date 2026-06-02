@@ -606,7 +606,10 @@ affinity. `[limits].udp_worker_cpu_affinity` can request a Linux CPU id per
 dedicated worker. Defaults preserve one socket, Tokio runtime ownership, and no
 affinity. The benchmark harness records the runtime, worker count, and affinity
 settings so Tokio and dedicated profiles can be compared without changing the
-release default.
+release default. Dedicated Linux runs also expose mmsg syscall counters,
+partial-send counters, WouldBlock retry counters, and per-worker labelled
+datagram counters so local tuning can distinguish syscall batch depth from
+reuseport worker imbalance.
 
 On 2026-06-02, the local loopback profile with reduced hot-path metrics,
 `udp_batch_size=32`, four server threads, four client threads, and client
@@ -623,6 +626,17 @@ batch 512 about 1.47M responses/s, and batch 1024 fell back to about 1.19M
 responses/s. A batch-512 affinity run measured about 898k responses/s, so
 affinity remains host/runtime specific and evidence-gated. This is not physical
 NIC evidence.
+
+The local runtime sweep harness can now compare runtimes, worker counts, batch
+sizes, and affinity modes under one retained query trace. It records both
+`summary.tsv` and a sorted `best.tsv` so follow-up optimization work can start
+from retained evidence rather than hand-run profiles.
+
+For hosts that block direct `perf -p` attach under the default
+`perf_event_paranoid` policy, the benchmark can optionally use the installed
+`/usr/local/libexec/oxidedns-perf-capture` helper through non-interactive
+`sudo -n`. The helper is root-owned, installed by one `pkexec` setup step, and
+checks target PID ownership before running `perf stat` or `perf record`.
 
 ### io_uring Evaluation
 

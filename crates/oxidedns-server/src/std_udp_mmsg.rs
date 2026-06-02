@@ -13,6 +13,7 @@ const MAX_MMSG_BATCH: usize = 1024;
 
 pub(crate) struct StdUdpMmsg {
     capacity: usize,
+    stats: StdUdpMmsgStats,
     #[cfg(target_os = "linux")]
     names: Vec<libc::sockaddr_storage>,
     #[cfg(target_os = "linux")]
@@ -26,6 +27,7 @@ impl StdUdpMmsg {
         let capacity = batch_size.clamp(1, MAX_MMSG_BATCH);
         Self {
             capacity,
+            stats: StdUdpMmsgStats::default(),
             #[cfg(target_os = "linux")]
             names: zeroed_vec(capacity),
             #[cfg(target_os = "linux")]
@@ -33,6 +35,10 @@ impl StdUdpMmsg {
             #[cfg(target_os = "linux")]
             messages: zeroed_vec(capacity),
         }
+    }
+
+    pub(crate) fn take_stats(&mut self) -> StdUdpMmsgStats {
+        std::mem::take(&mut self.stats)
     }
 
     pub(crate) fn recv_batch(
@@ -140,6 +146,8 @@ impl StdUdpMmsg {
         }
 
         let received = result as usize;
+        self.stats.receive_syscalls += 1;
+        self.stats.received_datagrams += received as u64;
         for (index, packet) in inbound.iter_mut().take(received).enumerate() {
             packet.len = (self.messages[index].msg_len as usize).min(packet.buffer.len());
             let peer =
@@ -175,6 +183,11 @@ impl StdUdpMmsg {
                 )
             };
             if result > 0 {
+                self.stats.send_syscalls += 1;
+                self.stats.sent_datagrams += result as u64;
+                if (result as usize) < count {
+                    self.stats.send_partial_syscalls += 1;
+                }
                 sent += result as usize;
                 blocked_retries = 0;
                 continue;
@@ -182,6 +195,7 @@ impl StdUdpMmsg {
 
             let error = io::Error::last_os_error();
             if error.kind() == ErrorKind::WouldBlock {
+                self.stats.send_wouldblock_retries += 1;
                 blocked_retries += 1;
                 std::thread::yield_now();
                 continue;
@@ -222,6 +236,16 @@ impl StdUdpMmsg {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StdUdpMmsgStats {
+    pub(crate) receive_syscalls: u64,
+    pub(crate) received_datagrams: u64,
+    pub(crate) send_syscalls: u64,
+    pub(crate) sent_datagrams: u64,
+    pub(crate) send_partial_syscalls: u64,
+    pub(crate) send_wouldblock_retries: u64,
 }
 
 #[cfg(target_os = "linux")]
