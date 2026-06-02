@@ -137,7 +137,7 @@ impl StdUdpMmsg {
                 socket.as_raw_fd(),
                 self.messages.as_mut_ptr(),
                 count as libc::c_uint,
-                libc::MSG_DONTWAIT,
+                libc::MSG_DONTWAIT as _,
                 std::ptr::null_mut(),
             )
         };
@@ -179,7 +179,7 @@ impl StdUdpMmsg {
                     socket.as_raw_fd(),
                     self.messages.as_mut_ptr(),
                     count as libc::c_uint,
-                    libc::MSG_DONTWAIT,
+                    libc::MSG_DONTWAIT as _,
                 )
             };
             if result > 0 {
