@@ -16,6 +16,7 @@ runtime_files = sorted(
     for path in (repo_root / "crates").glob("*/src/**/*.rs")
     if "crates/oxide-gun/" not in path.relative_to(repo_root).as_posix()
     and "crates/oxide-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
+    and not path.relative_to(repo_root).as_posix().endswith("/src/tests.rs")
 )
 
 def runtime_text(path: Path) -> str:
@@ -39,10 +40,14 @@ audited_unsafe_adapter_paths = {
 }
 tool_unsafe_adapter_paths = current_unsafe_adapter_paths - audited_unsafe_adapter_paths
 expected_current_unsafe_adapters = {
+    Path("crates/oxidedns-server-ebpf/src/lib.rs"),
+    Path("crates/oxidedns-server/src/af_xdp.rs"),
     Path("crates/oxidedns-server/src/privilege.rs"),
     Path("crates/oxidedns-server/src/process_hardening.rs"),
     Path("crates/oxidedns-server/src/process_signals.rs"),
     Path("crates/oxidedns-server/src/resource_limits.rs"),
+    Path("crates/oxidedns-server/src/std_udp_mmsg.rs"),
+    Path("crates/oxidedns-server/src/std_udp_socket.rs"),
 }
 if audited_unsafe_adapter_paths != expected_current_unsafe_adapters:
     raise SystemExit(
@@ -90,7 +95,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             re.compile(r"\bOpenOptions\b"),
             re.compile(r"\bcreate_dir(?:_all)?\b"),
             re.compile(r"\bremove_(?:file|dir|dir_all)\b"),
-            re.compile(r"\brename\b"),
+            re.compile(r"\b(?:std::fs::|tokio::fs::)?rename\s*\("),
             re.compile(r"\bset_permissions\b"),
         ],
         list(runtime_sources),
@@ -191,7 +196,22 @@ dns_text = runtime_sources[Path("crates/oxidedns-core/src/dns.rs")]
 axfr_text = runtime_sources[Path("crates/oxidedns-core/src/axfr.rs")]
 catalog_text = runtime_sources[Path("crates/oxidedns-core/src/catalog.rs")]
 config_text = runtime_sources[Path("crates/oxidedns-core/src/config.rs")]
-server_text = runtime_sources[Path("crates/oxidedns-server/src/lib.rs")]
+server_module_paths = [
+    Path("crates/oxidedns-server/src/build_info.rs"),
+    Path("crates/oxidedns-server/src/config_validation.rs"),
+    Path("crates/oxidedns-server/src/dns_cookie.rs"),
+    Path("crates/oxidedns-server/src/errors.rs"),
+    Path("crates/oxidedns-server/src/health_metrics.rs"),
+    Path("crates/oxidedns-server/src/lib.rs"),
+    Path("crates/oxidedns-server/src/rate_limit.rs"),
+    Path("crates/oxidedns-server/src/runtime_status.rs"),
+    Path("crates/oxidedns-server/src/shutdown.rs"),
+    Path("crates/oxidedns-server/src/tcp.rs"),
+    Path("crates/oxidedns-server/src/transfer.rs"),
+    Path("crates/oxidedns-server/src/transfer_plan.rs"),
+    Path("crates/oxidedns-server/src/udp.rs"),
+]
+server_text = "\n".join(runtime_sources[path] for path in server_module_paths)
 bench_text = (repo_root / "crates/oxidedns-core/examples/zone_image_bench.rs").read_text(
     encoding="utf-8"
 )

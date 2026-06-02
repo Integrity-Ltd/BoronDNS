@@ -144,6 +144,13 @@ For Engineering MVP, long-running steps may be marked as delegated when
 the runnable harness, artifact format, and release/operations handoff are
 present.
 
+For releases that change the `ZoneImage` data plane, packet composer, or UDP/TCP
+serving path, retain `scripts/zone-image-evidence-gate.sh` output as the
+ZoneImage release gate. A local loopback run is acceptable for Engineering
+release stabilization evidence; formal performance acceptance must use the
+Reference Hardware/Profile or a physical non-loopback run with
+`OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`.
+
 `scripts/capture-release-handoff.sh` is intentionally a setup artifact. It
 creates the release attachment map, scheduled CI/manual-run plan, signing
 runbook, release-note fill plan, external-operator acceptance template, and

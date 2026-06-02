@@ -176,6 +176,8 @@ REVIEW_BASELINE_SCOPE = {
         "paths": [
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/tcp.rs",
+            "crates/oxidedns-server/src/udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
@@ -193,6 +195,7 @@ REVIEW_BASELINE_SCOPE = {
             "crates/oxidedns-core/src/axfr.rs",
             "crates/oxidedns-core/src/tsig.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/transfer.rs",
         ],
         "evidence_paths": [
             "scripts/interop-bind-axfr.sh",
@@ -223,7 +226,7 @@ REVIEW_BASELINE_SCOPE = {
         ],
         "source_needles": [
             "Unknown transfer RDATA",
-            "augment_lookup_result_with_dnssec",
+            "nsec3_iterations_exceeded",
             "RecordType::Rrsig",
             "RecordType::Nsec3",
         ],
@@ -231,6 +234,7 @@ REVIEW_BASELINE_SCOPE = {
     "health metrics structured logs": {
         "paths": [
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/health_metrics.rs",
             "crates/oxidedns-cli/src/main.rs",
             "docs/health-metrics-interface.md",
         ],
@@ -380,6 +384,11 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/axfr.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/transfer.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-core/src/axfr.rs",
+            "crates/oxidedns-server/src/tests.rs",
         ],
         "evidence_paths": [
             "scripts/interop-bind-ixfr-refresh.sh",
@@ -403,6 +412,10 @@ FEATURES = {
             "Cargo.toml",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/transfer.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-server/src/tests.rs",
         ],
         "evidence_paths": [
             "scripts/interop-knot-xot-docker.sh",
@@ -415,7 +428,6 @@ FEATURES = {
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
             'features = ["ring", "tls12"]',
-            "refresh_xot_uses_configured_client_certificate",
         ],
         "test_needles": [
             "refresh_xot_handshake_failure_does_not_retry_cleartext",
@@ -437,7 +449,7 @@ FEATURES = {
         ],
         "srs_needles": ["ODS-FR-DNSSEC-001", "ODS-FR-DNSSEC-014"],
         "source_needles": [
-            "augment_lookup_result_with_dnssec",
+            "nsec3_iterations_exceeded",
             "nsec3_max_iterations",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
@@ -451,6 +463,12 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/health_metrics.rs",
+            "crates/oxidedns-server/src/rate_limit.rs",
+            "crates/oxidedns-server/src/udp.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-server/src/tests.rs",
         ],
         "evidence_paths": [
             "scripts/interop-rrl-udp.sh",
@@ -475,6 +493,11 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/udp.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-core/src/dns.rs",
+            "crates/oxidedns-server/src/tests.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dns-cookie-dig.sh",
@@ -496,6 +519,10 @@ FEATURES = {
             "crates/oxidedns-core/src/catalog.rs",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/health_metrics.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-server/src/tests.rs",
         ],
         "evidence_paths": [
             "docs/catalog-zone-rfc9432.md",
@@ -537,7 +564,7 @@ FEATURES = {
             "parse_edns_options",
             "EDNS_NSID_OPTION",
             "EDNS_TCP_KEEPALIVE_OPTION",
-            "append_edns_padding_if_it_fits",
+            "append_edns_padding",
             "metadata.udp_ceiling(options)",
             "response_opt_copies_query_do_bit_without_dnssec_augmentation",
         ],
@@ -581,6 +608,7 @@ FEATURES = {
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/health_metrics.rs",
         ],
         "evidence_paths": [
             "scripts/interop-chaos-queries.sh",
@@ -660,6 +688,7 @@ SUPPORT_TOOLING = {
             "scripts/benchmark-large-catalog-zones.sh",
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
+            "crates/oxidedns-server/src/health_metrics.rs",
         ],
         "evidence_paths": [
             "docs/dns-client-benchmark.md",
@@ -851,11 +880,17 @@ def main() -> int:
     for feature, spec in FEATURES.items():
         aliases = spec["aliases"]
         paths = spec["paths"]
+        test_paths = spec.get("test_paths", paths)
         evidence_paths = spec["evidence_paths"]
         test_needles = spec["test_needles"]
         source = "\n".join(
             (ROOT / relative_path).read_text(encoding="utf-8")
             for relative_path in paths
+            if (ROOT / relative_path).exists()
+        )
+        test_source = "\n".join(
+            (ROOT / relative_path).read_text(encoding="utf-8")
+            for relative_path in test_paths
             if (ROOT / relative_path).exists()
         )
         if not any(alias in disposition for alias in aliases):
@@ -878,6 +913,14 @@ def main() -> int:
                 )
             if not (ROOT / relative_path).exists():
                 errors.append(f"missing evidence path for {feature}: {relative_path}")
+        for relative_path in test_paths:
+            if relative_path not in feature_scope:
+                errors.append(
+                    f"{FEATURE_SCOPE_PATH.relative_to(ROOT)} does not cite "
+                    f"{relative_path} representative tests for {feature}"
+                )
+            if not (ROOT / relative_path).exists():
+                errors.append(f"missing representative test path for {feature}: {relative_path}")
         for needle in spec["srs_needles"]:
             if needle not in srs_current:
                 errors.append(
@@ -891,7 +934,7 @@ def main() -> int:
                     f"needle {needle!r}"
                 )
         for needle in test_needles:
-            if needle not in source:
+            if needle not in test_source:
                 errors.append(
                     f"source cited for {feature} lacks representative test "
                     f"marker {needle!r}"

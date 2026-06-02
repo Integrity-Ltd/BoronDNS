@@ -742,6 +742,7 @@ start_perf_capture() {
     if [[ "$perf_stat_enabled" == true ]]; then
         perf_stat_status="started"
         if [[ "$perf_privileged_helper_enabled" == true ]]; then
+            # shellcheck disable=SC2024 # stdout/stderr artifacts are intentionally owned by the invoking user.
             sudo -n "$perf_helper_path" stat \
                 --pid "$oxidedns_pid" \
                 --duration "$duration" \
@@ -757,6 +758,7 @@ start_perf_capture() {
     if [[ "$perf_record_enabled" == true ]]; then
         perf_record_status="started"
         if [[ "$perf_privileged_helper_enabled" == true ]]; then
+            # shellcheck disable=SC2024 # stdout/stderr artifacts are intentionally owned by the invoking user.
             sudo -n "$perf_helper_path" record \
                 --pid "$oxidedns_pid" \
                 --duration "$duration" \

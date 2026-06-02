@@ -12,6 +12,8 @@ repo_root = Path(sys.argv[1])
 
 runtime_sources: dict[Path, str] = {}
 for path in sorted((repo_root / "crates").glob("*/src/**/*.rs")):
+    if path.relative_to(repo_root).as_posix().endswith("/src/tests.rs"):
+        continue
     text = path.read_text(encoding="utf-8")
     marker = "\n#[cfg(test)]\nmod tests"
     if marker in text:
@@ -30,6 +32,7 @@ for path in runtime_sources:
     print(f"  {path}")
 
 zone_text = runtime_sources.get(Path("crates/oxidedns-core/src/zone.rs"), "")
+zone_image_text = runtime_sources.get(Path("crates/oxidedns-core/src/zone_image.rs"), "")
 axfr_text = runtime_sources.get(Path("crates/oxidedns-core/src/axfr.rs"), "")
 dns_text = runtime_sources.get(Path("crates/oxidedns-core/src/dns.rs"), "")
 
@@ -38,9 +41,17 @@ required_fragments = [
     ("transfer DNSKEY RDATA validation only", "RecordType::Dnskey as u16 => validate_dnskey_rdata", axfr_text),
     ("transfer NSEC RDATA validation only", "RecordType::Nsec as u16 => validate_nsec_rdata", axfr_text),
     ("transfer NSEC3 RDATA validation only", "RecordType::Nsec3 as u16 => validate_nsec3_rdata", axfr_text),
-    ("DO-bit driven augmentation", "augment_lookup_result_with_dnssec", zone_text),
-    ("RRSIGs selected from stored RRsets", "add_rrsig_augmentations", zone_text),
-    ("DNSSEC records pushed from stored RRsets", "push_rrset_records", zone_text),
+    (
+        "DO-bit driven augmentation",
+        "image.augment_lookup_plan_with_dnssec_ascii_lowercase_hint",
+        dns_text,
+    ),
+    ("RRSIGs selected from stored RRsets", "add_rrsig_augmentations", zone_image_text),
+    (
+        "DNSSEC records pushed from stored RRsets",
+        "fn push_authority_rrset(",
+        zone_image_text,
+    ),
     ("non-DO suppression path", "is_dnssec_proof_or_signature_type", zone_text + dns_text),
 ]
 

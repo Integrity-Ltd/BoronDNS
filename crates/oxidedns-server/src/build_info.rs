@@ -1,0 +1,4 @@
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_COMMIT: &str = env!("OXIDEDNS_BUILD_COMMIT");
+pub const BUILD_RUST_VERSION: &str = env!("OXIDEDNS_BUILD_RUST_VERSION");
+pub const BUILD_TIMESTAMP: &str = env!("OXIDEDNS_BUILD_TIMESTAMP");

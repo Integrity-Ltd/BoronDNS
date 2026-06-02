@@ -35,7 +35,10 @@ mode="${1:-}"
 shift || true
 case "$mode" in
 stat | record) ;;
-*) usage; exit 64 ;;
+*)
+    usage
+    exit 64
+    ;;
 esac
 
 pid=""

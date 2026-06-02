@@ -33,6 +33,10 @@ const NO_AUTHORITY_SOA_INDEX: u16 = u16::MAX;
 const NO_NODE_LOW_RRTYPE_BITMAP: u16 = u16::MAX;
 type OwnerOverrideWire = InlineNameWire;
 type LowercaseLabelKey = SmallVec<[u8; LABEL_INLINE_CAPACITY]>;
+type Nsec3ParamHashCache = SmallVec<[(u16, Option<[u8; 20]>); 1]>;
+type CanonicalWireLabelRanges = SmallVec<[(usize, usize); 16]>;
+#[cfg(test)]
+type Nsec3DomainHashCache<'a> = SmallVec<[(Nsec3Params<'a>, Option<[u8; 20]>); 1]>;
 pub(crate) type ZoneImageRecordFixedFields = [u8; 8];
 
 // ODS-NFR-MAINT-004 principal functional requirement references for the
@@ -2385,9 +2389,7 @@ impl ZoneImage {
         max_cname_chain: usize,
         any_response: AnyResponseMode,
     ) -> Option<ZoneImageLookupPlan> {
-        let Some(wildcard_node) = self.find_child(closest_node, b"*") else {
-            return None;
-        };
+        let wildcard_node = self.find_child(closest_node, b"*")?;
 
         if qtype == 255 {
             if any_response == AnyResponseMode::Minimal {
@@ -2487,6 +2489,7 @@ impl ZoneImage {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_indirection_target<'a>(
         &'a self,
         target: &DomainName,
@@ -2511,11 +2514,7 @@ impl ZoneImage {
         match target_node {
             ImageTargetNode::OutOfZone | ImageTargetNode::OutOfZoneParentSuffix => {}
             ImageTargetNode::InZoneNode(target_node) => {
-                if state
-                    .visited_target_nodes
-                    .iter()
-                    .any(|visited| *visited == target_node)
-                {
+                if state.visited_target_nodes.contains(&target_node) {
                     warn!(
                         qname = %state.original_qname,
                         zone = %self.origin,
@@ -3137,7 +3136,7 @@ impl ZoneImage {
         name: NameLabelView<'_>,
         param_set_index: u16,
         param_set: &ImageNsec3ParamSet,
-        cache: &mut SmallVec<[(u16, Option<[u8; 20]>); 1]>,
+        cache: &mut Nsec3ParamHashCache,
     ) -> usize {
         if let Some(index) = cache
             .iter()
@@ -3157,7 +3156,7 @@ impl ZoneImage {
         wire_name: &[u8],
         param_set_index: u16,
         param_set: &ImageNsec3ParamSet,
-        cache: &mut SmallVec<[(u16, Option<[u8; 20]>); 1]>,
+        cache: &mut Nsec3ParamHashCache,
     ) -> usize {
         if let Some(index) = cache
             .iter()
@@ -5034,9 +5033,7 @@ fn push_canonical_order_wire_key(
     Ok(Some(BlobRange { offset, len }))
 }
 
-fn canonical_wire_label_ranges(
-    wire_name: &[u8],
-) -> Option<(SmallVec<[(usize, usize); 16]>, usize)> {
+fn canonical_wire_label_ranges(wire_name: &[u8]) -> Option<(CanonicalWireLabelRanges, usize)> {
     let mut labels = SmallVec::<[(usize, usize); 16]>::new();
     let mut offset = 0usize;
     let mut total_len = 1usize;
@@ -5294,12 +5291,12 @@ fn build_child_hashes(
     let mut hashes = Vec::new();
     let mut slots = Vec::new();
 
-    for node_index in 0..nodes.len() {
-        let node = nodes[node_index];
+    for node in nodes.iter_mut() {
         let edge_count = usize::from(node.edge_count);
         if edge_count < CHILD_HASH_FANOUT_THRESHOLD {
             continue;
         }
+        let first_edge = node.first_edge as usize;
 
         let slot_count = edge_count.saturating_mul(2).next_power_of_two();
         let first_slot = checked_u32(slots.len(), "child hash slots")?;
@@ -5308,7 +5305,7 @@ fn build_child_hashes(
         let mask = slot_count - 1;
 
         for edge_offset in 0..edge_count {
-            let edge = edges[node.first_edge as usize + edge_offset];
+            let edge = edges[first_edge + edge_offset];
             let label = blob_from_arena(labels, edge.label);
             let mut slot = child_label_hash(label) & mask;
             loop {
@@ -5322,7 +5319,7 @@ fn build_child_hashes(
         }
 
         let hash_index = checked_u32(hashes.len(), "child hashes")?;
-        nodes[node_index].child_hash = hash_index;
+        node.child_hash = hash_index;
         hashes.push(ImageChildHash {
             first_slot,
             slot_mask: slot_count_u32 - 1,
@@ -5495,7 +5492,7 @@ fn nsec3_next_hash_bytes(rdata: &[u8]) -> Option<[u8; 20]> {
 fn nsec3_hash_domain_cache_index<'a>(
     name: &DomainName,
     params: Nsec3Params<'a>,
-    cache: &mut SmallVec<[(Nsec3Params<'a>, Option<[u8; 20]>); 1]>,
+    cache: &mut Nsec3DomainHashCache<'a>,
 ) -> usize {
     nsec3_hash_label_view_cache_index(
         NameLabelView {
@@ -5512,7 +5509,7 @@ fn nsec3_hash_domain_cache_index<'a>(
 fn nsec3_hash_label_view_cache_index<'a>(
     name: NameLabelView<'_>,
     params: Nsec3Params<'a>,
-    cache: &mut SmallVec<[(Nsec3Params<'a>, Option<[u8; 20]>); 1]>,
+    cache: &mut Nsec3DomainHashCache<'a>,
 ) -> usize {
     if let Some(index) = cache
         .iter()

@@ -6,6 +6,39 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+## 0.1.4 - 2026-06-02
+
+### Changed
+
+- Split the large `oxidedns-server` runtime file into focused modules for UDP,
+  TCP, health/metrics, transfer I/O, transfer planning, rate limiting, DNS
+  Cookies, configuration validation, runtime status, shutdown, errors, and
+  tests without changing runtime ownership or packet-serving behavior.
+- Updated maintainability evidence to count standalone test modules separately
+  from production Rust and to track the current 34-module first-party workspace
+  map.
+- Registered the standard UDP socket/mmsg adapters and feature-gated server
+  AF_XDP/eBPF adapters in the unsafe-boundary and unsafe-prone dependency
+  registries.
+- Bumped the workspace and eBPF support crates to version `0.1.4`.
+
+### Fixed
+
+- Added a hard cap on DNS compression-pointer indirection chains in both name
+  parsing and skip-only record scanning to keep malformed packet handling
+  bounded.
+- Fixed benchmark script shellcheck hygiene for privileged perf capture while
+  keeping stdout/stderr artifacts owned by the invoking user.
+
+### Notes
+
+- This is the final intended local pre-NIC/XDP stabilization release. Physical
+  NIC AF_XDP/XDP performance evidence remains a separate lab-hardware phase.
+- Formal SRS acceptance evidence such as long fuzz campaigns, full interop
+  sweeps, reference-hardware benchmarks, soak, reproducible-build comparison,
+  signing, and external operator acceptance remains delegated to the later
+  release/operations gate.
+
 ## 0.1.3 - 2026-05-29
 
 ### Added

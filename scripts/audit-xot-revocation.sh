@@ -12,6 +12,8 @@ repo_root = Path(sys.argv[1])
 
 runtime_sources: dict[Path, str] = {}
 for path in sorted((repo_root / "crates").glob("*/src/**/*.rs")):
+    if path.relative_to(repo_root).as_posix().endswith("/src/tests.rs"):
+        continue
     text = path.read_text(encoding="utf-8")
     marker = "\n#[cfg(test)]\nmod tests"
     if marker in text:
@@ -29,7 +31,7 @@ print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")
 
-xot_source = runtime_sources.get(Path("crates/oxidedns-server/src/lib.rs"), "")
+xot_source = runtime_sources.get(Path("crates/oxidedns-server/src/transfer.rs"), "")
 required_fragments = [
     ("tokio-rustls client connector", "TlsConnector"),
     ("rustls client config", "ClientConfig"),

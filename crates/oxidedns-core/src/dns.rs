@@ -18,6 +18,8 @@ use crate::zone_image::zone_image_record_fixed_fields;
 
 pub(crate) type InlineNameWire = SmallVec<[u8; 64]>;
 
+const MAX_COMPRESSED_NAME_POINTERS: usize = 128;
+
 // ODS-NFR-MAINT-004 principal functional requirement references for DNS
 // message parsing, authoritative response construction, EDNS, DNSSEC serving,
 // and DNS Cookies:
@@ -283,6 +285,9 @@ impl DomainName {
                     };
                     let pointer = (((len & 0x3f) as usize) << 8) | next as usize;
                     if pointer >= packet.len() || visited_pointers.contains(&pointer) {
+                        return Err(DnsParseError::FormErr);
+                    }
+                    if visited_pointers.len() >= MAX_COMPRESSED_NAME_POINTERS {
                         return Err(DnsParseError::FormErr);
                     }
                     visited_pointers.push(pointer);
@@ -616,6 +621,9 @@ fn scan_compressed_name(
                 };
                 let pointer = (((len & 0x3f) as usize) << 8) | next as usize;
                 if pointer >= packet.len() || visited_pointers.contains(&pointer) {
+                    return Err(DnsParseError::FormErr);
+                }
+                if visited_pointers.len() >= MAX_COMPRESSED_NAME_POINTERS {
                     return Err(DnsParseError::FormErr);
                 }
                 visited_pointers.push(pointer);
@@ -1850,6 +1858,7 @@ fn build_zone_image_failure_response(
     response
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_zone_image_response(
     header: &Header,
     question: &Question,
@@ -1902,6 +1911,7 @@ fn build_zone_image_response(
     Some(response)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_truncated_zone_image_response(
     header: &Header,
     question: &Question,
@@ -5314,6 +5324,37 @@ mod tests {
             skip_compressed_name(packet, 0).expect_err("pointer loop must fail"),
             DnsParseError::FormErr
         );
+    }
+
+    #[test]
+    fn parse_rejects_excessive_compression_pointer_chain() {
+        let packet = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
+
+        assert_eq!(
+            DomainName::parse(&packet, 0).expect_err("long pointer chain must fail"),
+            DnsParseError::FormErr
+        );
+    }
+
+    #[test]
+    fn skip_compressed_name_rejects_excessive_pointer_chain() {
+        let packet = compressed_pointer_chain(MAX_COMPRESSED_NAME_POINTERS + 1);
+
+        assert_eq!(
+            skip_compressed_name(&packet, 0).expect_err("long pointer chain must fail"),
+            DnsParseError::FormErr
+        );
+    }
+
+    fn compressed_pointer_chain(pointer_count: usize) -> Vec<u8> {
+        let mut packet = Vec::with_capacity(pointer_count * 2 + 1);
+        for index in 0..pointer_count {
+            let target = ((index + 1) * 2) as u16;
+            packet.push(0xc0 | ((target >> 8) as u8 & 0x3f));
+            packet.push(target as u8);
+        }
+        packet.push(0);
+        packet
     }
 
     #[test]

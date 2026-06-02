@@ -975,18 +975,13 @@ impl MetricsConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum MetricsHotPathDetail {
     #[serde(rename = "full")]
+    #[default]
     Full,
     #[serde(rename = "reduced")]
     Reduced,
-}
-
-impl Default for MetricsHotPathDetail {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -1416,32 +1411,22 @@ impl Limits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum UdpRuntime {
     #[serde(rename = "tokio")]
+    #[default]
     Tokio,
     #[serde(rename = "dedicated")]
     Dedicated,
 }
 
-impl Default for UdpRuntime {
-    fn default() -> Self {
-        Self::Tokio
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum UdpBackend {
     #[serde(rename = "std")]
+    #[default]
     Std,
     #[serde(rename = "af_xdp")]
     AfXdp,
-}
-
-impl Default for UdpBackend {
-    fn default() -> Self {
-        Self::Std
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1552,9 +1537,10 @@ impl XdpConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum XdpMode {
     #[serde(rename = "skb")]
+    #[default]
     Skb,
     #[serde(rename = "drv")]
     Drv,
@@ -1562,26 +1548,15 @@ pub enum XdpMode {
     Hw,
 }
 
-impl Default for XdpMode {
-    fn default() -> Self {
-        Self::Skb
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum XdpZeroCopyMode {
     #[serde(rename = "auto")]
+    #[default]
     Auto,
     #[serde(rename = "require")]
     Require,
     #[serde(rename = "disable")]
     Disable,
-}
-
-impl Default for XdpZeroCopyMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

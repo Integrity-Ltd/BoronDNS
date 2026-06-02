@@ -15,11 +15,17 @@ trace_override="${OXIDEDNS_UDP_RUNTIME_SWEEP_TRACE_FILE:-}"
 
 case "$overwrite" in
 true | false) ;;
-*) printf 'OXIDEDNS_UDP_RUNTIME_SWEEP_OVERWRITE must be true or false, got %q\n' "$overwrite" >&2; exit 64 ;;
+*)
+    printf 'OXIDEDNS_UDP_RUNTIME_SWEEP_OVERWRITE must be true or false, got %q\n' "$overwrite" >&2
+    exit 64
+    ;;
 esac
 case "$preflight_only" in
 true | false) ;;
-*) printf 'OXIDEDNS_UDP_RUNTIME_SWEEP_PREFLIGHT_ONLY must be true or false, got %q\n' "$preflight_only" >&2; exit 64 ;;
+*)
+    printf 'OXIDEDNS_UDP_RUNTIME_SWEEP_PREFLIGHT_ONLY must be true or false, got %q\n' "$preflight_only" >&2
+    exit 64
+    ;;
 esac
 if [[ -n "$trace_override" && ! -f "$trace_override" ]]; then
     printf 'OXIDEDNS_UDP_RUNTIME_SWEEP_TRACE_FILE does not exist: %s\n' "$trace_override" >&2
@@ -38,7 +44,10 @@ fi
 for runtime in "${runtimes[@]}"; do
     case "$runtime" in
     tokio | dedicated) ;;
-    *) printf 'unsupported runtime in OXIDEDNS_UDP_RUNTIME_SWEEP_RUNTIMES: %q\n' "$runtime" >&2; exit 64 ;;
+    *)
+        printf 'unsupported runtime in OXIDEDNS_UDP_RUNTIME_SWEEP_RUNTIMES: %q\n' "$runtime" >&2
+        exit 64
+        ;;
     esac
 done
 for workers in "${workers_list[@]}"; do
@@ -62,7 +71,10 @@ done
 for mode in "${affinity_modes[@]}"; do
     case "$mode" in
     none | auto) ;;
-    *) printf 'unsupported affinity mode: %q\n' "$mode" >&2; exit 64 ;;
+    *)
+        printf 'unsupported affinity mode: %q\n' "$mode" >&2
+        exit 64
+        ;;
     esac
 done
 
@@ -153,97 +165,97 @@ for runtime in "${runtimes[@]}"; do
         for batch_size in "${batch_sizes[@]}"; do
             for client_sockets in "${client_sockets_list[@]}"; do
                 for affinity_mode in "${affinity_modes[@]}"; do
-                if [[ "$affinity_mode" == auto && "$runtime" != dedicated ]]; then
-                    continue
-                fi
-                if [[ "$affinity_mode" == auto && "$workers" == 1 ]]; then
-                    continue
-                fi
-                affinity_value=""
-                affinity_label="none"
-                if [[ "$affinity_mode" == auto ]]; then
-                    affinity_value="$(auto_affinity "$workers")"
-                    affinity_label="${affinity_value//,/-}"
-                fi
-                artifact_dir="$sweep_dir/${runtime}-workers${workers}-batch${batch_size}-client-sockets${client_sockets}-affinity-${affinity_label}"
-                run_env=(
-                    OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR="$artifact_dir"
-                    OXIDEDNS_BENCH_UDP_RUNTIME="$runtime"
-                    OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS="$workers"
-                    OXIDEDNS_BENCH_UDP_BATCH_SIZE="$batch_size"
-                    OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD="$client_sockets"
-                )
-                if [[ -n "$affinity_value" ]]; then
-                    run_env+=(OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY="$affinity_value")
-                else
-                    run_env+=(OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY="")
-                fi
-                if [[ -n "$retained_trace" ]]; then
-                    run_env+=(OXIDEDNS_BENCH_TRACE_FILE="$retained_trace")
-                else
-                    run_env+=(OXIDEDNS_BENCH_TRACE_ENABLED=true)
-                fi
-                env "${run_env[@]}" "$repo_root/scripts/benchmark-dns-clients.sh"
-                if [[ -z "$retained_trace" ]]; then
-                    retained_trace="$artifact_dir/query-trace.tsv"
-                fi
+                    if [[ "$affinity_mode" == auto && "$runtime" != dedicated ]]; then
+                        continue
+                    fi
+                    if [[ "$affinity_mode" == auto && "$workers" == 1 ]]; then
+                        continue
+                    fi
+                    affinity_value=""
+                    affinity_label="none"
+                    if [[ "$affinity_mode" == auto ]]; then
+                        affinity_value="$(auto_affinity "$workers")"
+                        affinity_label="${affinity_value//,/-}"
+                    fi
+                    artifact_dir="$sweep_dir/${runtime}-workers${workers}-batch${batch_size}-client-sockets${client_sockets}-affinity-${affinity_label}"
+                    run_env=(
+                        OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR="$artifact_dir"
+                        OXIDEDNS_BENCH_UDP_RUNTIME="$runtime"
+                        OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS="$workers"
+                        OXIDEDNS_BENCH_UDP_BATCH_SIZE="$batch_size"
+                        OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD="$client_sockets"
+                    )
+                    if [[ -n "$affinity_value" ]]; then
+                        run_env+=(OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY="$affinity_value")
+                    else
+                        run_env+=(OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY="")
+                    fi
+                    if [[ -n "$retained_trace" ]]; then
+                        run_env+=(OXIDEDNS_BENCH_TRACE_FILE="$retained_trace")
+                    else
+                        run_env+=(OXIDEDNS_BENCH_TRACE_ENABLED=true)
+                    fi
+                    env "${run_env[@]}" "$repo_root/scripts/benchmark-dns-clients.sh"
+                    if [[ -z "$retained_trace" ]]; then
+                        retained_trace="$artifact_dir/query-trace.tsv"
+                    fi
 
-                results="$artifact_dir/benchmark-results.tsv"
-                if [[ ! -f "$results" ]]; then
-                    printf 'benchmark did not write expected results file: %s\n' "$results" >&2
-                    exit 1
-                fi
-                udp_receive_batches="$(tsv_value "$results" udp_receive_batches)"
-                udp_received_datagrams="$(tsv_value "$results" udp_received_datagrams)"
-                udp_send_batches="$(tsv_value "$results" udp_send_batches)"
-                udp_sent_datagrams="$(tsv_value "$results" udp_sent_datagrams)"
-                udp_mmsg_receive_syscalls="$(tsv_value "$results" udp_mmsg_receive_syscalls)"
-                udp_mmsg_received_datagrams="$(tsv_value "$results" udp_mmsg_received_datagrams)"
-                udp_mmsg_send_syscalls="$(tsv_value "$results" udp_mmsg_send_syscalls)"
-                udp_mmsg_sent_datagrams="$(tsv_value "$results" udp_mmsg_sent_datagrams)"
-                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                    "$runtime" \
-                    "$workers" \
-                    "$batch_size" \
-                    "$client_sockets" \
-                    "${affinity_value:-none}" \
-                    "$artifact_dir" \
-                    "$(tsv_value "$results" responses_per_second)" \
-                    "$(tsv_value "$results" latency_us_p50)" \
-                    "$(tsv_value "$results" latency_us_p99)" \
-                    "$(tsv_value "$results" latency_us_p999)" \
-                    "$(tsv_value "$results" dropped)" \
-                    "$(tsv_value "$results" errors)" \
-                    "$udp_receive_batches" \
-                    "$udp_received_datagrams" \
-                    "$(per_unit "$udp_received_datagrams" "$udp_receive_batches")" \
-                    "$udp_send_batches" \
-                    "$udp_sent_datagrams" \
-                    "$(per_unit "$udp_sent_datagrams" "$udp_send_batches")" \
-                    "$udp_mmsg_receive_syscalls" \
-                    "$(per_unit "$udp_mmsg_received_datagrams" "$udp_mmsg_receive_syscalls")" \
-                    "$udp_mmsg_send_syscalls" \
-                    "$(per_unit "$udp_mmsg_sent_datagrams" "$udp_mmsg_send_syscalls")" \
-                    "$(tsv_value "$results" udp_mmsg_send_partial_syscalls)" \
-                    "$(tsv_value "$results" udp_mmsg_send_wouldblock_retries)" \
-                    "$(tsv_value "$results" udp_worker_receive_slots)" \
-                    "$(tsv_value "$results" udp_worker_received_datagrams_imbalance_ratio)" \
-                    "$(tsv_value "$results" udp_worker_send_slots)" \
-                    "$(tsv_value "$results" udp_worker_sent_datagrams_imbalance_ratio)" \
-                    "$(tsv_value "$results" network_device)" \
-                    "$(tsv_value "$results" network_rx_packets_delta)" \
-                    "$(tsv_value "$results" network_tx_packets_delta)" \
-                    "$(tsv_value "$results" network_rx_gbps)" \
-                    "$(tsv_value "$results" network_tx_gbps)" \
-                    "$(tsv_value "$results" network_sum_gbps)" \
-                    "$(tsv_value "$results" network_rx_gigabytes_per_second)" \
-                    "$(tsv_value "$results" network_tx_gigabytes_per_second)" \
-                    "$(tsv_value "$results" network_sum_gigabytes_per_second)" \
-                    "$(tsv_value "$results" network_rx_bytes_per_response)" \
-                    "$(tsv_value "$results" network_tx_bytes_per_response)" \
-                    "$(tsv_value "$results" network_sum_bytes_per_response)" \
-                    "$(tsv_value "$results" network_throughput_scope)" \
-                    >>"$summary_path"
+                    results="$artifact_dir/benchmark-results.tsv"
+                    if [[ ! -f "$results" ]]; then
+                        printf 'benchmark did not write expected results file: %s\n' "$results" >&2
+                        exit 1
+                    fi
+                    udp_receive_batches="$(tsv_value "$results" udp_receive_batches)"
+                    udp_received_datagrams="$(tsv_value "$results" udp_received_datagrams)"
+                    udp_send_batches="$(tsv_value "$results" udp_send_batches)"
+                    udp_sent_datagrams="$(tsv_value "$results" udp_sent_datagrams)"
+                    udp_mmsg_receive_syscalls="$(tsv_value "$results" udp_mmsg_receive_syscalls)"
+                    udp_mmsg_received_datagrams="$(tsv_value "$results" udp_mmsg_received_datagrams)"
+                    udp_mmsg_send_syscalls="$(tsv_value "$results" udp_mmsg_send_syscalls)"
+                    udp_mmsg_sent_datagrams="$(tsv_value "$results" udp_mmsg_sent_datagrams)"
+                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                        "$runtime" \
+                        "$workers" \
+                        "$batch_size" \
+                        "$client_sockets" \
+                        "${affinity_value:-none}" \
+                        "$artifact_dir" \
+                        "$(tsv_value "$results" responses_per_second)" \
+                        "$(tsv_value "$results" latency_us_p50)" \
+                        "$(tsv_value "$results" latency_us_p99)" \
+                        "$(tsv_value "$results" latency_us_p999)" \
+                        "$(tsv_value "$results" dropped)" \
+                        "$(tsv_value "$results" errors)" \
+                        "$udp_receive_batches" \
+                        "$udp_received_datagrams" \
+                        "$(per_unit "$udp_received_datagrams" "$udp_receive_batches")" \
+                        "$udp_send_batches" \
+                        "$udp_sent_datagrams" \
+                        "$(per_unit "$udp_sent_datagrams" "$udp_send_batches")" \
+                        "$udp_mmsg_receive_syscalls" \
+                        "$(per_unit "$udp_mmsg_received_datagrams" "$udp_mmsg_receive_syscalls")" \
+                        "$udp_mmsg_send_syscalls" \
+                        "$(per_unit "$udp_mmsg_sent_datagrams" "$udp_mmsg_send_syscalls")" \
+                        "$(tsv_value "$results" udp_mmsg_send_partial_syscalls)" \
+                        "$(tsv_value "$results" udp_mmsg_send_wouldblock_retries)" \
+                        "$(tsv_value "$results" udp_worker_receive_slots)" \
+                        "$(tsv_value "$results" udp_worker_received_datagrams_imbalance_ratio)" \
+                        "$(tsv_value "$results" udp_worker_send_slots)" \
+                        "$(tsv_value "$results" udp_worker_sent_datagrams_imbalance_ratio)" \
+                        "$(tsv_value "$results" network_device)" \
+                        "$(tsv_value "$results" network_rx_packets_delta)" \
+                        "$(tsv_value "$results" network_tx_packets_delta)" \
+                        "$(tsv_value "$results" network_rx_gbps)" \
+                        "$(tsv_value "$results" network_tx_gbps)" \
+                        "$(tsv_value "$results" network_sum_gbps)" \
+                        "$(tsv_value "$results" network_rx_gigabytes_per_second)" \
+                        "$(tsv_value "$results" network_tx_gigabytes_per_second)" \
+                        "$(tsv_value "$results" network_sum_gigabytes_per_second)" \
+                        "$(tsv_value "$results" network_rx_bytes_per_response)" \
+                        "$(tsv_value "$results" network_tx_bytes_per_response)" \
+                        "$(tsv_value "$results" network_sum_bytes_per_response)" \
+                        "$(tsv_value "$results" network_throughput_scope)" \
+                        >>"$summary_path"
                 done
             done
         done

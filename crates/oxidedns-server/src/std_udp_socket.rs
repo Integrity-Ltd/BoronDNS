@@ -45,11 +45,10 @@ fn bind_std(addr: SocketAddr, reuseport: bool) -> io::Result<std::net::UdpSocket
         close_on_error(fd);
         return Err(error);
     }
-    if reuseport {
-        if let Err(error) = set_socket_bool(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, true) {
-            close_on_error(fd);
-            return Err(error);
-        }
+    if reuseport && let Err(error) = set_socket_bool(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, true)
+    {
+        close_on_error(fd);
+        return Err(error);
     }
     if let Err(error) = bind_socket_addr(fd, addr) {
         close_on_error(fd);

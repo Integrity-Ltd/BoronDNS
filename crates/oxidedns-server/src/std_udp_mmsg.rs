@@ -206,6 +206,7 @@ impl StdUdpMmsg {
     }
 
     #[cfg(target_os = "linux")]
+    #[allow(clippy::infallible_destructuring_match)]
     fn prepare_send_messages(&mut self, outbound: &[UdpOutbound]) -> io::Result<()> {
         for (index, packet) in outbound.iter().enumerate() {
             let peer = match packet.target {

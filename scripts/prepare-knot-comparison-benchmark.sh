@@ -28,7 +28,10 @@ shift || true
 
 case "$mode" in
 querydb | trace | stage-knot-primary | normalize-oxidedns | normalize-kxdpgun) ;;
-*) usage; exit 64 ;;
+*)
+    usage
+    exit 64
+    ;;
 esac
 
 zone_file=""

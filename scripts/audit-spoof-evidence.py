@@ -13,7 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKS = [
     (
         "ODS-FR-SPOOF-001",
-        REPO_ROOT / "crates/oxidedns-server/src/lib.rs",
+        [
+            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
+            REPO_ROOT / "crates/oxidedns-server/src/tests.rs",
+        ],
         [
             "fn transfer_query_id() -> Result<u16, TransferError>",
             "getrandom::fill(&mut bytes)",
@@ -23,7 +26,10 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-002",
-        REPO_ROOT / "crates/oxidedns-server/src/lib.rs",
+        [
+            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
+            REPO_ROOT / "crates/oxidedns-server/src/tests.rs",
+        ],
         [
             "UdpSocket::bind(outbound_udp_bind_addr(primary, transfer_source))",
             '"0.0.0.0:0"',
@@ -35,7 +41,10 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-003..004",
-        REPO_ROOT / "crates/oxidedns-server/src/lib.rs",
+        [
+            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
+            REPO_ROOT / "crates/oxidedns-server/src/tests.rs",
+        ],
         [
             ".connect(primary)",
             "async fn poll_soa_from_primary_ignores_udp_packet_from_unconnected_peer()",
@@ -44,7 +53,7 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-005",
-        REPO_ROOT / "crates/oxidedns-core/src/axfr.rs",
+        [REPO_ROOT / "crates/oxidedns-core/src/axfr.rs"],
         [
             "if header.id != qid",
             "fn rejects_ixfr_response_with_mismatched_qid()",
@@ -54,7 +63,7 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-006",
-        REPO_ROOT / "crates/oxidedns-core/src/axfr.rs",
+        [REPO_ROOT / "crates/oxidedns-core/src/axfr.rs"],
         [
             "fn validate_response_question(",
             "qname.canonical_key() != zone_apex.canonical_key()",
@@ -65,7 +74,10 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-007",
-        REPO_ROOT / "crates/oxidedns-server/src/lib.rs",
+        [
+            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
+            REPO_ROOT / "crates/oxidedns-server/src/tests.rs",
+        ],
         [
             "async fn poll_soa_from_primary_records_warning_evidence_for_malformed_response()",
             '"SOA poll response rejected"',
@@ -80,15 +92,15 @@ def main() -> int:
     print("spoof_evidence_audit=started")
     failures: list[str] = []
 
-    for requirement, path, fragments in CHECKS:
-        source = path.read_text(encoding="utf-8")
+    for requirement, paths, fragments in CHECKS:
+        source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
         missing = [fragment for fragment in fragments if fragment not in source]
-        rel_path = path.relative_to(REPO_ROOT)
+        rel_paths = ";".join(str(path.relative_to(REPO_ROOT)) for path in paths)
         if missing:
             for fragment in missing:
-                failures.append(f"{requirement}: missing {fragment!r} in {rel_path}")
+                failures.append(f"{requirement}: missing {fragment!r} in {rel_paths}")
             continue
-        print(f"{requirement}=present path={rel_path}")
+        print(f"{requirement}=present paths={rel_paths}")
 
     if failures:
         for failure in failures:
