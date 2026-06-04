@@ -25,7 +25,20 @@ Implemented behavior in the current Engineering MVP:
   `zones.<catalog-zone>`.
 - Unsupported catalog RRs and unsupported properties are ignored.
 - Member zones inherit the catalog zone transfer primaries, transfer transport,
-  TSIG key, NOTIFY source policy, transfer source binding, and transfer limits.
+  TSIG key, NOTIFY source policy, transfer source binding, and transfer limits
+  by default.
+- Operators can split catalog-transfer and member-transfer policy with
+  `catalog_primaries`/`catalog_transfer_primaries`, `catalog_tsig_key`,
+  `member_primaries`/`member_transfer_primaries`, and `member_tsig_key`. This
+  lets OxideDNS transfer the RFC 9432 catalog from a managed PowerDNS publisher
+  while transferring member zones from BIND, Knot, NSD, PowerDNS, or customer
+  primaries selected by the catalog group.
+- Operators can opt in to per-member transfer metadata with
+  `member_transfer_extensions = true`. OxideDNS then accepts BIND-compatible
+  `primaries.ext.<member-node>` A/AAAA records, a common
+  `primaries.ext.<member-node>` TXT TSIG key-name reference, and
+  OxideDNS-specific extension TXT records for transfer transport and NOTIFY
+  source policy.
 - Adding a member PTR schedules transfer of the new member zone.
 - Removing a member PTR removes catalog-managed in-memory service for that
   member zone.
@@ -44,14 +57,15 @@ Implemented behavior in the current Engineering MVP:
 
 Outside this Engineering MVP catalog slice:
 
-- Per-member custom transfer settings from catalog properties.
 - Catalog migration state beyond replacing the previous in-memory membership
   set for the configured catalog.
 - Persistent catalog or member-zone state across process restarts.
-- Primary-side catalog generation.
 - Optional product-specific member-name allow-list or deny-list policy. The
   default catalog profile follows RFC 9432 member-name semantics rather than
   silently rejecting IANA Special-Use names or wildcard labels.
+- Carrying plaintext TSIG secrets, XoT trust anchors, client certificates, or
+  client keys inside the catalog. TSIG secrets and TLS trust/client material
+  remain local static configuration.
 
 ## Configuration
 
@@ -77,6 +91,37 @@ apex or names below it.
 Catalog member zones are served on the DNS query interface after they transfer
 successfully. They do not need `[[zones]]` entries.
 
+Per-member transfer metadata is disabled by default. Enable it only for catalog
+profiles whose producer is allowed to choose member-zone transfer targets:
+
+```toml
+[[catalog_zones]]
+name = "catalog.example."
+catalog_primaries = ["192.0.2.10:53"]
+member_primaries = ["203.0.113.53:53"] # fallback if a member has no override
+catalog_tsig_key = "catalog-transfer-key."
+member_tsig_key = "fallback-member-key."
+member_transfer_extensions = true
+```
+
+With that switch enabled, a member node such as
+`a.zones.catalog.example.` can override the fallback member transfer policy
+with records like:
+
+```text
+a.zones.catalog.example. PTR member.example.
+primaries.ext.a.zones.catalog.example. A 198.51.100.53
+primaries.ext.a.zones.catalog.example. TXT "member-key."
+<extension-xfr-owner>.a.zones.catalog.example. TXT "transport=tcp;port=5300;mode=axfr_ixfr"
+<extension-notify-owner>.a.zones.catalog.example. TXT "source=198.51.100.54"
+```
+
+Malformed extension data rejects only the member transfer override. The member
+PTR remains an RFC 9432 catalog member, and OxideDNS falls back to static member
+policy for newly added members or retains the last valid plan for already
+managed members. Multiple distinct TSIG key-name TXT values for one member are
+treated as unsafe because OxideDNS uses one TSIG key per transferred zone.
+
 ## Operational Model
 
 On startup OxideDNS inserts configured catalog zones into the zone-state
@@ -98,9 +143,10 @@ the implemented schema keeps this as process-wide transfer policy under
 `[transfer]` because TOML reserves `[[zones]]` for the zone array itself.
 
 Configuration remains static for the catalog zone definitions themselves.
-Changing the set of configured catalogs, their primaries, TSIG references, or
-the `serve_catalog_zone` policy requires a process restart. The member-zone set
-inside a catalog is dynamic and follows successful catalog transfers.
+Changing the set of configured catalogs, their catalog/member primaries, TSIG
+references, or the `serve_catalog_zone` policy requires a process restart. The
+member-zone set inside a catalog is dynamic and follows successful catalog
+transfers.
 
 Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
 10,000 per `ODS-NFR-SEC-013`. If a catalog lists more member zones than the
@@ -134,11 +180,17 @@ a catalog member was discovered, transferred, and became ACTIVE.
 ## PowerDNS Primary Pattern
 
 For an internal PowerDNS plus PostgreSQL primary, publish one RFC 9432 catalog
-zone from PowerDNS and configure OxideDNS as a secondary for that catalog. Zone
-creation then becomes:
+zone from PowerDNS and configure OxideDNS as a secondary for that catalog. If
+PowerDNS is also the content primary, the legacy inherited `primaries`/`tsig_key`
+shape is enough. If PowerDNS is only the management/catalog publisher, configure
+the catalog with split transfer policy so catalog transfers point to PowerDNS
+and member transfers point to the content primary group.
+
+Zone creation then becomes:
 
 1. Create or update the real authoritative zone in PowerDNS.
-2. Add or remove the matching member PTR in the catalog zone.
+2. Add or remove the matching member PTR in the catalog zone for the relevant
+   transfer-policy group.
 3. Allow PowerDNS to notify OxideDNS for the catalog zone, or wait for the next
    SOA-driven catalog refresh.
 4. OxideDNS transfers the catalog, schedules member transfers, and begins

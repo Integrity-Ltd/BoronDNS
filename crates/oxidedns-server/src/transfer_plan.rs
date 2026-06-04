@@ -6,7 +6,8 @@ use std::{
 
 use oxidedns_core::{
     ServerConfig, axfr,
-    config::{CatalogZoneConfig, TransferPrimaryConfig, ZoneConfig},
+    catalog::{CatalogMemberTransfer, CatalogMemberTransport},
+    config::{CatalogZoneConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
     dns::DomainName,
     tsig::TsigKey,
 };
@@ -50,6 +51,8 @@ impl ZoneTransferPlan {
 #[derive(Debug, Clone)]
 pub(crate) struct TransferPlan {
     zones_by_key: Arc<Mutex<HashMap<String, ZoneTransferPlan>>>,
+    catalog_member_templates_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
+    tsig_keys_by_name: Arc<HashMap<String, Arc<TsigKey>>>,
 }
 
 impl TransferPlan {
@@ -74,6 +77,7 @@ impl TransferPlan {
             })
             .collect::<HashMap<_, _>>();
         let mut zones_by_key = HashMap::new();
+        let mut catalog_member_templates_by_key = HashMap::new();
         for zone in &config.zones {
             let plan = transfer_plan_from_zone_config(
                 zone,
@@ -100,11 +104,26 @@ impl TransferPlan {
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
-            zones_by_key.insert(plan.origin.canonical_key(), plan);
+            let catalog_key = plan.origin.canonical_key();
+            let member_template = transfer_plan_from_catalog_member_config(
+                catalog_zone,
+                &tsig_keys,
+                config.tsig.fudge_seconds,
+                config.limits.max_transfer_ingest_bytes,
+                axfr::TransferParseOptions {
+                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
+                },
+                &config.interfaces.transfer,
+                &primary_start_index,
+            )?;
+            zones_by_key.insert(catalog_key.clone(), plan);
+            catalog_member_templates_by_key.insert(catalog_key, member_template);
         }
 
         Ok(Self {
             zones_by_key: Arc::new(Mutex::new(zones_by_key)),
+            catalog_member_templates_by_key: Arc::new(catalog_member_templates_by_key),
+            tsig_keys_by_name: Arc::new(tsig_keys),
         })
     }
 
@@ -121,6 +140,89 @@ impl TransferPlan {
             .lock()
             .expect("transfer plan lock poisoned")
             .insert(plan.origin.canonical_key(), plan);
+    }
+
+    pub(crate) fn catalog_member_plan(
+        &self,
+        catalog_origin: &DomainName,
+        member_origin: DomainName,
+        transfer_override: Option<&CatalogMemberTransfer>,
+    ) -> Option<ZoneTransferPlan> {
+        let template = self
+            .catalog_member_templates_by_key
+            .get(&catalog_origin.canonical_key())
+            .map(|plan| plan.for_member_origin(member_origin))?;
+        if let Some(transfer_override) = transfer_override {
+            self.apply_catalog_member_override(template, transfer_override)
+        } else {
+            Some(template)
+        }
+    }
+
+    fn apply_catalog_member_override(
+        &self,
+        mut plan: ZoneTransferPlan,
+        transfer_override: &CatalogMemberTransfer,
+    ) -> Option<ZoneTransferPlan> {
+        if !transfer_override.primaries.is_empty() {
+            let transport = transfer_override
+                .xfr
+                .as_ref()
+                .and_then(|xfr| xfr.transport)
+                .unwrap_or(CatalogMemberTransport::Tcp);
+            let port = transfer_override
+                .xfr
+                .as_ref()
+                .and_then(|xfr| xfr.port)
+                .unwrap_or(match transport {
+                    CatalogMemberTransport::Tcp => 53,
+                    CatalogMemberTransport::Xot => 853,
+                });
+            let server_name = transfer_override
+                .xfr
+                .as_ref()
+                .and_then(|xfr| xfr.server_name.clone());
+            let xot_profile = if transport == CatalogMemberTransport::Xot {
+                Some(
+                    plan.primaries
+                        .iter()
+                        .find(|primary| primary.transport == TransferTransportConfig::Xot)?
+                        .clone(),
+                )
+            } else {
+                None
+            };
+            plan.primaries = transfer_override
+                .primaries
+                .iter()
+                .map(|primary| {
+                    let addr = std::net::SocketAddr::new(primary.addr, port);
+                    match transport {
+                        CatalogMemberTransport::Tcp => TransferPrimaryConfig::tcp(addr),
+                        CatalogMemberTransport::Xot => {
+                            let mut primary_config = xot_profile
+                                .clone()
+                                .expect("XoT profile checked before override construction");
+                            primary_config.addr = addr;
+                            if server_name.is_some() {
+                                primary_config.server_name = server_name.clone();
+                            }
+                            primary_config
+                        }
+                    }
+                })
+                .collect();
+        }
+
+        if let Some(tsig_key_name) = &transfer_override.tsig_key_name {
+            plan.tsig_key = Some(
+                self.tsig_keys_by_name
+                    .get(&tsig_key_name.canonical_key())?
+                    .clone(),
+            );
+        }
+
+        Some(plan)
     }
 
     pub(crate) fn remove(&self, origin: &DomainName) {
@@ -190,10 +292,38 @@ fn transfer_plan_from_catalog_zone_config(
     let zone = ZoneConfig {
         name: zone.name.clone(),
         class: zone.class.clone(),
-        primaries: zone.primaries.clone(),
-        transfer_primaries: zone.transfer_primaries.clone(),
+        primaries: Vec::new(),
+        transfer_primaries: zone.catalog_transfer_targets(),
         notify_sources: zone.notify_sources.clone(),
-        tsig_key: zone.tsig_key.clone(),
+        tsig_key: zone.catalog_tsig_key_name().map(str::to_owned),
+    };
+    transfer_plan_from_zone_config(
+        &zone,
+        tsig_keys,
+        tsig_fudge_seconds,
+        max_transfer_ingest_bytes,
+        parse_options,
+        transfer_sources,
+        primary_start_index,
+    )
+}
+
+fn transfer_plan_from_catalog_member_config(
+    zone: &CatalogZoneConfig,
+    tsig_keys: &HashMap<String, Arc<TsigKey>>,
+    tsig_fudge_seconds: u16,
+    max_transfer_ingest_bytes: u64,
+    parse_options: axfr::TransferParseOptions,
+    transfer_sources: &[SocketAddr],
+    primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
+) -> Result<ZoneTransferPlan, RuntimeError> {
+    let zone = ZoneConfig {
+        name: zone.name.clone(),
+        class: zone.class.clone(),
+        primaries: Vec::new(),
+        transfer_primaries: zone.member_transfer_targets(),
+        notify_sources: zone.notify_sources.clone(),
+        tsig_key: zone.member_tsig_key_name().map(str::to_owned),
     };
     transfer_plan_from_zone_config(
         &zone,

@@ -226,18 +226,31 @@ notify_sources = ["192.0.2.53"]
 
 #[[catalog_zones]]
 # RFC 9432 catalog zone transferred from a trusted primary. Member zones are
-# discovered from PTR records below zones.<catalog-zone> and inherit this
-# catalog's transfer primaries, TSIG key, NOTIFY source policy, and transfer
-# limits.
+# discovered from PTR records below zones.<catalog-zone>. By default, members
+# inherit this catalog's transfer primaries, TSIG key, NOTIFY source policy, and
+# transfer limits. Use catalog_* and member_* fields to transfer the catalog
+# from one managed primary while transferring members from another content
+# primary.
 #name = "catalog.example.test."
 #class = "IN"
 #primaries = ["192.0.2.53:53"]
 #notify_sources = ["192.0.2.53"]
 # Catalog transfers must be TSIG-authenticated.
 #tsig_key = "transfer-key."
+# Split-policy example:
+#catalog_primaries = ["192.0.2.10:53"]
+#member_primaries = ["198.51.100.53:53"]
+#catalog_tsig_key = "catalog-transfer-key."
+#member_tsig_key = "member-transfer-key."
 # Default: false. Transfer and process the catalog but do not serve the catalog
 # zone itself on the public DNS query interface.
 #serve_catalog_zone = false
+# Default: false. When true, accept optional per-member transfer metadata from
+# primaries.ext.<member>, _udns-xfr.<member>, and _udns-notify.<member> catalog
+# records. This carries addresses, ports, transport, server_name, TSIG key
+# names, and NOTIFY sources only; TSIG secrets and TLS trust material stay in
+# local static config.
+#member_transfer_extensions = false
 # Default: 10000. Cap catalog-derived member zones accepted from this catalog.
 #max_member_zones = 10000
 

@@ -113,7 +113,12 @@ impl ServerConfig {
             }
         }
         for catalog_zone in &mut redacted.catalog_zones {
-            for primary in &mut catalog_zone.transfer_primaries {
+            for primary in catalog_zone
+                .transfer_primaries
+                .iter_mut()
+                .chain(catalog_zone.catalog_transfer_primaries.iter_mut())
+                .chain(catalog_zone.member_transfer_primaries.iter_mut())
+            {
                 if primary.client_key_pem.is_some() {
                     primary.client_key_pem = Some("<redacted>".to_owned());
                 }
@@ -306,22 +311,22 @@ impl ServerConfig {
         }
         for catalog_zone in &self.catalog_zones {
             catalog_zone.validate()?;
-            if catalog_zone.tsig_key.is_none() {
+            if catalog_zone.catalog_tsig_key_name().is_none() {
                 return Err(ConfigError::Invalid(format!(
                     "catalog zone {} requires tsig_key because catalog-zone transfers must be TSIG-authenticated",
                     catalog_zone.name
                 )));
             }
-            if let Some(tsig_key) = &catalog_zone.tsig_key {
+            for (field, tsig_key) in catalog_zone.tsig_key_references() {
                 let key_name = DomainName::from_absolute_str(tsig_key).map_err(|_| {
                     ConfigError::Invalid(format!(
-                        "catalog zone {} references TSIG key {tsig_key}; TSIG key names must be absolute DNS names",
+                        "catalog zone {} references {field} {tsig_key}; TSIG key names must be absolute DNS names",
                         catalog_zone.name
                     ))
                 })?;
                 if !tsig_key_names.contains(&key_name.canonical_key()) {
                     return Err(ConfigError::Invalid(format!(
-                        "catalog zone {} references unknown TSIG key {tsig_key}",
+                        "catalog zone {} references unknown {field} {tsig_key}",
                         catalog_zone.name
                     )));
                 }
@@ -572,7 +577,7 @@ impl ServerConfig {
                     .map(|primary| (&zone.name, primary))
             })
             .chain(self.catalog_zones.iter().flat_map(|zone| {
-                zone.transfer_targets()
+                zone.all_transfer_targets()
                     .into_iter()
                     .map(|primary| (&zone.name, primary))
             }))
@@ -1652,16 +1657,66 @@ pub struct CatalogZoneConfig {
     #[serde(default)]
     pub transfer_primaries: Vec<TransferPrimaryConfig>,
     #[serde(default)]
+    pub catalog_primaries: Vec<SocketAddr>,
+    #[serde(default)]
+    pub catalog_transfer_primaries: Vec<TransferPrimaryConfig>,
+    #[serde(default)]
+    pub member_primaries: Vec<SocketAddr>,
+    #[serde(default)]
+    pub member_transfer_primaries: Vec<TransferPrimaryConfig>,
+    #[serde(default)]
     pub notify_sources: Vec<std::net::IpAddr>,
     pub tsig_key: Option<String>,
+    pub catalog_tsig_key: Option<String>,
+    pub member_tsig_key: Option<String>,
     #[serde(default)]
     pub serve_catalog_zone: bool,
+    #[serde(default)]
+    pub member_transfer_extensions: bool,
     #[serde(default = "default_catalog_max_member_zones")]
     pub max_member_zones: usize,
 }
 
 impl CatalogZoneConfig {
     pub fn transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        self.catalog_transfer_targets()
+    }
+
+    pub fn catalog_transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        if !self.catalog_transfer_primaries.is_empty() {
+            self.catalog_transfer_primaries.clone()
+        } else if !self.catalog_primaries.is_empty() {
+            self.catalog_primaries
+                .iter()
+                .copied()
+                .map(TransferPrimaryConfig::tcp)
+                .collect()
+        } else {
+            self.shared_transfer_targets()
+        }
+    }
+
+    pub fn member_transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        if !self.member_transfer_primaries.is_empty() {
+            self.member_transfer_primaries.clone()
+        } else if !self.member_primaries.is_empty() {
+            self.member_primaries
+                .iter()
+                .copied()
+                .map(TransferPrimaryConfig::tcp)
+                .collect()
+        } else {
+            self.shared_transfer_targets()
+        }
+    }
+
+    pub fn all_transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
+        let mut targets = self.catalog_transfer_targets();
+        targets.extend(self.member_transfer_targets());
+        targets
+    }
+
+    fn shared_transfer_targets(&self) -> Vec<TransferPrimaryConfig> {
         if self.transfer_primaries.is_empty() {
             self.primaries
                 .iter()
@@ -1674,10 +1729,45 @@ impl CatalogZoneConfig {
     }
 
     pub fn transfer_target_addrs(&self) -> Vec<SocketAddr> {
-        self.transfer_targets()
+        self.catalog_transfer_target_addrs()
+    }
+
+    pub fn catalog_transfer_target_addrs(&self) -> Vec<SocketAddr> {
+        self.catalog_transfer_targets()
             .into_iter()
             .map(|target| target.addr)
             .collect()
+    }
+
+    pub fn member_transfer_target_addrs(&self) -> Vec<SocketAddr> {
+        self.member_transfer_targets()
+            .into_iter()
+            .map(|target| target.addr)
+            .collect()
+    }
+
+    pub fn catalog_tsig_key_name(&self) -> Option<&str> {
+        self.catalog_tsig_key
+            .as_deref()
+            .or(self.tsig_key.as_deref())
+    }
+
+    pub fn member_tsig_key_name(&self) -> Option<&str> {
+        self.member_tsig_key.as_deref().or(self.tsig_key.as_deref())
+    }
+
+    fn tsig_key_references(&self) -> Vec<(&'static str, &str)> {
+        let mut references = Vec::new();
+        if let Some(tsig_key) = self.tsig_key.as_deref() {
+            references.push(("tsig_key", tsig_key));
+        }
+        if let Some(tsig_key) = self.catalog_tsig_key.as_deref() {
+            references.push(("catalog_tsig_key", tsig_key));
+        }
+        if let Some(tsig_key) = self.member_tsig_key.as_deref() {
+            references.push(("member_tsig_key", tsig_key));
+        }
+        references
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -1687,22 +1777,69 @@ impl CatalogZoneConfig {
                 self.name
             )));
         }
-        ZoneConfig {
-            name: self.name.clone(),
-            class: self.class.clone(),
-            primaries: self.primaries.clone(),
-            transfer_primaries: self.transfer_primaries.clone(),
-            notify_sources: self.notify_sources.clone(),
-            tsig_key: self.tsig_key.clone(),
-        }
-        .validate()
-        .map_err(|error| match error {
-            ConfigError::Invalid(message) => {
-                ConfigError::Invalid(message.replace("zone ", "catalog zone "))
+        validate_catalog_transfer_group(
+            &self.name,
+            "catalog zone",
+            &self.primaries,
+            &self.transfer_primaries,
+        )?;
+        validate_catalog_transfer_group(
+            &self.name,
+            "catalog zone catalog",
+            &self.catalog_primaries,
+            &self.catalog_transfer_primaries,
+        )?;
+        validate_catalog_transfer_group(
+            &self.name,
+            "catalog zone member",
+            &self.member_primaries,
+            &self.member_transfer_primaries,
+        )?;
+        if !self.primaries.is_empty() || !self.transfer_primaries.is_empty() {
+            if !self.catalog_primaries.is_empty() || !self.catalog_transfer_primaries.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "catalog zone {} must not mix shared primaries/transfer_primaries with catalog_primaries/catalog_transfer_primaries",
+                    self.name
+                )));
             }
-            other => other,
-        })
+            if !self.member_primaries.is_empty() || !self.member_transfer_primaries.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "catalog zone {} must not mix shared primaries/transfer_primaries with member_primaries/member_transfer_primaries",
+                    self.name
+                )));
+            }
+        }
+        if self.catalog_transfer_targets().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} requires at least one catalog primary or shared primary",
+                self.name
+            )));
+        }
+        if self.member_transfer_targets().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} requires at least one member primary or shared primary",
+                self.name
+            )));
+        }
+        Ok(())
     }
+}
+
+fn validate_catalog_transfer_group(
+    zone_name: &str,
+    label: &str,
+    primaries: &[SocketAddr],
+    transfer_primaries: &[TransferPrimaryConfig],
+) -> Result<(), ConfigError> {
+    if !primaries.is_empty() && !transfer_primaries.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "{label} {zone_name} must not mix legacy primaries and transfer_primaries"
+        )));
+    }
+    for primary in transfer_primaries {
+        primary.validate(zone_name)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -2376,7 +2513,86 @@ mod tests {
             config.catalog_zones[0].transfer_target_addrs(),
             vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
         );
+        assert_eq!(
+            config.catalog_zones[0].member_transfer_target_addrs(),
+            vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
+        );
         assert_eq!(config.catalog_zones[0].max_member_zones, 42);
+    }
+
+    #[test]
+    fn parses_split_catalog_and_member_transfer_policy() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[tsig_keys]]
+                name = "member-key."
+                algorithm = "hmac-sha256"
+                secret = "bWVtYmVyLXNlY3JldA=="
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["198.51.100.53:53"]
+                notify_sources = ["198.51.100.54"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "member-key."
+                max_member_zones = 42
+            "#,
+        )
+        .expect("valid split catalog config");
+
+        let catalog = &config.catalog_zones[0];
+        assert!(catalog.primaries.is_empty());
+        assert_eq!(
+            catalog.catalog_transfer_target_addrs(),
+            vec![SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53))]
+        );
+        assert_eq!(
+            catalog.member_transfer_target_addrs(),
+            vec![SocketAddr::from((Ipv4Addr::new(198, 51, 100, 53), 53))]
+        );
+        assert_eq!(catalog.catalog_tsig_key_name(), Some("catalog-key."));
+        assert_eq!(catalog.member_tsig_key_name(), Some("member-key."));
+        assert_eq!(catalog.all_transfer_targets().len(), 2);
+    }
+
+    #[test]
+    fn rejects_split_catalog_policy_with_missing_member_key() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["198.51.100.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "missing-key."
+            "#,
+        )
+        .expect_err("missing member key is invalid");
+
+        assert!(
+            error
+                .to_string()
+                .contains("references unknown member_tsig_key missing-key.")
+        );
     }
 
     #[test]
@@ -4913,6 +5129,49 @@ mod tests {
         assert!(dumped.contains("secret = \"<redacted>\""));
         assert!(dumped.contains("nsid = \"dns-bud-1\""));
         assert!(!dumped.contains("c2VjcmV0LWtleQ=="));
+    }
+
+    #[test]
+    fn redacted_toml_dump_scrubs_split_catalog_xot_inline_keys() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "Y2F0YWxvZy1zZWNyZXQ="
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_tsig_key = "catalog-key."
+
+                [[catalog_zones.catalog_transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "catalog-primary.example"
+                trust_anchors = ["/etc/oxidedns/catalog-ca.pem"]
+                client_cert = "/etc/oxidedns/catalog-client.pem"
+                client_key_pem = "catalog-inline-private-key"
+
+                [[catalog_zones.member_transfer_primaries]]
+                addr = "198.51.100.53:853"
+                transport = "xot"
+                server_name = "member-primary.example"
+                trust_anchors = ["/etc/oxidedns/member-ca.pem"]
+                client_cert = "/etc/oxidedns/member-client.pem"
+                client_key_pem = "member-inline-private-key"
+            "#,
+        )
+        .expect("valid split catalog XoT config");
+
+        let dumped = config.to_redacted_toml().expect("redacted TOML dump");
+
+        assert_eq!(dumped.matches("client_key_pem = \"<redacted>\"").count(), 2);
+        assert!(!dumped.contains("catalog-inline-private-key"));
+        assert!(!dumped.contains("member-inline-private-key"));
+        assert!(!dumped.contains("Y2F0YWxvZy1zZWNyZXQ="));
     }
 
     #[test]

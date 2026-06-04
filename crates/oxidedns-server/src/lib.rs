@@ -36,7 +36,7 @@ use oxidedns_core::config::UdpRuntime;
 use oxidedns_core::{
     ServerConfig,
     axfr::{self, IxfrResponse},
-    catalog::{CatalogError, parse_catalog_members},
+    catalog::{CatalogError, CatalogMember, CatalogMemberTransfer, parse_catalog_members},
     config::{CatalogZoneConfig, TransferTransportConfig, ZoneConfig},
     dns::{DomainName, Header, Opcode, Question, Rcode},
     tsig::{
@@ -833,7 +833,7 @@ impl CatalogManager {
                 .collect::<HashSet<_>>();
             (old_member_keys, other_catalog_member_keys)
         };
-        let mut members_by_key = HashMap::new();
+        let mut members_by_key = HashMap::<String, CatalogMember>::new();
         for member in members {
             let member_key = member.zone.canonical_key();
             if self.catalogs_by_key.contains_key(&member_key)
@@ -848,11 +848,11 @@ impl CatalogManager {
                 );
                 continue;
             }
-            members_by_key.insert(member_key, member.zone);
+            members_by_key.insert(member_key, member);
         }
         let new_member_keys = members_by_key.keys().cloned().collect::<HashSet<_>>();
 
-        let Some(catalog_plan) = transfer_plan.get(&catalog.origin) else {
+        if transfer_plan.get(&catalog.origin).is_none() {
             warn!(
                 category = "transfer",
                 event = "catalog_without_transfer_plan",
@@ -860,7 +860,7 @@ impl CatalogManager {
                 "catalog zone has no transfer plan"
             );
             return;
-        };
+        }
 
         let mut added = new_member_keys
             .difference(&old_member_keys)
@@ -868,9 +868,10 @@ impl CatalogManager {
             .collect::<Vec<_>>();
         added.sort();
         for member_key in added {
-            let Some(member_origin) = members_by_key.get(&member_key).cloned() else {
+            let Some(member) = members_by_key.get(&member_key) else {
                 continue;
             };
+            let member_origin = member.zone.clone();
             if self.static_zone_keys.contains(&member_key) {
                 error!(
                     category = "transfer",
@@ -881,8 +882,31 @@ impl CatalogManager {
                 );
                 continue;
             }
-            transfer_plan.insert(catalog_plan.for_member_origin(member_origin.clone()));
-            notify_authority.add_zone_from_catalog(&member_origin, &catalog.config);
+            let transfer_override = catalog
+                .config
+                .member_transfer_extensions
+                .then_some(member.transfer.as_ref())
+                .flatten();
+            let Some(member_plan) = transfer_plan.catalog_member_plan(
+                &catalog.origin,
+                member_origin.clone(),
+                transfer_override,
+            ) else {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_without_valid_member_transfer_plan",
+                    catalog_zone = %catalog.origin,
+                    zone = %member_origin,
+                    "catalog zone has no valid member transfer plan"
+                );
+                continue;
+            };
+            transfer_plan.insert(member_plan);
+            notify_authority.add_zone_from_catalog(
+                &member_origin,
+                &catalog.config,
+                transfer_override,
+            );
             if !zones.contains_exact_zone_for_control(&member_origin) {
                 zones.insert_loading(member_origin.clone());
                 refresh_registry.record_loading_start(&member_origin);
@@ -922,6 +946,45 @@ impl CatalogManager {
                     "added catalog-managed member zone"
                 );
             }
+        }
+
+        let mut retained = new_member_keys
+            .intersection(&old_member_keys)
+            .cloned()
+            .collect::<Vec<_>>();
+        retained.sort();
+        for member_key in retained {
+            if self.static_zone_keys.contains(&member_key) {
+                continue;
+            }
+            let Some(member) = members_by_key.get(&member_key) else {
+                continue;
+            };
+            let transfer_override = catalog
+                .config
+                .member_transfer_extensions
+                .then_some(member.transfer.as_ref())
+                .flatten();
+            let Some(member_plan) = transfer_plan.catalog_member_plan(
+                &catalog.origin,
+                member.zone.clone(),
+                transfer_override,
+            ) else {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_transfer_override_rejected",
+                    catalog_zone = %catalog.origin,
+                    zone = %member.zone,
+                    "catalog member transfer override was not applied; retaining existing transfer plan"
+                );
+                continue;
+            };
+            transfer_plan.insert(member_plan);
+            notify_authority.add_zone_from_catalog(
+                &member.zone,
+                &catalog.config,
+                transfer_override,
+            );
         }
 
         let mut removed = old_member_keys
@@ -1572,7 +1635,7 @@ impl NotifyAuthority {
                 .expect("configuration validation rejects invalid catalog zone names");
             let sources = notify_sources_for_catalog_zone(catalog_zone);
             sources_by_zone.insert(origin.canonical_key(), sources);
-            if let Some(tsig_key) = &catalog_zone.tsig_key {
+            if let Some(tsig_key) = catalog_zone.catalog_tsig_key_name() {
                 let key_name = DomainName::from_absolute_str(tsig_key)
                     .expect("configuration validation rejects invalid TSIG key references");
                 let key = tsig_keys
@@ -1618,17 +1681,27 @@ impl NotifyAuthority {
             .cloned()
     }
 
-    fn add_zone_from_catalog(&self, origin: &DomainName, catalog: &CatalogZoneConfig) {
+    fn add_zone_from_catalog(
+        &self,
+        origin: &DomainName,
+        catalog: &CatalogZoneConfig,
+        transfer_override: Option<&CatalogMemberTransfer>,
+    ) {
         self.sources_by_zone
             .lock()
             .expect("notify authority source lock poisoned")
             .insert(
                 origin.canonical_key(),
-                notify_sources_for_catalog_zone(catalog),
+                notify_sources_for_catalog_member_zone(catalog, transfer_override),
             );
-        if let Some(tsig_key) = &catalog.tsig_key {
-            let key_name = DomainName::from_absolute_str(tsig_key)
-                .expect("configuration validation rejects invalid TSIG key references");
+        let tsig_key_name = transfer_override
+            .and_then(|transfer| transfer.tsig_key_name.as_ref().cloned())
+            .or_else(|| {
+                catalog
+                    .member_tsig_key_name()
+                    .and_then(|name| DomainName::from_absolute_str(name).ok())
+            });
+        if let Some(key_name) = tsig_key_name {
             if let Some(key) = self.tsig_keys_by_name.get(&key_name.canonical_key()) {
                 self.tsig_keys_by_zone
                     .lock()
@@ -1663,10 +1736,36 @@ fn notify_sources_for_zone(zone: &ZoneConfig) -> HashSet<IpAddr> {
 
 fn notify_sources_for_catalog_zone(zone: &CatalogZoneConfig) -> HashSet<IpAddr> {
     let mut sources = zone
-        .transfer_target_addrs()
+        .catalog_transfer_target_addrs()
         .into_iter()
         .map(|primary| primary.ip())
         .collect::<HashSet<_>>();
+    sources.extend(zone.notify_sources.iter().copied());
+    sources
+}
+
+fn notify_sources_for_catalog_member_zone(
+    zone: &CatalogZoneConfig,
+    transfer_override: Option<&CatalogMemberTransfer>,
+) -> HashSet<IpAddr> {
+    let mut sources = HashSet::new();
+    if let Some(transfer_override) = transfer_override
+        && !transfer_override.primaries.is_empty()
+    {
+        sources.extend(
+            transfer_override
+                .primaries
+                .iter()
+                .map(|primary| primary.addr),
+        );
+        sources.extend(transfer_override.notify_sources.iter().copied());
+    } else {
+        sources.extend(
+            zone.member_transfer_target_addrs()
+                .into_iter()
+                .map(|primary| primary.ip()),
+        );
+    }
     sources.extend(zone.notify_sources.iter().copied());
     sources
 }

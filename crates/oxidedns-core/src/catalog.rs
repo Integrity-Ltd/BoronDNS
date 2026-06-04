@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 use thiserror::Error;
 
@@ -17,6 +20,33 @@ use crate::{
 pub struct CatalogMember {
     pub member_node: DomainName,
     pub zone: DomainName,
+    pub transfer: Option<CatalogMemberTransfer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogMemberTransfer {
+    pub primaries: Vec<CatalogMemberPrimary>,
+    pub tsig_key_name: Option<DomainName>,
+    pub xfr: Option<CatalogMemberXfr>,
+    pub notify_sources: Vec<IpAddr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogMemberPrimary {
+    pub addr: IpAddr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogMemberTransport {
+    Tcp,
+    Xot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogMemberXfr {
+    pub transport: Option<CatalogMemberTransport>,
+    pub port: Option<u16>,
+    pub server_name: Option<String>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -100,11 +130,202 @@ pub fn parse_catalog_members(
         members.push(CatalogMember {
             member_node: owner.clone(),
             zone: member,
+            transfer: parse_member_transfer_extension(catalog_view, owner),
         });
     }
 
     members.sort_by_key(|member| member.zone.canonical_key());
     Ok(members)
+}
+
+fn parse_member_transfer_extension(
+    catalog_view: CatalogZoneView<'_>,
+    member_node: &DomainName,
+) -> Option<CatalogMemberTransfer> {
+    let primary_base = format!("primaries.ext.{}", member_node.canonical_key());
+    let xfr_owner = format!("_udns-xfr.{}", member_node.canonical_key());
+    let notify_owner = format!("_udns-notify.{}", member_node.canonical_key());
+    let mut primaries = Vec::new();
+    let mut key_names_by_owner = HashMap::<String, Vec<DomainName>>::new();
+    let mut xfr = None;
+    let mut notify_sources = Vec::new();
+    let mut malformed = false;
+
+    for rrset in catalog_view.rrsets() {
+        if rrset.class != 1 {
+            continue;
+        }
+        let owner_key = rrset.owner.canonical_key();
+        if owner_key == primary_base || owner_key.ends_with(&format!(".{primary_base}")) {
+            match rrset.rr_type {
+                value if value == RecordType::A as u16 => {
+                    for rdata in rrset.rdatas() {
+                        let Ok(bytes) = <[u8; 4]>::try_from(rdata.as_slice()) else {
+                            malformed = true;
+                            continue;
+                        };
+                        primaries.push(CatalogMemberPrimary {
+                            addr: IpAddr::V4(Ipv4Addr::from(bytes)),
+                        });
+                    }
+                }
+                value if value == RecordType::Aaaa as u16 => {
+                    for rdata in rrset.rdatas() {
+                        let Ok(bytes) = <[u8; 16]>::try_from(rdata.as_slice()) else {
+                            malformed = true;
+                            continue;
+                        };
+                        primaries.push(CatalogMemberPrimary {
+                            addr: IpAddr::V6(Ipv6Addr::from(bytes)),
+                        });
+                    }
+                }
+                value if value == RecordType::Txt as u16 => {
+                    for rdata in rrset.rdatas() {
+                        let Some(text) = parse_single_txt(rdata) else {
+                            malformed = true;
+                            continue;
+                        };
+                        let Ok(text) = std::str::from_utf8(text) else {
+                            malformed = true;
+                            continue;
+                        };
+                        let Ok(name) = DomainName::from_absolute_str(text.trim()) else {
+                            malformed = true;
+                            continue;
+                        };
+                        key_names_by_owner
+                            .entry(owner_key.clone())
+                            .or_default()
+                            .push(name);
+                    }
+                }
+                _ => {}
+            }
+        } else if owner_key == xfr_owner && rrset.rr_type == RecordType::Txt as u16 {
+            for rdata in rrset.rdatas() {
+                let Some(text) = parse_txt_utf8(rdata) else {
+                    malformed = true;
+                    continue;
+                };
+                let Some(parsed) = parse_udns_xfr_txt(text) else {
+                    malformed = true;
+                    continue;
+                };
+                xfr = Some(parsed);
+            }
+        } else if owner_key == notify_owner && rrset.rr_type == RecordType::Txt as u16 {
+            for rdata in rrset.rdatas() {
+                let Some(text) = parse_txt_utf8(rdata) else {
+                    malformed = true;
+                    continue;
+                };
+                let Some(mut sources) = parse_udns_notify_txt(text) else {
+                    malformed = true;
+                    continue;
+                };
+                notify_sources.append(&mut sources);
+            }
+        }
+    }
+
+    if malformed {
+        return None;
+    }
+
+    let mut key_names = key_names_by_owner
+        .into_values()
+        .flatten()
+        .collect::<Vec<_>>();
+    key_names.sort_by_key(|name| name.canonical_key());
+    key_names.dedup_by_key(|name| name.canonical_key());
+    let tsig_key_name = match key_names.as_slice() {
+        [] => None,
+        [name] => Some(name.clone()),
+        _ => return None,
+    };
+
+    notify_sources.sort();
+    notify_sources.dedup();
+
+    if primaries.is_empty() && tsig_key_name.is_none() && xfr.is_none() && notify_sources.is_empty()
+    {
+        None
+    } else {
+        Some(CatalogMemberTransfer {
+            primaries,
+            tsig_key_name,
+            xfr,
+            notify_sources,
+        })
+    }
+}
+
+fn parse_txt_utf8(rdata: &[u8]) -> Option<&str> {
+    std::str::from_utf8(parse_single_txt(rdata)?).ok()
+}
+
+fn parse_udns_xfr_txt(text: &str) -> Option<CatalogMemberXfr> {
+    let mut transport = None;
+    let mut port = None;
+    let mut server_name = None;
+    for (key, value) in parse_semicolon_fields(text) {
+        match key {
+            "transport" => match value {
+                "tcp" => transport = Some(CatalogMemberTransport::Tcp),
+                "xot" => transport = Some(CatalogMemberTransport::Xot),
+                _ => return None,
+            },
+            "port" => {
+                let parsed = value.parse::<u16>().ok()?;
+                if parsed == 0 {
+                    return None;
+                }
+                port = Some(parsed);
+            }
+            "server_name" => {
+                if value.is_empty() || value.contains(char::is_whitespace) {
+                    return None;
+                }
+                server_name = Some(value.to_owned());
+            }
+            "mode" => {}
+            "" => {}
+            _ => {}
+        }
+    }
+    Some(CatalogMemberXfr {
+        transport,
+        port,
+        server_name,
+    })
+}
+
+fn parse_udns_notify_txt(text: &str) -> Option<Vec<IpAddr>> {
+    let mut sources = Vec::new();
+    for (key, value) in parse_semicolon_fields(text) {
+        match key {
+            "source" | "sources" => {
+                for source in value.split(',') {
+                    let source = source.trim();
+                    if source.is_empty() {
+                        continue;
+                    }
+                    sources.push(source.parse::<IpAddr>().ok()?);
+                }
+            }
+            "" => {}
+            _ => {}
+        }
+    }
+    Some(sources)
+}
+
+fn parse_semicolon_fields(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.split(';').map(|field| {
+        let (key, value) = field.split_once('=').unwrap_or((field, ""));
+        (key.trim(), value.trim())
+    })
 }
 
 fn validate_catalog_version(catalog_view: &CatalogZoneView<'_>) -> Result<(), CatalogError> {
@@ -185,6 +406,126 @@ mod tests {
 
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+    }
+
+    #[test]
+    fn parses_opt_in_member_transfer_extension_records() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog,
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("alpha.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("primaries.ext.a.zones.catalog.example.")
+                        .unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    0,
+                    vec![vec![192, 0, 2, 53]],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("primaries.ext.a.zones.catalog.example.")
+                        .unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("member-key.example.")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("transport=tcp;port=5300;mode=axfr-ixfr")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("sources=198.51.100.1,2001:db8::1")],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
+
+        let transfer = members[0].transfer.as_ref().expect("transfer extension");
+        assert_eq!(
+            transfer.primaries,
+            vec![CatalogMemberPrimary {
+                addr: "192.0.2.53".parse().unwrap()
+            }]
+        );
+        assert_eq!(
+            transfer
+                .tsig_key_name
+                .as_ref()
+                .map(DomainName::canonical_key),
+            Some("member-key.example.".to_owned())
+        );
+        assert_eq!(transfer.xfr.as_ref().and_then(|xfr| xfr.port), Some(5300));
+        assert_eq!(transfer.notify_sources.len(), 2);
+    }
+
+    #[test]
+    fn ignores_malformed_member_transfer_extension_without_dropping_member() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog,
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("alpha.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("transport=udp;port=0")],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+        assert_eq!(members[0].transfer, None);
     }
 
     #[test]
@@ -285,5 +626,13 @@ mod tests {
                 "invalid.".to_owned(),
             ]
         );
+    }
+
+    fn txt(value: &str) -> Vec<u8> {
+        let bytes = value.as_bytes();
+        assert!(bytes.len() < 256);
+        let mut rdata = vec![bytes.len() as u8];
+        rdata.extend_from_slice(bytes);
+        rdata
     }
 }

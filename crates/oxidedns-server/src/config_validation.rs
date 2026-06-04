@@ -91,7 +91,7 @@ fn transfer_targets_with_names(config: &ServerConfig) -> Vec<(String, TransferPr
                 .map(|primary| (zone.name.clone(), primary))
         })
         .chain(config.catalog_zones.iter().flat_map(|zone| {
-            zone.transfer_targets()
+            zone.all_transfer_targets()
                 .into_iter()
                 .map(|primary| (zone.name.clone(), primary))
         }))

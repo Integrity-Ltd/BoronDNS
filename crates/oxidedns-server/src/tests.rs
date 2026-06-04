@@ -2,7 +2,7 @@ static TEST_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 use std::{
     collections::{HashMap, HashSet},
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -100,11 +100,18 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
                 algorithm = "hmac-sha256"
                 secret = "dG9wc2VjcmV0"
 
+                [[tsig_keys]]
+                name = "member-key."
+                algorithm = "hmac-sha256"
+                secret = "bWVtYmVyLXNlY3JldA=="
+
                 [[catalog_zones]]
                 name = "catalog.example."
-                primaries = ["192.0.2.53:53"]
-                notify_sources = ["192.0.2.53"]
-                tsig_key = "catalog-key."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["198.51.100.53:53"]
+                notify_sources = ["198.51.100.54"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "member-key."
             "#,
     )
     .expect("valid catalog config");
@@ -157,7 +164,31 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
         .await;
 
     assert!(zones.find_published_zone(&catalog_origin).is_none());
-    assert!(transfer_plan.get(&member_origin).is_some());
+    let member_plan = transfer_plan
+        .get(&member_origin)
+        .expect("member transfer plan");
+    assert_eq!(
+        member_plan
+            .primaries
+            .iter()
+            .map(|primary| primary.addr)
+            .collect::<Vec<_>>(),
+        vec![SocketAddr::from((Ipv4Addr::new(198, 51, 100, 53), 53))]
+    );
+    assert_eq!(
+        member_plan
+            .tsig_key
+            .as_ref()
+            .expect("member TSIG key")
+            .name
+            .to_string(),
+        "member-key."
+    );
+    assert!(notify_authority.is_authorized(&catalog_origin, 1, "192.0.2.53".parse().unwrap()));
+    assert!(!notify_authority.is_authorized(&catalog_origin, 1, "198.51.100.53".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.53".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.54".parse().unwrap()));
+    assert!(!notify_authority.is_authorized(&member_origin, 1, "192.0.2.53".parse().unwrap()));
     assert_eq!(
         zones
             .exact_snapshot_for_transfer(&member_origin)
@@ -174,6 +205,146 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let request = rx.recv().await.expect("member refresh request");
     assert_eq!(request.zone, member_origin);
     assert_eq!(request.reason, super::RefreshReason::Catalog);
+}
+
+#[tokio::test]
+async fn catalog_snapshot_applies_opt_in_member_transfer_extension() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[tsig_keys]]
+                name = "fallback-key."
+                algorithm = "hmac-sha256"
+                secret = "ZmFsbGJhY2stc2VjcmV0"
+
+                [[tsig_keys]]
+                name = "override-key."
+                algorithm = "hmac-sha256"
+                secret = "b3ZlcnJpZGUtc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["203.0.113.53:53"]
+                notify_sources = ["198.51.100.54"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "fallback-key."
+                member_transfer_extensions = true
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let snapshot = ZoneSnapshot::active(
+        catalog_origin.clone(),
+        Some(7),
+        vec![
+            Rrset::new(
+                DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("2")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                RecordType::Ptr as u16,
+                1,
+                0,
+                vec![member_origin.to_wire()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("primaries.ext.a.zones.catalog.example.").unwrap(),
+                RecordType::A as u16,
+                1,
+                0,
+                vec![vec![198, 51, 100, 53]],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("primaries.ext.a.zones.catalog.example.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("override-key.")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("transport=tcp;port=5300")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("_udns-notify.a.zones.catalog.example.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("source=198.51.100.55")],
+            ),
+        ],
+    );
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_origin.clone());
+    zones.insert_snapshot(snapshot.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config(&config);
+    let (tx, mut rx) = mpsc::channel(1);
+    let metadata = zone_metadata_for(&snapshot);
+
+    catalog_manager
+        .apply_snapshot(
+            snapshot.catalog_zone_view(),
+            &metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    let member_plan = transfer_plan
+        .get(&member_origin)
+        .expect("member transfer plan");
+    assert_eq!(
+        member_plan
+            .primaries
+            .iter()
+            .map(|primary| primary.addr)
+            .collect::<Vec<_>>(),
+        vec![SocketAddr::from((Ipv4Addr::new(198, 51, 100, 53), 5300))]
+    );
+    assert_eq!(
+        member_plan
+            .tsig_key
+            .as_ref()
+            .expect("override TSIG key")
+            .name
+            .to_string(),
+        "override-key."
+    );
+    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.53".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.54".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.55".parse().unwrap()));
+    assert!(!notify_authority.is_authorized(&member_origin, 1, "203.0.113.53".parse().unwrap()));
+    assert_eq!(
+        rx.recv().await.expect("member refresh request").zone,
+        member_origin
+    );
 }
 
 #[tokio::test]
@@ -2129,6 +2300,14 @@ fn zone_metadata_for(snapshot: &ZoneSnapshot) -> ZoneMetadata {
         shape: None,
         shape_histograms: None,
     }
+}
+
+fn catalog_txt(value: &str) -> Vec<u8> {
+    let bytes = value.as_bytes();
+    assert!(bytes.len() < 256);
+    let mut rdata = vec![bytes.len() as u8];
+    rdata.extend_from_slice(bytes);
+    rdata
 }
 
 #[tokio::test]
