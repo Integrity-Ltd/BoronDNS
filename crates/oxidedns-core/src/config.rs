@@ -55,6 +55,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub observability: ObservabilityConfig,
     #[serde(default)]
+    pub control_plane: ControlPlaneConfig,
+    #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
     pub edns: EdnsConfig,
@@ -131,6 +133,9 @@ impl ServerConfig {
                 key.secret = Some("<redacted>".to_owned());
             }
         }
+        if redacted.control_plane.telemetry.bearer_token.is_some() {
+            redacted.control_plane.telemetry.bearer_token = Some("<redacted>".to_owned());
+        }
         Ok(toml::to_string_pretty(&redacted)?)
     }
 
@@ -145,6 +150,7 @@ impl ServerConfig {
         self.logging.validate()?;
         self.metrics.validate()?;
         self.observability.validate()?;
+        self.control_plane.validate()?;
         self.chaos.validate()?;
         self.dnssec.validate()?;
 
@@ -1070,6 +1076,106 @@ impl ObservabilityConfig {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneConfig {
+    #[serde(default)]
+    pub telemetry: ControlPlaneTelemetryConfig,
+}
+
+impl ControlPlaneConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        self.telemetry.validate()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneTelemetryConfig {
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    #[serde(default = "default_control_plane_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ControlPlaneTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            endpoint_url: None,
+            node_id: None,
+            bearer_token: None,
+            timeout_secs: default_control_plane_timeout_secs(),
+        }
+    }
+}
+
+impl ControlPlaneTelemetryConfig {
+    pub fn enabled(&self) -> bool {
+        self.endpoint_url.is_some() && self.node_id.is_some() && self.bearer_token.is_some()
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let configured = [
+            self.endpoint_url.is_some(),
+            self.node_id.is_some(),
+            self.bearer_token.is_some(),
+        ];
+        if configured.iter().any(|configured| *configured)
+            && configured.iter().any(|configured| !*configured)
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.telemetry endpoint_url, node_id, and bearer_token must be set together".to_owned(),
+            ));
+        }
+        if let Some(endpoint_url) = self.endpoint_url.as_deref() {
+            let endpoint_url = endpoint_url.trim();
+            if !(endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://")) {
+                return Err(ConfigError::Invalid(
+                    "control_plane.telemetry.endpoint_url must start with http:// or https://"
+                        .to_owned(),
+                ));
+            }
+            if endpoint_url.ends_with('/') {
+                return Err(ConfigError::Invalid(
+                    "control_plane.telemetry.endpoint_url must not end with '/'".to_owned(),
+                ));
+            }
+        }
+        if self
+            .node_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.telemetry.node_id must not be empty".to_owned(),
+            ));
+        }
+        if self
+            .bearer_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.telemetry.bearer_token must not be empty".to_owned(),
+            ));
+        }
+        if self.timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "control_plane.telemetry.timeout_secs must be greater than zero".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_control_plane_timeout_secs() -> u64 {
+    5
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -2576,6 +2682,51 @@ mod tests {
                 53
             )))]
         );
+    }
+
+    #[test]
+    fn parses_and_redacts_control_plane_telemetry_config() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [control_plane.telemetry]
+                endpoint_url = "https://udns.example.internal/api/v1"
+                node_id = "11111111-1111-1111-1111-111111111111"
+                bearer_token = "secret-node-token"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid telemetry config");
+
+        assert!(config.control_plane.telemetry.enabled());
+        let redacted = config.to_redacted_toml().expect("redacted config");
+        assert!(redacted.contains("bearer_token = \"<redacted>\""));
+        assert!(!redacted.contains("secret-node-token"));
+    }
+
+    #[test]
+    fn rejects_partial_control_plane_telemetry_config() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [control_plane.telemetry]
+                endpoint_url = "https://udns.example.internal/api/v1"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("partial telemetry config should fail");
+
+        assert!(error.to_string().contains("must be set together"));
     }
 
     #[test]

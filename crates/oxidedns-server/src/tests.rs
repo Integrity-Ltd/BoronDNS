@@ -43,7 +43,7 @@ use tracing::{
 use super::observability::{ObservabilityAuth, TransferMaterial};
 use super::{
     BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig,
-    CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+    ControlPlaneTelemetryReporter, CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
     DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
     HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter, NotifyAuthority,
     NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction, NotifyRefreshTracker,
@@ -5074,6 +5074,7 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
             ixfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
+            telemetry: ControlPlaneTelemetryReporter::disabled(),
         },
     )
     .await
@@ -5175,6 +5176,7 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
             ixfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            telemetry: ControlPlaneTelemetryReporter::disabled(),
         },
     ));
 

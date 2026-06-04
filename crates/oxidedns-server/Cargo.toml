@@ -13,6 +13,7 @@ flate2.workspace = true
 getrandom.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true

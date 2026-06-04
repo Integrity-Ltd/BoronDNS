@@ -265,6 +265,7 @@ impl Runtime {
         );
         metrics.set_configuration_warnings(startup_warning_count as u64);
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
+        let control_plane_telemetry = ControlPlaneTelemetryReporter::from_config(&self.config);
 
         info!(
             udp_listeners = self.config.udp_listeners().len(),
@@ -390,6 +391,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: transfer_limit.clone(),
+                telemetry: control_plane_telemetry.clone(),
             },
         ));
         refresh_workers.spawn(serve_refresh_requests(
@@ -411,6 +413,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: transfer_limit.clone(),
+                telemetry: control_plane_telemetry,
             },
         ));
         listeners.spawn(serve_scheduled_refreshes(
@@ -648,6 +651,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: Arc::new(Semaphore::new(max_concurrent_transfers)),
+                telemetry: ControlPlaneTelemetryReporter::disabled(),
             },
         )
         .await
@@ -2249,6 +2253,122 @@ fn signal_notify_refresh(
     }
 }
 
+#[derive(Clone)]
+struct ControlPlaneTelemetryReporter {
+    endpoint_url: Option<Arc<str>>,
+    node_id: Option<Arc<str>>,
+    bearer_token: Option<Arc<str>>,
+    timeout: Duration,
+    client: reqwest::Client,
+}
+
+impl ControlPlaneTelemetryReporter {
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self {
+            endpoint_url: None,
+            node_id: None,
+            bearer_token: None,
+            timeout: Duration::from_secs(5),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    fn from_config(config: &ServerConfig) -> Self {
+        let telemetry = &config.control_plane.telemetry;
+        Self {
+            endpoint_url: telemetry
+                .endpoint_url
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().trim_end_matches('/').to_owned())),
+            node_id: telemetry
+                .node_id
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().to_owned())),
+            bearer_token: telemetry
+                .bearer_token
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().to_owned())),
+            timeout: Duration::from_secs(telemetry.timeout_secs),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.endpoint_url.is_some() && self.node_id.is_some() && self.bearer_token.is_some()
+    }
+
+    async fn report_success(&self, metadata: &ZoneMetadata, status: &'static str, reason: &str) {
+        if !self.enabled() {
+            return;
+        }
+        let mut body = serde_json::json!({
+            "zone_name": metadata.origin.to_string(),
+            "status": status,
+            "transfer_mode": "axfr_ixfr",
+            "message": format!("OxideDNS transfer {status} during {reason} refresh"),
+        });
+        if let Some(serial) = metadata.serial {
+            body["serial"] = serde_json::Value::String(serial.to_string());
+        }
+        if let Some(timers) = metadata.soa_timers {
+            body["refresh_seconds"] = serde_json::Value::from(timers.refresh);
+            body["retry_seconds"] = serde_json::Value::from(timers.retry);
+        }
+        self.post(body).await;
+    }
+
+    async fn report_failure(&self, origin: &DomainName, failure_cause: Option<&str>, reason: &str) {
+        if !self.enabled() {
+            return;
+        }
+        let failure_reason = failure_cause
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("transfer failed without detailed cause");
+        self.post(serde_json::json!({
+            "zone_name": origin.to_string(),
+            "status": "failed",
+            "transfer_mode": "axfr_ixfr",
+            "failure_reason": failure_reason,
+            "message": format!("OxideDNS transfer failed during {reason} refresh"),
+        }))
+        .await;
+    }
+
+    async fn post(&self, body: serde_json::Value) {
+        let (Some(endpoint_url), Some(node_id), Some(bearer_token)) = (
+            self.endpoint_url.as_deref(),
+            self.node_id.as_deref(),
+            self.bearer_token.as_deref(),
+        ) else {
+            return;
+        };
+        let url = format!("{endpoint_url}/secondary-nodes/{node_id}/transfer-events");
+        match self
+            .client
+            .post(url)
+            .bearer_auth(bearer_token)
+            .timeout(self.timeout)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => warn!(
+                category = "control_plane",
+                status = %response.status(),
+                "uDNS transfer telemetry report was rejected"
+            ),
+            Err(error) => warn!(
+                category = "control_plane",
+                %error,
+                "failed to send uDNS transfer telemetry report"
+            ),
+        }
+    }
+}
+
 async fn serve_refresh_requests(
     mut refresh_rx: mpsc::Receiver<RefreshRequest>,
     zones: ZoneStore,
@@ -2302,6 +2422,7 @@ async fn serve_refresh_requests(
                 let axfr_timeout = settings.axfr_timeout;
                 let ixfr_timeout = settings.ixfr_timeout;
                 let tcp_connect_timeout = settings.tcp_connect_timeout;
+                let telemetry = settings.telemetry.clone();
                 let zones = zones.clone();
                 let catalog_runtime = catalog_runtime.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
@@ -2329,6 +2450,14 @@ async fn serve_refresh_requests(
                             catalog_runtime
                                 .refresh_registry
                                 .record_success_from_metadata(&metadata);
+                            let telemetry_status = if updated_snapshot.is_some() {
+                                "success"
+                            } else {
+                                "skipped"
+                            };
+                            telemetry
+                                .report_success(&metadata, telemetry_status, request.reason.as_str())
+                                .await;
                             if let Some(snapshot) = updated_snapshot
                                 .as_deref()
                                 .filter(|_| {
@@ -2349,11 +2478,20 @@ async fn serve_refresh_requests(
                                     .await;
                             }
                         }
-                        None => catalog_runtime.refresh_registry.record_failure_with_cause(
-                            &request.zone,
-                            zones.exact_zone_control_metadata(&request.zone),
-                            outcome.failure_cause,
-                        ),
+                        None => {
+                            telemetry
+                                .report_failure(
+                                    &request.zone,
+                                    outcome.failure_cause.as_deref(),
+                                    request.reason.as_str(),
+                                )
+                                .await;
+                            catalog_runtime.refresh_registry.record_failure_with_cause(
+                                &request.zone,
+                                zones.exact_zone_control_metadata(&request.zone),
+                                outcome.failure_cause,
+                            );
+                        }
                     }
                 });
             }
@@ -2375,6 +2513,7 @@ struct RefreshWorkerSettings {
     ixfr_timeout: Duration,
     tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
+    telemetry: ControlPlaneTelemetryReporter,
 }
 
 #[derive(Clone)]
@@ -2383,6 +2522,7 @@ struct InitialLoadSettings {
     ixfr_timeout: Duration,
     tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
+    telemetry: ControlPlaneTelemetryReporter,
 }
 
 #[derive(Clone, Copy)]
@@ -2464,6 +2604,7 @@ async fn run_initial_zone_loads(
         let axfr_timeout = settings.axfr_timeout;
         let ixfr_timeout = settings.ixfr_timeout;
         let tcp_connect_timeout = settings.tcp_connect_timeout;
+        let telemetry = settings.telemetry.clone();
         let transfer_permit = settings
             .transfer_limit
             .clone()
@@ -2493,6 +2634,14 @@ async fn run_initial_zone_loads(
                     catalog_runtime
                         .refresh_registry
                         .record_success_from_metadata(&metadata);
+                    let telemetry_status = if updated_snapshot.is_some() {
+                        "success"
+                    } else {
+                        "skipped"
+                    };
+                    telemetry
+                        .report_success(&metadata, telemetry_status, "initial")
+                        .await;
                     if let Some(snapshot) = updated_snapshot.as_deref().filter(|_| {
                         catalog_runtime
                             .manager
@@ -2514,6 +2663,9 @@ async fn run_initial_zone_loads(
                 }
                 None => {
                     let zone_apex = &plan.origin;
+                    telemetry
+                        .report_failure(zone_apex, outcome.failure_cause.as_deref(), "initial")
+                        .await;
                     catalog_runtime.refresh_registry.record_failure_with_cause(
                         zone_apex,
                         zones.exact_zone_control_metadata(zone_apex),
