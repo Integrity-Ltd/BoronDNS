@@ -17,6 +17,7 @@ mod config_validation;
 mod dns_cookie;
 mod errors;
 mod health_metrics;
+mod observability;
 mod privilege;
 mod process_hardening;
 mod process_signals;
@@ -101,6 +102,7 @@ pub(crate) use health_metrics::{
     QueryLatencyCategory, QueryPipelineStage, ResponseCacheCandidateCategory,
     ResponseCacheIneligibleReason, RuntimeMetricsSnapshot,
 };
+use observability::{ObservabilityAuth, TransferMaterial};
 use rate_limit::{
     IpPrefix, NotifyLogLimiter, RrlDecision, RrlLimiter, response_opt_record,
     response_question_end, response_record_type, serve_notify_log_summaries,
@@ -222,6 +224,13 @@ impl Runtime {
         let run_as_user = privilege::configured_run_as_user(&self.config)?;
         tokio::pin!(shutdown_signal);
         let transfer_plan = TransferPlan::from_config(&self.config)?;
+        let observability_auth = ObservabilityAuth::from_config(&self.config.observability)
+            .map_err(|source| {
+                RuntimeError::InvalidRuntimeConfig(format!(
+                    "failed to read observability bearer token file: {source}"
+                ))
+            })?;
+        let transfer_materials = TransferMaterial::from_config(&self.config);
         let catalog_manager = CatalogManager::from_config(&self.config);
         let refresh_registry = ZoneRefreshRegistry::new(
             Duration::from_secs(self.config.limits.zsm_min_interval_secs),
@@ -421,9 +430,11 @@ impl Runtime {
                     refresh_registry: refresh_registry.clone(),
                     metrics_rate_limiter: MetricsRateLimiter::from_config(self.config.health),
                     observability: self.config.observability.clone(),
+                    observability_auth: observability_auth.clone(),
                     observability_rate_limiter: MetricsRateLimiter::from_observability_config(
                         &self.config.observability,
                     ),
+                    transfer_materials: transfer_materials.clone(),
                     started_at: Instant::now(),
                     graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
                     zone_shape_metrics_enabled: self.config.metrics.zone_shape_enabled,

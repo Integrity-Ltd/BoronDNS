@@ -30,7 +30,14 @@ use tracing::{info, warn};
 use crate::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, CatalogManager,
     CookiePrefixMetricSettings, IpPrefix, NotifyRefreshAction, NotifyTsigResult, RuntimeError,
-    RuntimeStatus, RuntimeStatusValue, ZoneRefreshRegistry, cookie_metric_prefix, std_udp_mmsg,
+    RuntimeStatus, RuntimeStatusValue, ZoneRefreshRegistry, cookie_metric_prefix,
+    observability::{
+        ObservabilityAuth, ObservabilityAuthError, TransferMaterial,
+        certificate_observability_value, filesystem_observability_value, fraction_value,
+        process_resources_observability_value, time_sync_observability_value,
+        transfer_material_observability_counts,
+    },
+    std_udp_mmsg,
 };
 
 pub(crate) async fn serve_health(
@@ -249,39 +256,69 @@ async fn metrics(
 
 async fn observability_index(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(peer.ip(), &state, observability_index_value(&state))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_index_value(&state),
+    )
 }
 
 async fn observability_summary(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(peer.ip(), &state, observability_summary_value(&state))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_summary_value(&state),
+    )
 }
 
 async fn observability_runtime(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(peer.ip(), &state, observability_runtime_value(&state))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_runtime_value(&state),
+    )
 }
 
 async fn observability_resources(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let config = &state.observability;
+    let filesystems = if config.include_filesystems {
+        filesystem_observability_value()
+    } else {
+        json!({"status": "disabled"})
+    };
+    let process_resources = if config.include_process_resources {
+        process_resources_observability_value()
+    } else {
+        json!({"status": "disabled"})
+    };
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(
             &state,
             json!({
-                "filesystems": optional_check_status(config.include_filesystems),
-                "process_resources": optional_check_status(config.include_process_resources),
-                "note": "resource probing is bounded to future host-local snapshots; this endpoint does not perform external checks"
+                "filesystems": filesystems,
+                "process_resources": process_resources,
+                "note": "resource probing is bounded to host-local snapshots; this endpoint does not perform external checks"
             }),
         ),
     )
@@ -289,30 +326,43 @@ async fn observability_resources(
 
 async fn observability_time(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let status = if state.observability.include_time_sync_status {
-        json!({"status": "unknown", "source": "unconfigured"})
+        time_sync_observability_value()
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(peer.ip(), &state, observability_base_value(&state, status))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_base_value(&state, status),
+    )
 }
 
 async fn observability_certificates(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let status = if state.observability.include_certificate_status {
-        json!({"status": "unknown", "configured_material": "not_indexed"})
+        certificate_observability_value(&state.transfer_materials)
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(peer.ip(), &state, observability_base_value(&state, status))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_base_value(&state, status),
+    )
 }
 
 async fn observability_zones(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let zones = if state.observability.include_zone_detail {
@@ -327,6 +377,7 @@ async fn observability_zones(
     };
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(
             &state,
@@ -341,6 +392,7 @@ async fn observability_zones(
 
 async fn observability_zone(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(zone): Path<String>,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -357,6 +409,7 @@ async fn observability_zone(
     }) else {
         return observability_response(
             peer.ip(),
+            &headers,
             &state,
             observability_base_value(
                 &state,
@@ -366,6 +419,7 @@ async fn observability_zone(
     };
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(&state, zone_observability_value(&state, &metadata)),
     )
@@ -373,10 +427,12 @@ async fn observability_zone(
 
 async fn observability_catalogs(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(
             &state,
@@ -390,16 +446,30 @@ async fn observability_catalogs(
 
 async fn observability_transfers(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let snapshot = state.metrics.snapshot();
+    let scheduler = zone_scheduler_observability_values(&state);
+    let failures_since_success = scheduler
+        .iter()
+        .filter_map(|zone| zone["failures_since_success"].as_u64())
+        .sum::<u64>();
+    let zones_waiting = scheduler
+        .iter()
+        .filter(|zone| zone["next_refresh_unix_seconds"].is_number())
+        .count();
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(
             &state,
             json!({
-                "active": "not_tracked",
+                "active": {
+                    "status": "not_tracked",
+                    "reason": "transfer sessions are counted and scheduler state is tracked, but in-flight session detail is not retained"
+                },
                 "counters": {
                     "axfr_started": snapshot.axfr_started,
                     "axfr_succeeded": snapshot.axfr_succeeded,
@@ -407,8 +477,17 @@ async fn observability_transfers(
                     "ixfr_started": snapshot.ixfr_started,
                     "ixfr_succeeded": snapshot.ixfr_succeeded,
                     "ixfr_failed": snapshot.ixfr_failed,
+                    "total_started": snapshot.axfr_started.saturating_add(snapshot.ixfr_started),
+                    "total_succeeded": snapshot.axfr_succeeded.saturating_add(snapshot.ixfr_succeeded),
+                    "total_failed": snapshot.axfr_failed.saturating_add(snapshot.ixfr_failed),
                 },
-                "per_zone_scheduler": zone_scheduler_observability_values(&state),
+                "scheduler": {
+                    "zones_reported": scheduler.len(),
+                    "zones_waiting_for_refresh": zones_waiting,
+                    "failures_since_success_total": failures_since_success,
+                },
+                "transfer_materials": transfer_material_observability_counts(&state.transfer_materials),
+                "per_zone_scheduler": scheduler,
             }),
         ),
     )
@@ -416,21 +495,48 @@ async fn observability_transfers(
 
 async fn observability_security(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let snapshot = state.metrics.snapshot();
+    let rcode_counts = if state.metrics.hot_path_detail_enabled() {
+        state.metrics.query_rcode_counts()
+    } else {
+        HashMap::new()
+    };
+    let refused_queries = if state.metrics.hot_path_detail_enabled() {
+        rcode_counts
+            .get(&(oxidedns_core::dns::Rcode::Refused as u16))
+            .copied()
+            .map(Value::from)
+            .unwrap_or_else(|| Value::from(0))
+    } else {
+        json!("reduced")
+    };
+    let notify_tsig_failures = snapshot
+        .notify_tsig_badkey
+        .saturating_add(snapshot.notify_tsig_badsig)
+        .saturating_add(snapshot.notify_tsig_badtime)
+        .saturating_add(snapshot.notify_tsig_badalg)
+        .saturating_add(snapshot.notify_tsig_badtrunc);
     observability_response(
         peer.ip(),
+        &headers,
         &state,
         observability_base_value(
             &state,
             json!({
-                "recursion": {"authoritative_only": true, "recursive_service": false},
+                "recursion": {
+                    "authoritative_only": true,
+                    "recursive_service": false,
+                    "refused_queries": refused_queries,
+                },
                 "notify": {
                     "received": snapshot.notify_received,
                     "unauthorized": snapshot.notify_unauthorized,
                     "refresh_signalled": snapshot.notify_refresh_signalled,
                     "refresh_deduplicated": snapshot.notify_refresh_deduplicated,
+                    "unauthorized_fraction": fraction_value(snapshot.notify_unauthorized, snapshot.notify_received),
                 },
                 "tsig_notify": {
                     "ok": snapshot.notify_tsig_ok,
@@ -439,6 +545,7 @@ async fn observability_security(
                     "badtime": snapshot.notify_tsig_badtime,
                     "badalg": snapshot.notify_tsig_badalg,
                     "badtrunc": snapshot.notify_tsig_badtrunc,
+                    "failures": notify_tsig_failures,
                 },
                 "dns_cookie": {
                     "no_cookie": snapshot.dns_cookie_no_cookie,
@@ -455,6 +562,7 @@ async fn observability_security(
                     "tracked_keys": snapshot.rrl_tracked_keys,
                     "key_evictions": snapshot.rrl_key_evictions,
                 },
+                "wrong_interface": {"status": "not_tracked"},
             }),
         ),
     )
@@ -462,6 +570,7 @@ async fn observability_security(
 
 async fn observability_config(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
     let config = &state.observability;
@@ -479,6 +588,7 @@ async fn observability_config(
                 "include_zone_detail": config.include_zone_detail,
                 "include_config_summary": config.include_config_summary,
                 "bearer_token_configured": config.bearer_token_file.is_some(),
+                "bearer_token_loaded": state.observability_auth.is_configured(),
             },
             "metrics": {"hot_path_detail": state.metrics.hot_path_detail_label()},
             "zones": zone_counts_value(&state),
@@ -487,10 +597,23 @@ async fn observability_config(
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(peer.ip(), &state, observability_base_value(&state, body))
+    observability_response(
+        peer.ip(),
+        &headers,
+        &state,
+        observability_base_value(&state, body),
+    )
 }
 
-fn observability_response(source: IpAddr, state: &HealthEndpointState, value: Value) -> Response {
+fn observability_response(
+    source: IpAddr,
+    headers: &HeaderMap,
+    state: &HealthEndpointState,
+    value: Value,
+) -> Response {
+    if let Err(error) = state.observability_auth.authorize(headers) {
+        return observability_auth_error_response(error);
+    }
     if let Err(retry_after_seconds) = state.observability_rate_limiter.check(source) {
         return rate_limited_response(retry_after_seconds);
     }
@@ -697,14 +820,6 @@ fn zone_scheduler_observability_values(state: &HealthEndpointState) -> Vec<Value
         .collect()
 }
 
-fn optional_check_status(enabled: bool) -> Value {
-    if enabled {
-        json!({"status": "unknown"})
-    } else {
-        json!({"status": "disabled"})
-    }
-}
-
 fn runtime_status_label(status: RuntimeStatusValue) -> &'static str {
     match status {
         RuntimeStatusValue::Running => "running",
@@ -735,6 +850,22 @@ fn rate_limited_response(retry_after_seconds: u64) -> Response {
             (header::RETRY_AFTER, retry_after_seconds.to_string()),
         ],
         format!("{{\"error\":\"rate_limited\",\"retry_after_seconds\":{retry_after_seconds}}}"),
+    )
+        .into_response()
+}
+
+fn observability_auth_error_response(error: ObservabilityAuthError) -> Response {
+    let (status, code) = match error {
+        ObservabilityAuthError::Missing => (StatusCode::UNAUTHORIZED, "missing_bearer_token"),
+        ObservabilityAuthError::Invalid => (StatusCode::UNAUTHORIZED, "invalid_bearer_token"),
+    };
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "application/json".to_owned()),
+            (header::WWW_AUTHENTICATE, "Bearer".to_owned()),
+        ],
+        format!("{{\"error\":\"{code}\"}}"),
     )
         .into_response()
 }
@@ -1933,7 +2064,9 @@ pub(crate) struct HealthEndpointState {
     pub(crate) refresh_registry: ZoneRefreshRegistry,
     pub(crate) metrics_rate_limiter: MetricsRateLimiter,
     pub(crate) observability: ObservabilityConfig,
+    pub(crate) observability_auth: ObservabilityAuth,
     pub(crate) observability_rate_limiter: MetricsRateLimiter,
+    pub(crate) transfer_materials: Vec<TransferMaterial>,
     pub(crate) started_at: Instant,
     pub(crate) graceful_shutdown_secs: u64,
     pub(crate) zone_shape_metrics_enabled: bool,

@@ -3,8 +3,9 @@
 Status: implemented initial optional OxideDNS observability API. The current
 implementation exposes the endpoint family below as compact JSON snapshots on
 the existing management HTTP listener when `[observability].enabled = true`.
-Host resource, time-sync, and certificate checks currently return explicit
-`unknown` or `disabled` status values rather than performing external probes.
+Host resource, time-sync, and certificate checks use bounded host-local probes;
+unavailable optional checks return explicit `unknown` or `disabled` status
+values rather than blocking.
 
 This document defines the shape for the in-process OxideDNS observability API.
 It replaces the idea of a separate on-node monitoring agent with a narrower
@@ -116,20 +117,19 @@ include_zone_detail = true
 # and TSIG values must never be returned. Default: true.
 include_config_summary = true
 
-# Reserved optional static bearer token file for direct deployments that cannot
-# place the listener behind an authenticated management proxy. The current
-# implementation reports whether it is configured but does not enforce bearer
-# auth yet; put remotely reachable listeners behind an authenticated management
-# proxy. Default: unset.
+# Optional static bearer token file for direct deployments that cannot place the
+# listener behind an authenticated management proxy. When set, all observability
+# endpoints require `Authorization: Bearer <token>`. The token is loaded at
+# listener startup, trimmed for surrounding ASCII whitespace, and never returned
+# by the API. Default: unset.
 # bearer_token_file = "/etc/oxidedns-secondary/observability.token"
 ```
 
 Authentication is deployment-dependent. Localhost-only and private management
-network deployments may keep the listener unauthenticated like the current
-health endpoints. Any remotely reachable deployment should either place the
-listener behind an authenticated/TLS management proxy or configure a future
-first-party authentication mode. This API exposes operational metadata and is
-not suitable for public DNS listener addresses.
+network deployments may keep the listener unauthenticated, but any remotely
+reachable deployment should set `bearer_token_file` and preferably place the
+listener behind an authenticated/TLS management proxy. This API exposes
+operational metadata and is not suitable for public DNS listener addresses.
 
 ## Endpoint Summary
 
@@ -155,10 +155,11 @@ error style unless a later interface revision defines a richer error contract.
 The path prefix is configurable, but endpoint names under the prefix should be
 stable once implemented.
 
-The current implementation wires all paths in the table. `/resources`,
-`/time`, and `/certificates` are intentionally non-blocking placeholders until
-bounded host-local probes are added; they return `unknown` when the check family
-is enabled and `disabled` when the corresponding configuration toggle is false.
+The current implementation wires all paths in the table. `/resources` reads
+bounded local process and filesystem snapshots. `/time` checks host time status
+from host-local status files when available. `/certificates` inspects
+configured XoT trust-anchor and client certificate PEM files. Disabled check
+families return `disabled`; unavailable host services return `unknown`.
 
 ## Response Principles
 
@@ -174,11 +175,12 @@ Every response should include:
 - enough status fields for the control plane or an operator to decide whether the data is
   fresh, partial, or disabled by configuration.
 
-Every implemented response also reports `metrics_detail` as `full` or
-`reduced`. In reduced metrics mode, aggregate atomic counters remain available,
-but hot-path detail maps and per-zone query counters are intentionally reduced.
-JSON zone entries therefore report `"queries": "reduced"` instead of forcing
-the disabled per-zone counter maps back onto the hot path.
+Every response also reports `metrics_detail` as `full` or `reduced`. In reduced
+metrics mode, aggregate atomic counters remain available, but hot-path detail
+maps, per-zone query counters, and RCODE-derived security detail are
+intentionally reduced. JSON zone entries therefore report
+`"queries": "reduced"` and the security endpoint reports reduced RCODE detail
+instead of forcing disabled maps back onto the hot path.
 
 Secrets must be redacted. Responses must not expose:
 
@@ -252,10 +254,10 @@ Example:
 }
 ```
 
-The resource block is intentionally coarse. It is acceptable for a Rust
-implementation to read `/proc`, `statvfs`, or equivalent Linux APIs for a small
-`df -h`-style view and process resource counters. It should not grow into full
-host inventory.
+The resource block is intentionally coarse. The current implementation reads
+`/proc/self/status`, `/proc/self/stat`, `/proc/self/fd`, `/proc/self/limits`,
+and `statvfs("/")` through the audited OS-adapter module for a small process
+and filesystem view. It should not grow into full host inventory.
 
 ## Zone And Transfer State
 
@@ -274,9 +276,11 @@ tracked by OxideDNS:
   cheap from served records;
 - query counters already available through metrics, summarized for JSON users.
 
-The transfer endpoints should expose active and recent in-memory transfer
-sessions with bounded retention. They should not persist long-term history;
-the control plane or another collector owns durable history if needed.
+The current transfer endpoint exposes AXFR/IXFR aggregate counters, scheduler
+state, and configured transfer-material counts. In-flight session detail and
+recent session history are not retained yet; the endpoint reports this as
+`active.status = "not_tracked"` instead of inventing state. The control plane or
+another collector owns durable history if needed.
 
 ## Catalog State
 
@@ -302,11 +306,11 @@ its own runtime:
 - recursion-refusal behavior for the authoritative server configuration;
 - TSIG verification counters by outcome, without key material;
 - unauthorized or TSIG-failed NOTIFY counters;
-- transfer ACL/source rejection counts;
+- transfer ACL/source rejection counts where tracked by existing metrics;
 - DNS Cookie policy and outcome counters;
 - RRL policy and limited/drop/slip counters;
 - listener/interface role map and whether management endpoints are bound only
-  to management/local addresses.
+  to management/local addresses when that state is tracked.
 
 External facts such as "hidden primary is unreachable from the Internet" or
 "public secondaries answer correctly from multiple regions" belong to external
@@ -315,13 +319,11 @@ black-box probes, not this API.
 ## Time And Certificate Checks
 
 Clock correctness matters for TSIG and DNSSEC signature validity, but OxideDNS
-should not implement its own NTP/SNTP protocol client. The proposed time
-endpoint should only summarize status available from existing host services or
-OS interfaces, for example:
+does not implement its own NTP/SNTP protocol client and does not spawn host
+commands. The time endpoint only summarizes status available from existing host
+service status files or OS interfaces:
 
-- `timedatectl show` / D-Bus equivalent;
-- `chronyc tracking` when chrony is installed;
-- `ntpq`/`ntpstat` where deployed;
+- `/run/systemd/timesync/synchronized` where systemd-timesyncd exposes it;
 - container-provided host-time status where available.
 
 If no status source is available, the endpoint should return `unknown`, not
@@ -329,7 +331,7 @@ If no status source is available, the endpoint should return `unknown`, not
 
 Certificate status should be limited to configured files OxideDNS already uses,
 such as XoT trust anchors and client certificates. The response should expose
-subject/issuer fingerprints and not-before/not-after timestamps, not PEM bytes.
+subject/issuer names and not-before/not-after timestamps, not PEM bytes.
 
 ## Non-Interference Requirements
 

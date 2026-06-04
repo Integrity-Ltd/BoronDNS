@@ -40,6 +40,7 @@ use tracing::{
     subscriber::Interest,
 };
 
+use super::observability::{ObservabilityAuth, TransferMaterial};
 use super::{
     BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig,
     CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
@@ -1173,6 +1174,180 @@ async fn observability_api_reports_catalog_membership() {
 }
 
 #[tokio::test]
+async fn observability_api_enforces_configured_bearer_token() {
+    let token_path = unique_test_path("observability-token", "txt");
+    std::fs::write(&token_path, b"test-token\n").expect("write observability token");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            bearer_token_file: Some(token_path),
+            ..ObservabilityConfig::default()
+        },
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let missing = http_request(addr, "GET", "/observability/v1").await;
+    assert!(missing.starts_with("HTTP/1.1 401 Unauthorized"));
+    assert!(missing.ends_with(r#"{"error":"missing_bearer_token"}"#));
+
+    let wrong = String::from_utf8(
+        http_request_with_headers(
+            addr,
+            "GET",
+            "/observability/v1",
+            &[("Authorization", "Bearer wrong-token")],
+        )
+        .await,
+    )
+    .expect("HTTP response should be UTF-8");
+    assert!(wrong.starts_with("HTTP/1.1 401 Unauthorized"));
+    assert!(wrong.ends_with(r#"{"error":"invalid_bearer_token"}"#));
+
+    let index = http_json_with_headers(
+        addr,
+        "/observability/v1",
+        &[("Authorization", "Bearer test-token")],
+    )
+    .await;
+    assert_eq!(index["data"]["enabled"], true);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_reports_resource_and_time_snapshots() {
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        },
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let resources = http_json(addr, "/observability/v1/resources").await;
+    assert!(resources["data"]["filesystems"]["status"].is_string());
+    assert_eq!(resources["data"]["process_resources"]["status"], "ok");
+    assert!(resources["data"]["process_resources"]["pid"].is_number());
+    assert!(resources["data"]["process_resources"]["file_descriptors_open"].is_number());
+
+    let time = http_json(addr, "/observability/v1/time").await;
+    assert!(time["data"]["status"].is_string());
+    assert!(time["data"]["source"].is_string());
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_reports_certificate_status_for_xot_material() {
+    let (cert_path, _key_path) = write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let mut state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        },
+    );
+    state.transfer_materials = vec![TransferMaterial {
+        scope: "zone",
+        zone: "example.test.".to_owned(),
+        primary: "192.0.2.53:853".to_owned(),
+        transport: "xot",
+        server_name: Some("primary.example.test".to_owned()),
+        trust_anchors: vec![cert_path.display().to_string()],
+        client_cert: None,
+        client_key_configured: false,
+        inline_client_key_configured: false,
+    }];
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let certificates = http_json(addr, "/observability/v1/certificates").await;
+    assert_eq!(certificates["data"]["status"], "ok");
+    assert_eq!(certificates["data"]["configured_materials"], 1);
+    assert_eq!(
+        certificates["data"]["certificates"][0]["role"],
+        "trust_anchor"
+    );
+    assert_eq!(certificates["data"]["certificates"][0]["scope"], "zone");
+    assert_eq!(
+        certificates["data"]["certificates"][0]["server_name"],
+        "primary.example.test"
+    );
+    assert!(certificates["data"]["certificates"][0]["not_after_unix_seconds"].is_number());
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_reports_transfer_security_and_reduced_detail() {
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let mut state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        },
+    );
+    state.metrics = RuntimeMetrics::new_reduced_for_test();
+    state.metrics.record_axfr_started();
+    state.metrics.record_axfr_succeeded();
+    state.metrics.record_ixfr_started();
+    state.metrics.record_ixfr_failed();
+    state.metrics.record_notify_received();
+    state.metrics.record_notify_unauthorized();
+    state
+        .metrics
+        .record_query_response_rcode(Rcode::Refused as u16);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let transfers = http_json(addr, "/observability/v1/transfers").await;
+    assert_eq!(transfers["data"]["counters"]["total_started"], 2);
+    assert_eq!(transfers["data"]["counters"]["total_succeeded"], 1);
+    assert_eq!(transfers["data"]["counters"]["total_failed"], 1);
+    assert_eq!(transfers["data"]["active"]["status"], "not_tracked");
+
+    let security = http_json(addr, "/observability/v1/security").await;
+    assert_eq!(security["metrics_detail"], "reduced");
+    assert_eq!(security["data"]["recursion"]["refused_queries"], "reduced");
+    assert_eq!(security["data"]["notify"]["received"], 1);
+    assert_eq!(security["data"]["notify"]["unauthorized"], 1);
+
+    server.abort();
+}
+
+#[tokio::test]
 async fn health_endpoint_exits_on_graceful_shutdown_signal() {
     let zones = ZoneStore::new();
     zones.insert_snapshot(ZoneSnapshot::active(
@@ -1392,9 +1567,11 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
             refresh_registry,
             metrics_rate_limiter: MetricsRateLimiter::default(),
             observability: ObservabilityConfig::default(),
+            observability_auth: ObservabilityAuth::default(),
             observability_rate_limiter: MetricsRateLimiter::from_observability_config(
                 &ObservabilityConfig::default(),
             ),
+            transfer_materials: Vec::new(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: true,
@@ -1663,9 +1840,11 @@ async fn metrics_endpoint_rate_limits_per_source_without_limiting_health() {
                 ..HealthConfig::default()
             }),
             observability: ObservabilityConfig::default(),
+            observability_auth: ObservabilityAuth::default(),
             observability_rate_limiter: MetricsRateLimiter::from_observability_config(
                 &ObservabilityConfig::default(),
             ),
+            transfer_materials: Vec::new(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: false,
@@ -1715,9 +1894,11 @@ async fn health_endpoint_reports_draining_and_unready_during_shutdown() {
             ),
             metrics_rate_limiter: MetricsRateLimiter::default(),
             observability: ObservabilityConfig::default(),
+            observability_auth: ObservabilityAuth::default(),
             observability_rate_limiter: MetricsRateLimiter::from_observability_config(
                 &ObservabilityConfig::default(),
             ),
+            transfer_materials: Vec::new(),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: false,
@@ -8342,6 +8523,20 @@ async fn http_request(addr: std::net::SocketAddr, method: &str, path: &str) -> S
 
 async fn http_json(addr: std::net::SocketAddr, path: &str) -> serde_json::Value {
     let response = http_request(addr, "GET", path).await;
+    json_body_from_ok_response(response)
+}
+
+async fn http_json_with_headers(
+    addr: std::net::SocketAddr,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> serde_json::Value {
+    let response = String::from_utf8(http_request_with_headers(addr, "GET", path, headers).await)
+        .expect("HTTP response should be UTF-8");
+    json_body_from_ok_response(response)
+}
+
+fn json_body_from_ok_response(response: String) -> serde_json::Value {
     assert!(
         response.starts_with("HTTP/1.1 200 OK"),
         "unexpected HTTP response: {response}"
@@ -8471,6 +8666,8 @@ fn health_state_with_observability(
     observability: ObservabilityConfig,
 ) -> HealthEndpointState {
     let observability_rate_limiter = MetricsRateLimiter::from_observability_config(&observability);
+    let observability_auth =
+        ObservabilityAuth::from_config(&observability).expect("observability auth config");
     HealthEndpointState {
         zones,
         runtime_status: RuntimeStatus::new(),
@@ -8483,7 +8680,9 @@ fn health_state_with_observability(
         ),
         metrics_rate_limiter: MetricsRateLimiter::default(),
         observability,
+        observability_auth,
         observability_rate_limiter,
+        transfer_materials: Vec::<TransferMaterial>::new(),
         started_at: std::time::Instant::now(),
         graceful_shutdown_secs: 30,
         zone_shape_metrics_enabled: false,
