@@ -97,7 +97,13 @@ policy = "lenient"
 timestamp_past_tolerance_seconds = 3600
 timestamp_future_tolerance_seconds = 300
 # 0 keeps the secret for the process lifetime; non-zero enables in-process
-# periodic regeneration without persisting secret material.
+# periodic regeneration without persisting secret material. For anycast or
+# load-balanced deployments, configure the same 32-hex-character server_secret
+# on every instance. During staged rollover, deploy the new value as
+# server_secret and the old value as previous_server_secret. Do not combine a
+# configured server_secret with secret_rotation_interval_secs.
+# server_secret = "00112233445566778899aabbccddeeff"
+# previous_server_secret = "ffeeddccbbaa99887766554433221100"
 secret_rotation_interval_secs = 0
 
 [rrl]

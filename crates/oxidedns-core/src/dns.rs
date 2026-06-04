@@ -860,6 +860,7 @@ pub enum ExtendedDnsErrorsMode {
 pub struct DnsCookieContext<'a> {
     pub client_ip: IpAddr,
     pub server_secret: &'a [u8; 16],
+    pub previous_server_secret: Option<&'a [u8; 16]>,
     pub now_unix_secs: u32,
     pub past_window_secs: u32,
     pub future_window_secs: u32,
@@ -871,6 +872,7 @@ impl<'a> DnsCookieContext<'a> {
         Self {
             client_ip,
             server_secret,
+            previous_server_secret: None,
             now_unix_secs,
             past_window_secs: DNS_COOKIE_DEFAULT_PAST_WINDOW_SECS,
             future_window_secs: DNS_COOKIE_DEFAULT_FUTURE_WINDOW_SECS,
@@ -3313,14 +3315,26 @@ fn dns_server_cookie_is_valid(cookie: EdnsCookie, context: DnsCookieContext) -> 
         return false;
     }
 
+    dns_cookie_hash_matches_secret(cookie, &server_cookie.bytes, context.server_secret, context)
+        || context.previous_server_secret.is_some_and(|secret| {
+            dns_cookie_hash_matches_secret(cookie, &server_cookie.bytes, secret, context)
+        })
+}
+
+fn dns_cookie_hash_matches_secret(
+    cookie: EdnsCookie,
+    server_cookie_bytes: &[u8; 32],
+    secret: &[u8; 16],
+    context: DnsCookieContext,
+) -> bool {
     let expected = compute_dns_server_cookie_with_fields(
         cookie.client,
-        &server_cookie.bytes[..8],
+        &server_cookie_bytes[..8],
         context.client_ip,
-        context.server_secret,
+        secret,
     );
     expected
-        .ct_eq(&server_cookie.bytes[8..DNS_COOKIE_SERVER_V1_LEN])
+        .ct_eq(&server_cookie_bytes[8..DNS_COOKIE_SERVER_V1_LEN])
         .into()
 }
 
@@ -10374,6 +10388,54 @@ mod tests {
         assert_eq!(
             dns_cookie_request_status(&packet, Some(context)),
             Some(DnsCookieRequestStatus::ValidServerCookie)
+        );
+    }
+
+    #[test]
+    fn edns_cookie_previous_server_secret_validates_during_rollover() {
+        let current = hex_to_array_16("00112233445566778899aabbccddeeff");
+        let previous = hex_to_array_16("e5e973e5a6b2a43f48e7dc849e37bfcf");
+        let mut context =
+            DnsCookieContext::new("198.51.100.100".parse().unwrap(), &current, 1_559_731_985);
+        context.previous_server_secret = Some(&previous);
+        let mut packet = query(&example_name(), RecordType::A as u16, 1);
+        append_opt(
+            &mut packet,
+            4096,
+            0,
+            &edns_option(
+                EDNS_COOKIE_OPTION,
+                &hex_to_vec("2464c4abcf10c957010000005cf79f111f8130c3eee29480"),
+            ),
+        );
+
+        let response = store_response_with_options(
+            &packet,
+            &ZoneStore::new(),
+            AnswerOptions {
+                transport: Transport::Udp,
+                max_udp_payload: DEFAULT_MAX_UDP_PAYLOAD,
+                max_cname_chain: DEFAULT_MAX_CNAME_CHAIN,
+                nsec3_max_iterations: 100,
+                tcp_keepalive_timeout_secs: DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
+                edns_padding_block_size: 0,
+                extended_dns_errors: ExtendedDnsErrorsMode::Off,
+                any_response: AnyResponseMode::Minimal,
+                nsid: &[],
+                chaos: ChaosOptions::default(),
+                dns_cookie: Some(context),
+            },
+        );
+
+        assert_eq!(
+            dns_cookie_request_status(&packet, Some(context)),
+            Some(DnsCookieRequestStatus::ValidServerCookie)
+        );
+        assert_ne!(
+            response_opt_option(&response, EDNS_COOKIE_OPTION),
+            Some(hex_to_vec(
+                "2464c4abcf10c957010000005cf79f111f8130c3eee29480"
+            ))
         );
     }
 

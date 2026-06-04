@@ -22,6 +22,7 @@ use tokio_rustls::{
     rustls::{
         ClientConfig, RootCertStore,
         pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject},
+        version,
     },
 };
 use tracing::{info, warn};
@@ -471,7 +472,8 @@ pub(crate) fn build_xot_client_config(
         });
     }
 
-    let builder = ClientConfig::builder().with_root_certificates(roots);
+    let builder = ClientConfig::builder_with_protocol_versions(&[&version::TLS13])
+        .with_root_certificates(roots);
     match (
         &primary.client_cert,
         &primary.client_key,

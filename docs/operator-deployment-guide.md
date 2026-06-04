@@ -270,13 +270,13 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   but may omit NSEC3 proof RRsets and, with minimal EDE enabled, include EDE
   INFO-CODE 27.
 - `[cookie]`: DNS Cookie policy (`lenient`, `strict`, or `disabled`),
-  timestamp tolerance windows, and optional in-process server-secret rotation.
-  A non-zero `secret_rotation_interval_secs` invalidates previously issued
-  server cookies when rotation occurs, equivalent to the cookie effect of a
-  process restart. The current Engineering MVP secret is process-local and
-  generated at startup; it is not a configured shared Server Secret. Do not use
-  strict-cookie behavior as an anycast or load-balanced consistency guarantee
-  until the formal RFC 9018 shared-secret and staged-rollover gap is closed.
+  timestamp tolerance windows, optional in-process server-secret rotation, and
+  configured shared Server Secret material. For anycast or load-balanced
+  deployments, set the same 32-hex-character `server_secret` on every instance.
+  During staged rollover, deploy the new value as `server_secret` and the old
+  value as `previous_server_secret`; OxideDNS accepts cookies signed by either
+  value and refreshes responses with the current secret. Do not combine
+  configured shared secrets with `secret_rotation_interval_secs`.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration. The current
   release-review threshold baseline is documented in
   `docs/rrl-release-thresholds.md`; `summary_log_interval_secs` controls
@@ -661,10 +661,9 @@ XoT:
   TLS version, and cipher suite. Session close includes duration and byte
   counters. Certificate material, private keys, and TLS key material are not
   logged.
-- RFC 9103 XoT conformance requires TLS 1.3 or later. Current Engineering MVP
-  builds use rustls with TLS 1.2 compatibility enabled for interoperability
-  testing; treat any TLS 1.2 XoT handshake as compatibility evidence, not formal
-  RFC 9103 conformance evidence.
+- RFC 9103 XoT conformance requires TLS 1.3 or later. OxideDNS builds the XoT
+  transfer client with a TLS 1.3-only protocol profile and rejects TLS 1.2-only
+  primaries before sending a DNS transfer query.
 - OxideDNS does not perform real-time XoT certificate revocation checks via CRL or
   OCSP requests. Operators that require stricter revocation handling should use
   short-lived primary certificates and automated trust-anchor rotation.

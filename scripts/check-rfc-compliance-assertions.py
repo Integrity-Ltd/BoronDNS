@@ -72,14 +72,14 @@ REQUIRED_EVIDENCE_SNIPPETS = {
         "does not claim RFC 7314 compliance",
     ],
     "RFC 9103": [
-        "TLS 1.3-or-later formal-profile evidence",
-        "TLS 1.2 compatibility",
-        "not an RFC 9103 compliance basis",
+        "TLS 1.3-only protocol profile",
+        "no cleartext fallback",
+        "current-version capability decisions",
     ],
     "RFC 5246": [
         "Informative Only",
-        "compatibility-only XoT transport behavior",
-        "not an RFC 9103 compliance basis",
+        "does not use TLS 1.2 for the formal XoT client profile",
+        "separate explicit policy",
     ],
     "RFC 8446": [
         "TLS 1.3",

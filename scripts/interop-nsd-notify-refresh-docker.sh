@@ -27,6 +27,14 @@ mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
+    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
+        kill "$oxidedns_pid" 2>/dev/null || true
+        wait "$oxidedns_pid" 2>/dev/null || true
+    fi
+    if [[ -n "${notify_proxy_pid:-}" ]] && kill -0 "$notify_proxy_pid" 2>/dev/null; then
+        kill "$notify_proxy_pid" 2>/dev/null || true
+        wait "$notify_proxy_pid" 2>/dev/null || true
+    fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
             echo "---- nsd container logs ----" >&2
@@ -166,12 +174,7 @@ PY
 
 cargo build -p oxidedns-cli >/dev/null
 if ! docker run -d --name "$container" \
-    -p "127.0.0.1:$nsd_port:$nsd_port/tcp" \
-    -p "127.0.0.1:$nsd_port:$nsd_port/udp" \
-    -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/tcp" \
-    -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/udp" \
-    -p "127.0.0.1:$oxidedns_health_port:$oxidedns_health_port/tcp" \
-    -v "$repo_root:/repo:ro" \
+    --network host \
     -v "$workdir:/work:rw" \
     alpine:latest \
     sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && nsd -c /work/nsd.conf && tail -f /dev/null' \
@@ -196,9 +199,9 @@ fi
 
 cat >"$oxidedns_conf" <<EOF
 [server]
-listen_udp = ["0.0.0.0:$oxidedns_dns_port"]
-listen_tcp = ["0.0.0.0:$oxidedns_dns_port"]
-health = "0.0.0.0:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
+listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
+health = "127.0.0.1:$oxidedns_health_port"
 log_level = "info"
 
 [rrl]
@@ -220,8 +223,10 @@ primaries = ["127.0.0.1:$nsd_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-docker exec "$container" sh -c "python3 /work/notify-proxy.py '$notify_port' '$oxidedns_dns_port' /work/notify-proxy.log >/work/notify-proxy.stderr 2>&1 &"
-docker exec "$container" sh -c '/repo/target/debug/oxidedns serve --config /work/oxidedns.toml >/work/oxidedns.log 2>&1 &'
+python3 "$notify_proxy" "$notify_port" "$oxidedns_dns_port" "$notify_proxy_log" >"$workdir/notify-proxy.stderr" 2>&1 &
+notify_proxy_pid=$!
+"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
+oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do

@@ -82,7 +82,6 @@ blocked_packages = {
     "crl",
     "openssl",
     "native-tls",
-    "reqwest",
     "ureq",
     "isahc",
     "curl",
@@ -100,7 +99,27 @@ if package_matches:
     failures.append("revocation or standalone HTTP/TLS client dependency was found")
 else:
     print("status=passed")
-    print("evidence=No OCSP/CRL, OpenSSL/native-tls, or standalone HTTP-client crate appears in Cargo.lock.")
+    print("evidence=No OCSP/CRL, OpenSSL/native-tls, or standalone revocation HTTP-client crate appears in Cargo.lock.")
+
+if "reqwest" in package_names:
+    print()
+    print("check=reqwest_confined_outside_xot")
+    reqwest_matches: list[str] = []
+    for path, text in runtime_sources.items():
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if "reqwest::" in line:
+                reqwest_matches.append(f"{path}:{line_number}: {line.strip()}")
+    disallowed_reqwest = [
+        match for match in reqwest_matches if not match.startswith("crates/oxidedns-server/src/lib.rs:")
+    ]
+    if disallowed_reqwest:
+        print("status=failed")
+        for match in disallowed_reqwest:
+            print(f"  {match}")
+        failures.append("reqwest was referenced outside the non-XoT telemetry module")
+    else:
+        print("status=passed")
+        print("evidence=reqwest is confined to uDNS transfer telemetry and is not used by the XoT client path.")
 
 print()
 print("ocsp_stapling_posture")

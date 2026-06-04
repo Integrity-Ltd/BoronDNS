@@ -32,7 +32,7 @@ use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
     sync::{mpsc, oneshot},
 };
-use tokio_rustls::rustls::{RootCertStore, server::WebPkiClientVerifier};
+use tokio_rustls::rustls::{RootCertStore, server::WebPkiClientVerifier, version};
 use tracing::{
     Event, Metadata, Subscriber,
     field::{Field, Visit},
@@ -53,13 +53,14 @@ use super::{
     ResponseCacheIneligibleReason, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
     RuntimeError, RuntimeMetrics, RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError,
     TransferPlan, TransferSession, TransferTsig, UdpRuntime, UdpServerSettings,
-    ZoneRefreshRegistry, bind_udp_listeners, dns_cookie_secret_fingerprint, drain_task_set,
-    drain_tcp_connections, handle_tcp_connection, handle_tcp_connection_with_query_hook,
-    jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
-    log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
-    observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-    prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
-    query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
+    ZoneRefreshRegistry, bind_udp_listeners, dns_cookie_secret_fingerprint,
+    dns_cookie_secret_store_from_config, drain_task_set, drain_tcp_connections,
+    handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval, load_pem_certs,
+    load_pem_private_key_from_file as load_pem_private_key, log_loading_warning,
+    log_notify_log_summary, log_rrl_summary, metrics_body, observe_query_metrics,
+    poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
+    prepare_notify_packet_with_metrics, prepare_query_tsig_packet, query_id_from_random_bytes,
+    record_query_lookup_metrics, record_query_response_metric,
     refresh_zone_metadata_from_primaries, required_file_descriptor_limit, response_category,
     response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
     rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
@@ -3123,6 +3124,7 @@ fn dns_cookie_secret_store_rotates_only_after_configured_interval() {
     let generated_at = std::time::Instant::now() - std::time::Duration::from_secs(61);
     let rotating = DnsCookieSecretStore::new_at(
         [1; 16],
+        None,
         Some(std::time::Duration::from_secs(60)),
         generated_at,
     );
@@ -3134,12 +3136,114 @@ fn dns_cookie_secret_store_rotates_only_after_configured_interval() {
     let retained = rotating.current_with_generator(|| -> Result<[u8; 16], getrandom::Error> {
         panic!("secret generator should not be called before the next interval")
     });
-    let disabled = DnsCookieSecretStore::new_at([3; 16], None, generated_at);
+    let disabled = DnsCookieSecretStore::new_at([3; 16], Some([2; 16]), None, generated_at);
 
-    assert_eq!(rotated, [2; 16]);
-    assert_eq!(retained, [2; 16]);
-    assert_eq!(disabled.current_with_generator(|| Ok([4; 16])), [3; 16]);
+    assert_eq!(rotated.current, [2; 16]);
+    assert_eq!(rotated.previous, Some([1; 16]));
+    assert_eq!(retained.current, [2; 16]);
+    assert_eq!(retained.previous, Some([1; 16]));
+    let disabled_current = disabled.current_with_generator(|| Ok([4; 16]));
+    assert_eq!(disabled_current.current, [3; 16]);
+    assert_eq!(disabled_current.previous, Some([2; 16]));
     assert!(captured.contains_all(&["DNS Cookie server secret rotated", "secret_fingerprint=",]));
+}
+
+#[test]
+fn dns_cookie_secret_store_uses_configured_shared_secrets() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [cookie]
+                policy = "lenient"
+                server_secret = "00112233445566778899aabbccddeeff"
+                previous_server_secret = "ffeeddccbbaa99887766554433221100"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid config");
+
+    let store = dns_cookie_secret_store_from_config(
+        &config,
+        dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+    )
+    .expect("configured DNS Cookie secret store");
+    let secrets = store.current();
+
+    assert_eq!(
+        secrets.current,
+        [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ]
+    );
+    assert_eq!(
+        secrets.previous,
+        Some([
+            0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+            0x11, 0x00,
+        ])
+    );
+}
+
+#[tokio::test]
+async fn control_plane_telemetry_posts_success_payload() {
+    let (endpoint, received) = spawn_telemetry_endpoint("204 No Content").await;
+    let reporter = control_plane_reporter_for_endpoint(endpoint);
+    let metadata = telemetry_zone_metadata(
+        Some(2026060401),
+        Some(SoaTimers {
+            refresh: 60,
+            retry: 30,
+            expire: 300,
+            minimum: 300,
+        }),
+    );
+
+    reporter.report_success(&metadata, "active", "notify").await;
+    let request = received.await.expect("telemetry request");
+    let body = telemetry_json_body(&request);
+
+    assert!(request.starts_with("POST /secondary-nodes/node-a/transfer-events HTTP/1.1"));
+    assert!(request.contains("authorization: Bearer token-a"));
+    assert_eq!(body["zone_name"], "alpha.test.");
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["serial"], "2026060401");
+    assert_eq!(body["refresh_seconds"], 60);
+    assert_eq!(body["retry_seconds"], 30);
+}
+
+#[tokio::test]
+async fn control_plane_telemetry_posts_failure_payload_and_logs_rejection() {
+    let (endpoint, received) = spawn_telemetry_endpoint("503 Service Unavailable").await;
+    let reporter = control_plane_reporter_for_endpoint(endpoint);
+    let captured = CapturedEvents::new();
+    let subscriber = CapturingSubscriber::new(captured.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let origin = DomainName::from_absolute_str("alpha.test.").unwrap();
+
+    reporter
+        .report_failure(&origin, Some("   "), "initial")
+        .await;
+    let request = received.await.expect("telemetry request");
+    let body = telemetry_json_body(&request);
+
+    assert_eq!(body["zone_name"], "alpha.test.");
+    assert_eq!(body["status"], "failed");
+    assert_eq!(
+        body["failure_reason"],
+        "transfer failed without detailed cause"
+    );
+    assert!(captured.contains_all(&[
+        "uDNS transfer telemetry report was rejected",
+        "category=\"transfer\"",
+        "status=503 Service Unavailable",
+    ]));
 }
 
 #[test]
@@ -5654,6 +5758,59 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
 }
 
 #[tokio::test]
+async fn refresh_xot_rejects_tls12_only_primary_before_query() {
+    let (primary, trust_anchor, mut query_seen) = spawn_xot_tls12_primary_detecting_query().await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = ["{trust_anchor}"]
+            "#
+    ))
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_loading(apex);
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+    let refresh_result = refresh_zone_metadata_from_primaries(
+        &zones,
+        &plan,
+        None,
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            ixfr_timeout: std::time::Duration::from_millis(100),
+            axfr_timeout: std::time::Duration::from_millis(100),
+            tcp_connect_timeout: std::time::Duration::from_millis(100),
+            reason: "test",
+        },
+    )
+    .await;
+
+    assert!(refresh_result.is_none());
+    let query_result =
+        tokio::time::timeout(std::time::Duration::from_millis(100), query_seen.recv()).await;
+    assert!(
+        !matches!(query_result, Ok(Some(()))),
+        "TLS 1.2-only XoT primaries must fail the formal profile before AXFR is sent"
+    );
+    assert_eq!(metrics.snapshot().axfr_failed, 1);
+}
+
+#[tokio::test]
 async fn refresh_xot_rejects_untrusted_certificate_before_query() {
     let (cert_path, key_path) = write_self_signed_xot_cert_files_for_name("primary.example.test");
     let (untrusted_anchor, _untrusted_key) =
@@ -7350,6 +7507,51 @@ async fn spawn_xot_primary_detecting_query_with_cert_files(
     (addr, query_seen_rx)
 }
 
+async fn spawn_xot_tls12_primary_detecting_query()
+-> (std::net::SocketAddr, String, mpsc::Receiver<()>) {
+    let (cert_path, key_path) = write_self_signed_xot_cert_files();
+
+    let certs =
+        load_pem_certs(cert_path.to_str().expect("utf-8 cert path")).expect("load generated cert");
+    let key = load_pem_private_key(
+        "127.0.0.1:0".parse().unwrap(),
+        key_path.to_str().expect("utf-8 key path"),
+    )
+    .expect("load generated key");
+    let mut config =
+        tokio_rustls::rustls::ServerConfig::builder_with_protocol_versions(&[&version::TLS12])
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server tls config");
+    config.alpn_protocols = vec![b"dot".to_vec()];
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (query_seen_tx, query_seen_rx) = mpsc::channel(1);
+
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut stream) = acceptor.accept(stream).await else {
+            return;
+        };
+        let mut length_prefix = [0u8; 2];
+        if matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                stream.read_exact(&mut length_prefix),
+            )
+            .await,
+            Ok(Ok(_))
+        ) {
+            let _ = query_seen_tx.send(()).await;
+        }
+    });
+
+    (addr, cert_path.display().to_string(), query_seen_rx)
+}
+
 fn write_self_signed_xot_cert_files() -> (std::path::PathBuf, std::path::PathBuf) {
     write_self_signed_xot_cert_files_for_name("primary.example.test")
 }
@@ -8401,6 +8603,101 @@ fn udp_settings_for_test(metrics: RuntimeMetrics, rrl_config: RrlConfig) -> UdpS
 
 fn notify_log_limiter_for_test() -> NotifyLogLimiter {
     NotifyLogLimiter::new(std::time::Duration::from_secs(60))
+}
+
+async fn spawn_telemetry_endpoint(
+    status: &'static str,
+) -> (std::net::SocketAddr, oneshot::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        let _ = request_tx.send(request);
+        let response =
+            format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    (addr, request_rx)
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut header_end = None;
+    let mut content_length = 0usize;
+    loop {
+        let mut chunk = [0u8; 1024];
+        let read = stream.read(&mut chunk).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if header_end.is_none()
+            && let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n")
+        {
+            header_end = Some(position + 4);
+            let headers = String::from_utf8_lossy(&request[..position]);
+            for line in headers.lines() {
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse().unwrap();
+                }
+            }
+        }
+        if let Some(end) = header_end
+            && request.len() >= end + content_length
+        {
+            break;
+        }
+    }
+    String::from_utf8(request).expect("telemetry request should be utf8")
+}
+
+fn control_plane_reporter_for_endpoint(
+    endpoint: std::net::SocketAddr,
+) -> ControlPlaneTelemetryReporter {
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [control_plane.telemetry]
+                endpoint_url = "http://{endpoint}"
+                node_id = "node-a"
+                bearer_token = "token-a"
+                timeout_secs = 5
+
+                [[zones]]
+                name = "alpha.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+    ))
+    .expect("valid telemetry config");
+    ControlPlaneTelemetryReporter::from_config(&config)
+}
+
+fn telemetry_zone_metadata(serial: Option<u32>, soa_timers: Option<SoaTimers>) -> ZoneMetadata {
+    ZoneMetadata {
+        origin: DomainName::from_absolute_str("alpha.test.").unwrap(),
+        origin_key: Arc::from("alpha.test."),
+        origin_name: Arc::from("alpha.test."),
+        state: ZoneState::Active,
+        serial,
+        soa_timers,
+        shape: None,
+        shape_histograms: None,
+    }
+}
+
+fn telemetry_json_body(request: &str) -> serde_json::Value {
+    let body = request
+        .split_once("\r\n\r\n")
+        .expect("telemetry request should have headers")
+        .1;
+    serde_json::from_str(body).expect("telemetry request body should be JSON")
 }
 
 fn dns_cookie_settings_for_test(policy: DnsCookiePolicy) -> DnsCookieRuntimeSettings {

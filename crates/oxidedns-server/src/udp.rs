@@ -619,8 +619,8 @@ fn handle_udp_datagram(
             query_metrics: None,
         });
     }
-    let dns_cookie_secret = settings.dns_cookie_secrets.current();
-    let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secret, settings.dns_cookie);
+    let dns_cookie_secrets = settings.dns_cookie_secrets.current();
+    let dns_cookie = dns_cookie_context(peer_ip, &dns_cookie_secrets, settings.dns_cookie);
     let cookie_validated = dns_cookie
         .is_some_and(|context| request_has_valid_dns_server_cookie(&prepared.packet, context));
     let query_metrics = observe_query_metrics(

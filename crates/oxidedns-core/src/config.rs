@@ -136,6 +136,12 @@ impl ServerConfig {
         if redacted.control_plane.telemetry.bearer_token.is_some() {
             redacted.control_plane.telemetry.bearer_token = Some("<redacted>".to_owned());
         }
+        if redacted.cookie.server_secret.is_some() {
+            redacted.cookie.server_secret = Some("<redacted>".to_owned());
+        }
+        if redacted.cookie.previous_server_secret.is_some() {
+            redacted.cookie.previous_server_secret = Some("<redacted>".to_owned());
+        }
         Ok(toml::to_string_pretty(&redacted)?)
     }
 
@@ -1329,11 +1335,15 @@ pub enum LogFormatConfig {
     Plain,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CookieConfig {
     #[serde(default)]
     pub policy: CookiePolicyConfig,
+    #[serde(default)]
+    pub server_secret: Option<String>,
+    #[serde(default)]
+    pub previous_server_secret: Option<String>,
     #[serde(default = "default_cookie_timestamp_past_tolerance_seconds")]
     pub timestamp_past_tolerance_seconds: u32,
     #[serde(default = "default_cookie_timestamp_future_tolerance_seconds")]
@@ -1346,6 +1356,8 @@ impl Default for CookieConfig {
     fn default() -> Self {
         Self {
             policy: CookiePolicyConfig::Lenient,
+            server_secret: None,
+            previous_server_secret: None,
             timestamp_past_tolerance_seconds: default_cookie_timestamp_past_tolerance_seconds(),
             timestamp_future_tolerance_seconds: default_cookie_timestamp_future_tolerance_seconds(),
             secret_rotation_interval_secs: 0,
@@ -1355,6 +1367,22 @@ impl Default for CookieConfig {
 
 impl CookieConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.server_secret.is_some() && self.secret_rotation_interval_secs > 0 {
+            return Err(ConfigError::Invalid(
+                "cookie.secret_rotation_interval_secs cannot be used with cookie.server_secret; rotate shared Server Secrets by setting server_secret and previous_server_secret".to_owned(),
+            ));
+        }
+        if self.previous_server_secret.is_some() && self.server_secret.is_none() {
+            return Err(ConfigError::Invalid(
+                "cookie.previous_server_secret requires cookie.server_secret".to_owned(),
+            ));
+        }
+        if let Some(secret) = self.server_secret.as_deref() {
+            decode_cookie_server_secret("cookie.server_secret", secret)?;
+        }
+        if let Some(secret) = self.previous_server_secret.as_deref() {
+            decode_cookie_server_secret("cookie.previous_server_secret", secret)?;
+        }
         if self.timestamp_past_tolerance_seconds >= 2_147_483_648 {
             return Err(ConfigError::Invalid(
                 "cookie.timestamp_past_tolerance_seconds must be less than 2147483648".to_owned(),
@@ -1366,6 +1394,53 @@ impl CookieConfig {
             ));
         }
         Ok(())
+    }
+
+    pub fn server_secret_bytes(&self) -> Result<Option<[u8; 16]>, ConfigError> {
+        self.server_secret
+            .as_deref()
+            .map(|secret| decode_cookie_server_secret("cookie.server_secret", secret))
+            .transpose()
+    }
+
+    pub fn previous_server_secret_bytes(&self) -> Result<Option<[u8; 16]>, ConfigError> {
+        self.previous_server_secret
+            .as_deref()
+            .map(|secret| decode_cookie_server_secret("cookie.previous_server_secret", secret))
+            .transpose()
+    }
+}
+
+fn decode_cookie_server_secret(parameter: &str, value: &str) -> Result<[u8; 16], ConfigError> {
+    let value = value.trim();
+    if value.len() != 32 {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must be exactly 32 hexadecimal characters"
+        )));
+    }
+    let mut secret = [0u8; 16];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = decode_hex_nibble(chunk[0]).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "{parameter} must contain only hexadecimal characters"
+            ))
+        })?;
+        let low = decode_hex_nibble(chunk[1]).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "{parameter} must contain only hexadecimal characters"
+            ))
+        })?;
+        secret[index] = (high << 4) | low;
+    }
+    Ok(secret)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -4188,9 +4263,10 @@ mod tests {
 
                 [cookie]
                 policy = "strict"
+                server_secret = "00112233445566778899aabbccddeeff"
+                previous_server_secret = "ffeeddccbbaa99887766554433221100"
                 timestamp_past_tolerance_seconds = 1800
                 timestamp_future_tolerance_seconds = 60
-                secret_rotation_interval_secs = 86400
 
                 [[zones]]
                 name = "example.test."
@@ -4200,9 +4276,30 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(config.cookie.policy, CookiePolicyConfig::Strict);
+        assert_eq!(
+            config.cookie.server_secret_bytes().expect("server secret"),
+            Some([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ])
+        );
+        assert_eq!(
+            config
+                .cookie
+                .previous_server_secret_bytes()
+                .expect("previous server secret"),
+            Some([
+                0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+                0x11, 0x00,
+            ])
+        );
         assert_eq!(config.cookie.timestamp_past_tolerance_seconds, 1800);
         assert_eq!(config.cookie.timestamp_future_tolerance_seconds, 60);
-        assert_eq!(config.cookie.secret_rotation_interval_secs, 86400);
+        let dumped = config.to_redacted_toml().expect("redacted config");
+        assert!(!dumped.contains("00112233445566778899aabbccddeeff"));
+        assert!(!dumped.contains("ffeeddccbbaa99887766554433221100"));
+        assert!(dumped.contains("server_secret = \"<redacted>\""));
+        assert!(dumped.contains("previous_server_secret = \"<redacted>\""));
     }
 
     #[test]
@@ -4480,6 +4577,70 @@ mod tests {
             error
                 .to_string()
                 .contains("cookie.timestamp_past_tolerance_seconds")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_dns_cookie_shared_secret_configuration() {
+        let invalid_hex = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                server_secret = "not-hex"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("invalid cookie secret should fail");
+        assert!(
+            invalid_hex
+                .to_string()
+                .contains("cookie.server_secret must be exactly 32 hexadecimal characters")
+        );
+
+        let previous_without_current = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                previous_server_secret = "00112233445566778899aabbccddeeff"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("previous cookie secret without current should fail");
+        assert!(
+            previous_without_current
+                .to_string()
+                .contains("cookie.previous_server_secret requires cookie.server_secret")
+        );
+
+        let random_rotation_with_shared_secret = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [cookie]
+                server_secret = "00112233445566778899aabbccddeeff"
+                secret_rotation_interval_secs = 60
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("random rotation with configured shared secret should fail");
+        assert!(
+            random_rotation_with_shared_secret
+                .to_string()
+                .contains("cookie.secret_rotation_interval_secs cannot be used")
         );
     }
 

@@ -295,17 +295,7 @@ impl Runtime {
             ipv4_prefix_len: self.config.rrl.ipv4_prefix_len,
             ipv6_prefix_len: self.config.rrl.ipv6_prefix_len,
         };
-        let dns_cookie_secret = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
-        let dns_cookie_secrets =
-            DnsCookieSecretStore::new(dns_cookie_secret, dns_cookie.secret_rotation_interval);
-        if dns_cookie.policy.is_some() {
-            info!(
-                category = "cookie",
-                secret_fingerprint = %dns_cookie_secret_fingerprint(&dns_cookie_secret),
-                rotation_interval_secs = dns_cookie.secret_rotation_interval.map(|duration| duration.as_secs()).unwrap_or(0),
-                "DNS Cookie server secret generated"
-            );
-        }
+        let dns_cookie_secrets = dns_cookie_secret_store_from_config(&self.config, dns_cookie)?;
         let mut health_shutdown = Vec::new();
         let mut bound_health_listeners = Vec::new();
         for addr in self.config.health_listeners() {
@@ -1599,6 +1589,50 @@ fn jitter_seed() -> u64 {
     (since_epoch as u64) ^ ((since_epoch >> 64) as u64)
 }
 
+fn dns_cookie_secret_store_from_config(
+    config: &ServerConfig,
+    settings: DnsCookieRuntimeSettings,
+) -> Result<DnsCookieSecretStore, RuntimeError> {
+    let configured_current = config
+        .cookie
+        .server_secret_bytes()
+        .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
+    let configured_previous = config
+        .cookie
+        .previous_server_secret_bytes()
+        .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
+
+    if let Some(current) = configured_current {
+        if settings.policy.is_some() {
+            info!(
+                category = "cookie",
+                secret_fingerprint = %dns_cookie_secret_fingerprint(&current),
+                previous_secret_fingerprint = configured_previous
+                    .as_ref()
+                    .map(dns_cookie_secret_fingerprint)
+                    .unwrap_or_else(|| "none".to_owned()),
+                "DNS Cookie shared Server Secret configured"
+            );
+        }
+        return Ok(DnsCookieSecretStore::configured(
+            current,
+            configured_previous,
+        ));
+    }
+
+    let current = dns_cookie_secret().map_err(RuntimeError::DnsCookieSecret)?;
+    let store = DnsCookieSecretStore::new(current, settings.secret_rotation_interval);
+    if settings.policy.is_some() {
+        info!(
+            category = "cookie",
+            secret_fingerprint = %dns_cookie_secret_fingerprint(&current),
+            rotation_interval_secs = settings.secret_rotation_interval.map(|duration| duration.as_secs()).unwrap_or(0),
+            "DNS Cookie server secret generated"
+        );
+    }
+    Ok(store)
+}
+
 #[derive(Debug, Clone)]
 struct NotifyAuthority {
     sources_by_zone: Arc<Mutex<HashMap<String, HashSet<IpAddr>>>>,
@@ -2356,12 +2390,12 @@ impl ControlPlaneTelemetryReporter {
         {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => warn!(
-                category = "control_plane",
+                category = "transfer",
                 status = %response.status(),
                 "uDNS transfer telemetry report was rejected"
             ),
             Err(error) => warn!(
-                category = "control_plane",
+                category = "transfer",
                 %error,
                 "failed to send uDNS transfer telemetry report"
             ),

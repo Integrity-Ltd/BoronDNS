@@ -65,6 +65,10 @@ cleanup() {
             echo "---- strict-client-only-badcookie-dig.out ----" >&2
             cat "$workdir/strict-client-only-badcookie-dig.out" >&2
         }
+        [[ -f "$workdir/strict-shared-previous-cookie-dig.out" ]] && {
+            echo "---- strict-shared-previous-cookie-dig.out ----" >&2
+            cat "$workdir/strict-shared-previous-cookie-dig.out" >&2
+        }
         [[ -f "$workdir/strict-invalid-server-cookie-badcookie-dig.out" ]] && {
             echo "---- strict-invalid-server-cookie-badcookie-dig.out ----" >&2
             cat "$workdir/strict-invalid-server-cookie-badcookie-dig.out" >&2
@@ -98,6 +102,8 @@ strict_oxidedns_conf="$workdir/strict-oxidedns.toml"
 summary_env="$workdir/dns-cookie-summary.env"
 strict_summary_env="$workdir/strict-dns-cookie-summary.env"
 traceability_tsv="$workdir/dns-cookie-traceability.tsv"
+cookie_old_secret="00112233445566778899aabbccddeeff"
+cookie_new_secret="ffeeddccbbaa99887766554433221100"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -231,6 +237,7 @@ log_level = "debug"
 
 [cookie]
 policy = "lenient"
+server_secret = "$cookie_old_secret"
 
 [limits]
 axfr_timeout_secs = 5
@@ -344,8 +351,8 @@ for expected in \
     fi
 done
 
-if ! grep -q "DNS Cookie server secret generated" "$workdir/oxidedns.log"; then
-    echo "OxideDNS log did not record DNS Cookie startup fingerprint event" >&2
+if ! grep -q "DNS Cookie shared Server Secret configured" "$workdir/oxidedns.log"; then
+    echo "OxideDNS log did not record configured DNS Cookie startup fingerprint event" >&2
     exit 1
 fi
 
@@ -362,6 +369,8 @@ log_level = "debug"
 
 [cookie]
 policy = "strict"
+server_secret = "$cookie_new_secret"
+previous_server_secret = "$cookie_old_secret"
 
 [limits]
 axfr_timeout_secs = 5
@@ -390,6 +399,25 @@ done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
     echo "strict OxideDNS did not become ready after fake-primary AXFR" >&2
+    exit 1
+fi
+
+dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A \
+    +norecurse "+cookie=$response_cookie" +noall +comments +answer +time=1 +tries=1 \
+    >"$workdir/strict-shared-previous-cookie-dig.out"
+
+if ! grep -q "www.alpha.test." "$workdir/strict-shared-previous-cookie-dig.out" || ! grep -q "192.0.2.10" "$workdir/strict-shared-previous-cookie-dig.out"; then
+    echo "strict staged-rollover instance did not accept server cookie from previous shared secret" >&2
+    exit 1
+fi
+
+strict_shared_response_cookie="$(awk '/COOKIE:/ {print $3; exit}' "$workdir/strict-shared-previous-cookie-dig.out")"
+if [[ ! "$strict_shared_response_cookie" =~ ^${client_cookie}[0-9a-fA-F]{32}$ ]]; then
+    echo "strict staged-rollover response did not contain a refreshed server cookie" >&2
+    exit 1
+fi
+if [[ "$strict_shared_response_cookie" == "$response_cookie" ]]; then
+    echo "strict staged-rollover response did not refresh the previous-secret cookie with the current shared secret" >&2
     exit 1
 fi
 
@@ -436,7 +464,7 @@ fi
 strict_metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 for expected in \
     'oxidedns_dns_cookie_queries_total{case="client_only"} 1' \
-    'oxidedns_dns_cookie_queries_total{case="valid_server"} 3' \
+    'oxidedns_dns_cookie_queries_total{case="valid_server"} 4' \
     'oxidedns_dns_cookie_queries_total{case="invalid_server"} 1' \
     'oxidedns_dns_cookie_badcookie_responses_total 2' \
     'oxidedns_dns_cookie_badcookie_responses_by_prefix_total{source_prefix="127.0.0.0/24"} 2'; do
@@ -463,10 +491,12 @@ EOF
 cat >"$strict_summary_env" <<EOF
 client_cookie=$client_cookie
 strict_response_cookie_bytes=$((${#strict_response_cookie} / 2))
+strict_shared_previous_cookie_accepted=1
+strict_shared_previous_response_cookie_bytes=$((${#strict_shared_response_cookie} / 2))
 strict_client_only_badcookie=1
 strict_invalid_server_cookie_badcookie=1
 strict_valid_server_cookie_response=1
-strict_valid_server_cookie_metric_count=3
+strict_valid_server_cookie_metric_count=4
 strict_badcookie_metric_count=2
 EOF
 
@@ -475,6 +505,7 @@ requirement	artifact	evidence
 ODS-FR-COOKIE-003	no-cookie-dig.out	no COOKIE option emitted when client omits COOKIE
 ODS-FR-COOKIE-004	first-dig.out	client-cookie-only query receives RFC9018 server cookie
 ODS-FR-COOKIE-005	second-dig.out	valid server-cookie retry receives authoritative answer
+ODS-FR-COOKIE-004	strict-shared-previous-cookie-dig.out	staged rollover instance accepts a Server Cookie produced by another instance with the previous configured shared secret and refreshes it with the current secret
 ODS-FR-COOKIE-006	invalid-cookie-dig.out	lenient invalid-server-cookie query receives answer plus refreshed cookie
 ODS-FR-COOKIE-006	strict-client-only-badcookie-dig.out	strict client-cookie-only query receives BADCOOKIE plus retry cookie
 ODS-FR-COOKIE-006	strict-invalid-server-cookie-badcookie-dig.out	strict invalid-server-cookie query receives BADCOOKIE plus retry cookie
@@ -496,6 +527,7 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$workdir/second-dig.out" "$artifact_dir/second-dig.out"
     cp "$workdir/invalid-cookie-dig.out" "$artifact_dir/invalid-cookie-dig.out"
     cp "$workdir/strict-client-only-badcookie-dig.out" "$artifact_dir/strict-client-only-badcookie-dig.out"
+    cp "$workdir/strict-shared-previous-cookie-dig.out" "$artifact_dir/strict-shared-previous-cookie-dig.out"
     cp "$workdir/strict-invalid-server-cookie-badcookie-dig.out" "$artifact_dir/strict-invalid-server-cookie-badcookie-dig.out"
     cp "$workdir/strict-valid-server-cookie-dig.out" "$artifact_dir/strict-valid-server-cookie-dig.out"
     cp "$summary_env" "$artifact_dir/dns-cookie-summary.env"
@@ -505,4 +537,4 @@ if [[ -n "$artifact_dir" ]]; then
     printf '%s\n' "$strict_metrics" >"$artifact_dir/strict-metrics.txt"
 fi
 
-printf 'DNS Cookie dig interop passed response_cookie_bytes=%s cases=no_cookie,client_only,valid_server,invalid_server strict_badcookie=2\n' "$((${#response_cookie} / 2))"
+printf 'DNS Cookie dig interop passed response_cookie_bytes=%s cases=no_cookie,client_only,valid_server,invalid_server shared_previous_rollover=1 strict_badcookie=2\n' "$((${#response_cookie} / 2))"

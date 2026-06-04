@@ -107,6 +107,8 @@ def assert_current_dependency_confined(
             f"declared adapter paths:\n{formatted}"
         )
     if not observed_allowed_reference:
+        if "transitive-only" in row["rationale"].lower():
+            return
         fail(
             f"unsafe-prone dependency {package!r} is current but no first-party "
             "source reference was observed in its declared allowed_paths"

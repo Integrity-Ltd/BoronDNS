@@ -71,6 +71,7 @@ RUSTUP_TOOLCHAIN=nightly cargo fuzz check transfer_stream
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check tsig_message
 RUSTUP_TOOLCHAIN=nightly cargo fuzz check notify_edns_datagram
 scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
+scripts/interop-primary-matrix.sh
 scripts/interop-bind-axfr.sh
 scripts/interop-bind-tsig-axfr.sh
 scripts/interop-bind-notify-refresh.sh

@@ -85,6 +85,12 @@ to the tested primary implementation version, OS or container package context,
 configuration artifacts, transport, and security mode. A skipped script is
 missing evidence, not passing evidence.
 
+Use `scripts/interop-primary-matrix.sh` for a retained aggregate pass across the
+selected BIND, NSD, Knot, and PowerDNS/PostgreSQL primary scenarios. It writes
+`primary-matrix-summary.tsv` and per-primary artifact subdirectories under
+`target/evidence/primary-matrix-...` by default, or under
+`OXIDEDNS_PRIMARY_MATRIX_ARTIFACT_DIR` when set.
+
 Set `OXIDEDNS_RELEASE_NOTES` to a completed release-notes markdown file to run
 the release-note gate and verify that retained primary-version artifact paths
 are published in the notes.

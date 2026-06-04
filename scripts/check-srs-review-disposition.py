@@ -262,7 +262,7 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
     "XoT": [
         "Retained in Engineering MVP as outbound zone-transfer transport only",
         "Client-query DoT and NOTIFY-over-TLS listeners remain out of scope",
-        "Formal RFC 9103 XoT conformance still requires TLS 1.3-or-later evidence",
+        "transfer client now enforces a TLS 1.3-only formal RFC 9103 profile",
     ],
     "DNS Cookies": [
         "Retained in Engineering MVP as an implemented UDP source-address confirmation mechanism",
@@ -327,7 +327,7 @@ REVIEW_DEFER_CODE_BACKING = {
     "XoT": [
         "| XoT |",
         "Client-query DoT, DoH, DoQ, inbound XoT listeners",
-        "formal RFC 9103 TLS 1.3-only conformance",
+        "TLS 1.3-only client profile",
     ],
     "DNS Cookies": [
         "| DNS Cookies |",
@@ -427,7 +427,7 @@ FEATURES = {
         "source_needles": [
             "connect_xot_stream",
             "alpn_protocols = vec![b\"dot\".to_vec()]",
-            'features = ["ring", "tls12"]',
+            "ClientConfig::builder_with_protocol_versions(&[&version::TLS13])",
         ],
         "test_needles": [
             "refresh_xot_handshake_failure_does_not_retry_cleartext",
@@ -821,10 +821,10 @@ def main() -> int:
             )
     for term in [
         "Current Intentional Code Alignment Gaps",
-        "XoT TLS version compatibility",
-        "rustls defaults with the Cargo `tls12` feature enabled",
-        "Formal RFC 9103 evidence must either enforce TLS 1.3-or-later",
-        "explicitly separated compatibility-mode evidence",
+        "XoT TLS formal profile enforcement",
+        "builder_with_protocol_versions(&[&version::TLS13])",
+        "TLS 1.2-only primaries fail",
+        "formal TLS 1.3-only profile enforcement",
         "Section 4.1 owns the member-zone PTR structure",
         "special-use or wildcard-looking names are not implicitly invalid",
         "RFC 9432 §5.2 name clashes are ignored and logged",

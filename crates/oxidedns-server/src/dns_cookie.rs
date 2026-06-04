@@ -30,38 +30,51 @@ pub(crate) struct DnsCookieSecretStore {
     rotation_interval: Option<Duration>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DnsCookieSecrets {
+    pub(crate) current: [u8; 16],
+    pub(crate) previous: Option<[u8; 16]>,
+}
+
 struct DnsCookieSecretState {
     current: [u8; 16],
+    previous: Option<[u8; 16]>,
     generated_at: Instant,
 }
 
 impl DnsCookieSecretStore {
     pub(crate) fn new(current: [u8; 16], rotation_interval: Option<Duration>) -> Self {
-        Self::new_at(current, rotation_interval, Instant::now())
+        Self::new_at(current, None, rotation_interval, Instant::now())
+    }
+
+    pub(crate) fn configured(current: [u8; 16], previous: Option<[u8; 16]>) -> Self {
+        Self::new_at(current, previous, None, Instant::now())
     }
 
     pub(crate) fn new_at(
         current: [u8; 16],
+        previous: Option<[u8; 16]>,
         rotation_interval: Option<Duration>,
         generated_at: Instant,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(DnsCookieSecretState {
                 current,
+                previous,
                 generated_at,
             })),
             rotation_interval,
         }
     }
 
-    pub(crate) fn current(&self) -> [u8; 16] {
+    pub(crate) fn current(&self) -> DnsCookieSecrets {
         self.current_with_generator(dns_cookie_secret)
     }
 
     pub(crate) fn current_with_generator(
         &self,
         generate_secret: impl FnOnce() -> Result<[u8; 16], getrandom::Error>,
-    ) -> [u8; 16] {
+    ) -> DnsCookieSecrets {
         let mut state = self
             .inner
             .lock()
@@ -72,6 +85,7 @@ impl DnsCookieSecretStore {
         {
             match generate_secret() {
                 Ok(secret) => {
+                    state.previous = Some(state.current);
                     state.current = secret;
                     state.generated_at = Instant::now();
                     info!(
@@ -89,7 +103,10 @@ impl DnsCookieSecretStore {
                 }
             }
         }
-        state.current
+        DnsCookieSecrets {
+            current: state.current,
+            previous: state.previous,
+        }
     }
 }
 
@@ -141,10 +158,11 @@ pub(crate) fn dns_cookie_settings(config: &CookieConfig) -> DnsCookieRuntimeSett
 
 pub(crate) fn dns_cookie_context<'a>(
     peer_ip: IpAddr,
-    secret: &'a [u8; 16],
+    secrets: &'a DnsCookieSecrets,
     settings: DnsCookieRuntimeSettings,
 ) -> Option<DnsCookieContext<'a>> {
-    let mut context = DnsCookieContext::new(peer_ip, secret, current_unix_time_secs());
+    let mut context = DnsCookieContext::new(peer_ip, &secrets.current, current_unix_time_secs());
+    context.previous_server_secret = secrets.previous.as_ref();
     context.policy = settings.policy?;
     context.past_window_secs = settings.past_window_secs;
     context.future_window_secs = settings.future_window_secs;
