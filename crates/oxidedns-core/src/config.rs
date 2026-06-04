@@ -53,6 +53,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
     #[serde(default)]
+    pub observability: ObservabilityConfig,
+    #[serde(default)]
     pub query: QuerySettings,
     #[serde(default)]
     pub edns: EdnsConfig,
@@ -142,6 +144,7 @@ impl ServerConfig {
         }
         self.logging.validate()?;
         self.metrics.validate()?;
+        self.observability.validate()?;
         self.chaos.validate()?;
         self.dnssec.validate()?;
 
@@ -987,6 +990,86 @@ pub enum MetricsHotPathDetail {
     Full,
     #[serde(rename = "reduced")]
     Reduced,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ObservabilityConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_observability_path_prefix")]
+    pub path_prefix: String,
+    #[serde(default = "default_observability_rate_limit_per_minute")]
+    pub rate_limit_per_minute: u32,
+    #[serde(default = "default_observability_rate_limit_idle_seconds")]
+    pub rate_limit_idle_seconds: u64,
+    #[serde(default = "default_true")]
+    pub include_filesystems: bool,
+    #[serde(default = "default_true")]
+    pub include_process_resources: bool,
+    #[serde(default = "default_true")]
+    pub include_time_sync_status: bool,
+    #[serde(default = "default_true")]
+    pub include_certificate_status: bool,
+    #[serde(default = "default_true")]
+    pub include_zone_detail: bool,
+    #[serde(default = "default_true")]
+    pub include_config_summary: bool,
+    #[serde(default)]
+    pub bearer_token_file: Option<PathBuf>,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path_prefix: default_observability_path_prefix(),
+            rate_limit_per_minute: default_observability_rate_limit_per_minute(),
+            rate_limit_idle_seconds: default_observability_rate_limit_idle_seconds(),
+            include_filesystems: true,
+            include_process_resources: true,
+            include_time_sync_status: true,
+            include_certificate_status: true,
+            include_zone_detail: true,
+            include_config_summary: true,
+            bearer_token_file: None,
+        }
+    }
+}
+
+impl ObservabilityConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.path_prefix.is_empty() || !self.path_prefix.starts_with('/') {
+            return Err(ConfigError::Invalid(
+                "observability.path_prefix must be an absolute HTTP path".to_owned(),
+            ));
+        }
+        if self.path_prefix.len() > 1 && self.path_prefix.ends_with('/') {
+            return Err(ConfigError::Invalid(
+                "observability.path_prefix must not end with '/'".to_owned(),
+            ));
+        }
+        if self
+            .path_prefix
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        {
+            return Err(ConfigError::Invalid(
+                "observability.path_prefix must not contain '.' or '..' path segments".to_owned(),
+            ));
+        }
+        if self.rate_limit_per_minute == 0 {
+            return Err(ConfigError::Invalid(
+                "observability.rate_limit_per_minute must be at least 1".to_owned(),
+            ));
+        }
+        if self.rate_limit_idle_seconds == 0 {
+            return Err(ConfigError::Invalid(
+                "observability.rate_limit_idle_seconds must be at least 1".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -2334,6 +2417,18 @@ fn default_metrics_rate_limit_per_minute() -> u32 {
 }
 
 fn default_metrics_rate_limit_idle_seconds() -> u64 {
+    300
+}
+
+fn default_observability_path_prefix() -> String {
+    "/observability/v1".to_owned()
+}
+
+fn default_observability_rate_limit_per_minute() -> u32 {
+    60
+}
+
+fn default_observability_rate_limit_idle_seconds() -> u64 {
     300
 }
 
@@ -4031,6 +4126,80 @@ mod tests {
         );
         assert!(config.metrics.pipeline_timing_enabled);
         assert!(config.metrics.zone_shape_enabled);
+    }
+
+    #[test]
+    fn parses_observability_configuration() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [observability]
+                enabled = true
+                path_prefix = "/obs/v1"
+                rate_limit_per_minute = 30
+                rate_limit_idle_seconds = 120
+                include_filesystems = false
+                include_process_resources = false
+                include_time_sync_status = false
+                include_certificate_status = false
+                include_zone_detail = false
+                include_config_summary = false
+                bearer_token_file = "/etc/oxidedns/observability.token"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid observability config");
+
+        assert!(config.observability.enabled);
+        assert_eq!(config.observability.path_prefix, "/obs/v1");
+        assert_eq!(config.observability.rate_limit_per_minute, 30);
+        assert_eq!(config.observability.rate_limit_idle_seconds, 120);
+        assert!(!config.observability.include_filesystems);
+        assert!(!config.observability.include_process_resources);
+        assert!(!config.observability.include_time_sync_status);
+        assert!(!config.observability.include_certificate_status);
+        assert!(!config.observability.include_zone_detail);
+        assert!(!config.observability.include_config_summary);
+        assert_eq!(
+            config.observability.bearer_token_file.as_deref(),
+            Some(Path::new("/etc/oxidedns/observability.token"))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_observability_configuration() {
+        for (case, expected) in [
+            ("path_prefix = \"obs\"", "absolute HTTP path"),
+            ("path_prefix = \"/obs/\"", "must not end with '/'"),
+            ("path_prefix = \"/../obs\"", "must not contain"),
+            ("rate_limit_per_minute = 0", "rate_limit_per_minute"),
+            ("rate_limit_idle_seconds = 0", "rate_limit_idle_seconds"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [observability]
+                    {case}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("invalid observability config must fail");
+
+            assert!(
+                error.to_string().contains(expected),
+                "{case} produced {error}"
+            );
+        }
     }
 
     #[test]

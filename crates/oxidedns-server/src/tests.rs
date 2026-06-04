@@ -13,7 +13,7 @@ use oxidedns_core::{
     ServerConfig,
     axfr::{IxfrResponse, frame_tcp_message},
     config::{
-        HealthConfig, MetricsHotPathDetail, RrlConfig, TransferPrimaryConfig,
+        HealthConfig, MetricsHotPathDetail, ObservabilityConfig, RrlConfig, TransferPrimaryConfig,
         TransferTransportConfig, UdpBackend, XdpConfig,
     },
     dns::{
@@ -41,24 +41,24 @@ use tracing::{
 };
 
 use super::{
-    BoundUdpListener, CatalogManager, CatalogRuntime, CookiePrefixMetricSettings,
-    DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS,
-    DnsCookieRuntimeSettings, DnsCookieSecretStore, HealthEndpointState, IxfrCooldownRegistry,
-    LoadingWarning, MetricsRateLimiter, NotifyAuthority, NotifyLogLimiter, NotifyLogSummary,
-    NotifyRefreshAction, NotifyRefreshTracker, NotifyTsigResult, PacketIo, PreparedDnsMessage,
-    QueryLatencyCategory, QueryLatencyHistogram, QueryMetricObservation, QueryObservationOptions,
-    QueryPipelineStage, RefreshAttemptContext, RefreshRequest, RefreshWorkerSettings,
-    ResponseCacheCandidateCategory, ResponseCacheIneligibleReason, RrlCategory, RrlDecision,
-    RrlLimiter, RrlSummary, Runtime, RuntimeError, RuntimeMetrics, RuntimeStatus, StdUdpBatchIo,
-    TcpServerSettings, TransferError, TransferPlan, TransferSession, TransferTsig, UdpRuntime,
-    UdpServerSettings, ZoneRefreshRegistry, bind_udp_listeners, dns_cookie_secret_fingerprint,
-    drain_task_set, drain_tcp_connections, handle_tcp_connection,
-    handle_tcp_connection_with_query_hook, jitter_interval, load_pem_certs,
-    load_pem_private_key_from_file as load_pem_private_key, log_loading_warning,
-    log_notify_log_summary, log_rrl_summary, metrics_body, observe_query_metrics,
-    poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-    prepare_notify_packet_with_metrics, prepare_query_tsig_packet, query_id_from_random_bytes,
-    record_query_lookup_metrics, record_query_response_metric,
+    BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig,
+    CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+    DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
+    HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter, NotifyAuthority,
+    NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction, NotifyRefreshTracker,
+    NotifyTsigResult, PacketIo, PreparedDnsMessage, QueryLatencyCategory, QueryLatencyHistogram,
+    QueryMetricObservation, QueryObservationOptions, QueryPipelineStage, RefreshAttemptContext,
+    RefreshRequest, RefreshWorkerSettings, ResponseCacheCandidateCategory,
+    ResponseCacheIneligibleReason, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
+    RuntimeError, RuntimeMetrics, RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError,
+    TransferPlan, TransferSession, TransferTsig, UdpRuntime, UdpServerSettings,
+    ZoneRefreshRegistry, bind_udp_listeners, dns_cookie_secret_fingerprint, drain_task_set,
+    drain_tcp_connections, handle_tcp_connection, handle_tcp_connection_with_query_hook,
+    jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
+    log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
+    observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+    prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
+    query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
     refresh_zone_metadata_from_primaries, required_file_descriptor_limit, response_category,
     response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
     rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
@@ -1002,6 +1002,177 @@ async fn health_endpoint_reports_starting_until_zone_active() {
 }
 
 #[tokio::test]
+async fn observability_api_is_disabled_by_default() {
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(
+        listener,
+        health_state(zones),
+        std::future::pending(),
+    ));
+
+    let response = http_request(addr, "GET", "/observability/v1").await;
+    assert!(response.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(response.ends_with(r#"{"error":"not_found","path":"/observability/v1"}"#));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_reports_summary_and_zones() {
+    let zones = ZoneStore::new();
+    let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        active_origin.clone(),
+        Some(42),
+        vec![Rrset::new(
+            active_origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata()],
+        )],
+    ));
+    zones.insert_loading(DomainName::from_absolute_str("loading.test.").unwrap());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        },
+    );
+    state.metrics.record_query_received();
+    state.metrics.record_zone_query_key("example.test.");
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let summary = http_json(addr, "/observability/v1/summary").await;
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["data"]["zones"]["active"], 1);
+    assert_eq!(summary["data"]["zones"]["loading"], 1);
+    assert_eq!(summary["data"]["zone_image"]["serve_hits"], 0);
+
+    let zones = http_json(addr, "/observability/v1/zones").await;
+    assert_eq!(zones["data"]["zones"][0]["zone"], "example.test.");
+    assert_eq!(zones["data"]["zones"][0]["queries"], 1);
+
+    let zone = http_json(addr, "/observability/v1/zones/example.test.").await;
+    assert_eq!(zone["data"]["serial"], 42);
+    assert_eq!(zone["data"]["source"], "configured");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_honors_custom_prefix_and_reduced_metrics() {
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        DomainName::from_absolute_str("example.test.").unwrap(),
+        Some(1),
+        Vec::new(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            path_prefix: "/obs".to_owned(),
+            ..ObservabilityConfig::default()
+        },
+    );
+    state.metrics = RuntimeMetrics::new_reduced_for_test();
+    state.metrics.record_query_received();
+    state.metrics.record_zone_query_key("example.test.");
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let default_path = http_request(addr, "GET", "/observability/v1").await;
+    assert!(default_path.starts_with("HTTP/1.1 404 Not Found"));
+
+    let index = http_json(addr, "/obs").await;
+    assert_eq!(index["data"]["endpoints"]["summary"], "/obs/summary");
+    assert_eq!(index["metrics_detail"], "reduced");
+
+    let zones = http_json(addr, "/obs/zones").await;
+    assert_eq!(zones["data"]["zones"][0]["queries"], "reduced");
+    assert_eq!(zones["metrics_detail"], "reduced");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn observability_api_reports_catalog_membership() {
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(DomainName::from_absolute_str("catalog.example.").unwrap());
+    zones.insert_loading(DomainName::from_absolute_str("alpha.example.").unwrap());
+    let mut state = health_state_with_observability(
+        zones,
+        ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        },
+    );
+    state.catalog_manager = CatalogManager {
+        catalogs_by_key: Arc::new(HashMap::from([(
+            "catalog.example.".to_owned(),
+            CatalogRuntimeConfig {
+                origin: DomainName::from_absolute_str("catalog.example.").unwrap(),
+                config: oxidedns_core::config::CatalogZoneConfig {
+                    name: "catalog.example.".to_owned(),
+                    class: "IN".to_owned(),
+                    primaries: vec!["192.0.2.53:53".parse().unwrap()],
+                    transfer_primaries: Vec::new(),
+                    catalog_primaries: Vec::new(),
+                    catalog_transfer_primaries: Vec::new(),
+                    member_primaries: Vec::new(),
+                    member_transfer_primaries: Vec::new(),
+                    notify_sources: Vec::new(),
+                    tsig_key: Some("catalog-key.".to_owned()),
+                    catalog_tsig_key: None,
+                    member_tsig_key: None,
+                    serve_catalog_zone: false,
+                    member_transfer_extensions: false,
+                    max_member_zones: 10_000,
+                },
+            },
+        )])),
+        static_zone_keys: Arc::new(HashSet::from(["static.example.".to_owned()])),
+        memberships_by_catalog: Arc::new(Mutex::new(HashMap::from([(
+            "catalog.example.".to_owned(),
+            HashSet::from(["alpha.example.".to_owned(), "static.example.".to_owned()]),
+        )]))),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_health(listener, state, std::future::pending()));
+
+    let catalogs = http_json(addr, "/observability/v1/catalogs").await;
+    assert_eq!(catalogs["data"]["configured"], 1);
+    assert_eq!(
+        catalogs["data"]["memberships"][0]["catalog_zone"],
+        "catalog.example."
+    );
+    assert_eq!(catalogs["data"]["memberships"][0]["members_total"], 2);
+    assert_eq!(catalogs["data"]["memberships"][0]["members_managed"], 1);
+    assert_eq!(
+        catalogs["data"]["memberships"][0]["members_static_overlap"],
+        1
+    );
+
+    let zone = http_json(addr, "/observability/v1/zones/alpha.example.").await;
+    assert_eq!(zone["data"]["source"], "catalog_derived");
+
+    server.abort();
+}
+
+#[tokio::test]
 async fn health_endpoint_exits_on_graceful_shutdown_signal() {
     let zones = ZoneStore::new();
     zones.insert_snapshot(ZoneSnapshot::active(
@@ -1220,6 +1391,10 @@ async fn health_endpoint_handles_readyz_metrics_404_and_405() {
             catalog_manager: CatalogManager::default(),
             refresh_registry,
             metrics_rate_limiter: MetricsRateLimiter::default(),
+            observability: ObservabilityConfig::default(),
+            observability_rate_limiter: MetricsRateLimiter::from_observability_config(
+                &ObservabilityConfig::default(),
+            ),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: true,
@@ -1487,6 +1662,10 @@ async fn metrics_endpoint_rate_limits_per_source_without_limiting_health() {
                 metrics_rate_limit_idle_seconds: 300,
                 ..HealthConfig::default()
             }),
+            observability: ObservabilityConfig::default(),
+            observability_rate_limiter: MetricsRateLimiter::from_observability_config(
+                &ObservabilityConfig::default(),
+            ),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: false,
@@ -1535,6 +1714,10 @@ async fn health_endpoint_reports_draining_and_unready_during_shutdown() {
                 std::time::Duration::from_secs(3600),
             ),
             metrics_rate_limiter: MetricsRateLimiter::default(),
+            observability: ObservabilityConfig::default(),
+            observability_rate_limiter: MetricsRateLimiter::from_observability_config(
+                &ObservabilityConfig::default(),
+            ),
             started_at: std::time::Instant::now(),
             graceful_shutdown_secs: 30,
             zone_shape_metrics_enabled: false,
@@ -8157,6 +8340,19 @@ async fn http_request(addr: std::net::SocketAddr, method: &str, path: &str) -> S
         .expect("HTTP response should be UTF-8")
 }
 
+async fn http_json(addr: std::net::SocketAddr, path: &str) -> serde_json::Value {
+    let response = http_request(addr, "GET", path).await;
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected HTTP response: {response}"
+    );
+    let body = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response should have body")
+        .1;
+    serde_json::from_str(body).expect("observability response should be valid JSON")
+}
+
 async fn http_request_with_headers(
     addr: std::net::SocketAddr,
     method: &str,
@@ -8267,6 +8463,14 @@ async fn unused_udp_tcp_addr() -> std::net::SocketAddr {
 }
 
 fn health_state(zones: ZoneStore) -> HealthEndpointState {
+    health_state_with_observability(zones, ObservabilityConfig::default())
+}
+
+fn health_state_with_observability(
+    zones: ZoneStore,
+    observability: ObservabilityConfig,
+) -> HealthEndpointState {
+    let observability_rate_limiter = MetricsRateLimiter::from_observability_config(&observability);
     HealthEndpointState {
         zones,
         runtime_status: RuntimeStatus::new(),
@@ -8278,6 +8482,8 @@ fn health_state(zones: ZoneStore) -> HealthEndpointState {
             std::time::Duration::from_secs(3600),
         ),
         metrics_rate_limiter: MetricsRateLimiter::default(),
+        observability,
+        observability_rate_limiter,
         started_at: std::time::Instant::now(),
         graceful_shutdown_secs: 30,
         zone_shape_metrics_enabled: false,

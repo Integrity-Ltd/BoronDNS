@@ -7,22 +7,23 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Router,
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use flate2::{Compression, write::GzEncoder};
 use oxidedns_core::{
-    config::{HealthConfig, MetricsHotPathDetail},
+    config::{HealthConfig, MetricsHotPathDetail, ObservabilityConfig},
     dns::{ChaosQueryOutcome, DnsCookieRequestStatus, ZoneImageServeFailureReason},
     zone::{ZoneShapeHistogramBucket, ZoneState, ZoneStore},
 };
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
@@ -50,7 +51,7 @@ pub(crate) async fn serve_health(
 }
 
 fn health_router(state: HealthEndpointState) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route(
             "/livez",
             get(livez)
@@ -74,9 +75,86 @@ fn health_router(state: HealthEndpointState) -> Router {
             get(metrics)
                 .head(health_method_not_allowed)
                 .fallback(health_method_not_allowed),
-        )
-        .fallback(health_not_found)
-        .with_state(state)
+        );
+
+    if state.observability.enabled {
+        let prefix = state.observability.path_prefix.clone();
+        router = router
+            .route(
+                &prefix,
+                get(observability_index)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/summary"),
+                get(observability_summary)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/runtime"),
+                get(observability_runtime)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/resources"),
+                get(observability_resources)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/time"),
+                get(observability_time)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/certificates"),
+                get(observability_certificates)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/zones"),
+                get(observability_zones)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/zones/{{zone}}"),
+                get(observability_zone)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/catalogs"),
+                get(observability_catalogs)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/transfers"),
+                get(observability_transfers)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/security"),
+                get(observability_security)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            )
+            .route(
+                &format!("{prefix}/config"),
+                get(observability_config)
+                    .head(health_method_not_allowed)
+                    .fallback(health_method_not_allowed),
+            );
+    }
+
+    router.fallback(health_not_found).with_state(state)
 }
 
 async fn health_method_not_allowed(uri: Uri) -> Response {
@@ -167,6 +245,486 @@ async fn metrics(
         body,
     )
         .into_response()
+}
+
+async fn observability_index(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    observability_response(peer.ip(), &state, observability_index_value(&state))
+}
+
+async fn observability_summary(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    observability_response(peer.ip(), &state, observability_summary_value(&state))
+}
+
+async fn observability_runtime(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    observability_response(peer.ip(), &state, observability_runtime_value(&state))
+}
+
+async fn observability_resources(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let config = &state.observability;
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(
+            &state,
+            json!({
+                "filesystems": optional_check_status(config.include_filesystems),
+                "process_resources": optional_check_status(config.include_process_resources),
+                "note": "resource probing is bounded to future host-local snapshots; this endpoint does not perform external checks"
+            }),
+        ),
+    )
+}
+
+async fn observability_time(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let status = if state.observability.include_time_sync_status {
+        json!({"status": "unknown", "source": "unconfigured"})
+    } else {
+        json!({"status": "disabled"})
+    };
+    observability_response(peer.ip(), &state, observability_base_value(&state, status))
+}
+
+async fn observability_certificates(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let status = if state.observability.include_certificate_status {
+        json!({"status": "unknown", "configured_material": "not_indexed"})
+    } else {
+        json!({"status": "disabled"})
+    };
+    observability_response(peer.ip(), &state, observability_base_value(&state, status))
+}
+
+async fn observability_zones(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let zones = if state.observability.include_zone_detail {
+        state
+            .zones
+            .zone_metadata()
+            .into_iter()
+            .map(|metadata| zone_observability_value(&state, &metadata))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(
+            &state,
+            json!({
+                "detail": state.observability.include_zone_detail,
+                "counts": zone_counts_value(&state),
+                "zones": zones,
+            }),
+        ),
+    )
+}
+
+async fn observability_zone(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(zone): Path<String>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let requested = if zone.ends_with('.') {
+        zone
+    } else {
+        format!("{zone}.")
+    };
+    let Some(metadata) = state.zones.zone_metadata().into_iter().find(|metadata| {
+        metadata
+            .origin_name
+            .as_ref()
+            .eq_ignore_ascii_case(&requested)
+    }) else {
+        return observability_response(
+            peer.ip(),
+            &state,
+            observability_base_value(
+                &state,
+                json!({"error": "zone_not_found", "zone": requested}),
+            ),
+        );
+    };
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(&state, zone_observability_value(&state, &metadata)),
+    )
+}
+
+async fn observability_catalogs(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(
+            &state,
+            json!({
+                "configured": state.catalog_manager.catalogs_by_key.len(),
+                "memberships": catalog_observability_values(&state),
+            }),
+        ),
+    )
+}
+
+async fn observability_transfers(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let snapshot = state.metrics.snapshot();
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(
+            &state,
+            json!({
+                "active": "not_tracked",
+                "counters": {
+                    "axfr_started": snapshot.axfr_started,
+                    "axfr_succeeded": snapshot.axfr_succeeded,
+                    "axfr_failed": snapshot.axfr_failed,
+                    "ixfr_started": snapshot.ixfr_started,
+                    "ixfr_succeeded": snapshot.ixfr_succeeded,
+                    "ixfr_failed": snapshot.ixfr_failed,
+                },
+                "per_zone_scheduler": zone_scheduler_observability_values(&state),
+            }),
+        ),
+    )
+}
+
+async fn observability_security(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let snapshot = state.metrics.snapshot();
+    observability_response(
+        peer.ip(),
+        &state,
+        observability_base_value(
+            &state,
+            json!({
+                "recursion": {"authoritative_only": true, "recursive_service": false},
+                "notify": {
+                    "received": snapshot.notify_received,
+                    "unauthorized": snapshot.notify_unauthorized,
+                    "refresh_signalled": snapshot.notify_refresh_signalled,
+                    "refresh_deduplicated": snapshot.notify_refresh_deduplicated,
+                },
+                "tsig_notify": {
+                    "ok": snapshot.notify_tsig_ok,
+                    "badkey": snapshot.notify_tsig_badkey,
+                    "badsig": snapshot.notify_tsig_badsig,
+                    "badtime": snapshot.notify_tsig_badtime,
+                    "badalg": snapshot.notify_tsig_badalg,
+                    "badtrunc": snapshot.notify_tsig_badtrunc,
+                },
+                "dns_cookie": {
+                    "no_cookie": snapshot.dns_cookie_no_cookie,
+                    "client_only": snapshot.dns_cookie_client_only,
+                    "valid_server": snapshot.dns_cookie_valid_server,
+                    "invalid_server": snapshot.dns_cookie_invalid_server,
+                    "badcookie": snapshot.dns_cookie_badcookie,
+                    "prefix_detail": if state.metrics.hot_path_detail_enabled() { "full" } else { "reduced" },
+                },
+                "rrl": {
+                    "subject": snapshot.rrl_subject,
+                    "dropped": snapshot.rrl_dropped,
+                    "truncated": snapshot.rrl_truncated,
+                    "tracked_keys": snapshot.rrl_tracked_keys,
+                    "key_evictions": snapshot.rrl_key_evictions,
+                },
+            }),
+        ),
+    )
+}
+
+async fn observability_config(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<HealthEndpointState>,
+) -> Response {
+    let config = &state.observability;
+    let body = if config.include_config_summary {
+        json!({
+            "observability": {
+                "enabled": config.enabled,
+                "path_prefix": config.path_prefix,
+                "rate_limit_per_minute": config.rate_limit_per_minute,
+                "rate_limit_idle_seconds": config.rate_limit_idle_seconds,
+                "include_filesystems": config.include_filesystems,
+                "include_process_resources": config.include_process_resources,
+                "include_time_sync_status": config.include_time_sync_status,
+                "include_certificate_status": config.include_certificate_status,
+                "include_zone_detail": config.include_zone_detail,
+                "include_config_summary": config.include_config_summary,
+                "bearer_token_configured": config.bearer_token_file.is_some(),
+            },
+            "metrics": {"hot_path_detail": state.metrics.hot_path_detail_label()},
+            "zones": zone_counts_value(&state),
+            "catalogs": {"configured": state.catalog_manager.catalogs_by_key.len()},
+        })
+    } else {
+        json!({"status": "disabled"})
+    };
+    observability_response(peer.ip(), &state, observability_base_value(&state, body))
+}
+
+fn observability_response(source: IpAddr, state: &HealthEndpointState, value: Value) -> Response {
+    if let Err(retry_after_seconds) = state.observability_rate_limiter.check(source) {
+        return rate_limited_response(retry_after_seconds);
+    }
+    json_response(StatusCode::OK, value.to_string())
+}
+
+fn observability_base_value(state: &HealthEndpointState, data: Value) -> Value {
+    json!({
+        "schema_version": 1,
+        "generated_at_unix_seconds": unix_timestamp_seconds_now(),
+        "server": {
+            "version": BUILD_VERSION,
+            "status": runtime_status_label(state.runtime_status.status()),
+            "uptime_seconds": state.started_at.elapsed().as_secs(),
+            "draining": state.runtime_status.status() == RuntimeStatusValue::Draining,
+        },
+        "metrics_detail": state.metrics.hot_path_detail_label(),
+        "data": data,
+    })
+}
+
+fn observability_index_value(state: &HealthEndpointState) -> Value {
+    let prefix = &state.observability.path_prefix;
+    observability_base_value(
+        state,
+        json!({
+            "enabled": true,
+            "endpoints": {
+                "summary": format!("{prefix}/summary"),
+                "runtime": format!("{prefix}/runtime"),
+                "resources": format!("{prefix}/resources"),
+                "time": format!("{prefix}/time"),
+                "certificates": format!("{prefix}/certificates"),
+                "zones": format!("{prefix}/zones"),
+                "catalogs": format!("{prefix}/catalogs"),
+                "transfers": format!("{prefix}/transfers"),
+                "security": format!("{prefix}/security"),
+                "config": format!("{prefix}/config"),
+            },
+            "features": {
+                "zone_detail": state.observability.include_zone_detail,
+                "config_summary": state.observability.include_config_summary,
+                "filesystems": state.observability.include_filesystems,
+                "process_resources": state.observability.include_process_resources,
+                "time_sync_status": state.observability.include_time_sync_status,
+                "certificate_status": state.observability.include_certificate_status,
+            }
+        }),
+    )
+}
+
+fn observability_summary_value(state: &HealthEndpointState) -> Value {
+    let snapshot = state.metrics.snapshot();
+    observability_base_value(
+        state,
+        json!({
+            "zones": zone_counts_value(state),
+            "catalogs": {
+                "configured": state.catalog_manager.catalogs_by_key.len(),
+                "members_applied": state.catalog_manager.member_metrics().iter().filter(|member| member.managed).count(),
+                "members_total": state.catalog_manager.member_metrics().len(),
+            },
+            "transfers": {
+                "axfr_started": snapshot.axfr_started,
+                "axfr_succeeded": snapshot.axfr_succeeded,
+                "axfr_failed": snapshot.axfr_failed,
+                "ixfr_started": snapshot.ixfr_started,
+                "ixfr_succeeded": snapshot.ixfr_succeeded,
+                "ixfr_failed": snapshot.ixfr_failed,
+            },
+            "security": {
+                "notify_unauthorized": snapshot.notify_unauthorized,
+                "rrl_dropped": snapshot.rrl_dropped,
+                "dns_cookie_badcookie": snapshot.dns_cookie_badcookie,
+            },
+            "zone_image": {
+                "serve_hits": snapshot.zone_image_serve_hits,
+                "direct_hits": snapshot.zone_image_serve_direct_hits,
+                "semantic_hits": snapshot.zone_image_serve_semantic_hits,
+                "serve_failures": snapshot.zone_image_serve_failures,
+            },
+        }),
+    )
+}
+
+fn observability_runtime_value(state: &HealthEndpointState) -> Value {
+    observability_base_value(
+        state,
+        json!({
+            "version": BUILD_VERSION,
+            "commit": BUILD_COMMIT,
+            "rust_version": BUILD_RUST_VERSION,
+            "build_timestamp": BUILD_TIMESTAMP,
+            "uptime_seconds": state.started_at.elapsed().as_secs(),
+            "status": runtime_status_label(state.runtime_status.status()),
+            "grace_period_remaining_seconds": state.graceful_shutdown_remaining_secs(),
+            "metrics_detail": state.metrics.hot_path_detail_label(),
+        }),
+    )
+}
+
+fn zone_counts_value(state: &HealthEndpointState) -> Value {
+    let counts = ZoneCounts::from_store(&state.zones);
+    let catalog_members = state.catalog_manager.member_metrics();
+    json!({
+        "configured_or_known": state.zones.len(),
+        "active": counts.active,
+        "loading": counts.loading,
+        "expired": counts.expired,
+        "catalog_derived": catalog_members.iter().filter(|member| member.managed).count(),
+        "catalog_zones": state.catalog_manager.catalogs_by_key.len(),
+    })
+}
+
+fn zone_observability_value(
+    state: &HealthEndpointState,
+    metadata: &oxidedns_core::zone::ZoneMetadata,
+) -> Value {
+    let source = if state
+        .catalog_manager
+        .is_catalog_key(metadata.origin_key.as_ref())
+    {
+        "catalog_zone"
+    } else if state
+        .catalog_manager
+        .member_metrics()
+        .iter()
+        .any(|member| member.member_zone == metadata.origin)
+    {
+        "catalog_derived"
+    } else {
+        "configured"
+    };
+    let queries = if state.metrics.hot_path_detail_enabled() {
+        state
+            .metrics
+            .zone_query_counts()
+            .get(metadata.origin_key.as_ref())
+            .copied()
+            .map(Value::from)
+            .unwrap_or_else(|| Value::from(0))
+    } else {
+        json!("reduced")
+    };
+    json!({
+        "zone": metadata.origin_name.as_ref(),
+        "source": source,
+        "state": zone_state_label(metadata.state),
+        "serial": metadata.serial,
+        "soa_refresh_seconds": metadata.soa_timers.map(|timers| timers.refresh),
+        "soa_retry_seconds": metadata.soa_timers.map(|timers| timers.retry),
+        "soa_expire_seconds": metadata.soa_timers.map(|timers| timers.expire),
+        "queries": queries,
+    })
+}
+
+fn catalog_observability_values(state: &HealthEndpointState) -> Vec<Value> {
+    let mut values = state
+        .catalog_manager
+        .catalogs_by_key
+        .values()
+        .map(|catalog| {
+            let members = state
+                .catalog_manager
+                .member_metrics()
+                .into_iter()
+                .filter(|member| member.catalog_zone == catalog.origin)
+                .collect::<Vec<_>>();
+            json!({
+                "catalog_zone": catalog.origin.to_string(),
+                "serve_catalog_zone": catalog.config.serve_catalog_zone,
+                "max_member_zones": catalog.config.max_member_zones,
+                "member_transfer_extensions": catalog.config.member_transfer_extensions,
+                "members_total": members.len(),
+                "members_managed": members.iter().filter(|member| member.managed).count(),
+                "members_static_overlap": members.iter().filter(|member| !member.managed).count(),
+            })
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        left["catalog_zone"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["catalog_zone"].as_str().unwrap_or_default())
+    });
+    values
+}
+
+fn zone_scheduler_observability_values(state: &HealthEndpointState) -> Vec<Value> {
+    let statuses = state.refresh_registry.snapshots_by_zone();
+    state
+        .zones
+        .zone_metadata()
+        .into_iter()
+        .map(|metadata| {
+            let status = statuses.get(metadata.origin_key.as_ref());
+            json!({
+                "zone": metadata.origin_name.as_ref(),
+                "last_success_unix_seconds": status.and_then(|status| status.last_success_unix_secs),
+                "next_refresh_unix_seconds": status.and_then(|status| status.next_refresh_unix_secs),
+                "failures_since_success": status.map_or(0, |status| status.failures_since_success),
+            })
+        })
+        .collect()
+}
+
+fn optional_check_status(enabled: bool) -> Value {
+    if enabled {
+        json!({"status": "unknown"})
+    } else {
+        json!({"status": "disabled"})
+    }
+}
+
+fn runtime_status_label(status: RuntimeStatusValue) -> &'static str {
+    match status {
+        RuntimeStatusValue::Running => "running",
+        RuntimeStatusValue::Draining => "draining",
+        RuntimeStatusValue::Unhealthy => "unhealthy",
+    }
+}
+
+fn zone_state_label(state: ZoneState) -> &'static str {
+    match state {
+        ZoneState::Loading => "loading",
+        ZoneState::Active => "active",
+        ZoneState::Expired => "expired",
+    }
+}
+
+fn unix_timestamp_seconds_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn rate_limited_response(retry_after_seconds: u64) -> Response {
@@ -1374,6 +1932,8 @@ pub(crate) struct HealthEndpointState {
     pub(crate) catalog_manager: CatalogManager,
     pub(crate) refresh_registry: ZoneRefreshRegistry,
     pub(crate) metrics_rate_limiter: MetricsRateLimiter,
+    pub(crate) observability: ObservabilityConfig,
+    pub(crate) observability_rate_limiter: MetricsRateLimiter,
     pub(crate) started_at: Instant,
     pub(crate) graceful_shutdown_secs: u64,
     pub(crate) zone_shape_metrics_enabled: bool,
@@ -1405,12 +1965,23 @@ impl Default for MetricsRateLimiter {
 }
 
 impl MetricsRateLimiter {
-    pub(crate) fn from_config(config: HealthConfig) -> Self {
+    pub(crate) fn from_observability_config(config: &ObservabilityConfig) -> Self {
+        Self::from_parts(config.rate_limit_per_minute, config.rate_limit_idle_seconds)
+    }
+
+    fn from_parts(limit_per_minute: u32, idle_seconds: u64) -> Self {
         Self {
-            limit_per_minute: config.metrics_rate_limit_per_minute,
-            idle_timeout: Duration::from_secs(config.metrics_rate_limit_idle_seconds),
+            limit_per_minute,
+            idle_timeout: Duration::from_secs(idle_seconds),
             inner: Arc::new(Mutex::new(MetricsRateLimitState::default())),
         }
+    }
+
+    pub(crate) fn from_config(config: HealthConfig) -> Self {
+        Self::from_parts(
+            config.metrics_rate_limit_per_minute,
+            config.metrics_rate_limit_idle_seconds,
+        )
     }
 
     pub(crate) fn check(&self, source: IpAddr) -> Result<(), u64> {
@@ -2248,6 +2819,13 @@ impl RuntimeMetrics {
 
     pub(crate) fn hot_path_detail_enabled(&self) -> bool {
         self.inner.hot_path_detail == MetricsHotPathDetail::Full
+    }
+
+    pub(crate) fn hot_path_detail_label(&self) -> &'static str {
+        match self.inner.hot_path_detail {
+            MetricsHotPathDetail::Full => "full",
+            MetricsHotPathDetail::Reduced => "reduced",
+        }
     }
 
     pub(crate) fn record_query_pipeline_latency(

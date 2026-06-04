@@ -420,6 +420,10 @@ impl Runtime {
                     catalog_manager: catalog_manager.clone(),
                     refresh_registry: refresh_registry.clone(),
                     metrics_rate_limiter: MetricsRateLimiter::from_config(self.config.health),
+                    observability: self.config.observability.clone(),
+                    observability_rate_limiter: MetricsRateLimiter::from_observability_config(
+                        &self.config.observability,
+                    ),
                     started_at: Instant::now(),
                     graceful_shutdown_secs: self.config.limits.graceful_shutdown_secs,
                     zone_shape_metrics_enabled: self.config.metrics.zone_shape_enabled,
@@ -1701,13 +1705,13 @@ impl NotifyAuthority {
                     .member_tsig_key_name()
                     .and_then(|name| DomainName::from_absolute_str(name).ok())
             });
-        if let Some(key_name) = tsig_key_name {
-            if let Some(key) = self.tsig_keys_by_name.get(&key_name.canonical_key()) {
-                self.tsig_keys_by_zone
-                    .lock()
-                    .expect("notify authority zone TSIG lock poisoned")
-                    .insert(origin.canonical_key(), key.clone());
-            }
+        if let Some(key_name) = tsig_key_name
+            && let Some(key) = self.tsig_keys_by_name.get(&key_name.canonical_key())
+        {
+            self.tsig_keys_by_zone
+                .lock()
+                .expect("notify authority zone TSIG lock poisoned")
+                .insert(origin.canonical_key(), key.clone());
         }
     }
 

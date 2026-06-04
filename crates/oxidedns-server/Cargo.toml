@@ -12,6 +12,7 @@ axum.workspace = true
 flate2.workspace = true
 getrandom.workspace = true
 libc.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
