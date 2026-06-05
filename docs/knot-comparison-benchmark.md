@@ -313,6 +313,15 @@ about 99.29% reply rate. A follow-up 40/44/48 worker sweep at 4.7M and batch
 were below 99%. The 44-worker profile still missed the gate at 4.75M, measuring
 about 98.26%, so the higher-rate boundary remains unresolved.
 
+At 4.75M under `fq`, increasing the server UDP batch size helped more than
+additional workers: 48 workers with batch 32 reached about 98.66%, batch 64
+reached about 98.96% in the first row, and batch 128 regressed to about 98.57%.
+The same-artifact Knot comparison at 4.75M with the 48-worker batch-64 profile
+measured Knot at about 92.21% reply rate and OxideDNS at about 98.72%, so
+OxideDNS stayed clearly ahead but still below the packet-loss gate. Batch 64
+did not carry 4.8M, which fell to about 95.54%, and combining batch 64 with
+`txqueuelen=5000` was worse than `fq` alone at about 98.31%.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
 the transport result; post-run benchmark logs and kernel packet counters remain
