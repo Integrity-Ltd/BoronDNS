@@ -311,6 +311,26 @@ experiments:
   offered rate before the OxideDNS sweeps. The Knot row uses the same staged
   `querydb`, target IP, kxdpgun batch/mode/source settings, and kernel packet
   counters as the OxideDNS rows.
+- `OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP=true` adds a Knot XDP reference row for
+  each offered rate. The harness copies the staged `knot.conf`, appends an
+  `xdp:` section for the benchmark interface/port, and starts Knot through
+  `sudo` because XDP attach normally requires elevated capabilities.
+- `OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS="std af_xdp"` selects which OxideDNS
+  packet backends to sweep. `std` preserves the existing standard UDP matrix.
+  `af_xdp` forces the valid AF_XDP config shape: one reuseport worker, Tokio
+  runtime, `udp_idle_strategy = "park"`, the configured XDP interface, one
+  queue, ring/UMEM sizes, and the project-built redirect object.
+- XDP rows are controlled with `OXIDEDNS_PHYSICAL_XDP_MODE=drv`,
+  `OXIDEDNS_PHYSICAL_XDP_ZERO_COPY=require`,
+  `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=4096`,
+  `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
+  `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`, and optionally
+  `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
+  server checkout. Knot XDP uses `OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=on` and
+  `OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE=2048`.
+  The summary rows retain `server_udp_backend`, `xdp_mode`, and
+  `xdp_zero_copy` so standard, Knot-XDP, and OxideDNS-AF_XDP rows cannot be
+  confused.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
@@ -767,6 +787,13 @@ On the player host:
 3. Sweep offered rates rather than reporting one point.
 4. Keep the same `-b`, `-F`, source IP range, target port, and duration across
    implementations.
+
+For XDP promotion claims, include both `OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP=true`
+and `OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS="af_xdp"` in the retained run, and
+record whether OxideDNS `zero_copy=require` succeeds or fails on the selected
+NIC/queue. If zero-copy has to be relaxed to `auto` or disabled, the row is
+engineering evidence only and should not be described as the final Knot-XDP
+comparison.
 
 The meaningful result is the saturation knee: the highest offered rate where
 response percentage, drops/errors, p99/p999 latency, and byte throughput remain
