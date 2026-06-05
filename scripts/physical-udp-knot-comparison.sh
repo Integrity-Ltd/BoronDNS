@@ -20,6 +20,7 @@ perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
 socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
 socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
+include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
@@ -119,6 +120,53 @@ REMOTE
 }
 
 capture_static_host_context
+
+run_knot_reference_start() {
+    local run_abs="$1"
+    local server_interface="$2"
+
+    ssh "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" <<'REMOTE'
+set -euo pipefail
+stage_abs="$1"
+run_abs="$2"
+knot_target_ip="$3"
+knot_target_port="$4"
+server_interface="$5"
+
+mkdir -p "$run_abs"
+pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x knotd 2>/dev/null || true
+sleep 0.2
+
+cd "$stage_abs"
+knotd -c knot.conf -v >"$run_abs/knot.log" 2>&1 &
+echo $! >"$run_abs/knot.pid"
+for _ in $(seq 1 80); do
+    if dig @"$knot_target_ip" -p "$knot_target_port" perf.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.25
+done
+
+cp /proc/net/dev "$run_abs/server-proc-net-dev-before.txt"
+cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"
+cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-before.txt"
+ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-before.txt" 2>&1 || true
+REMOTE
+}
+
+run_knot_reference_stop() {
+    local run_abs="$1"
+
+    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+if [[ -f "$run_abs/knot.pid" ]]; then
+    kill "$(cat "$run_abs/knot.pid")" 2>/dev/null || true
+    wait "$(cat "$run_abs/knot.pid")" 2>/dev/null || true
+fi
+REMOTE
+}
 
 run_server_start() {
     local run_abs="$1"
@@ -347,7 +395,7 @@ cp /proc/net/dev "$run_abs/server-proc-net-dev-after.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-after.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
-curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" || true
+curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
 python3 - "$target" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
@@ -562,6 +610,20 @@ if [[ -f "$run_abs/udp-socket-sample.pid" ]]; then
 fi
 REMOTE
 }
+
+if [[ "$include_knot" == true ]]; then
+    for rate in $rates_list; do
+        run_id="knot-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        run_knot_reference_start "$run_abs" "$interface"
+        ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$knot_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
+        ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
+        rm -f "$run_id.kxdpgun.tmp"
+        run_server_finish "$run_abs" "knot" "n/a" "$rate" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_knot_reference_stop "$run_abs"
+    done
+fi
 
 for workers in $workers_list; do
     for rate in $rates_list; do

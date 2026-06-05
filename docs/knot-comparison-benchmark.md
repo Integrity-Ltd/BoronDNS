@@ -211,6 +211,10 @@ experiments:
   window. Use this when `SndbufErrors` is the active gate and per-socket queue
   state is needed; `OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL=0.25` controls the
   sample interval in seconds.
+- `OXIDEDNS_PHYSICAL_INCLUDE_KNOT=true` adds a Knot reference row for each
+  offered rate before the OxideDNS sweeps. The Knot row uses the same staged
+  `querydb`, target IP, kxdpgun batch/mode/source settings, and kernel packet
+  counters as the OxideDNS rows.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
@@ -239,6 +243,13 @@ fell to about 98.74%. A 40-worker spin profile and the accidental
 single-socket/sibling CPU placement were worse. The send-loss gate remains: the
 best rows still show Linux UDP `SndbufErrors`, while NIC TX queue drops and
 softnet drops are not the dominant signal.
+
+The first same-artifact Knot reference row at 4.5M offered QPS measured Knot at
+about 4.43M replies/s and 98.46% reply rate, while OxideDNS with 36 unbound
+workers, batch size 8, counters off, spin idle, and 2 MiB receive/send buffers
+measured about 4.45M replies/s and 98.91% reply rate. That sample is favorable
+to OxideDNS on raw replies, but both rows still miss the packet-loss/reply-rate
+gate, so it is not a completed comparison claim.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
