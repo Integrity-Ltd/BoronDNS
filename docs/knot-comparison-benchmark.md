@@ -348,7 +348,11 @@ receive errors and about 228k `SndbufErrors`; 40 and 44 workers were worse, and
 4.8M still fell to about 90.96%. A committed-harness same-artifact comparison
 with `server_wmem_max=33554432` measured Knot at about 92.06% and OxideDNS at
 about 95.90%, so OxideDNS still led Knot but did not stably clear the
-packet-loss gate. Treat larger `wmem_max` plus send buffer as the current
+packet-loss gate. Raising the ceiling again to `server_wmem_max=67108864` with
+a 32 MiB requested send buffer produced two 4.75M rows at about 98.47% and
+99.22% reply rate with zero receive errors and about 362k/185k `SndbufErrors`.
+That setting improved the 4.8M row to about 95.16%, but still left about 1.16M
+`SndbufErrors`. Treat larger `wmem_max` plus send buffer as the current
 strongest 4.75M follow-up, not as proof that the next saturation boundary is
 solved.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
