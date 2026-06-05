@@ -172,15 +172,15 @@ worker count, hot-path metric detail, and dedicated-worker idle strategy, starts
 Knot only long enough for OxideDNS to transfer the zone, then runs `kxdpgun`
 from the player host against the idle OxideDNS secondary. It writes one
 artifact directory under the staged directory's `evidence/` folder and emits a
-`summary.tsv` containing offered rate, UDP batch size, replies per second, reply
-percentage, average DNS reply size, Ethernet reply bit rate, effective server
-`txqueuelen`, effective per-queue server TX qdisc, server RX/TX packet deltas,
-Linux UDP `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/
-`SndbufErrors` deltas, root qdisc drop and requeue deltas, and aggregate
-softnet drop and time-squeeze deltas. Each artifact directory also includes
-`host/` context files for server CPU topology, server NIC driver/channel/RSS/
-offload state, server link/qdisc state, server interrupts/softirqs, and player
-host/NIC context.
+`summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
+size, replies per second, reply percentage, average DNS reply size, Ethernet
+reply bit rate, effective server `txqueuelen`, effective per-queue server TX
+qdisc, server RX/TX packet deltas, Linux UDP
+`InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
+root qdisc drop and requeue deltas, and aggregate softnet drop and time-squeeze
+deltas. Each artifact directory also includes `host/` context files for server
+CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
+state, server interrupts/softirqs, and player host/NIC context.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
