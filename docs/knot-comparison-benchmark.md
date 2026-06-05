@@ -547,6 +547,13 @@ was gone; `recv_batch_linux` remained the largest user-space bucket at about
 9.9%, so the next application-side experiment should target receive message
 setup or packet ownership in the dedicated standard UDP loop rather than
 ZoneImage composition.
+Moving the standard UDP inbound packet buffers into `StdUdpMmsg` and prebinding
+receive-side `mmsghdr`/`iovec` state was negative despite targeting that bucket.
+Two 4.8M rows at `physical-udp-knot-comparison-20260605T202558Z` and
+`physical-udp-knot-comparison-20260605T202640Z` measured about 97.10% and 97.64%
+reply rate, with receive-buffer errors appearing in both rows and the first row
+showing elevated softnet time-squeeze. Keep the caller-owned inbound batch
+layout until a receive change also improves packet-loss behavior.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
