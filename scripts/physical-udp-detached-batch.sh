@@ -71,7 +71,8 @@ start_run() {
     date -u +%Y-%m-%dT%H:%M:%SZ >"$run_dir/submitted-at.txt"
     printf 'starting\n' >"$run_dir/status"
 
-    nohup bash -s -- "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" >"$run_dir/monitor.log" 2>&1 <<'MONITOR' &
+    cat >"$run_dir/monitor.sh" <<'MONITOR'
+#!/usr/bin/env bash
 set -euo pipefail
 
 repo_root="$1"
@@ -141,6 +142,8 @@ else
 fi
 exit "$harness_status"
 MONITOR
+    chmod +x "$run_dir/monitor.sh"
+    nohup "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" </dev/null >"$run_dir/monitor.log" 2>&1 &
     monitor_pid="$!"
     printf '%s\n' "$monitor_pid" >"$run_dir/monitor.pid"
 
@@ -154,6 +157,8 @@ MONITOR
 status_run() {
     local run_dir="$1"
     local pid=""
+    local alive="unknown"
+    local status_value="unknown"
 
     if [[ ! -d "$run_dir" ]]; then
         printf 'detached run directory not found: %s\n' "$run_dir" >&2
@@ -167,15 +172,20 @@ status_run() {
     if [[ -n "$pid" ]]; then
         printf 'monitor_pid=%s\n' "$pid"
         if kill -0 "$pid" >/dev/null 2>&1; then
-            printf 'monitor_alive=true\n'
+            alive="true"
         else
-            printf 'monitor_alive=false\n'
+            alive="false"
         fi
+        printf 'monitor_alive=%s\n' "$alive"
     fi
     if [[ -f "$run_dir/status" ]]; then
-        printf 'status=%s\n' "$(<"$run_dir/status")"
+        status_value="$(<"$run_dir/status")"
     else
-        printf 'status=unknown\n'
+        status_value="unknown"
+    fi
+    printf 'status=%s\n' "$status_value"
+    if [[ "$status_value" == "running" && "$alive" == "false" && ! -f "$run_dir/exit-code" ]]; then
+        printf 'status_warning=monitor exited before writing exit-code\n'
     fi
     if [[ -f "$run_dir/exit-code" ]]; then
         printf 'exit_code=%s\n' "$(<"$run_dir/exit-code")"
