@@ -226,7 +226,13 @@ if [[ "$requested_fq_pacing" == "__none__" ]]; then
 fi
 tc qdisc show dev "$iface" >"$out_abs/host/server-tx-qdisc-before.txt" 2>&1 || true
 tc qdisc show dev "$iface" |
-    awk '$1 == "qdisc" && $4 == "parent" {print $5 "\t" $2}' >"$restore_file"
+    awk '$1 == "qdisc" && $4 == "parent" {
+        parent = $5
+        if (parent ~ /^:/) {
+            parent = "0" parent
+        }
+        print parent "\t" $2
+    }' >"$restore_file"
 if [[ ! -s "$restore_file" ]]; then
     printf 'no per-queue qdisc children found for %s\n' "$iface" >&2
     exit 65
