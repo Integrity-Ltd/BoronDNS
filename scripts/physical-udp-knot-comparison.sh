@@ -45,22 +45,41 @@ require_tool() {
 require_tool ssh
 require_tool base64
 
+ssh_control_dir="$(mktemp -d "${TMPDIR:-/tmp}/oxidedns-physical-ssh.XXXXXX")"
+ssh_control_options=(
+    -o ControlMaster=auto
+    -o ControlPersist=180
+    -o ControlPath="$ssh_control_dir/%C"
+    -o ServerAliveInterval=10
+    -o ServerAliveCountMax=2
+)
+
+ssh_control() {
+    command ssh "${ssh_control_options[@]}" "$@"
+}
+
+close_ssh_control() {
+    command ssh "${ssh_control_options[@]}" -O exit "$server_ssh" >/dev/null 2>&1 || true
+    command ssh "${ssh_control_options[@]}" -O exit "$player_ssh" >/dev/null 2>&1 || true
+    rm -rf "$ssh_control_dir"
+}
+
 remote_server_root() {
-    ssh "$server_ssh" "cd $server_root && pwd"
+    ssh_control "$server_ssh" "cd $server_root && pwd"
 }
 
 resolve_stage() {
     if [[ -n "$stage_override" ]]; then
-        ssh "$server_ssh" "cd $server_root && realpath '$stage_override'"
+        ssh_control "$server_ssh" "cd $server_root && realpath '$stage_override'"
     else
-        ssh "$server_ssh" "cd $server_root && stage=\$(cat ~/oxidedns-last-benchmark-stage.txt 2>/dev/null || ls -td target/physical-knot-comparison-*/staged | head -1) && realpath \"\$stage\""
+        ssh_control "$server_ssh" "cd $server_root && stage=\$(cat ~/oxidedns-last-benchmark-stage.txt 2>/dev/null || ls -td target/physical-knot-comparison-*/staged | head -1) && realpath \"\$stage\""
     fi
 }
 
 cleanup_remote() {
-    ssh "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
     if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
-        ssh "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
+        ssh_control "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
 iface="$1"
 restore_file="$2"
 if [[ -f "$restore_file" ]]; then
@@ -72,12 +91,13 @@ fi
 REMOTE
     fi
     if [[ -n "$server_txqueuelen" && -n "$original_server_txqueuelen" ]]; then
-        ssh "$server_ssh" bash -s -- "$interface" "$original_server_txqueuelen" <<'REMOTE' >/dev/null 2>&1 || true
+        ssh_control "$server_ssh" bash -s -- "$interface" "$original_server_txqueuelen" <<'REMOTE' >/dev/null 2>&1 || true
 iface="$1"
 txqueuelen="$2"
-sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
+        sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
 REMOTE
     fi
+    close_ssh_control
 }
 
 trap cleanup_remote EXIT
@@ -92,7 +112,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -111,7 +131,7 @@ select_run_id() {
 }
 
 server_link_txqueuelen() {
-    ssh "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 ip -o link show dev "$iface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p'
@@ -121,7 +141,7 @@ REMOTE
 configure_server_link_tuning() {
     local effective_txqueuelen
 
-    ssh "$server_ssh" "mkdir -p '$out_abs/host'"
+    ssh_control "$server_ssh" "mkdir -p '$out_abs/host'"
     if [[ -n "$server_tx_qdisc" ]]; then
         case "$server_tx_qdisc" in
         fq | fq_codel | pfifo_fast) ;;
@@ -130,7 +150,7 @@ configure_server_link_tuning() {
             exit 64
             ;;
         esac
-        ssh "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" <<'REMOTE'
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 requested_qdisc="$2"
@@ -158,7 +178,7 @@ REMOTE
     fi
     original_server_txqueuelen="$(server_link_txqueuelen)"
     if [[ -n "$server_txqueuelen" ]]; then
-        ssh "$server_ssh" bash -s -- "$interface" "$server_txqueuelen" <<'REMOTE'
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_txqueuelen" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 txqueuelen="$2"
@@ -166,7 +186,7 @@ sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
 REMOTE
     fi
     effective_txqueuelen="$(server_link_txqueuelen)"
-    ssh "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
@@ -186,7 +206,7 @@ REMOTE
 capture_static_host_context() {
     local player_context
 
-    ssh "$server_ssh" bash -s -- "$out_abs" "$interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$interface" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 server_interface="$2"
@@ -209,7 +229,7 @@ ethtool -k "$server_interface" >"$out_abs/host/server-ethtool-features.txt" 2>&1
 REMOTE
 
     player_context="$(
-        ssh "$player_ssh" bash -s -- "$interface" <<'REMOTE'
+        ssh_control "$player_ssh" bash -s -- "$interface" <<'REMOTE'
 set -euo pipefail
 player_interface="$1"
 {
@@ -229,7 +249,7 @@ player_interface="$1"
 }
 REMOTE
     )"
-    printf '%s\n' "$player_context" | ssh "$server_ssh" "cat > '$out_abs/host/player-context.txt'"
+    printf '%s\n' "$player_context" | ssh_control "$server_ssh" "cat > '$out_abs/host/player-context.txt'"
 }
 
 configure_server_link_tuning
@@ -239,7 +259,7 @@ run_knot_reference_start() {
     local run_abs="$1"
     local server_interface="$2"
 
-    ssh "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" <<'REMOTE'
 set -euo pipefail
 stage_abs="$1"
 run_abs="$2"
@@ -273,7 +293,7 @@ REMOTE
 run_knot_reference_stop() {
     local run_abs="$1"
 
-    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 if [[ -f "$run_abs/knot.pid" ]]; then
@@ -302,7 +322,7 @@ run_server_start() {
     local cpus_arg="${cpus:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -477,7 +497,7 @@ run_server_finish() {
     local server_prefix_arg="${selected_server_prefix_b64:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 run_abs="$2"
@@ -659,7 +679,7 @@ run_server_perf_start() {
         return 0
     fi
 
-    ssh "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 frequency="$2"
@@ -678,7 +698,7 @@ run_server_perf_finish() {
         return 0
     fi
 
-    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 if [[ -f "$run_abs/perf.pid" ]]; then
@@ -708,7 +728,7 @@ run_server_socket_sample_start() {
         return 0
     fi
 
-    ssh "$server_ssh" bash -s -- "$run_abs" "$port" "$seconds" "$interval" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$port" "$seconds" "$interval" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 port="$2"
@@ -749,7 +769,7 @@ run_server_socket_sample_finish() {
         return 0
     fi
 
-    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 if [[ -f "$run_abs/udp-socket-sample.pid" ]]; then
@@ -770,8 +790,8 @@ if [[ "$include_knot" == true ]]; then
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
         run_knot_reference_start "$run_abs" "$interface"
-        ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$knot_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
-        ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
+        ssh_control "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$knot_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
+        ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
         rm -f "$run_id.kxdpgun.tmp"
         run_server_finish "$run_abs" "knot" "n/a" "$rate" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
@@ -789,8 +809,8 @@ for workers in $workers_list; do
                     run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
                     run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                     run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                    ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
-                    ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
+                    ssh_control "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
+                    ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
                     rm -f "$run_id.kxdpgun.tmp"
                     run_server_socket_sample_finish "$run_abs" "$socket_sample"
                     run_server_perf_finish "$run_abs" "$perf_record"
@@ -802,4 +822,4 @@ for workers in $workers_list; do
 done
 
 printf 'artifact_dir=%s\n' "$out_abs"
-ssh "$server_ssh" "cat '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "cat '$out_abs/summary.tsv'"

@@ -182,6 +182,11 @@ softnet drop and time-squeeze deltas. Each artifact directory also includes
 offload state, server link/qdisc state, server interrupts/softirqs, and player
 host/NIC context.
 
+The wrapper uses temporary SSH ControlMaster sockets for the server and player
+hosts during one invocation. This keeps long physical sweeps from repeatedly
+performing SSH key exchange for every setup, finish, and artifact-copy step; the
+control sockets are closed during local cleanup.
+
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
 
