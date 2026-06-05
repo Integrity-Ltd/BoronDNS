@@ -435,6 +435,15 @@ measured per-socket pacing rates 8M/9M/10M/11M/12M bytes/s at about 96.44%,
 97.60%, 97.30%, 97.08%, and 97.25% reply rate respectively. The best paced row
 was below the unpaced short batch-64 row, so keep the pacing knob for future
 host experiments but do not treat fixed socket pacing as the current fix.
+A reduced-metrics diagnostic row at
+`physical-udp-knot-comparison-20260605T193038Z` confirmed that the dedicated
+worker `sendmmsg` path was not seeing direct syscall backpressure: it retained
+543778 send syscalls, 22435263 accepted datagrams, zero partial send syscalls,
+and zero WouldBlock retries. That row was not a comparable performance
+candidate because reduced counters shifted the 4.8M profile down to about
+93.45% with about 1.45M receive-buffer errors. Treat this as evidence that the
+send-side loss in hot-path-off rows is happening after syscall acceptance in the
+kernel/qdisc/NIC path, not as a retry-loop failure in user space.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
