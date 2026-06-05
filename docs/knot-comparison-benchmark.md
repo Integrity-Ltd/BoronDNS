@@ -187,6 +187,19 @@ experiments:
   settings into each run config. This is host specific: the first 4 MiB test on
   the current server was worse than the default, so retain the setting only when
   the run evidence proves it helps.
+- `OXIDEDNS_PHYSICAL_SERVER_BIN=target/profiling/oxidedns` runs a symbolized
+  profiling build instead of the stripped release binary.
+- `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
+  `perf-report-*.txt` files beside the run logs on the server host.
+
+The first retained perf-guided UDP pass showed that the counters-off,
+CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
+checks rather than ZoneImage response composition. Reusing stable `recvmmsg`
+receive layout and skipping disabled RRL state/category work moved the current
+3M offered-QPS profile to about 2.87M replies/s and 95.8% reply rate, with the
+3.5M offered-QPS profile reaching about 3.09M replies/s but only 88.3% reply
+rate. That is progress on throughput, but packet loss remains above the
+comparison gate.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

@@ -5,6 +5,7 @@ set -euo pipefail
 server_ssh="${OXIDEDNS_PHYSICAL_SERVER_SSH:-oxidedns-1}"
 player_ssh="${OXIDEDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
 server_root="${OXIDEDNS_PHYSICAL_SERVER_ROOT:-~/oxidedns}"
+server_bin="${OXIDEDNS_PHYSICAL_SERVER_BIN:-}"
 player_workdir="${OXIDEDNS_PHYSICAL_PLAYER_WORKDIR:-~/oxidedns-tools/bench}"
 target_ip="${OXIDEDNS_PHYSICAL_TARGET_IP:-198.18.0.1}"
 source_ip="${OXIDEDNS_PHYSICAL_SOURCE_IP:-198.18.0.2}"
@@ -14,6 +15,8 @@ knot_port="${OXIDEDNS_PHYSICAL_KNOT_PORT:-5301}"
 duration="${OXIDEDNS_PHYSICAL_DURATION:-5}"
 batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
+perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
+perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
@@ -52,6 +55,7 @@ trap cleanup_remote EXIT
 server_root_abs="$(remote_server_root)"
 stage_abs="$(resolve_stage)"
 out_abs="$stage_abs/evidence/physical-udp-knot-comparison-$(date -u +%Y%m%dT%H%M%SZ)"
+server_bin_arg="${server_bin:-__default__}"
 
 ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\thot_path_detail\\tidle_strategy\\tsocket_buffer_bytes\\tworker_cpus\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\n' > '$out_abs/summary.tsv'"
 
@@ -64,10 +68,11 @@ run_server_start() {
     local knot_target_port="$6"
     local socket_buffer="$7"
     local cpus="$8"
+    local selected_server_bin="$9"
     local socket_buffer_arg="${socket_buffer:-__none__}"
     local cpus_arg="${cpus:-__none__}"
 
-    ssh "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_buffer_arg" "$cpus_arg" <<'REMOTE'
+    ssh "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_buffer_arg" "$cpus_arg" "$selected_server_bin" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -79,11 +84,17 @@ knot_target_ip="$7"
 knot_target_port="$8"
 socket_buffer="$9"
 cpus="${10}"
+server_bin="${11}"
 if [[ "$socket_buffer" == "__none__" ]]; then
     socket_buffer=""
 fi
 if [[ "$cpus" == "__none__" ]]; then
     cpus=""
+fi
+if [[ "$server_bin" == "__default__" ]]; then
+    server_bin="$server_root/target/release/oxidedns"
+elif [[ "$server_bin" != /* ]]; then
+    server_bin="$server_root/$server_bin"
 fi
 
 mkdir -p "$run_abs"
@@ -147,7 +158,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 fi
 
-"$server_root/target/release/oxidedns" --validate-config "$run_abs/oxidedns.toml" >"$run_abs/validate.out" 2>&1
+"$server_bin" --validate-config "$run_abs/oxidedns.toml" >"$run_abs/validate.out" 2>&1
 
 cd "$stage_abs"
 knotd -c knot.conf -v >"$run_abs/knot.log" 2>&1 &
@@ -160,7 +171,7 @@ for _ in $(seq 1 80); do
 done
 
 ulimit -n 65536
-"$server_root/target/release/oxidedns" serve --config "$run_abs/oxidedns.toml" >"$run_abs/oxidedns.log" 2>&1 &
+"$server_bin" serve --config "$run_abs/oxidedns.toml" >"$run_abs/oxidedns.log" 2>&1 &
 echo $! >"$run_abs/oxidedns.pid"
 
 ready=""
@@ -247,6 +258,54 @@ fi
 REMOTE
 }
 
+run_server_perf_start() {
+    local run_abs="$1"
+    local record="$2"
+    local frequency="$3"
+    local seconds="$4"
+
+    if [[ "$record" != true ]]; then
+        return 0
+    fi
+
+    ssh "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+frequency="$2"
+seconds="$3"
+pid="$(cat "$run_abs/oxidedns.pid")"
+sudo perf record -F "$frequency" -g -p "$pid" -o "$run_abs/perf.data" -- sleep "$seconds" >"$run_abs/perf-record.log" 2>&1 &
+echo $! >"$run_abs/perf.pid"
+REMOTE
+}
+
+run_server_perf_finish() {
+    local run_abs="$1"
+    local record="$2"
+
+    if [[ "$record" != true ]]; then
+        return 0
+    fi
+
+    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+if [[ -f "$run_abs/perf.pid" ]]; then
+    perf_pid="$(cat "$run_abs/perf.pid")"
+    for _ in $(seq 1 120); do
+        if ! ps -p "$perf_pid" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.25
+    done
+fi
+if [[ -f "$run_abs/perf.data" ]]; then
+    sudo perf report -i "$run_abs/perf.data" --stdio --no-children --sort comm,symbol,dso >"$run_abs/perf-report-symbols.txt" 2>"$run_abs/perf-report-symbols.err" || true
+    sudo perf report -i "$run_abs/perf.data" --stdio --children --sort comm,symbol,dso >"$run_abs/perf-report-children.txt" 2>"$run_abs/perf-report-children.err" || true
+fi
+REMOTE
+}
+
 for workers in $workers_list; do
     for rate in $rates_list; do
         for hot_path in $hot_path_list; do
@@ -254,10 +313,12 @@ for workers in $workers_list; do
                 run_id="oxidedns-w${workers}-q${rate}-metrics-${hot_path}-idle-${idle_strategy}"
                 run_abs="$out_abs/$run_id"
                 printf 'running %s\n' "$run_id"
-                run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_buffer_bytes" "$worker_cpus"
+                run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_buffer_bytes" "$worker_cpus" "$server_bin_arg"
+                run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                 ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
                 ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
                 rm -f "$run_id.kxdpgun.tmp"
+                run_server_perf_finish "$run_abs" "$perf_record"
                 run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$hot_path" "$idle_strategy" "$socket_buffer_bytes" "$worker_cpus"
             done
         done

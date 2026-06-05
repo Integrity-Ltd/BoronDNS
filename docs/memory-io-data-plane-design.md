@@ -682,6 +682,15 @@ and 89.7% reply rate. A first 4 MiB `SO_RCVBUF`/`SO_SNDBUF` run was worse than
 the default on the same host, so socket-buffer sizing remains evidence-gated
 rather than a default recommendation.
 
+The follow-up symbolized perf pass showed the remaining standard UDP socket
+path dominated by `recvmmsg` receive setup and disabled RRL checks, not by
+ZoneImage response composition. Reusing stable receive message layout and
+returning immediately from disabled RRL moved the current pinned 16-worker
+profile to about 2.87M replies/s at 3M offered QPS with 95.8% reply rate, and
+about 3.09M replies/s at 3.5M offered QPS with 88.3% reply rate. The next gate
+is reducing ingress loss/reply percentage, not proving that the response
+composer can emit above 3M replies/s in isolation.
+
 ### AF_XDP Evaluation
 
 AF_XDP is an advanced UDP backend, not a default server dependency.

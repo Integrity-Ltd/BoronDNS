@@ -110,22 +110,27 @@ impl StdUdpMmsg {
         use std::os::fd::AsRawFd;
 
         let count = self.capacity.min(inbound.len());
-        for (index, packet) in inbound.iter_mut().take(count).enumerate() {
-            // SAFETY: zeroed is valid for sockaddr_storage; the kernel fills
-            // the address bytes selected by msg_namelen before we inspect it.
-            self.names[index] = unsafe { std::mem::zeroed() };
-            self.iovecs[index].iov_base = packet.buffer.as_mut_ptr().cast();
-            self.iovecs[index].iov_len = packet.buffer.len();
+        let sockaddr_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        let mut index = 0usize;
+        while index < count {
+            let packet = &mut inbound[index];
+            let buffer_ptr = packet.buffer.as_mut_ptr().cast();
+            let buffer_len = packet.buffer.len();
+            if self.iovecs[index].iov_base != buffer_ptr || self.iovecs[index].iov_len != buffer_len
+            {
+                self.iovecs[index].iov_base = buffer_ptr;
+                self.iovecs[index].iov_len = buffer_len;
+                // SAFETY: zeroed is valid for msghdr; all pointer and length
+                // fields used by recvmmsg are set immediately below.
+                self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
+                self.messages[index].msg_hdr.msg_name =
+                    (&mut self.names[index] as *mut libc::sockaddr_storage).cast();
+                self.messages[index].msg_hdr.msg_iov = &mut self.iovecs[index];
+                self.messages[index].msg_hdr.msg_iovlen = 1;
+            }
             self.messages[index].msg_len = 0;
-            // SAFETY: zeroed is valid for msghdr; all pointer and length
-            // fields used by recvmmsg are set immediately below.
-            self.messages[index].msg_hdr = unsafe { std::mem::zeroed() };
-            self.messages[index].msg_hdr.msg_name =
-                (&mut self.names[index] as *mut libc::sockaddr_storage).cast();
-            self.messages[index].msg_hdr.msg_namelen =
-                std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-            self.messages[index].msg_hdr.msg_iov = &mut self.iovecs[index];
-            self.messages[index].msg_hdr.msg_iovlen = 1;
+            self.messages[index].msg_hdr.msg_namelen = sockaddr_len;
+            index += 1;
         }
 
         // SAFETY: `socket` is a live UDP socket; `messages[..count]` points to
@@ -148,12 +153,15 @@ impl StdUdpMmsg {
         let received = result as usize;
         self.stats.receive_syscalls += 1;
         self.stats.received_datagrams += received as u64;
-        for (index, packet) in inbound.iter_mut().take(received).enumerate() {
+        let mut index = 0usize;
+        while index < received {
+            let packet = &mut inbound[index];
             packet.len = (self.messages[index].msg_len as usize).min(packet.buffer.len());
             let peer =
                 socket_addr_from_raw(&self.names[index], self.messages[index].msg_hdr.msg_namelen)?;
             packet.peer = peer;
             packet.target = UdpPacketTarget::Socket(peer);
+            index += 1;
         }
         Ok(received)
     }

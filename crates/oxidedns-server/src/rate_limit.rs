@@ -107,6 +107,7 @@ pub(crate) fn log_notify_log_summary(summary: NotifyLogSummary, interval: Durati
 
 #[derive(Clone, Debug)]
 pub(crate) struct RrlLimiter {
+    enabled: bool,
     inner: Arc<Mutex<RrlState>>,
     metrics: RuntimeMetrics,
 }
@@ -114,12 +115,16 @@ pub(crate) struct RrlLimiter {
 impl RrlLimiter {
     pub(crate) fn from_config(config: &RrlConfig, metrics: RuntimeMetrics) -> Self {
         Self {
+            enabled: config.enabled,
             inner: Arc::new(Mutex::new(RrlState::from_config(config))),
             metrics,
         }
     }
 
     pub(crate) fn apply(&self, source: IpAddr, response: Vec<u8>) -> RrlDecision {
+        if !self.enabled {
+            return RrlDecision::Send(response);
+        }
         let Some(category) = response_category(&response) else {
             return RrlDecision::Send(response);
         };
@@ -135,7 +140,7 @@ impl RrlLimiter {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.inner.lock().expect("RRL state lock poisoned").enabled
+        self.enabled
     }
 }
 
