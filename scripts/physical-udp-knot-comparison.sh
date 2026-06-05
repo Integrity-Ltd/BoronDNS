@@ -37,9 +37,11 @@ server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
 server_tx_qdisc="${OXIDEDNS_PHYSICAL_SERVER_TX_QDISC:-}"
 server_tx_fq_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_LIMIT:-10000}"
 server_tx_fq_flow_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT:-}"
+server_tx_ring="${OXIDEDNS_PHYSICAL_SERVER_TX_RING:-}"
 server_wmem_max="${OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
 original_server_txqueuelen=""
+original_server_tx_ring=""
 original_server_wmem_max=""
 
 require_tool() {
@@ -108,6 +110,13 @@ txqueuelen="$2"
         sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
 REMOTE
     fi
+    if [[ -n "$server_tx_ring" && -n "$original_server_tx_ring" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$original_server_tx_ring" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+tx_ring="$2"
+sudo ethtool -G "$iface" tx "$tx_ring"
+REMOTE
+    fi
     if [[ -n "$server_wmem_max" && -n "$original_server_wmem_max" ]]; then
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$original_server_wmem_max'" >/dev/null 2>&1 || true
     fi
@@ -127,7 +136,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_received_datagrams\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_received_datagrams\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -150,6 +159,17 @@ server_link_txqueuelen() {
 set -euo pipefail
 iface="$1"
 ip -o link show dev "$iface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p'
+REMOTE
+}
+
+server_link_tx_ring() {
+    ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+ethtool -g "$iface" 2>/dev/null | awk '
+    /^Current hardware settings:/ {current = 1; next}
+    current && $1 == "TX:" {print $2; exit}
+'
 REMOTE
 }
 
@@ -211,27 +231,43 @@ sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
 REMOTE
     fi
     effective_txqueuelen="$(server_link_txqueuelen)"
+    original_server_tx_ring="$(server_link_tx_ring)"
+    if [[ -n "$server_tx_ring" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_ring" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+tx_ring="$2"
+sudo ethtool -G "$iface" tx "$tx_ring"
+REMOTE
+    fi
+    effective_tx_ring="$(server_link_tx_ring)"
     original_server_wmem_max="$(ssh_control "$server_ssh" "sysctl -n net.core.wmem_max")"
     if [[ -n "$server_wmem_max" ]]; then
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$server_wmem_max'" >/dev/null
     fi
     effective_wmem_max="$(ssh_control "$server_ssh" "sysctl -n net.core.wmem_max")"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
 requested_txqueuelen="$3"
 effective_txqueuelen="$4"
-requested_fq_limit="$5"
-requested_fq_flow_limit="$6"
-original_wmem_max="$7"
-requested_wmem_max="$8"
-effective_wmem_max="$9"
+original_tx_ring="$5"
+requested_tx_ring="$6"
+effective_tx_ring="$7"
+requested_fq_limit="$8"
+requested_fq_flow_limit="$9"
+original_wmem_max="${10}"
+requested_wmem_max="${11}"
+effective_wmem_max="${12}"
 if [[ "$requested_txqueuelen" == "__none__" ]]; then
     requested_txqueuelen=""
 fi
 if [[ "$requested_fq_flow_limit" == "__none__" ]]; then
     requested_fq_flow_limit=""
+fi
+if [[ "$requested_tx_ring" == "__none__" ]]; then
+    requested_tx_ring=""
 fi
 if [[ "$requested_wmem_max" == "__none__" ]]; then
     requested_wmem_max=""
@@ -240,6 +276,9 @@ cat >"$out_abs/host/server-link-tuning.txt" <<EOF
 original_txqueuelen=$original_txqueuelen
 requested_txqueuelen=$requested_txqueuelen
 effective_txqueuelen=$effective_txqueuelen
+original_tx_ring=$original_tx_ring
+requested_tx_ring=$requested_tx_ring
+effective_tx_ring=$effective_tx_ring
 requested_fq_limit=$requested_fq_limit
 requested_fq_flow_limit=$requested_fq_flow_limit
 original_wmem_max=$original_wmem_max
@@ -269,6 +308,7 @@ tc -s qdisc show dev "$server_interface" >"$out_abs/host/server-tc-qdisc.txt" 2>
 cp /proc/interrupts "$out_abs/host/server-proc-interrupts.txt"
 cp /proc/softirqs "$out_abs/host/server-proc-softirqs.txt"
 ethtool -i "$server_interface" >"$out_abs/host/server-ethtool-driver.txt" 2>&1 || true
+ethtool -g "$server_interface" >"$out_abs/host/server-ethtool-ring.txt" 2>&1 || true
 ethtool -l "$server_interface" >"$out_abs/host/server-ethtool-channels.txt" 2>&1 || true
 ethtool -x "$server_interface" >"$out_abs/host/server-ethtool-rss.txt" 2>&1 || true
 ethtool -k "$server_interface" >"$out_abs/host/server-ethtool-features.txt" 2>&1 || true
@@ -589,6 +629,10 @@ if [[ "$server_prefix_b64" != "__none__" ]]; then
     server_prefix="$(printf '%s' "$server_prefix_b64" | base64 -d)"
 fi
 server_txqueuelen="$(ip -o link show dev "$server_interface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p')"
+server_tx_ring="$(ethtool -g "$server_interface" 2>/dev/null | awk '
+    /^Current hardware settings:/ {current = 1; next}
+    current && $1 == "TX:" {print $2; exit}
+')"
 server_tx_qdisc="$(tc qdisc show dev "$server_interface" | awk '
     $1 == "qdisc" && $4 == "parent" {count[$2] += 1}
     END {
@@ -629,11 +673,11 @@ cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:22]
+target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_ring, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:23]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -749,6 +793,7 @@ print("\t".join([
     socket_send_buffer or "default",
     socket_max_pacing_rate or "default",
     server_txqueuelen or "unknown",
+    server_tx_ring or "unknown",
     server_tx_qdisc or "unknown",
     server_tx_fq_limit or "default",
     server_tx_fq_flow_limit or "default",

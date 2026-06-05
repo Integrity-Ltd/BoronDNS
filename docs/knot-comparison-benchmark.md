@@ -175,8 +175,9 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-qdisc, effective `fq` limit/flow limit, requested UDP socket pacing rate,
-effective server `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
+ring size, effective per-queue server TX qdisc, effective `fq` limit/flow
+limit, requested UDP socket pacing rate, effective server `net.core.wmem_max`,
+server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
 enabled, root or child qdisc drop and requeue deltas, and aggregate softnet drop
@@ -245,6 +246,10 @@ experiments:
   original value during cleanup. Use it only for retained packet-loss
   experiments where qdisc drops or `SndbufErrors` identify transmit queueing as
   the active gate.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_RING=4096` temporarily sets the server NIC TX
+  ring size with `ethtool -G` and restores the original TX ring during cleanup.
+  Use it only for retained rows where send-side loss occurs after `sendmmsg`
+  acceptance; retained rows record the effective `server_tx_ring`.
 - `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` temporarily replaces each existing
   per-queue child qdisc on the server interface and restores the original child
   qdisc kinds during cleanup. The current wrapper accepts `fq`, `fq_codel`, and
