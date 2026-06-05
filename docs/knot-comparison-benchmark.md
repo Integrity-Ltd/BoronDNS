@@ -407,6 +407,13 @@ to 200000 was worse at about 97.33% with about 629k drops. Treat `fq limit`
 still accumulated about 1.69M/1.15M/1.02M qdisc-send-buffer drops and occasional
 receive errors. Keep the default `fq` flow-limit unless a more targeted
 pacing/queueing design is measured.
+Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
+profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
+`physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
+97.11%, and 98.48% reply rate respectively. The lower-worker rows reduced some
+send-buffer drops but traded them for much larger receive errors, while the
+48-worker row still had about 359k `SndbufErrors` and remained below the
+packet-loss gate.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
