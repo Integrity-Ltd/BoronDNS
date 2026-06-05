@@ -345,9 +345,12 @@ repeats were still below the gate at about 97.92% and 97.52%, but retained the
 lower send-error profile. With `net.core.wmem_max=33554432` and a 16 MiB
 requested send buffer, a 48-worker repeat reached about 99.04% with only 156
 receive errors and about 228k `SndbufErrors`; 40 and 44 workers were worse, and
-4.8M still fell to about 90.96%. Treat larger `wmem_max` plus send buffer as
-the current strongest 4.75M follow-up, not as proof that the next saturation
-boundary is solved.
+4.8M still fell to about 90.96%. A committed-harness same-artifact comparison
+with `server_wmem_max=33554432` measured Knot at about 92.06% and OxideDNS at
+about 95.90%, so OxideDNS still led Knot but did not stably clear the
+packet-loss gate. Treat larger `wmem_max` plus send buffer as the current
+strongest 4.75M follow-up, not as proof that the next saturation boundary is
+solved.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
