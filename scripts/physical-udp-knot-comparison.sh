@@ -79,7 +79,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -518,6 +518,20 @@ def parse_softnet(path):
             time_squeeze += int(fields[2], 16)
     return {"processed": processed, "dropped": dropped, "time_squeeze": time_squeeze}
 
+def parse_root_qdisc(path):
+    text = read(path)
+    for raw in text.splitlines():
+        if not raw.startswith("qdisc "):
+            continue
+        dropped = re.search(r"\(dropped ([0-9]+),", raw)
+        requeues = re.search(r" requeues ([0-9]+)\)", raw)
+        if dropped or requeues:
+            return {
+                "dropped": int(dropped.group(1)) if dropped else 0,
+                "requeues": int(requeues.group(1)) if requeues else 0,
+            }
+    return {"dropped": 0, "requeues": 0}
+
 def delta(before, after, key):
     return str(after.get(key, 0) - before.get(key, 0))
 
@@ -527,6 +541,8 @@ udp_before = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-before.txt")
 udp_after = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-after.txt")
 soft_before = parse_softnet(f"{run_abs}/server-proc-net-softnet-before.txt")
 soft_after = parse_softnet(f"{run_abs}/server-proc-net-softnet-after.txt")
+qdisc_before = parse_root_qdisc(f"{run_abs}/server-tc-qdisc-before.txt")
+qdisc_after = parse_root_qdisc(f"{run_abs}/server-tc-qdisc-after.txt")
 
 print("\t".join([
     target,
@@ -547,6 +563,8 @@ print("\t".join([
     duration.group(1) if duration else "",
     str(dev_after["rx"] - dev_before["rx"]),
     str(dev_after["tx"] - dev_before["tx"]),
+    delta(qdisc_before, qdisc_after, "dropped"),
+    delta(qdisc_before, qdisc_after, "requeues"),
     delta(udp_before, udp_after, "InDatagrams"),
     delta(udp_before, udp_after, "OutDatagrams"),
     delta(udp_before, udp_after, "InErrors"),

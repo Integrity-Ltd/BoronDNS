@@ -175,11 +175,11 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, UDP batch size, replies per second, reply
 percentage, average DNS reply size, Ethernet reply bit rate, effective server
 `txqueuelen`, server RX/TX packet deltas, Linux UDP `InDatagrams`/
-`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas, and aggregate
-softnet drop and time-squeeze deltas. Each artifact directory also includes
-`host/` context files for server CPU topology, server NIC driver/channel/RSS/
-offload state, server link/qdisc state, server interrupts/softirqs, and player
-host/NIC context.
+`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas, root qdisc drop
+and requeue deltas, and aggregate softnet drop and time-squeeze deltas. Each
+artifact directory also includes `host/` context files for server CPU topology,
+server NIC driver/channel/RSS/offload state, server link/qdisc state, server
+interrupts/softirqs, and player host/NIC context.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
