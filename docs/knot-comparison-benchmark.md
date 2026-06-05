@@ -302,7 +302,13 @@ rows prove otherwise. Follow-up socket-buffer rows under the 40-worker `fq`
 profile did not remove the 4.7M/4.75M gate: increasing only the receive buffer
 to 4 MiB made the 4.7M row worse at about 97.5% reply rate, while increasing
 only the send buffer to 4 MiB was roughly neutral at 4.7M and improved 4.75M
-only to about 98.4%.
+only to about 98.4%. A 40-worker `fq` batch-size sweep at 4.7M favored batch
+16 over batch 4 and 8, reaching about 99.33% reply rate with lower receive and
+send error counts than the batch-8 row in the same artifact. The same batch-16
+profile still fell below 98% at 4.75M, so it improves the 4.7M comparison point
+without removing the next saturation boundary. A same-artifact 4.7M comparison
+with Knot under `fq` measured Knot at about 94.82% reply rate and OxideDNS at
+about 99.29% reply rate.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
