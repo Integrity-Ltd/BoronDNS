@@ -336,6 +336,11 @@ rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
 4.75M/48-worker/OxideDNS-batch-64/`fq` profile. Keep the default kxdpgun batch
 10 for retained comparison rows unless a new player-side hypothesis is being
 tested.
+Splitting receive and send batch shape inside the standard UDP backend was also
+negative. Keeping `recvmmsg` at batch 64 while capping each `sendmmsg` call at
+32 packets produced about 98.21% and 97.39% reply rate in two 4.75M `fq` rows,
+with `SndbufErrors` still in the 3.0M-3.4M range. Keep the single batch-64
+receive/send path until a stronger pacing design is measured.
 Changing the standard UDP `sendmmsg` `WouldBlock` retry constant was not a
 useful code fix for this boundary: reducing retries from 256 to 64 nearly
 eliminated receive errors but dropped the 4.75M batch-64 `fq` row to about
