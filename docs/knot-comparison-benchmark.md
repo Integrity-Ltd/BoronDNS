@@ -325,6 +325,17 @@ measured Knot at about 92.21% reply rate and OxideDNS at about 98.72%, so
 OxideDNS stayed clearly ahead but still below the packet-loss gate. Batch 64
 did not carry 4.8M, which fell to about 95.54%, and combining batch 64 with
 `txqueuelen=5000` was worse than `fq` alone at about 98.31%.
+Socket sampling at the 4.75M batch-64 `fq` edge did not show sustained
+per-socket queue buildup: sampled OxideDNS sockets stayed at zero receive/send
+queue and zero `skmem` write/drop occupancy while the row still accumulated
+about 2.77M `SndbufErrors`. Treat the send loss as transient burst or pacing
+pressure, not a stable queue that remains visible between 100ms samples.
+Changing the kxdpgun sender batch also did not remove the boundary. With the
+summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
+rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
+4.75M/48-worker/OxideDNS-batch-64/`fq` profile. Keep the default kxdpgun batch
+10 for retained comparison rows unless a new player-side hypothesis is being
+tested.
 Changing the standard UDP `sendmmsg` `WouldBlock` retry constant was not a
 useful code fix for this boundary: reducing retries from 256 to 64 nearly
 eliminated receive errors but dropped the 4.75M batch-64 `fq` row to about
