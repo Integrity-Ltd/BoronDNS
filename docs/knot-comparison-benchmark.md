@@ -541,7 +541,12 @@ per-idle-poll error construction, but it did not clear the 4.8M packet-loss
 gate: the retained non-profiled row at
 `physical-udp-knot-comparison-20260605T201401Z` measured about 98.17% reply
 rate with about 428k qdisc/`SndbufErrors`. Keep it as receive-loop cleanup, not
-as a proven transport-loss fix.
+as a proven transport-loss fix. A follow-up profile at
+`physical-udp-knot-comparison-20260605T201614Z` confirmed the error-drop bucket
+was gone; `recv_batch_linux` remained the largest user-space bucket at about
+9.9%, so the next application-side experiment should target receive message
+setup or packet ownership in the dedicated standard UDP loop rather than
+ZoneImage composition.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
