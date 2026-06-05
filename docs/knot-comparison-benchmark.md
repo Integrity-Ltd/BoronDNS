@@ -175,12 +175,14 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-qdisc, effective server `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
+qdisc, effective `fq` flow limit, effective server `net.core.wmem_max`, server
+RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
-root qdisc drop and requeue deltas, and aggregate softnet drop and time-squeeze
-deltas. Each artifact directory also includes `host/` context files for server
-CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
-state, server interrupts/softirqs, and player host/NIC context.
+root or child qdisc drop and requeue deltas, and aggregate softnet drop and
+time-squeeze deltas. Each artifact directory also includes `host/` context
+files for server CPU topology, server NIC driver/channel/RSS/offload state,
+server link/qdisc state, server interrupts/softirqs, and player host/NIC
+context.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
@@ -217,6 +219,10 @@ experiments:
   qdisc kinds during cleanup. The current wrapper accepts `fq`, `fq_codel`, and
   `pfifo_fast`; use it only for send-side queueing experiments where the
   retained qdisc before/after files prove the host state was restored.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT=1000` sets `fq flow_limit` when
+  `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` is active. Retained rows record the
+  effective `server_tx_fq_flow_limit`. Leave it unset for baseline rows unless
+  child `fq` drops or `flows_plimit` counters are the active hypothesis.
 - `OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX=33554432` temporarily raises the server
   `net.core.wmem_max` sysctl and restores the original value during cleanup.
   Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES` value when
@@ -355,6 +361,13 @@ That setting improved the 4.8M row to about 95.16%, but still left about 1.16M
 `SndbufErrors`. Treat larger `wmem_max` plus send buffer as the current
 strongest 4.75M follow-up, not as proof that the next saturation boundary is
 solved.
+Inspecting child `fq` qdisc stats showed that `SndbufErrors` at this edge track
+qdisc drops closely. With the summary parser updated to include child qdisc
+drops, raising `fq flow_limit` from the default 100 to 1000 still left about
+699k/216k qdisc drops in two 4.75M rows, with reply rates about 97.05% and
+99.05%. Raising `flow_limit` to 10000 was worse at about 98.16% and 97.83%,
+with about 433k/942k qdisc drops. Treat the default `fq` flow limit as the
+baseline until a more targeted pacing/queueing design is measured.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same

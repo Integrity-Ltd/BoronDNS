@@ -34,6 +34,7 @@ worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
 server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
 server_tx_qdisc="${OXIDEDNS_PHYSICAL_SERVER_TX_QDISC:-}"
+server_tx_fq_flow_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT:-}"
 server_wmem_max="${OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
 original_server_txqueuelen=""
@@ -124,7 +125,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -163,12 +164,16 @@ configure_server_link_tuning() {
             exit 64
             ;;
         esac
-        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" <<'REMOTE'
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" "${server_tx_fq_flow_limit:-__none__}" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 requested_qdisc="$2"
 out_abs="$3"
+requested_fq_flow_limit="$4"
 restore_file="$out_abs/host/server-tx-qdisc-restore.tsv"
+if [[ "$requested_fq_flow_limit" == "__none__" ]]; then
+    requested_fq_flow_limit=""
+fi
 tc qdisc show dev "$iface" >"$out_abs/host/server-tx-qdisc-before.txt" 2>&1 || true
 tc qdisc show dev "$iface" |
     awk '$1 == "qdisc" && $4 == "parent" {print $5 "\t" $2}' >"$restore_file"
@@ -179,7 +184,11 @@ fi
 while IFS=$'\t' read -r parent _kind; do
     case "$requested_qdisc" in
     fq)
-        sudo tc qdisc replace dev "$iface" parent "$parent" fq limit 10000
+        if [[ -n "$requested_fq_flow_limit" ]]; then
+            sudo tc qdisc replace dev "$iface" parent "$parent" fq limit 10000 flow_limit "$requested_fq_flow_limit"
+        else
+            sudo tc qdisc replace dev "$iface" parent "$parent" fq limit 10000
+        fi
         ;;
     fq_codel | pfifo_fast)
         sudo tc qdisc replace dev "$iface" parent "$parent" "$requested_qdisc"
@@ -204,17 +213,21 @@ REMOTE
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$server_wmem_max'" >/dev/null
     fi
     effective_wmem_max="$(ssh_control "$server_ssh" "sysctl -n net.core.wmem_max")"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "${server_tx_fq_flow_limit:-__none__}" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
 requested_txqueuelen="$3"
 effective_txqueuelen="$4"
-original_wmem_max="$5"
-requested_wmem_max="$6"
-effective_wmem_max="$7"
+requested_fq_flow_limit="$5"
+original_wmem_max="$6"
+requested_wmem_max="$7"
+effective_wmem_max="$8"
 if [[ "$requested_txqueuelen" == "__none__" ]]; then
     requested_txqueuelen=""
+fi
+if [[ "$requested_fq_flow_limit" == "__none__" ]]; then
+    requested_fq_flow_limit=""
 fi
 if [[ "$requested_wmem_max" == "__none__" ]]; then
     requested_wmem_max=""
@@ -223,6 +236,7 @@ cat >"$out_abs/host/server-link-tuning.txt" <<EOF
 original_txqueuelen=$original_txqueuelen
 requested_txqueuelen=$requested_txqueuelen
 effective_txqueuelen=$effective_txqueuelen
+requested_fq_flow_limit=$requested_fq_flow_limit
 original_wmem_max=$original_wmem_max
 requested_wmem_max=$requested_wmem_max
 effective_wmem_max=$effective_wmem_max
@@ -573,6 +587,14 @@ server_tx_qdisc="$(tc qdisc show dev "$server_interface" | awk '
         }
     }
 ')"
+server_tx_fq_flow_limit="$(tc qdisc show dev "$server_interface" | awk '$1 == "qdisc" && $2 == "fq" && $4 == "parent" && !printed {
+    for (field = 1; field <= NF; field++) {
+        if ($field == "flow_limit" && field < NF) {
+            print $(field + 1)
+            printed = 1
+        }
+    }
+}')"
 server_wmem_max="$(sysctl -n net.core.wmem_max 2>/dev/null || printf unknown)"
 
 cp /proc/net/dev "$run_abs/server-proc-net-dev-after.txt"
@@ -581,11 +603,11 @@ cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$server_tx_qdisc" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$server_tx_qdisc" "$server_tx_fq_flow_limit" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, server_tx_qdisc, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:19]
+target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, server_tx_qdisc, server_tx_fq_flow_limit, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:20]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -636,19 +658,30 @@ def parse_softnet(path):
             time_squeeze += int(fields[2], 16)
     return {"processed": processed, "dropped": dropped, "time_squeeze": time_squeeze}
 
-def parse_root_qdisc(path):
+def parse_qdisc(path):
     text = read(path)
+    root = {"dropped": 0, "requeues": 0}
+    child_dropped = 0
+    current_kind = None
     for raw in text.splitlines():
-        if not raw.startswith("qdisc "):
+        if raw.startswith("qdisc "):
+            fields = raw.split()
+            current_kind = fields[1] if len(fields) > 1 else None
             continue
         dropped = re.search(r"\(dropped ([0-9]+),", raw)
         requeues = re.search(r" requeues ([0-9]+)\)", raw)
         if dropped or requeues:
-            return {
+            values = {
                 "dropped": int(dropped.group(1)) if dropped else 0,
                 "requeues": int(requeues.group(1)) if requeues else 0,
             }
-    return {"dropped": 0, "requeues": 0}
+            if current_kind == "mq":
+                root = values
+            elif current_kind is not None:
+                child_dropped += values["dropped"]
+    if child_dropped:
+        root["dropped"] = child_dropped
+    return root
 
 def delta(before, after, key):
     return str(after.get(key, 0) - before.get(key, 0))
@@ -659,8 +692,8 @@ udp_before = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-before.txt")
 udp_after = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-after.txt")
 soft_before = parse_softnet(f"{run_abs}/server-proc-net-softnet-before.txt")
 soft_after = parse_softnet(f"{run_abs}/server-proc-net-softnet-after.txt")
-qdisc_before = parse_root_qdisc(f"{run_abs}/server-tc-qdisc-before.txt")
-qdisc_after = parse_root_qdisc(f"{run_abs}/server-tc-qdisc-after.txt")
+qdisc_before = parse_qdisc(f"{run_abs}/server-tc-qdisc-before.txt")
+qdisc_after = parse_qdisc(f"{run_abs}/server-tc-qdisc-after.txt")
 
 print("\t".join([
     target,
@@ -675,6 +708,7 @@ print("\t".join([
     socket_send_buffer or "default",
     server_txqueuelen or "unknown",
     server_tx_qdisc or "unknown",
+    server_tx_fq_flow_limit or "default",
     server_wmem_max or "unknown",
     cpus or "unbound",
     server_prefix or "none",
