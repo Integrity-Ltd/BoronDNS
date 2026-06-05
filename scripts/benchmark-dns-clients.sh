@@ -1368,6 +1368,7 @@ udp_received_datagrams="$(prom_metric_value oxidedns_udp_received_datagrams_tota
 udp_send_batches="$(prom_metric_value oxidedns_udp_send_batches_total)"
 udp_sent_datagrams="$(prom_metric_value oxidedns_udp_sent_datagrams_total)"
 udp_mmsg_receive_syscalls="$(prom_metric_value oxidedns_udp_mmsg_receive_syscalls_total)"
+udp_mmsg_receive_wouldblock_syscalls="$(prom_metric_value oxidedns_udp_mmsg_receive_wouldblock_syscalls_total)"
 udp_mmsg_received_datagrams="$(prom_metric_value oxidedns_udp_mmsg_received_datagrams_total)"
 udp_mmsg_send_syscalls="$(prom_metric_value oxidedns_udp_mmsg_send_syscalls_total)"
 udp_mmsg_sent_datagrams="$(prom_metric_value oxidedns_udp_mmsg_sent_datagrams_total)"
@@ -1410,6 +1411,7 @@ udp_received_datagrams="${udp_received_datagrams:-unknown}"
 udp_send_batches="${udp_send_batches:-unknown}"
 udp_sent_datagrams="${udp_sent_datagrams:-unknown}"
 udp_mmsg_receive_syscalls="${udp_mmsg_receive_syscalls:-0}"
+udp_mmsg_receive_wouldblock_syscalls="${udp_mmsg_receive_wouldblock_syscalls:-0}"
 udp_mmsg_received_datagrams="${udp_mmsg_received_datagrams:-0}"
 udp_mmsg_send_syscalls="${udp_mmsg_send_syscalls:-0}"
 udp_mmsg_sent_datagrams="${udp_mmsg_sent_datagrams:-0}"
@@ -1444,6 +1446,7 @@ udp_received_datagrams	$udp_received_datagrams	datagrams
 udp_send_batches	$udp_send_batches	batches
 udp_sent_datagrams	$udp_sent_datagrams	datagrams
 udp_mmsg_receive_syscalls	$udp_mmsg_receive_syscalls	syscalls
+udp_mmsg_receive_wouldblock_syscalls	$udp_mmsg_receive_wouldblock_syscalls	syscalls
 udp_mmsg_received_datagrams	$udp_mmsg_received_datagrams	datagrams
 udp_mmsg_send_syscalls	$udp_mmsg_send_syscalls	syscalls
 udp_mmsg_sent_datagrams	$udp_mmsg_sent_datagrams	datagrams

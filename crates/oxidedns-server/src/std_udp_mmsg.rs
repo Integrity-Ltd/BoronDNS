@@ -151,6 +151,7 @@ impl StdUdpMmsg {
         if result < 0 {
             let errno = current_errno();
             if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
+                self.stats.receive_wouldblock_syscalls += 1;
                 return Ok(0);
             }
             return Err(io::Error::from_raw_os_error(errno));
@@ -260,6 +261,7 @@ impl StdUdpMmsg {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StdUdpMmsgStats {
     pub(crate) receive_syscalls: u64,
+    pub(crate) receive_wouldblock_syscalls: u64,
     pub(crate) received_datagrams: u64,
     pub(crate) send_syscalls: u64,
     pub(crate) sent_datagrams: u64,

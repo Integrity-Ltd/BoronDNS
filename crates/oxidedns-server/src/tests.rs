@@ -3817,6 +3817,7 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     let metrics = RuntimeMetrics::new();
     metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
         receive_syscalls: 3,
+        receive_wouldblock_syscalls: 5,
         received_datagrams: 30,
         send_syscalls: 4,
         sent_datagrams: 28,
@@ -3836,6 +3837,7 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     );
 
     assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 3"));
+    assert!(body.contains("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total 5"));
     assert!(body.contains("oxidedns_udp_mmsg_received_datagrams_total 30"));
     assert!(body.contains("oxidedns_udp_mmsg_send_syscalls_total 4"));
     assert!(body.contains("oxidedns_udp_mmsg_sent_datagrams_total 28"));
@@ -3865,6 +3867,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     metrics.record_udp_send_batch(9);
     metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
         receive_syscalls: 3,
+        receive_wouldblock_syscalls: 5,
         received_datagrams: 30,
         send_syscalls: 4,
         sent_datagrams: 28,
@@ -3895,6 +3898,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     assert!(body.contains("oxidedns_udp_send_batches_total 0"));
     assert!(body.contains("oxidedns_udp_sent_datagrams_total 0"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 0"));
+    assert!(body.contains("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_direct_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_semantic_hits_total 0"));

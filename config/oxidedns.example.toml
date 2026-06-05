@@ -155,6 +155,9 @@ udp_reuseport_workers = 1
 # "dedicated" uses one blocking OS thread per UDP worker for data-plane
 # experiments and later AF_XDP-shaped worker ownership.
 udp_runtime = "tokio"
+# Dedicated UDP idle behavior. "park" is the conservative default, while
+# "spin" keeps polling continuously for saturation benchmarks.
+udp_idle_strategy = "park"
 # Optional Linux CPU affinity list for dedicated standard UDP workers. Length
 # must match udp_reuseport_workers and requires udp_runtime = "dedicated".
 # Leave unset unless benchmark evidence justifies it.

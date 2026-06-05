@@ -180,9 +180,10 @@ limit, requested UDP socket pacing rate, effective server `net.core.rmem_max`
 and `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
-enabled, root or child qdisc drop and requeue deltas, child `fq`
-`flows_plimit` deltas when present, and aggregate softnet drop and time-squeeze
-deltas. Each artifact directory also includes `host/` context files for server
+enabled, including successful and empty nonblocking `recvmmsg` calls, root or
+child qdisc drop and requeue deltas, child `fq` `flows_plimit` deltas when
+present, and aggregate softnet drop and time-squeeze deltas. Each artifact
+directory also includes `host/` context files for server
 CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
 state, server IRQ affinity, RPS/XPS queue steering, interrupt coalescing,
 server interrupts/softirqs, and player host/NIC context.
@@ -511,6 +512,30 @@ from about 89.28% at 4.25M to about 67.17% at 4.8M. Restore RPS disabled, RX
 ring 1024, and adaptive RX coalescing as the reverse-role baseline; the next
 reverse-role work should be application receive-loop/AF_XDP evidence rather
 than more IRQ/RSS/RPS/XPS placement.
+A reverse-role receive-path profiling slice confirmed that the remaining
+standard UDP cliff is not a simple worker-placement issue. Perf rows at
+`physical-udp-knot-comparison-20260605T221215Z` and
+`physical-udp-knot-comparison-20260605T221553Z` were too perturbing to use as
+candidate performance numbers, but their symbol mix was dominated by syscall
+return, `recvmmsg`, kernel UDP enqueue/receive, and send-side kernel work rather
+than ZoneImage response construction. The reduced-counter rows also showed only
+about three received datagrams per successful `recvmmsg` call, but reduced
+counters themselves depressed reply rate.
+Adding a retained empty-`recvmmsg` counter and expanding per-worker packet-I/O
+slots to cover the 72-worker physical profile made the receive loop shape clear.
+With a local metrics build at `physical-udp-knot-comparison-20260605T222216Z`,
+the 72-worker, 4.35M, reduced-counter row recorded all 72 workers active and
+balanced within about 6.3% max/mean, but also recorded about 5.73M successful
+receive syscalls and about 103.8M empty nonblocking receive polls in a 5-second
+window. That identifies spin-idle empty polling as a large CPU consumer, not
+reuseport imbalance. However replacing spin with the existing park strategy was
+negative at `physical-udp-knot-comparison-20260605T222310Z`, and a temporary
+local yield-after-short-spin experiment at `physical-udp-knot-comparison-20260605T222548Z`
+was also negative. Keep the new counters for the next physical run, but do not
+treat idle sleeping/yielding as the reverse-role fix; the next substantial
+receive-path step should be a different packet-I/O design, most likely AF_XDP,
+unless a more targeted nonblocking poll/backoff design can be proven without
+losing responsiveness.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,

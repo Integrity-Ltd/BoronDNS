@@ -127,7 +127,7 @@ fi
 mkdir -p "$sweep_dir"
 
 summary_path="$sweep_dir/summary.tsv"
-printf 'udp_runtime\tudp_reuseport_workers\tudp_batch_size\tudp_client_sockets_per_thread\tudp_worker_cpu_affinity\tartifact_dir\tresponses_per_second\tlatency_us_p50\tlatency_us_p99\tlatency_us_p999\tdropped\terrors\tudp_receive_batches\tudp_received_datagrams\treceive_datagrams_per_batch\tudp_send_batches\tudp_sent_datagrams\tsend_datagrams_per_batch\tudp_mmsg_receive_syscalls\tmmsg_receive_datagrams_per_syscall\tudp_mmsg_send_syscalls\tmmsg_send_datagrams_per_syscall\tudp_mmsg_send_partial_syscalls\tudp_mmsg_send_wouldblock_retries\tudp_worker_receive_slots\tudp_worker_received_datagrams_imbalance_ratio\tudp_worker_send_slots\tudp_worker_sent_datagrams_imbalance_ratio\tnetwork_device\tnetwork_rx_packets_delta\tnetwork_tx_packets_delta\tnetwork_rx_gbps\tnetwork_tx_gbps\tnetwork_sum_gbps\tnetwork_rx_gigabytes_per_second\tnetwork_tx_gigabytes_per_second\tnetwork_sum_gigabytes_per_second\tnetwork_rx_bytes_per_response\tnetwork_tx_bytes_per_response\tnetwork_sum_bytes_per_response\tnetwork_throughput_scope\n' >"$summary_path"
+printf 'udp_runtime\tudp_reuseport_workers\tudp_batch_size\tudp_client_sockets_per_thread\tudp_worker_cpu_affinity\tartifact_dir\tresponses_per_second\tlatency_us_p50\tlatency_us_p99\tlatency_us_p999\tdropped\terrors\tudp_receive_batches\tudp_received_datagrams\treceive_datagrams_per_batch\tudp_send_batches\tudp_sent_datagrams\tsend_datagrams_per_batch\tudp_mmsg_receive_syscalls\tudp_mmsg_receive_wouldblock_syscalls\tmmsg_receive_datagrams_per_syscall\tudp_mmsg_send_syscalls\tmmsg_send_datagrams_per_syscall\tudp_mmsg_send_partial_syscalls\tudp_mmsg_send_wouldblock_retries\tudp_worker_receive_slots\tudp_worker_received_datagrams_imbalance_ratio\tudp_worker_send_slots\tudp_worker_sent_datagrams_imbalance_ratio\tnetwork_device\tnetwork_rx_packets_delta\tnetwork_tx_packets_delta\tnetwork_rx_gbps\tnetwork_tx_gbps\tnetwork_sum_gbps\tnetwork_rx_gigabytes_per_second\tnetwork_tx_gigabytes_per_second\tnetwork_sum_gigabytes_per_second\tnetwork_rx_bytes_per_response\tnetwork_tx_bytes_per_response\tnetwork_sum_bytes_per_response\tnetwork_throughput_scope\n' >"$summary_path"
 
 tsv_value() {
     local path="$1"
@@ -210,6 +210,7 @@ for runtime in "${runtimes[@]}"; do
                     udp_send_batches="$(tsv_value "$results" udp_send_batches)"
                     udp_sent_datagrams="$(tsv_value "$results" udp_sent_datagrams)"
                     udp_mmsg_receive_syscalls="$(tsv_value "$results" udp_mmsg_receive_syscalls)"
+                    udp_mmsg_receive_wouldblock_syscalls="$(tsv_value "$results" udp_mmsg_receive_wouldblock_syscalls)"
                     udp_mmsg_received_datagrams="$(tsv_value "$results" udp_mmsg_received_datagrams)"
                     udp_mmsg_send_syscalls="$(tsv_value "$results" udp_mmsg_send_syscalls)"
                     udp_mmsg_sent_datagrams="$(tsv_value "$results" udp_mmsg_sent_datagrams)"
@@ -233,6 +234,7 @@ for runtime in "${runtimes[@]}"; do
                         "$udp_sent_datagrams" \
                         "$(per_unit "$udp_sent_datagrams" "$udp_send_batches")" \
                         "$udp_mmsg_receive_syscalls" \
+                        "${udp_mmsg_receive_wouldblock_syscalls:-0}" \
                         "$(per_unit "$udp_mmsg_received_datagrams" "$udp_mmsg_receive_syscalls")" \
                         "$udp_mmsg_send_syscalls" \
                         "$(per_unit "$udp_mmsg_sent_datagrams" "$udp_mmsg_send_syscalls")" \
