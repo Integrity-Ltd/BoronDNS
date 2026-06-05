@@ -513,7 +513,11 @@ pin dedicated `SO_REUSEPORT` workers to selected CPUs. The optional
 `limits.udp_socket_send_buffer_bytes` settings request Linux `SO_RCVBUF` and
 `SO_SNDBUF` values for each UDP socket. Keep both as evidence-gated host tuning:
 oversized buffers can increase latency or memory pressure and may reduce
-throughput on some kernels.
+throughput on some kernels. `limits.udp_socket_max_pacing_rate_bytes_per_second`
+requests Linux `SO_MAX_PACING_RATE` for each UDP socket. Use it only with
+retained packet-loss evidence and a pacing-capable qdisc such as `fq`; too low a
+rate will cap throughput, while too high a rate may leave send-side drops
+unchanged.
 
 Query serving uses the immutable `ZoneImage` response path. Internal plan,
 DNSSEC-plan, or response-build failures return SERVFAIL and increment fixed

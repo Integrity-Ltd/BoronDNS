@@ -1553,6 +1553,8 @@ pub struct Limits {
     pub udp_socket_receive_buffer_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub udp_socket_send_buffer_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_socket_max_pacing_rate_bytes_per_second: Option<usize>,
     #[serde(default)]
     pub udp_backend: UdpBackend,
     #[serde(default = "default_max_cname_chain")]
@@ -1614,6 +1616,7 @@ impl Default for Limits {
             udp_idle_strategy: UdpIdleStrategy::default(),
             udp_socket_receive_buffer_bytes: None,
             udp_socket_send_buffer_bytes: None,
+            udp_socket_max_pacing_rate_bytes_per_second: None,
             udp_backend: UdpBackend::default(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
@@ -1678,6 +1681,12 @@ impl Limits {
         if matches!(self.udp_socket_send_buffer_bytes, Some(0)) {
             return Err(ConfigError::Invalid(
                 "limits.udp_socket_send_buffer_bytes must be greater than zero".to_owned(),
+            ));
+        }
+        if matches!(self.udp_socket_max_pacing_rate_bytes_per_second, Some(0)) {
+            return Err(ConfigError::Invalid(
+                "limits.udp_socket_max_pacing_rate_bytes_per_second must be greater than zero"
+                    .to_owned(),
             ));
         }
         if let Some(cpus) = &self.udp_worker_cpu_affinity {
@@ -2764,6 +2773,10 @@ mod tests {
         assert_eq!(config.limits.udp_idle_strategy, UdpIdleStrategy::Park);
         assert_eq!(config.limits.udp_socket_receive_buffer_bytes, None);
         assert_eq!(config.limits.udp_socket_send_buffer_bytes, None);
+        assert_eq!(
+            config.limits.udp_socket_max_pacing_rate_bytes_per_second,
+            None
+        );
         assert_eq!(config.limits.udp_backend, UdpBackend::Std);
         assert_eq!(config.xdp, XdpConfig::default());
         assert_eq!(config.limits.max_cname_chain, 8);
@@ -4795,6 +4808,7 @@ mod tests {
                 udp_idle_strategy = "spin"
                 udp_socket_receive_buffer_bytes = 4194304
                 udp_socket_send_buffer_bytes = 4194304
+                udp_socket_max_pacing_rate_bytes_per_second = 75000000
 
                 [[zones]]
                 name = "example.test."
@@ -4816,6 +4830,10 @@ mod tests {
             Some(4_194_304)
         );
         assert_eq!(config.limits.udp_socket_send_buffer_bytes, Some(4_194_304));
+        assert_eq!(
+            config.limits.udp_socket_max_pacing_rate_bytes_per_second,
+            Some(75_000_000)
+        );
     }
 
     #[test]
@@ -5104,6 +5122,30 @@ mod tests {
         .expect_err("zero UDP batch size must fail");
 
         assert!(error.to_string().contains("udp_batch_size"));
+    }
+
+    #[test]
+    fn rejects_zero_udp_socket_pacing_rate() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_socket_max_pacing_rate_bytes_per_second = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero UDP socket pacing rate must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("udp_socket_max_pacing_rate_bytes_per_second")
+        );
     }
 
     #[test]

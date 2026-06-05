@@ -319,6 +319,9 @@ impl Runtime {
                 self.config.limits.udp_worker_cpu_affinity.as_deref(),
                 self.config.limits.udp_socket_receive_buffer_bytes,
                 self.config.limits.udp_socket_send_buffer_bytes,
+                self.config
+                    .limits
+                    .udp_socket_max_pacing_rate_bytes_per_second,
             )
             .await?;
             bound_udp_listeners.append(&mut listeners);

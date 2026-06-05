@@ -9,8 +9,15 @@ pub(crate) fn bind(
     reuseport: bool,
     receive_buffer_bytes: Option<usize>,
     send_buffer_bytes: Option<usize>,
+    max_pacing_rate_bytes_per_second: Option<usize>,
 ) -> io::Result<UdpSocket> {
-    let socket = bind_std(addr, reuseport, receive_buffer_bytes, send_buffer_bytes)?;
+    let socket = bind_std(
+        addr,
+        reuseport,
+        receive_buffer_bytes,
+        send_buffer_bytes,
+        max_pacing_rate_bytes_per_second,
+    )?;
     socket.set_nonblocking(true)?;
     UdpSocket::from_std(socket)
 }
@@ -25,6 +32,7 @@ fn bind_std(
     reuseport: bool,
     receive_buffer_bytes: Option<usize>,
     send_buffer_bytes: Option<usize>,
+    max_pacing_rate_bytes_per_second: Option<usize>,
 ) -> io::Result<std::net::UdpSocket> {
     use std::os::fd::FromRawFd;
 
@@ -72,6 +80,18 @@ fn bind_std(
         close_on_error(fd);
         return Err(error);
     }
+    if let Some(bytes_per_second) = max_pacing_rate_bytes_per_second
+        && let Err(error) = set_socket_u32(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_MAX_PACING_RATE,
+            bytes_per_second,
+            "UDP socket pacing rate exceeds platform unsigned integer range",
+        )
+    {
+        close_on_error(fd);
+        return Err(error);
+    }
     if let Err(error) = bind_socket_addr(fd, addr) {
         close_on_error(fd);
         return Err(error);
@@ -88,6 +108,7 @@ fn bind_std(
     reuseport: bool,
     receive_buffer_bytes: Option<usize>,
     send_buffer_bytes: Option<usize>,
+    max_pacing_rate_bytes_per_second: Option<usize>,
 ) -> io::Result<std::net::UdpSocket> {
     if reuseport {
         return Err(io::Error::new(
@@ -100,6 +121,12 @@ fn bind_std(
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "UDP socket buffer sizing is only implemented on Linux",
+        ));
+    }
+    if max_pacing_rate_bytes_per_second.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "UDP socket pacing is only implemented on Linux",
         ));
     }
     Ok(socket)
@@ -152,6 +179,35 @@ fn set_socket_int(
             level,
             option,
             (&value as *const libc::c_int).cast(),
+            std::mem::size_of_val(&value) as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_socket_u32(
+    fd: libc::c_int,
+    level: libc::c_int,
+    option: libc::c_int,
+    value: usize,
+    range_error: &'static str,
+) -> io::Result<()> {
+    let value: libc::c_uint = value
+        .try_into()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, range_error))?;
+    // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
+    // is valid for the duration of the call with the correct size.
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            option,
+            (&value as *const libc::c_uint).cast(),
             std::mem::size_of_val(&value) as libc::socklen_t,
         )
     };

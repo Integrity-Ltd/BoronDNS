@@ -175,8 +175,8 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-qdisc, effective `fq` limit/flow limit, effective server `net.core.wmem_max`,
-server RX/TX packet deltas, Linux UDP
+qdisc, effective `fq` limit/flow limit, requested UDP socket pacing rate,
+effective server `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 root or child qdisc drop and requeue deltas, and aggregate softnet drop and
 time-squeeze deltas. Each artifact directory also includes `host/` context
@@ -232,6 +232,11 @@ experiments:
   `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES=4194304` override receive and send
   buffers independently. Use these for send-side loss experiments where
   `SndbufErrors` is non-zero but receive counters are clean.
+- `OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND=75000000` writes
+  `limits.udp_socket_max_pacing_rate_bytes_per_second` into each run config.
+  This requests Linux `SO_MAX_PACING_RATE` per UDP socket, so use it with `fq`
+  qdisc rows where aggregate send bursts are the active hypothesis. Retained
+  rows record the requested `socket_max_pacing_rate_bytes_per_second`.
 - `OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN=5000` temporarily sets the server
   interface transmit queue length for the comparison run and restores the
   original value during cleanup. Use it only for retained packet-loss

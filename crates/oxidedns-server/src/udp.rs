@@ -55,6 +55,7 @@ pub(crate) async fn bind_udp_listeners(
     cpu_affinity: Option<&[usize]>,
     socket_receive_buffer_bytes: Option<usize>,
     socket_send_buffer_bytes: Option<usize>,
+    socket_max_pacing_rate_bytes_per_second: Option<usize>,
 ) -> Result<Vec<BoundUdpListener>, RuntimeError> {
     match backend {
         UdpBackend::Std => bind_std_udp_listeners(
@@ -63,6 +64,7 @@ pub(crate) async fn bind_udp_listeners(
             cpu_affinity,
             socket_receive_buffer_bytes,
             socket_send_buffer_bytes,
+            socket_max_pacing_rate_bytes_per_second,
         )
         .map_err(|source| RuntimeError::BindUdp { addr, source }),
         UdpBackend::AfXdp => {
@@ -80,6 +82,7 @@ fn bind_std_udp_listeners(
     cpu_affinity: Option<&[usize]>,
     socket_receive_buffer_bytes: Option<usize>,
     socket_send_buffer_bytes: Option<usize>,
+    socket_max_pacing_rate_bytes_per_second: Option<usize>,
 ) -> std::io::Result<Vec<BoundUdpListener>> {
     let worker_count = worker_count.max(1);
     let reuseport = worker_count > 1;
@@ -91,6 +94,7 @@ fn bind_std_udp_listeners(
             reuseport,
             socket_receive_buffer_bytes,
             socket_send_buffer_bytes,
+            socket_max_pacing_rate_bytes_per_second,
         )?;
         if worker_id == 0 {
             bind_addr = socket.local_addr()?;

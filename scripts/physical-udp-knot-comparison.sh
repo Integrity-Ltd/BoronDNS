@@ -30,6 +30,7 @@ idle_strategy_list="${OXIDEDNS_PHYSICAL_IDLE_STRATEGIES:-park spin}"
 socket_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_BUFFER_BYTES:-}"
 socket_receive_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES:-$socket_buffer_bytes}"
 socket_send_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_buffer_bytes}"
+socket_max_pacing_rate_bytes_per_second="${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND:-}"
 worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
 server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
@@ -126,7 +127,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -357,17 +358,19 @@ run_server_start() {
     local knot_target_port="$6"
     local socket_receive_buffer="$7"
     local socket_send_buffer="$8"
-    local cpus="$9"
-    local selected_server_bin="${10}"
-    local selected_server_prefix="${11}"
-    local server_interface="${12}"
-    local udp_batch_size="${13}"
+    local socket_max_pacing_rate="$9"
+    local cpus="${10}"
+    local selected_server_bin="${11}"
+    local selected_server_prefix="${12}"
+    local server_interface="${13}"
+    local udp_batch_size="${14}"
     local socket_receive_buffer_arg="${socket_receive_buffer:-__none__}"
     local socket_send_buffer_arg="${socket_send_buffer:-__none__}"
+    local socket_max_pacing_rate_arg="${socket_max_pacing_rate:-__none__}"
     local cpus_arg="${cpus:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -379,16 +382,20 @@ knot_target_ip="$7"
 knot_target_port="$8"
 socket_receive_buffer="$9"
 socket_send_buffer="${10}"
-cpus="${11}"
-server_bin="${12}"
-server_prefix_b64="${13}"
-server_interface="${14}"
-udp_batch_size="${15}"
+socket_max_pacing_rate="${11}"
+cpus="${12}"
+server_bin="${13}"
+server_prefix_b64="${14}"
+server_interface="${15}"
+udp_batch_size="${16}"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
 fi
 if [[ "$socket_send_buffer" == "__none__" ]]; then
     socket_send_buffer=""
+fi
+if [[ "$socket_max_pacing_rate" == "__none__" ]]; then
+    socket_max_pacing_rate=""
 fi
 if [[ "$cpus" == "__none__" ]]; then
     cpus=""
@@ -431,16 +438,17 @@ else:
     )
 open(path, "w", encoding="utf-8").write(text)
 PY
-if [[ -n "$socket_receive_buffer" || -n "$socket_send_buffer" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$socket_receive_buffer" "$socket_send_buffer" <<'PY'
+if [[ -n "$socket_receive_buffer" || -n "$socket_send_buffer" || -n "$socket_max_pacing_rate" ]]; then
+    python3 - "$run_abs/oxidedns.toml" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" <<'PY'
 import re
 import sys
 
-path, socket_receive_buffer, socket_send_buffer = sys.argv[1:4]
+path, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate = sys.argv[1:5]
 text = open(path, encoding="utf-8").read()
 for key, value in (
     ("udp_socket_receive_buffer_bytes", socket_receive_buffer),
     ("udp_socket_send_buffer_bytes", socket_send_buffer),
+    ("udp_socket_max_pacing_rate_bytes_per_second", socket_max_pacing_rate),
 ):
     if not value:
         continue
@@ -535,16 +543,18 @@ run_server_finish() {
     local idle_strategy="$9"
     local socket_receive_buffer="${10}"
     local socket_send_buffer="${11}"
-    local cpus="${12}"
-    local selected_server_prefix_b64="${13}"
-    local server_interface="${14}"
+    local socket_max_pacing_rate="${12}"
+    local cpus="${13}"
+    local selected_server_prefix_b64="${14}"
+    local server_interface="${15}"
     local socket_receive_buffer_arg="${socket_receive_buffer:-__none__}"
     local socket_send_buffer_arg="${socket_send_buffer:-__none__}"
+    local socket_max_pacing_rate_arg="${socket_max_pacing_rate:-__none__}"
     local cpus_arg="${cpus:-__none__}"
     local server_prefix_arg="${selected_server_prefix_b64:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 run_abs="$2"
@@ -558,14 +568,18 @@ hot_path="$9"
 idle_strategy="${10}"
 socket_receive_buffer="${11}"
 socket_send_buffer="${12}"
-cpus="${13}"
-server_prefix_b64="${14}"
-server_interface="${15}"
+socket_max_pacing_rate="${13}"
+cpus="${14}"
+server_prefix_b64="${15}"
+server_interface="${16}"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
 fi
 if [[ "$socket_send_buffer" == "__none__" ]]; then
     socket_send_buffer=""
+fi
+if [[ "$socket_max_pacing_rate" == "__none__" ]]; then
+    socket_max_pacing_rate=""
 fi
 if [[ "$cpus" == "__none__" ]]; then
     cpus=""
@@ -615,11 +629,11 @@ cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:21]
+target, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:22]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -718,6 +732,7 @@ print("\t".join([
     idle_strategy,
     socket_receive_buffer or "default",
     socket_send_buffer or "default",
+    socket_max_pacing_rate or "default",
     server_txqueuelen or "unknown",
     server_tx_qdisc or "unknown",
     server_tx_fq_limit or "default",
@@ -948,7 +963,7 @@ if [[ "$include_knot" == true ]]; then
         printf 'running %s\n' "$run_id"
         run_knot_reference_start "$run_abs" "$interface"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate"
-        run_server_finish "$run_abs" "knot" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_server_finish "$run_abs" "knot" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
 fi
@@ -961,13 +976,13 @@ for workers in $workers_list; do
                     select_run_id "oxidedns-w${workers}-q${rate}-batch-${udp_batch_size}-metrics-${hot_path}-idle-${idle_strategy}"
                     run_abs="$out_abs/$run_id"
                     printf 'running %s\n' "$run_id"
-                    run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
+                    run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_bytes_per_second" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
                     run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                     run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
                     run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate"
                     run_server_socket_sample_finish "$run_abs" "$socket_sample"
                     run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
-                    run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_prefix_arg" "$interface"
+                    run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_bytes_per_second" "$worker_cpus" "$server_prefix_arg" "$interface"
                 done
             done
         done
