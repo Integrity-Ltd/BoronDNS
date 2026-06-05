@@ -53,6 +53,17 @@ struct Ipv4Hdr {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct Ipv6Hdr {
+    version_tc_flow: u32,
+    payload_len: u16,
+    next_header: u8,
+    hop_limit: u8,
+    src: [u8; 16],
+    dst: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct UdpHdr {
     source: u16,
     dest: u16,
@@ -73,28 +84,17 @@ pub fn oxidedns_xdp_redirect(ctx: XdpContext) -> u32 {
 
 fn try_oxidedns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     let eth = read_at::<EthHdr>(ctx, 0)?;
-    if u16::from_be(eth.eth_proto) != 0x0800 {
-        increment_counter(&PASSED_PACKETS);
-        return Ok(xdp_action::XDP_PASS);
-    }
+    let eth_proto = u16::from_be(eth.eth_proto);
+    let udp_offset = match eth_proto {
+        0x0800 => ipv4_udp_offset(ctx)?,
+        0x86dd => ipv6_udp_offset(ctx)?,
+        _ => {
+            increment_counter(&PASSED_PACKETS);
+            return Ok(xdp_action::XDP_PASS);
+        }
+    };
 
-    let ip_offset = mem::size_of::<EthHdr>();
-    let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
-    if ip.protocol != 17 {
-        increment_counter(&PASSED_PACKETS);
-        return Ok(xdp_action::XDP_PASS);
-    }
-    let ihl = usize::from(ip.version_ihl & 0x0f) * 4;
-    if ihl < mem::size_of::<Ipv4Hdr>() {
-        increment_counter(&PASSED_PACKETS);
-        return Ok(xdp_action::XDP_PASS);
-    }
-    if (u16::from_be(ip.frag_off) & 0x3fff) != 0 {
-        increment_counter(&PASSED_PACKETS);
-        return Ok(xdp_action::XDP_PASS);
-    }
-
-    let udp = read_at::<UdpHdr>(ctx, ip_offset + ihl)?;
+    let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
     let Some(config) = REDIRECT_CONFIG.get(0) else {
         increment_counter(&PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
@@ -114,6 +114,41 @@ fn try_oxidedns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
         increment_counter(&PASSED_PACKETS);
     }
     Ok(action)
+}
+
+fn ipv4_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
+    let ip_offset = mem::size_of::<EthHdr>();
+    let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
+    if ip.protocol != 17 {
+        return Err(());
+    }
+    let ihl = usize::from(ip.version_ihl & 0x0f) * 4;
+    if ihl < mem::size_of::<Ipv4Hdr>() {
+        return Err(());
+    }
+    if (u16::from_be(ip.frag_off) & 0x3fff) != 0 {
+        return Err(());
+    }
+
+    Ok(ip_offset + ihl)
+}
+
+fn ipv6_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
+    let ip_offset = mem::size_of::<EthHdr>();
+    let ip = read_at::<Ipv6Hdr>(ctx, ip_offset)?;
+    if u32::from_be(ip.version_tc_flow) >> 28 != 6 {
+        return Err(());
+    }
+    if ip.next_header != 17 {
+        // Extension-header parsing is deliberately deferred; pass those packets
+        // to the ordinary stack instead of redirecting them to userspace.
+        return Err(());
+    }
+    if u16::from_be(ip.payload_len) < mem::size_of::<UdpHdr>() as u16 {
+        return Err(());
+    }
+
+    Ok(ip_offset + mem::size_of::<Ipv6Hdr>())
 }
 
 fn read_at<T: Copy>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {

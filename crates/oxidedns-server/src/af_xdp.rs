@@ -6,7 +6,7 @@ use std::{
     ffi::CString,
     fmt,
     io::{self, ErrorKind},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Range,
     os::fd::RawFd,
     path::Path,
@@ -32,7 +32,9 @@ use super::{
 
 const ETHERNET_HEADER_LEN: usize = 14;
 const ETHERTYPE_IPV4: u16 = 0x0800;
+const ETHERTYPE_IPV6: u16 = 0x86dd;
 const IPV4_MIN_HEADER_LEN: usize = 20;
+const IPV6_HEADER_LEN: usize = 40;
 const UDP_HEADER_LEN: usize = 8;
 const IP_PROTOCOL_UDP: u8 = 17;
 
@@ -70,6 +72,61 @@ impl UdpIpv4Frame {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UdpIpv6Frame {
+    ipv6_header_offset: usize,
+    udp_header_offset: usize,
+    payload: Range<usize>,
+}
+
+impl UdpIpv6Frame {
+    pub(crate) fn payload(&self) -> Range<usize> {
+        self.payload.clone()
+    }
+
+    pub(crate) fn source_addr(&self, frame: &[u8]) -> SocketAddr {
+        SocketAddr::new(
+            IpAddr::V6(ipv6_addr_at(frame, self.ipv6_header_offset + 8)),
+            u16::from_be_bytes([
+                frame[self.udp_header_offset],
+                frame[self.udp_header_offset + 1],
+            ]),
+        )
+    }
+
+    pub(crate) fn destination_addr(&self, frame: &[u8]) -> SocketAddr {
+        SocketAddr::new(
+            IpAddr::V6(ipv6_addr_at(frame, self.ipv6_header_offset + 24)),
+            u16::from_be_bytes([
+                frame[self.udp_header_offset + 2],
+                frame[self.udp_header_offset + 3],
+            ]),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UdpIpFrame {
+    Ipv4(UdpIpv4Frame),
+    Ipv6(UdpIpv6Frame),
+}
+
+impl UdpIpFrame {
+    pub(crate) fn payload(&self) -> Range<usize> {
+        match self {
+            Self::Ipv4(frame) => frame.payload(),
+            Self::Ipv6(frame) => frame.payload(),
+        }
+    }
+
+    pub(crate) fn source_addr(&self, packet: &[u8]) -> SocketAddr {
+        match self {
+            Self::Ipv4(frame) => frame.source_addr(packet),
+            Self::Ipv6(frame) => frame.source_addr(packet),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AfXdpFrameError {
     ShortEthernet,
@@ -81,6 +138,9 @@ pub(crate) enum AfXdpFrameError {
     InvalidIpv4TotalLength,
     ShortUdp,
     InvalidUdpLength,
+    ShortIpv6,
+    UnsupportedIpv6NextHeader(u8),
+    InvalidIpv6PayloadLength,
     ResponseTooLarge,
     PacketResize,
 }
@@ -99,6 +159,11 @@ impl fmt::Display for AfXdpFrameError {
             Self::InvalidIpv4TotalLength => formatter.write_str("invalid IPv4 total length"),
             Self::ShortUdp => formatter.write_str("short UDP datagram"),
             Self::InvalidUdpLength => formatter.write_str("invalid UDP length"),
+            Self::ShortIpv6 => formatter.write_str("short IPv6 packet"),
+            Self::UnsupportedIpv6NextHeader(next_header) => {
+                write!(formatter, "unsupported IPv6 next header {next_header}")
+            }
+            Self::InvalidIpv6PayloadLength => formatter.write_str("invalid IPv6 payload length"),
             Self::ResponseTooLarge => formatter.write_str("AF_XDP response does not fit frame"),
             Self::PacketResize => formatter.write_str("failed to resize AF_XDP packet"),
         }
@@ -171,7 +236,7 @@ pub(crate) struct AfXdpPacketIo {
 
 struct ReceivedFrame {
     packet: xdp::Packet,
-    frame: UdpIpv4Frame,
+    frame: UdpIpFrame,
 }
 
 #[repr(C)]
@@ -395,7 +460,7 @@ impl AfXdpPacketIo {
         }
     }
 
-    fn push_inbound(&mut self, packet: xdp::Packet, frame: UdpIpv4Frame) -> bool {
+    fn push_inbound(&mut self, packet: xdp::Packet, frame: UdpIpFrame) -> bool {
         let payload = frame.payload();
         if payload.len() > UDP_PACKET_BUFFER_LEN {
             self.umem.free_packet(packet);
@@ -446,7 +511,7 @@ impl PacketIo for AfXdpPacketIo {
                 let Some(packet) = self.recv_slab.pop_back() else {
                     break;
                 };
-                match parse_udp_ipv4_frame(&packet) {
+                match parse_udp_ip_frame(&packet) {
                     Ok(frame) => {
                         self.push_inbound(packet, frame);
                         if self.active_inbound == self.batch_size {
@@ -490,7 +555,7 @@ impl PacketIo for AfXdpPacketIo {
                 .as_ref()
                 .and_then(|_| metrics.start_pipeline_timer());
             let write_result =
-                write_udp_ipv4_response(&mut frame.packet, frame.frame, &packet.response);
+                write_udp_ip_response(&mut frame.packet, frame.frame, &packet.response);
             if let Err(error) = write_result {
                 self.umem.free_packet(frame.packet);
                 return Err(io::Error::new(ErrorKind::InvalidData, error.to_string()));
@@ -622,6 +687,68 @@ pub(crate) fn parse_udp_ipv4_frame(frame: &[u8]) -> Result<UdpIpv4Frame, AfXdpFr
     })
 }
 
+pub(crate) fn parse_udp_ipv6_frame(frame: &[u8]) -> Result<UdpIpv6Frame, AfXdpFrameError> {
+    if frame.len() < ETHERNET_HEADER_LEN {
+        return Err(AfXdpFrameError::ShortEthernet);
+    }
+
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype != ETHERTYPE_IPV6 {
+        return Err(AfXdpFrameError::UnsupportedEtherType(ethertype));
+    }
+
+    let ipv6_header_offset = ETHERNET_HEADER_LEN;
+    if frame.len() < ipv6_header_offset + IPV6_HEADER_LEN {
+        return Err(AfXdpFrameError::ShortIpv6);
+    }
+    let version = frame[ipv6_header_offset] >> 4;
+    if version != 6 {
+        return Err(AfXdpFrameError::ShortIpv6);
+    }
+    let payload_len = usize::from(u16::from_be_bytes([
+        frame[ipv6_header_offset + 4],
+        frame[ipv6_header_offset + 5],
+    ]));
+    let next_header = frame[ipv6_header_offset + 6];
+    if next_header != IP_PROTOCOL_UDP {
+        return Err(AfXdpFrameError::UnsupportedIpv6NextHeader(next_header));
+    }
+    if payload_len < UDP_HEADER_LEN
+        || frame.len() < ipv6_header_offset + IPV6_HEADER_LEN + payload_len
+    {
+        return Err(AfXdpFrameError::InvalidIpv6PayloadLength);
+    }
+
+    let udp_header_offset = ipv6_header_offset + IPV6_HEADER_LEN;
+    let udp_len = usize::from(u16::from_be_bytes([
+        frame[udp_header_offset + 4],
+        frame[udp_header_offset + 5],
+    ]));
+    if udp_len < UDP_HEADER_LEN || udp_len != payload_len {
+        return Err(AfXdpFrameError::InvalidUdpLength);
+    }
+    let payload_start = udp_header_offset + UDP_HEADER_LEN;
+    let payload_end = payload_start + udp_len - UDP_HEADER_LEN;
+
+    Ok(UdpIpv6Frame {
+        ipv6_header_offset,
+        udp_header_offset,
+        payload: payload_start..payload_end,
+    })
+}
+
+pub(crate) fn parse_udp_ip_frame(frame: &[u8]) -> Result<UdpIpFrame, AfXdpFrameError> {
+    if frame.len() < ETHERNET_HEADER_LEN {
+        return Err(AfXdpFrameError::ShortEthernet);
+    }
+
+    match u16::from_be_bytes([frame[12], frame[13]]) {
+        ETHERTYPE_IPV4 => parse_udp_ipv4_frame(frame).map(UdpIpFrame::Ipv4),
+        ETHERTYPE_IPV6 => parse_udp_ipv6_frame(frame).map(UdpIpFrame::Ipv6),
+        ethertype => Err(AfXdpFrameError::UnsupportedEtherType(ethertype)),
+    }
+}
+
 pub(crate) fn rewrite_udp_ipv4_response_headers(
     frame: &mut [u8],
     packet: UdpIpv4Frame,
@@ -672,6 +799,50 @@ pub(crate) fn rewrite_udp_ipv4_response_headers(
     Ok(frame_len)
 }
 
+pub(crate) fn rewrite_udp_ipv6_response_headers(
+    frame: &mut [u8],
+    packet: UdpIpv6Frame,
+    response_len: usize,
+) -> Result<usize, AfXdpFrameError> {
+    if response_len > usize::from(u16::MAX) - UDP_HEADER_LEN {
+        return Err(AfXdpFrameError::ResponseTooLarge);
+    }
+    let udp_len = UDP_HEADER_LEN + response_len;
+    let frame_len = ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + udp_len;
+    if frame.len() < frame_len || packet.payload.start + response_len > frame.len() {
+        return Err(AfXdpFrameError::ResponseTooLarge);
+    }
+
+    for index in 0..6 {
+        frame.swap(index, index + 6);
+    }
+    for index in 0..16 {
+        frame.swap(
+            packet.ipv6_header_offset + 8 + index,
+            packet.ipv6_header_offset + 24 + index,
+        );
+    }
+    for index in 0..2 {
+        frame.swap(
+            packet.udp_header_offset + index,
+            packet.udp_header_offset + 2 + index,
+        );
+    }
+
+    let payload_len = u16::try_from(udp_len)
+        .map_err(|_| AfXdpFrameError::ResponseTooLarge)?
+        .to_be_bytes();
+    frame[packet.ipv6_header_offset + 4..packet.ipv6_header_offset + 6]
+        .copy_from_slice(&payload_len);
+    frame[packet.udp_header_offset + 4..packet.udp_header_offset + 6].copy_from_slice(&payload_len);
+    frame[packet.udp_header_offset + 6..packet.udp_header_offset + 8].copy_from_slice(&[0, 0]);
+    let checksum = udp_ipv6_checksum(frame, packet.udp_header_offset, udp_len);
+    frame[packet.udp_header_offset + 6..packet.udp_header_offset + 8]
+        .copy_from_slice(&checksum.to_be_bytes());
+
+    Ok(frame_len)
+}
+
 pub(crate) fn write_udp_ipv4_response(
     packet: &mut xdp::Packet,
     frame: UdpIpv4Frame,
@@ -697,6 +868,42 @@ pub(crate) fn write_udp_ipv4_response(
     rewrite_udp_ipv4_response_headers(packet, frame, response.len())
 }
 
+pub(crate) fn write_udp_ipv6_response(
+    packet: &mut xdp::Packet,
+    frame: UdpIpv6Frame,
+    response: &[u8],
+) -> Result<usize, AfXdpFrameError> {
+    if response.len() > usize::from(u16::MAX) - UDP_HEADER_LEN {
+        return Err(AfXdpFrameError::ResponseTooLarge);
+    }
+    let frame_len = ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN + response.len();
+    if frame_len > packet.capacity() {
+        return Err(AfXdpFrameError::ResponseTooLarge);
+    }
+    let current_len = packet.len();
+    let resize = i32::try_from(frame_len)
+        .and_then(|new_len| i32::try_from(current_len).map(|old_len| new_len - old_len))
+        .map_err(|_| AfXdpFrameError::PacketResize)?;
+    if resize != 0 {
+        packet
+            .adjust_tail(resize)
+            .map_err(|_| AfXdpFrameError::PacketResize)?;
+    }
+    packet[frame.payload.start..frame.payload.start + response.len()].copy_from_slice(response);
+    rewrite_udp_ipv6_response_headers(packet, frame, response.len())
+}
+
+pub(crate) fn write_udp_ip_response(
+    packet: &mut xdp::Packet,
+    frame: UdpIpFrame,
+    response: &[u8],
+) -> Result<usize, AfXdpFrameError> {
+    match frame {
+        UdpIpFrame::Ipv4(frame) => write_udp_ipv4_response(packet, frame, response),
+        UdpIpFrame::Ipv6(frame) => write_udp_ipv6_response(packet, frame, response),
+    }
+}
+
 fn ipv4_checksum(header: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut chunks = header.chunks_exact(2);
@@ -712,12 +919,54 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+fn ones_complement_add_bytes(mut sum: u32, bytes: &[u8]) -> u32 {
+    let mut chunks = bytes.chunks_exact(2);
+    for chunk in &mut chunks {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    if let Some(&last) = chunks.remainder().first() {
+        sum += u32::from(last) << 8;
+    }
+    sum
+}
+
+fn ones_complement_finish(mut sum: u32) -> u16 {
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+fn udp_ipv6_checksum(frame: &[u8], udp_header_offset: usize, udp_len: usize) -> u16 {
+    let ipv6_header_offset = ETHERNET_HEADER_LEN;
+    let mut sum = 0u32;
+    sum = ones_complement_add_bytes(sum, &frame[ipv6_header_offset + 8..ipv6_header_offset + 24]);
+    sum = ones_complement_add_bytes(
+        sum,
+        &frame[ipv6_header_offset + 24..ipv6_header_offset + 40],
+    );
+    sum = ones_complement_add_bytes(sum, &(udp_len as u32).to_be_bytes());
+    sum += u32::from(IP_PROTOCOL_UDP);
+    sum = ones_complement_add_bytes(sum, &frame[udp_header_offset..udp_header_offset + udp_len]);
+    match ones_complement_finish(sum) {
+        0 => 0xffff,
+        checksum => checksum,
+    }
+}
+
 fn ipv4_addr_at(frame: &[u8], offset: usize) -> Ipv4Addr {
     Ipv4Addr::new(
         frame[offset],
         frame[offset + 1],
         frame[offset + 2],
         frame[offset + 3],
+    )
+}
+
+fn ipv6_addr_at(frame: &[u8], offset: usize) -> Ipv6Addr {
+    Ipv6Addr::from(
+        <[u8; 16]>::try_from(&frame[offset..offset + 16])
+            .expect("IPv6 address range was validated during packet parsing"),
     )
 }
 
@@ -753,6 +1002,36 @@ mod tests {
         ETHERNET_HEADER_LEN + IPV4_MIN_HEADER_LEN + UDP_HEADER_LEN + payload_len
     }
 
+    fn ipv6_udp_frame(payload: &[u8]) -> Vec<u8> {
+        let udp_len = UDP_HEADER_LEN + payload.len();
+        let mut frame = vec![0u8; 256];
+        frame[0..6].copy_from_slice(&[0x10, 0x11, 0x12, 0x13, 0x14, 0x15]);
+        frame[6..12].copy_from_slice(&[0x20, 0x21, 0x22, 0x23, 0x24, 0x25]);
+        frame[12..14].copy_from_slice(&ETHERTYPE_IPV6.to_be_bytes());
+        let ip = ETHERNET_HEADER_LEN;
+        frame[ip] = 0x60;
+        frame[ip + 4..ip + 6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+        frame[ip + 6] = IP_PROTOCOL_UDP;
+        frame[ip + 7] = 64;
+        frame[ip + 8..ip + 24]
+            .copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        frame[ip + 24..ip + 40].copy_from_slice(&[
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x53,
+        ]);
+        let udp = ip + IPV6_HEADER_LEN;
+        frame[udp..udp + 2].copy_from_slice(&12345u16.to_be_bytes());
+        frame[udp + 2..udp + 4].copy_from_slice(&53u16.to_be_bytes());
+        frame[udp + 4..udp + 6].copy_from_slice(&(udp_len as u16).to_be_bytes());
+        frame[udp + UDP_HEADER_LEN..udp + UDP_HEADER_LEN + payload.len()].copy_from_slice(payload);
+        let checksum = udp_ipv6_checksum(&frame, udp, udp_len);
+        frame[udp + 6..udp + 8].copy_from_slice(&checksum.to_be_bytes());
+        frame
+    }
+
+    fn ipv6_udp_frame_len(payload_len: usize) -> usize {
+        ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN + payload_len
+    }
+
     #[test]
     fn parses_udp_ipv4_dns_payload_range() {
         let frame = ipv4_udp_frame(&[1, 2, 3, 4]);
@@ -767,6 +1046,26 @@ mod tests {
             packet.destination_addr(&frame),
             SocketAddr::from(([198, 51, 100, 53], 53))
         );
+    }
+
+    #[test]
+    fn parses_udp_ipv6_dns_payload_range() {
+        let frame = ipv6_udp_frame(&[1, 2, 3, 4]);
+        let packet = parse_udp_ipv6_frame(&frame).expect("IPv6 UDP frame");
+
+        assert_eq!(&frame[packet.payload()], &[1, 2, 3, 4]);
+        assert_eq!(
+            packet.source_addr(&frame),
+            SocketAddr::new("2001:db8::1".parse().expect("IPv6 source"), 12345)
+        );
+        assert_eq!(
+            packet.destination_addr(&frame),
+            SocketAddr::new("2001:db8::53".parse().expect("IPv6 destination"), 53)
+        );
+        assert!(matches!(
+            parse_udp_ip_frame(&frame),
+            Ok(UdpIpFrame::Ipv6(_))
+        ));
     }
 
     #[test]
@@ -813,6 +1112,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_ipv6_extension_header_for_now() {
+        let mut frame = ipv6_udp_frame(&[1, 2, 3, 4]);
+        frame[ETHERNET_HEADER_LEN + 6] = 0;
+
+        assert_eq!(
+            parse_udp_ipv6_frame(&frame),
+            Err(AfXdpFrameError::UnsupportedIpv6NextHeader(0))
+        );
+    }
+
+    #[test]
     fn rewrites_udp_ipv4_response_headers() {
         let mut frame = ipv4_udp_frame(&[1, 2, 3, 4]);
         let packet = parse_udp_ipv4_frame(&frame).expect("IPv4 UDP frame");
@@ -837,6 +1147,38 @@ mod tests {
         assert_eq!(u16::from_be_bytes([frame[udp + 2], frame[udp + 3]]), 12345);
         assert_eq!(u16::from_be_bytes([frame[udp + 4], frame[udp + 5]]), 14);
         assert_eq!(u16::from_be_bytes([frame[udp + 6], frame[udp + 7]]), 0);
+    }
+
+    #[test]
+    fn rewrites_udp_ipv6_response_headers_and_checksum() {
+        let mut frame = ipv6_udp_frame(&[1, 2, 3, 4]);
+        let packet = parse_udp_ipv6_frame(&frame).expect("IPv6 UDP frame");
+        frame[packet.payload.start..packet.payload.start + 6].copy_from_slice(&[9, 8, 7, 6, 5, 4]);
+
+        let frame_len =
+            rewrite_udp_ipv6_response_headers(&mut frame, packet, 6).expect("rewritten response");
+
+        assert_eq!(frame_len, ipv6_udp_frame_len(6));
+        assert_eq!(&frame[0..6], &[0x20, 0x21, 0x22, 0x23, 0x24, 0x25]);
+        assert_eq!(&frame[6..12], &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15]);
+        let ip = ETHERNET_HEADER_LEN;
+        assert_eq!(
+            &frame[ip + 8..ip + 24],
+            &[
+                0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x53,
+            ]
+        );
+        assert_eq!(
+            &frame[ip + 24..ip + 40],
+            &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,]
+        );
+        assert_eq!(u16::from_be_bytes([frame[ip + 4], frame[ip + 5]]), 14);
+        let udp = ip + IPV6_HEADER_LEN;
+        assert_eq!(u16::from_be_bytes([frame[udp], frame[udp + 1]]), 53);
+        assert_eq!(u16::from_be_bytes([frame[udp + 2], frame[udp + 3]]), 12345);
+        assert_eq!(u16::from_be_bytes([frame[udp + 4], frame[udp + 5]]), 14);
+        assert_ne!(u16::from_be_bytes([frame[udp + 6], frame[udp + 7]]), 0);
+        assert_eq!(udp_ipv6_checksum(&frame, udp, 14), 0xffff);
     }
 
     #[test]
@@ -884,6 +1226,36 @@ mod tests {
         assert_eq!(
             &packet[ETHERNET_HEADER_LEN + IPV4_MIN_HEADER_LEN + UDP_HEADER_LEN..],
             response
+        );
+    }
+
+    #[test]
+    fn writes_udp_ipv6_response_into_xdp_packet() {
+        let mut storage = [0u8; 2 * 1024];
+        let mut packet = xdp::Packet::testing_new(&mut storage);
+        let frame = ipv6_udp_frame(&[1; 64]);
+        packet
+            .insert(0, &frame[..ipv6_udp_frame_len(64)])
+            .expect("insert query frame");
+        let parsed = parse_udp_ipv6_frame(&packet).expect("IPv6 UDP frame");
+        let response = [7u8; 12];
+
+        let frame_len =
+            write_udp_ipv6_response(&mut packet, parsed, &response).expect("write response");
+
+        assert_eq!(frame_len, ipv6_udp_frame_len(response.len()));
+        assert_eq!(packet.len(), frame_len);
+        assert_eq!(
+            &packet[ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN..],
+            response
+        );
+        assert_eq!(
+            udp_ipv6_checksum(
+                &packet,
+                ETHERNET_HEADER_LEN + IPV6_HEADER_LEN,
+                UDP_HEADER_LEN + response.len()
+            ),
+            0xffff
         );
     }
 }

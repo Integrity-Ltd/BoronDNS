@@ -138,7 +138,7 @@ pub use transfer::{poll_soa_from_primary, transfer_axfr_from_primary, transfer_i
 use transfer_plan::{TransferPlan, ZoneTransferPlan};
 #[cfg(test)]
 use transfer_plan::{rotate_transfer_targets, uniform_index_from_u64};
-#[cfg(test)]
+#[cfg(any(test, feature = "af-xdp"))]
 pub(crate) use udp::PacketIo;
 #[cfg(feature = "af-xdp")]
 pub(crate) use udp::UDP_PACKET_BUFFER_LEN;
