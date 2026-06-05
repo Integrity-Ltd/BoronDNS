@@ -333,6 +333,10 @@ adaptive coalescing and forcing `rx-usecs=0`, `tx-usecs=0`, and one frame
 collapsed the row to about 74%, while a higher fixed coalescing profile
 (`rx-usecs=16`, `tx-usecs=16`, 256 frames) fell to about 96.57%. Keep the
 current server NIC adaptive coalescing and GRO settings for this profile.
+Full 48-worker CPU pinning to CPUs `0..47` was also worse than unbound
+scheduling for the 4.75M batch-64 `fq` profile, measuring about 98.04% reply
+rate. Keep worker CPU affinity unset for this profile unless a new IRQ/RSS-aware
+placement is measured.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
