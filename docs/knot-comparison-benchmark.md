@@ -467,6 +467,14 @@ reply rate respectively. The 16M row had zero receive errors but still had
 about 449k qdisc/`SndbufErrors`, while higher pacing rates accumulated even
 more qdisc drops. Keep the unpaced socket setting for the current retained
 profile.
+Disabling the `fq` scheduler's pacing mode was also not enough. The retained
+`physical-udp-knot-comparison-20260605T203858Z` row used `fq limit 50000
+nopacing` at the same 48-worker/4.8M/batch-64/32 MiB send-buffer profile and
+measured about 98.42% reply rate, with about 359k qdisc/`SndbufErrors` and
+tiny receive loss. The qdisc artifact confirmed `nopacing` on each child qdisc
+and cleanup restored the server interface to `pfifo_fast`. Keep the default
+`fq` pacing mode unless a more targeted queue-affinity design changes the loss
+shape.
 A reduced-metrics diagnostic row at
 `physical-udp-knot-comparison-20260605T193038Z` confirmed that the dedicated
 worker `sendmmsg` path was not seeing direct syscall backpressure: it retained
