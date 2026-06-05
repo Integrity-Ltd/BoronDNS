@@ -281,7 +281,10 @@ OxideDNS-only `fq` repeats measured about 99.60% and 99.84% reply rate. Combinin
 OxideDNS row fell to about 99.73%, below the best `fq`-only row, so prefer
 `fq` alone for the next repeated comparison pass. Treat `fq` as a strong
 evidence-gated candidate, but repeat the row before making a final
-hardware-profile claim.
+hardware-profile claim. The first higher-rate `fq` sweep moved the previous
+ceiling upward but did not remove the saturation cliff: 4.6M and 4.65M offered
+QPS stayed above 99% reply rate, while 4.7M fell to about 98.2% and 4.75M fell
+to about 96.5%, with receive-buffer errors and `SndbufErrors` rising together.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
