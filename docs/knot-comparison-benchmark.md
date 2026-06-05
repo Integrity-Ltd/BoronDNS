@@ -518,6 +518,15 @@ receive-buffer loss. Keep unbound scheduling for the current 4.8M/`fq
 limit=50000` profile; the next placement experiment should change kernel queue
 mapping or worker/socket ownership rather than only pinning the existing worker
 set.
+Skipping `QueryMetricObservation::started_at` construction when hot-path
+counters are off removes one per-query timestamp read from the saturation
+profile, but it did not clear the 4.8M gate. Retained rows at
+`physical-udp-knot-comparison-20260605T195012Z` and
+`physical-udp-knot-comparison-20260605T195103Z` measured about 98.00% and 98.68%
+reply rate with the same 48-worker/batch-64/`fq limit=50000`/32 MiB send-buffer
+profile. Keep the cleanup because it removes discarded work from the benchmark
+path, but treat it as a small hot-path hygiene change rather than a proven
+transport fix.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

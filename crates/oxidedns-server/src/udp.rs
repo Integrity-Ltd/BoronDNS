@@ -803,7 +803,7 @@ fn handle_udp_datagram(
 pub(crate) struct QueryMetricObservation {
     pub(crate) is_query: bool,
     pub(crate) transport: Transport,
-    pub(crate) started_at: Instant,
+    pub(crate) started_at: Option<Instant>,
     pub(crate) cookie_validated: bool,
     pub(crate) zone_key: Option<Arc<str>>,
     pub(crate) parse_duration: Option<Duration>,
@@ -824,12 +824,11 @@ pub(crate) fn observe_query_metrics(
     metrics: &RuntimeMetrics,
     options: QueryObservationOptions,
 ) -> QueryMetricObservation {
-    let started_at = Instant::now();
     let lookup_started = metrics.start_pipeline_timer();
     let not_query = || QueryMetricObservation {
         is_query: false,
         transport: options.transport,
-        started_at,
+        started_at: None,
         cookie_validated: false,
         zone_key: None,
         parse_duration: options.parse_duration,
@@ -839,10 +838,11 @@ pub(crate) fn observe_query_metrics(
     if !metrics.hot_path_counters_enabled() {
         return not_query();
     }
+    let started_at = Instant::now();
     let observed_query = |zone_key| QueryMetricObservation {
         is_query: true,
         transport: options.transport,
-        started_at,
+        started_at: Some(started_at),
         cookie_validated: options.cookie_validated,
         zone_key,
         parse_duration: options.parse_duration,
@@ -965,10 +965,12 @@ pub(crate) fn record_query_response_metric(
     if let Some(zone_key) = &observation.zone_key {
         metrics.record_zone_query_response_rcode(zone_key, rcode);
     }
-    metrics.record_query_latency(
-        query_latency_category(observation, response, &header),
-        observation.started_at.elapsed(),
-    );
+    if let Some(started_at) = observation.started_at {
+        metrics.record_query_latency(
+            query_latency_category(observation, response, &header),
+            started_at.elapsed(),
+        );
+    }
 }
 
 pub(crate) fn record_query_send_metric(

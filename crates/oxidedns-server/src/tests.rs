@@ -3366,6 +3366,7 @@ fn off_hot_path_metrics_skip_per_query_counters() {
     );
 
     assert!(!observation.is_query);
+    assert!(observation.started_at.is_none());
     assert_eq!(metrics.snapshot().queries_received, 0);
     assert!(metrics.zone_query_counts().is_empty());
 
@@ -3572,7 +3573,7 @@ fn query_metrics_count_cname_termination_causes_for_queries_only() {
     let observation = QueryMetricObservation {
         is_query: true,
         transport: Transport::Udp,
-        started_at: std::time::Instant::now(),
+        started_at: Some(std::time::Instant::now()),
         cookie_validated: false,
         zone_key: None,
         parse_duration: None,
@@ -3582,7 +3583,7 @@ fn query_metrics_count_cname_termination_causes_for_queries_only() {
     let non_query_observation = QueryMetricObservation {
         is_query: false,
         transport: Transport::Udp,
-        started_at: std::time::Instant::now(),
+        started_at: Some(std::time::Instant::now()),
         cookie_validated: false,
         zone_key: None,
         parse_duration: None,
@@ -3619,7 +3620,7 @@ fn query_metrics_count_nsec3_cap_from_lookup_observation_only() {
     let observation = QueryMetricObservation {
         is_query: true,
         transport: Transport::Udp,
-        started_at: std::time::Instant::now(),
+        started_at: Some(std::time::Instant::now()),
         cookie_validated: false,
         zone_key: None,
         parse_duration: None,
@@ -3629,7 +3630,7 @@ fn query_metrics_count_nsec3_cap_from_lookup_observation_only() {
     let non_query_observation = QueryMetricObservation {
         is_query: false,
         transport: Transport::Udp,
-        started_at: std::time::Instant::now(),
+        started_at: Some(std::time::Instant::now()),
         cookie_validated: false,
         zone_key: None,
         parse_duration: None,
@@ -3656,7 +3657,7 @@ fn query_metrics_count_zone_image_serve_hits_and_failures() {
     let observation = QueryMetricObservation {
         is_query: true,
         transport: Transport::Udp,
-        started_at: std::time::Instant::now(),
+        started_at: Some(std::time::Instant::now()),
         cookie_validated: false,
         zone_key: None,
         parse_duration: None,
