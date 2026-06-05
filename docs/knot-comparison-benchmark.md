@@ -434,6 +434,13 @@ profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 send-buffer drops but traded them for much larger receive errors, while the
 48-worker row still had about 359k `SndbufErrors` and remained below the
 packet-loss gate.
+Oversubscribing reuseport workers above the 48 logical CPUs was also negative,
+so extra sockets did not improve the queue-distribution boundary. A retained
+52/56/60/64 worker sweep at `physical-udp-knot-comparison-20260605T203222Z`
+measured about 93.40%, 92.44%, 95.70%, and 94.19% reply rate respectively.
+All rows accumulated large receive-buffer errors, and qdisc/`SndbufErrors` also
+remained high. Keep 48 unbound workers as the current 4.8M worker-count
+baseline.
 Static UDP batch-size tuning around 64 also did not clear the 4.8M boundary.
 With the same 48-worker/`fq limit=50000`/32 MiB send-buffer profile, the
 retained `physical-udp-knot-comparison-20260605T191533Z` sweep measured batch
