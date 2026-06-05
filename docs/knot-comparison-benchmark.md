@@ -358,6 +358,13 @@ Full 48-worker CPU pinning to CPUs `0..47` was also worse than unbound
 scheduling for the 4.75M batch-64 `fq` profile, measuring about 98.04% reply
 rate. Keep worker CPU affinity unset for this profile unless a new IRQ/RSS-aware
 placement is measured.
+A topology-guided NIC-local placement was also negative. The server NIC reports
+NUMA node 0 and local CPUs `0,2,4,...,46`, while its 48 completion queues are
+spread across both sockets. Pinning 24 workers to those NIC-local even CPUs at
+the 4.75M batch-64 `fq` edge collapsed to about 73.85% reply rate with about
+6.21M receive-buffer errors and no send-buffer errors. That profile starves
+receive capacity before the send-side gate, so cross-socket/unbound scheduling
+remains the retained baseline.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
