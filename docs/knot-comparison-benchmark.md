@@ -449,6 +449,16 @@ candidate because reduced counters shifted the 4.8M profile down to about
 93.45% with about 1.45M receive-buffer errors. Treat this as evidence that the
 send-side loss in hot-path-off rows is happening after syscall acceptance in the
 kernel/qdisc/NIC path, not as a retry-loop failure in user space.
+Increasing the NIC TX ring at the same 48-worker/4.8M/batch-64/`fq
+limit=50000` profile was negative. Retained rows at
+`physical-udp-knot-comparison-20260605T193659Z` and
+`physical-udp-knot-comparison-20260605T193803Z` measured TX rings 4096 and 8192
+at about 96.86% and 95.65% reply rate respectively. Larger rings reduced
+qdisc/`SndbufErrors` to about 194k and 88k, but receive-buffer errors rose to
+about 144k and 372k and softnet `time_squeeze` rose to 403 and 618. Cleanup
+restored the server interface to TX ring 1024. Keep the default TX ring for the
+current 4.8M profile unless a separate interrupt/queue-affinity change makes a
+larger ring useful.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
