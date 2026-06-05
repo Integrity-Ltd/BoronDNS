@@ -227,6 +227,10 @@ experiments:
   evidence-gated NUMA experiments; leave it unset for baseline comparisons.
 - `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
   `perf-report-*.txt` files beside the run logs on the server host.
+  `OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT=30s` bounds each retained
+  `perf report` pass so slow callgraph expansion cannot stall cleanup.
+  `OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN=false` skips the children report when
+  the symbol report is sufficient for a sweep.
 - `OXIDEDNS_PHYSICAL_SOCKET_SAMPLE=true` captures repeated
   `ss -u -n -m` samples for the OxideDNS UDP service port during the kxdpgun
   window. Use this when `SndbufErrors` is the active gate and per-socket queue

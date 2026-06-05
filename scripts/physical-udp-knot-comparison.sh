@@ -18,6 +18,8 @@ batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
 perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
+perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
+perf_report_children="${OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN:-true}"
 socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
 socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
 include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
@@ -698,14 +700,18 @@ REMOTE
 run_server_perf_finish() {
     local run_abs="$1"
     local record="$2"
+    local report_timeout="$3"
+    local report_children="$4"
 
     if [[ "$record" != true ]]; then
         return 0
     fi
 
-    ssh_control "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$report_timeout" "$report_children" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
+report_timeout="$2"
+report_children="$3"
 if [[ -f "$run_abs/perf.pid" ]]; then
     perf_pid="$(cat "$run_abs/perf.pid")"
     for _ in $(seq 1 120); do
@@ -714,10 +720,17 @@ if [[ -f "$run_abs/perf.pid" ]]; then
         fi
         sleep 0.25
     done
+    if ps -p "$perf_pid" >/dev/null 2>&1; then
+        echo "perf record did not finish before timeout; terminating pid $perf_pid" >>"$run_abs/perf-record.log"
+        sudo kill "$perf_pid" >/dev/null 2>&1 || kill "$perf_pid" >/dev/null 2>&1 || true
+        sleep 1
+    fi
 fi
 if [[ -f "$run_abs/perf.data" ]]; then
-    sudo perf report -i "$run_abs/perf.data" --stdio --no-children --sort comm,symbol,dso >"$run_abs/perf-report-symbols.txt" 2>"$run_abs/perf-report-symbols.err" || true
-    sudo perf report -i "$run_abs/perf.data" --stdio --children --sort comm,symbol,dso >"$run_abs/perf-report-children.txt" 2>"$run_abs/perf-report-children.err" || true
+    timeout --kill-after=5s "$report_timeout" sudo perf report -i "$run_abs/perf.data" --stdio --no-children --sort comm,symbol,dso >"$run_abs/perf-report-symbols.txt" 2>"$run_abs/perf-report-symbols.err" || echo "perf symbols report failed or timed out after $report_timeout" >>"$run_abs/perf-report-symbols.err"
+    if [[ "$report_children" == true ]]; then
+        timeout --kill-after=5s "$report_timeout" sudo perf report -i "$run_abs/perf.data" --stdio --children --sort comm,symbol,dso >"$run_abs/perf-report-children.txt" 2>"$run_abs/perf-report-children.err" || echo "perf children report failed or timed out after $report_timeout" >>"$run_abs/perf-report-children.err"
+    fi
 fi
 REMOTE
 }
@@ -878,7 +891,7 @@ for workers in $workers_list; do
                     run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
                     run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate"
                     run_server_socket_sample_finish "$run_abs" "$socket_sample"
-                    run_server_perf_finish "$run_abs" "$perf_record"
+                    run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
                     run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_prefix_arg" "$interface"
                 done
             done
