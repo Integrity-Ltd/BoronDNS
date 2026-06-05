@@ -180,11 +180,11 @@ limit, requested UDP socket pacing rate, effective server `net.core.wmem_max`,
 server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
-enabled, root or child qdisc drop and requeue deltas, and aggregate softnet drop
-and time-squeeze deltas. Each artifact directory also includes `host/` context
-files for server CPU topology, server NIC driver/channel/RSS/offload state,
-server link/qdisc state, server interrupts/softirqs, and player host/NIC
-context.
+enabled, root or child qdisc drop and requeue deltas, child `fq`
+`flows_plimit` deltas when present, and aggregate softnet drop and time-squeeze
+deltas. Each artifact directory also includes `host/` context files for server
+CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
+state, server interrupts/softirqs, and player host/NIC context.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
