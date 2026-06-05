@@ -454,11 +454,14 @@ measured about 99.50% reply rate at 4.8M. A three-row OxideDNS-only repeat at
 `physical-udp-knot-comparison-20260605T204808Z` measured about 99.87%, 99.96%,
 and 99.97%, with qdisc drops down to about 4k/6k/7k and low receive loss. Treat
 the combined `fq limit=50000`, `flow_limit=500`, 16 MiB receive ceiling, and
-64 MiB send ceiling profile as the current retained 4.8M candidate. A noisy
-same-artifact comparison at `physical-udp-knot-comparison-20260605T204713Z`
-still had OxideDNS ahead of Knot, but both rows were far below their normal
-reply rates, so repeat the clean Knot comparison before treating the full
-hardware-profile objective as complete.
+64 MiB send ceiling profile as the current retained 4.8M candidate. The clean
+same-artifact comparison at `physical-udp-knot-comparison-20260605T205029Z`
+then measured Knot at about 88.35% reply rate and OxideDNS at about 99.96%,
+with OxideDNS qdisc drops down to about 1.5k, receive-buffer errors about 7.5k,
+and `flows_plimit` about 1.5k. A previous same-tuning comparison at
+`physical-udp-knot-comparison-20260605T204713Z` was noisy, with both rows far
+below their normal reply rates, so retain `205029Z` as the passing comparison
+artifact.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
