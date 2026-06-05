@@ -3846,6 +3846,66 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
 }
 
 #[test]
+fn hot_path_detail_off_suppresses_udp_packet_counters() {
+    let zones = ZoneStore::new();
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(3600),
+    );
+    let metrics = RuntimeMetrics::new_with_settings(
+        DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
+        DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+        false,
+        MetricsHotPathDetail::Off,
+    );
+    metrics.record_query_received();
+    metrics.record_udp_receive_batch(10);
+    metrics.record_udp_send_batch(9);
+    metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
+        receive_syscalls: 3,
+        received_datagrams: 30,
+        send_syscalls: 4,
+        sent_datagrams: 28,
+        send_partial_syscalls: 1,
+        send_wouldblock_retries: 2,
+    });
+    metrics.record_udp_worker_receive_batch(1, 17);
+    metrics.record_udp_worker_send_batch(1, 16);
+    metrics.record_zone_image_serve_hit();
+    metrics.record_zone_image_serve_direct_hit();
+    metrics.record_zone_image_serve_semantic_hit();
+    metrics.record_zone_image_serve_failure();
+    metrics
+        .record_zone_image_serve_failure_reason(ZoneImageServeFailureReason::ResponseBuildFailed);
+
+    let body = metrics_body(
+        &zones,
+        &metrics,
+        &CatalogManager::default(),
+        &refresh_registry,
+        0,
+        false,
+    );
+
+    assert!(body.contains("oxidedns_queries_received_total 0"));
+    assert!(body.contains("oxidedns_udp_receive_batches_total 0"));
+    assert!(body.contains("oxidedns_udp_received_datagrams_total 0"));
+    assert!(body.contains("oxidedns_udp_send_batches_total 0"));
+    assert!(body.contains("oxidedns_udp_sent_datagrams_total 0"));
+    assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 0"));
+    assert!(body.contains("oxidedns_zone_image_serve_hits_total 0"));
+    assert!(body.contains("oxidedns_zone_image_serve_direct_hits_total 0"));
+    assert!(body.contains("oxidedns_zone_image_serve_semantic_hits_total 0"));
+    assert!(body.contains("oxidedns_zone_image_serve_failures_total 0"));
+    assert!(body.contains(
+        "oxidedns_zone_image_serve_failures_by_reason_total{reason=\"response_build_failed\"} 0"
+    ));
+    assert!(!body.contains("oxidedns_udp_worker_received_datagrams_total{worker=\"1\"}"));
+    assert!(!body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"1\"}"));
+}
+
+#[test]
 fn rrl_limiter_slips_udp_query_responses() {
     let config = RrlConfig {
         positive_per_second: 1,

@@ -670,9 +670,10 @@ answer behavior.
 Saturation-only packet-path experiments may use
 `[metrics].hot_path_detail = "off"` to suppress per-query hot-path counters as
 well. This profile is intended for isolating transport, response composition,
-and kernel/socket overhead from shared counter cost. It keeps worker and batch
-metrics available after the run, but query, RCODE, DNS Cookie, RRL, and per-zone
-hot-path metrics are not representative while the profile is active.
+and kernel/socket overhead from shared counter cost. Query, UDP packet-I/O,
+ZoneImage serve, RCODE, DNS Cookie, RRL, and per-zone hot-path metrics are not
+representative while the profile is active; use external benchmark logs and
+kernel packet counters as the packet-loss source of truth.
 
 Physical UDP loss experiments should record worker affinity and socket buffer
 settings with the result. On the current 48-CPU 25G host, pinning 16 dedicated

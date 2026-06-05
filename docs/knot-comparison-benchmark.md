@@ -172,8 +172,10 @@ worker count, hot-path metric detail, and dedicated-worker idle strategy, starts
 Knot only long enough for OxideDNS to transfer the zone, then runs `kxdpgun`
 from the player host against the idle OxideDNS secondary. It writes one
 artifact directory under the staged directory's `evidence/` folder and emits a
-`summary.tsv` containing offered rate, replies per second, reply percentage,
-average DNS reply size, and Ethernet reply bit rate.
+`summary.tsv` containing offered rate, UDP batch size, replies per second, reply
+percentage, average DNS reply size, Ethernet reply bit rate, server RX/TX packet
+deltas, Linux UDP `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/
+`SndbufErrors` deltas, and aggregate softnet drop and time-squeeze deltas.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
@@ -187,8 +189,18 @@ experiments:
   settings into each run config. This is host specific: the first 4 MiB test on
   the current server was worse than the default, so retain the setting only when
   the run evidence proves it helps.
+- `OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES=2097152` and
+  `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES=4194304` override receive and send
+  buffers independently. Use these for send-side loss experiments where
+  `SndbufErrors` is non-zero but receive counters are clean.
+- `OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="16 32 64"` sweeps
+  `[limits].udp_batch_size` in the staged config. The default `staged` value
+  preserves the staged directory's existing batch size.
 - `OXIDEDNS_PHYSICAL_SERVER_BIN=target/profiling/oxidedns` runs a symbolized
   profiling build instead of the stripped release binary.
+- `OXIDEDNS_PHYSICAL_SERVER_PREFIX="numactl --interleave=all"` prefixes both
+  validation and serve commands on the server host. This is intended for
+  evidence-gated NUMA experiments; leave it unset for baseline comparisons.
 - `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
   `perf-report-*.txt` files beside the run logs on the server host.
 
@@ -201,11 +213,21 @@ receive layout and skipping disabled RRL state/category work moved the current
 rate. That is progress on throughput, but packet loss remains above the
 comparison gate.
 
+The first send-side packet-loss pass at 4.5M offered QPS showed a clean receive
+path and persistent send pressure: 24 workers with pinned CPUs, counters off,
+park idle strategy, and 2 MiB receive/send socket buffers reached about 4.45M
+replies/s and 98.97% reply rate with zero receive errors and about 231k
+`SndbufErrors`. A send-only 4 MiB buffer test was worse, and the first 16/32/64
+UDP batch-size sweep did not remove send-buffer errors. Treat send-side socket
+pressure as the next measured gate before returning to ZoneImage composition
+work.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
-the transport result; worker/batch counters and post-run logs remain available,
-but DNS query, rcode, DNS Cookie, RRL, and per-zone hot-path counters are no
-longer representative while that profile is active. `limits.udp_idle_strategy =
+the transport result; post-run benchmark logs and kernel packet counters remain
+available, but DNS query, UDP packet-I/O, ZoneImage serve, rcode, DNS Cookie,
+RRL, and per-zone hot-path counters are no longer representative while that
+profile is active. `limits.udp_idle_strategy =
 "spin"` is only valid with `limits.udp_runtime = "dedicated"` and should remain
 an evidence-gated knob because it burns CPU while idle.
 

@@ -2639,26 +2639,41 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_query_received(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner.queries_received.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_query_truncated(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner.queries_truncated.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_query_cname_chain_limit(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .queries_cname_chain_limit
             .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_query_cname_loop(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .queries_cname_loop
             .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_udp_receive_batch(&self, datagrams: usize) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .udp_receive_batches
             .fetch_add(1, Ordering::Relaxed);
@@ -2668,6 +2683,9 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_send_batch(&self, datagrams: usize) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner.udp_send_batches.fetch_add(1, Ordering::Relaxed);
         self.inner
             .udp_sent_datagrams
@@ -2675,6 +2693,9 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_mmsg_stats(&self, stats: std_udp_mmsg::StdUdpMmsgStats) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         if stats.receive_syscalls != 0 {
             self.inner
                 .udp_mmsg_receive_syscalls
@@ -2708,6 +2729,9 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_worker_receive_batch(&self, worker_id: usize, datagrams: usize) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         if let Some(counter) = self.inner.udp_worker_receive_batches.get(worker_id) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
@@ -2717,6 +2741,9 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_worker_send_batch(&self, worker_id: usize, datagrams: usize) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         if let Some(counter) = self.inner.udp_worker_send_batches.get(worker_id) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
@@ -2836,24 +2863,36 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_zone_image_serve_hit(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .zone_image_serve_hits
             .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_zone_image_serve_direct_hit(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .zone_image_serve_direct_hits
             .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_zone_image_serve_semantic_hit(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .zone_image_serve_semantic_hits
             .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_zone_image_serve_failure(&self) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner
             .zone_image_serve_failures
             .fetch_add(1, Ordering::Relaxed);
@@ -2863,6 +2902,9 @@ impl RuntimeMetrics {
         &self,
         reason: ZoneImageServeFailureReason,
     ) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
         self.inner.zone_image_serve_failure_reasons[reason.metric_index()]
             .fetch_add(1, Ordering::Relaxed);
     }

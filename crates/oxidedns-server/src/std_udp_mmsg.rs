@@ -10,6 +10,8 @@ use crate::send_std_udp_batch_fallback;
 use crate::{UdpInbound, UdpOutbound, UdpPacketTarget};
 
 const MAX_MMSG_BATCH: usize = 1024;
+const SEND_WOULDBLOCK_RETRIES: usize = 256;
+const SEND_WOULDBLOCK_SPINS: usize = 64;
 
 pub(crate) struct StdUdpMmsg {
     capacity: usize,
@@ -176,7 +178,7 @@ impl StdUdpMmsg {
 
         let mut sent = 0usize;
         let mut blocked_retries = 0usize;
-        while sent < outbound.len() && blocked_retries < 64 {
+        while sent < outbound.len() && blocked_retries < SEND_WOULDBLOCK_RETRIES {
             let count = self.capacity.min(outbound.len() - sent);
             self.prepare_send_messages(&outbound[sent..sent + count])?;
             // SAFETY: `socket` is a live UDP socket; `messages[..count]` has
@@ -205,7 +207,11 @@ impl StdUdpMmsg {
             if error.kind() == ErrorKind::WouldBlock {
                 self.stats.send_wouldblock_retries += 1;
                 blocked_retries += 1;
-                std::thread::yield_now();
+                if blocked_retries <= SEND_WOULDBLOCK_SPINS {
+                    std::hint::spin_loop();
+                } else {
+                    std::thread::yield_now();
+                }
                 continue;
             }
             return Err(error);

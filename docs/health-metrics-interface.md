@@ -125,9 +125,11 @@ counters, but suppresses mutex-backed hot-path detail: per-zone query maps,
 global and per-zone RCODE maps, query latency histograms, DNS Cookie
 source-prefix maps, and pipeline/cache-planning histograms. Reduced mode is an
 observability/performance tradeoff and does not change DNS answer behavior.
-`[metrics].hot_path_detail = "off"` also suppresses the per-query coarse
-counters and is reserved for saturation profiling where counter contention would
-distort packet-path results.
+`[metrics].hot_path_detail = "off"` also suppresses coarse query, UDP packet-I/O,
+and ZoneImage serve counters and is reserved for saturation profiling where
+counter contention would distort packet-path results. Use external benchmark
+logs and kernel packet-drop counters as the packet-loss source of truth in this
+profile.
 
 The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
 driven by lookup-time NSEC3 proof-omission observation rather than serialized
