@@ -327,6 +327,12 @@ eliminated receive errors but dropped the 4.75M batch-64 `fq` row to about
 97.46%, while increasing retries to 512 stayed near 98.91% and did not clearly
 beat the original constant. Keep the current retry policy until a stronger
 send/receive pacing change is measured.
+Server NIC feature and coalescing experiments were also negative at the same
+profile. Disabling generic receive offload fell to about 98.35%. Disabling
+adaptive coalescing and forcing `rx-usecs=0`, `tx-usecs=0`, and one frame
+collapsed the row to about 74%, while a higher fixed coalescing profile
+(`rx-usecs=16`, `tx-usecs=16`, 256 frames) fell to about 96.57%. Keep the
+current server NIC adaptive coalescing and GRO settings for this profile.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
