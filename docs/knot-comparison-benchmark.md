@@ -308,7 +308,10 @@ send error counts than the batch-8 row in the same artifact. The same batch-16
 profile still fell below 98% at 4.75M, so it improves the 4.7M comparison point
 without removing the next saturation boundary. A same-artifact 4.7M comparison
 with Knot under `fq` measured Knot at about 94.82% reply rate and OxideDNS at
-about 99.29% reply rate.
+about 99.29% reply rate. A follow-up 40/44/48 worker sweep at 4.7M and batch
+16 was noisy: 44 workers won that artifact at about 99.14%, while 40 and 48
+were below 99%. The 44-worker profile still missed the gate at 4.75M, measuring
+about 98.26%, so the higher-rate boundary remains unresolved.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
