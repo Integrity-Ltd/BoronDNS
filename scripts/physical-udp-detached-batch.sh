@@ -31,6 +31,7 @@ require_tool() {
 
 record_command() {
     local run_dir="$1"
+    local name value
     shift
 
     {
@@ -52,12 +53,17 @@ record_command() {
         fi
     } >"$run_dir/command.txt"
     env | LC_ALL=C sort | awk -F= '$1 ~ /^OXIDEDNS_PHYSICAL_/ { print }' >"$run_dir/environment.txt"
+    while IFS='=' read -r name value; do
+        if [[ "$name" =~ ^OXIDEDNS_PHYSICAL_ ]]; then
+            printf 'export %s=%q\n' "$name" "$value"
+        fi
+    done < <(env | LC_ALL=C sort) >"$run_dir/environment.sh"
+    chmod 600 "$run_dir/environment.sh"
 }
 
 start_run() {
-    local timestamp run_dir monitor_pid
+    local launcher monitor_pid timestamp unit run_dir
 
-    require_tool nohup
     require_tool ssh
 
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -84,6 +90,9 @@ interface="$6"
 shift 6
 
 cd "$repo_root"
+exec >>"$run_dir/monitor.log" 2>&1
+# shellcheck source=/dev/null
+source "$run_dir/environment.sh"
 date -u +%Y-%m-%dT%H:%M:%SZ >"$run_dir/started-at.txt"
 printf 'running\n' >"$run_dir/status"
 ssh_options=(
@@ -143,12 +152,38 @@ fi
 exit "$harness_status"
 MONITOR
     chmod +x "$run_dir/monitor.sh"
-    nohup "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" </dev/null >"$run_dir/monitor.log" 2>&1 &
-    monitor_pid="$!"
-    printf '%s\n' "$monitor_pid" >"$run_dir/monitor.pid"
+    launcher="${OXIDEDNS_PHYSICAL_DETACHED_LAUNCHER:-auto}"
+    if [[ "$launcher" != "nohup" ]] && command -v systemd-run >/dev/null 2>&1; then
+        unit="oxidedns-physical-${timestamp}-$$"
+        if systemd-run --user --quiet --unit "$unit" --collect "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" >"$run_dir/launcher.log" 2>&1; then
+            printf 'systemd-run\n' >"$run_dir/launcher"
+            printf '%s\n' "$unit" >"$run_dir/systemd-unit"
+        else
+            if [[ "$launcher" != "auto" ]]; then
+                cat "$run_dir/launcher.log" >&2
+                exit 70
+            fi
+            require_tool nohup
+            nohup "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" </dev/null >"$run_dir/launcher.log" 2>&1 &
+            monitor_pid="$!"
+            printf 'nohup\n' >"$run_dir/launcher"
+            printf '%s\n' "$monitor_pid" >"$run_dir/monitor.pid"
+        fi
+    else
+        require_tool nohup
+        nohup "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" </dev/null >"$run_dir/launcher.log" 2>&1 &
+        monitor_pid="$!"
+        printf 'nohup\n' >"$run_dir/launcher"
+        printf '%s\n' "$monitor_pid" >"$run_dir/monitor.pid"
+    fi
 
     printf 'detached_run_dir=%s\n' "$run_dir"
-    printf 'monitor_pid=%s\n' "$monitor_pid"
+    if [[ -f "$run_dir/systemd-unit" ]]; then
+        printf 'monitor_unit=%s\n' "$(<"$run_dir/systemd-unit")"
+    fi
+    if [[ -f "$run_dir/monitor.pid" ]]; then
+        printf 'monitor_pid=%s\n' "$(<"$run_dir/monitor.pid")"
+    fi
     printf 'status_file=%s/status\n' "$run_dir"
     printf 'harness_log=%s/harness.log\n' "$run_dir"
     printf 'summary_file=%s/summary.tsv\n' "$run_dir"
@@ -157,6 +192,7 @@ MONITOR
 status_run() {
     local run_dir="$1"
     local pid=""
+    local unit=""
     local alive="unknown"
     local status_value="unknown"
 
@@ -167,17 +203,33 @@ status_run() {
     if [[ -f "$run_dir/monitor.pid" ]]; then
         pid="$(<"$run_dir/monitor.pid")"
     fi
+    if [[ -f "$run_dir/systemd-unit" ]]; then
+        unit="$(<"$run_dir/systemd-unit")"
+    fi
 
     printf 'detached_run_dir=%s\n' "$run_dir"
-    if [[ -n "$pid" ]]; then
+    if [[ -n "$unit" ]]; then
+        printf 'monitor_unit=%s\n' "$unit"
+        if systemctl --user is-active --quiet "$unit" >/dev/null 2>&1; then
+            alive="true"
+        else
+            alive="false"
+        fi
+        if systemctl --user show --property=MainPID --value "$unit" >/dev/null 2>&1; then
+            pid="$(systemctl --user show --property=MainPID --value "$unit")"
+            if [[ -n "$pid" && "$pid" != "0" ]]; then
+                printf 'monitor_pid=%s\n' "$pid"
+            fi
+        fi
+    elif [[ -n "$pid" ]]; then
         printf 'monitor_pid=%s\n' "$pid"
         if kill -0 "$pid" >/dev/null 2>&1; then
             alive="true"
         else
             alive="false"
         fi
-        printf 'monitor_alive=%s\n' "$alive"
     fi
+    printf 'monitor_alive=%s\n' "$alive"
     if [[ -f "$run_dir/status" ]]; then
         status_value="$(<"$run_dir/status")"
     else
