@@ -175,7 +175,7 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-qdisc, server RX/TX packet deltas, Linux UDP
+qdisc, effective server `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 root qdisc drop and requeue deltas, and aggregate softnet drop and time-squeeze
 deltas. Each artifact directory also includes `host/` context files for server
@@ -217,6 +217,11 @@ experiments:
   qdisc kinds during cleanup. The current wrapper accepts `fq`, `fq_codel`, and
   `pfifo_fast`; use it only for send-side queueing experiments where the
   retained qdisc before/after files prove the host state was restored.
+- `OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX=33554432` temporarily raises the server
+  `net.core.wmem_max` sysctl and restores the original value during cleanup.
+  Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES` value when
+  proving send-buffer headroom; retained rows record the effective
+  `server_wmem_max`.
 - `OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="16 32 64"` sweeps
   `[limits].udp_batch_size` in the staged config. The default `staged` value
   preserves the staged directory's existing batch size.
@@ -330,6 +335,19 @@ per-socket queue buildup: sampled OxideDNS sockets stayed at zero receive/send
 queue and zero `skmem` write/drop occupancy while the row still accumulated
 about 2.77M `SndbufErrors`. Treat the send loss as transient burst or pacing
 pressure, not a stable queue that remains visible between 100ms samples.
+Raising the server send-buffer ceiling was the first host knob to materially
+reduce the edge loss. The default server `net.core.wmem_max=4194304` capped the
+2 MiB requested send buffer at `skmem` `tb4194304`; with
+`net.core.wmem_max=16777216` and an 8 MiB requested send buffer, socket samples
+confirmed `tb16777216`, receive errors dropped to zero, and one 4.75M row
+reached about 99.02% reply rate with about 231k `SndbufErrors`. Unsampled
+repeats were still below the gate at about 97.92% and 97.52%, but retained the
+lower send-error profile. With `net.core.wmem_max=33554432` and a 16 MiB
+requested send buffer, a 48-worker repeat reached about 99.04% with only 156
+receive errors and about 228k `SndbufErrors`; 40 and 44 workers were worse, and
+4.8M still fell to about 90.96%. Treat larger `wmem_max` plus send buffer as
+the current strongest 4.75M follow-up, not as proof that the next saturation
+boundary is solved.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
