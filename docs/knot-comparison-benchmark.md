@@ -178,8 +178,9 @@ reply bit rate, effective server `txqueuelen`, effective per-queue server TX
 qdisc, effective `fq` limit/flow limit, requested UDP socket pacing rate,
 effective server `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
-root or child qdisc drop and requeue deltas, and aggregate softnet drop and
-time-squeeze deltas. Each artifact directory also includes `host/` context
+retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
+enabled, root or child qdisc drop and requeue deltas, and aggregate softnet drop
+and time-squeeze deltas. Each artifact directory also includes `host/` context
 files for server CPU topology, server NIC driver/channel/RSS/offload state,
 server link/qdisc state, server interrupts/softirqs, and player host/NIC
 context.

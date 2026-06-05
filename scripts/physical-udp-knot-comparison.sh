@@ -127,7 +127,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_received_datagrams\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -709,6 +709,20 @@ def parse_qdisc(path):
         root["dropped"] = child_dropped
     return root
 
+def parse_prom_metrics(path):
+    values = {}
+    for raw in read(path).splitlines():
+        if not raw or raw.startswith("#"):
+            continue
+        fields = raw.split()
+        if len(fields) < 2:
+            continue
+        try:
+            values[fields[0]] = str(int(float(fields[1])))
+        except ValueError:
+            continue
+    return values
+
 def delta(before, after, key):
     return str(after.get(key, 0) - before.get(key, 0))
 
@@ -720,6 +734,7 @@ soft_before = parse_softnet(f"{run_abs}/server-proc-net-softnet-before.txt")
 soft_after = parse_softnet(f"{run_abs}/server-proc-net-softnet-after.txt")
 qdisc_before = parse_qdisc(f"{run_abs}/server-tc-qdisc-before.txt")
 qdisc_after = parse_qdisc(f"{run_abs}/server-tc-qdisc-after.txt")
+prom = parse_prom_metrics(f"{run_abs}/metrics-after.prom")
 
 print("\t".join([
     target,
@@ -754,6 +769,12 @@ print("\t".join([
     delta(udp_before, udp_after, "InErrors"),
     delta(udp_before, udp_after, "RcvbufErrors"),
     delta(udp_before, udp_after, "SndbufErrors"),
+    prom.get("oxidedns_udp_mmsg_send_syscalls_total", "0"),
+    prom.get("oxidedns_udp_mmsg_sent_datagrams_total", "0"),
+    prom.get("oxidedns_udp_mmsg_send_partial_syscalls_total", "0"),
+    prom.get("oxidedns_udp_mmsg_send_wouldblock_retries_total", "0"),
+    prom.get("oxidedns_udp_mmsg_receive_syscalls_total", "0"),
+    prom.get("oxidedns_udp_mmsg_received_datagrams_total", "0"),
     delta(soft_before, soft_after, "dropped"),
     delta(soft_before, soft_after, "time_squeeze"),
 ]))
