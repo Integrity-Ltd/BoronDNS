@@ -400,8 +400,13 @@ qdisc/send-buffer drops. A same-artifact 4.8M comparison with the same tuning
 measured Knot at about 91.34% and OxideDNS at about 97.83%, so OxideDNS widened
 the comparison lead but still missed the packet-loss gate. Raising `fq limit`
 to 200000 was worse at about 97.33% with about 629k drops. Treat `fq limit`
-50000 as the current best qdisc-depth candidate and keep the default `fq`
-flow-limit unless a more targeted pacing/queueing design is measured.
+50000 as a useful qdisc-depth candidate, but not a stable pass: a detached
+10-second, three-repeat 4.8M batch retained at
+`physical-udp-knot-comparison-20260605T191048Z` measured only about 96.45%,
+97.42%, and 97.87% reply rate. The same rows restored host state afterward, but
+still accumulated about 1.69M/1.15M/1.02M qdisc-send-buffer drops and occasional
+receive errors. Keep the default `fq` flow-limit unless a more targeted
+pacing/queueing design is measured.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
