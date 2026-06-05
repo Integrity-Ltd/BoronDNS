@@ -119,12 +119,15 @@ sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
 REMOTE
     fi
     effective_txqueuelen="$(server_link_txqueuelen)"
-    ssh "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-}" "$effective_txqueuelen" <<'REMOTE'
+    ssh "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
 requested_txqueuelen="$3"
 effective_txqueuelen="$4"
+if [[ "$requested_txqueuelen" == "__none__" ]]; then
+    requested_txqueuelen=""
+fi
 cat >"$out_abs/host/server-link-tuning.txt" <<EOF
 original_txqueuelen=$original_txqueuelen
 requested_txqueuelen=$requested_txqueuelen
