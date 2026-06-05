@@ -76,6 +76,10 @@ resolve_stage() {
     fi
 }
 
+remote_player_workdir() {
+    ssh_control "$player_ssh" "cd $player_workdir && pwd"
+}
+
 cleanup_remote() {
     ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
     if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
@@ -104,6 +108,7 @@ trap cleanup_remote EXIT
 
 server_root_abs="$(remote_server_root)"
 stage_abs="$(resolve_stage)"
+player_workdir_abs="$(remote_player_workdir)"
 out_abs="$stage_abs/evidence/physical-udp-knot-comparison-$(date -u +%Y%m%dT%H%M%SZ)"
 server_bin_arg="${server_bin:-__default__}"
 if [[ -n "$server_prefix" ]]; then
@@ -784,15 +789,77 @@ fi
 REMOTE
 }
 
+run_player_kxdpgun() {
+    local run_abs="$1"
+    local id="$2"
+    local port="$3"
+    local rate="$4"
+    local local_log="$id.kxdpgun.tmp"
+    local player_run_dir
+    local remote_run_dir
+    local status="255"
+    local done="false"
+
+    player_run_dir=".oxidedns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    remote_run_dir="$player_workdir_abs/$player_run_dir"
+
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" <<'REMOTE'
+set -euo pipefail
+workdir="$1"
+run_dir="$2"
+duration="$3"
+port="$4"
+batch="$5"
+rate="$6"
+interface="$7"
+mode="$8"
+source_ip="$9"
+target_ip="${10}"
+mkdir -p "$workdir/$run_dir"
+(
+    cd "$workdir"
+    set +e
+    sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i querydb "$target_ip"
+    status="$?"
+    printf '%s\n' "$status" >"$workdir/$run_dir/status"
+    touch "$workdir/$run_dir/done"
+) >"$workdir/$run_dir/kxdpgun.log" 2>&1 </dev/null &
+echo "$!" >"$workdir/$run_dir/pid"
+REMOTE
+
+    for _ in $(seq 1 240); do
+        if ssh_control "$player_ssh" "test -f '$remote_run_dir/done'" >/dev/null 2>&1; then
+            done="true"
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [[ "$done" != true ]]; then
+        {
+            printf 'timed out waiting for detached kxdpgun run %s\n' "$id"
+            ssh_control "$player_ssh" "cat '$remote_run_dir/kxdpgun.log' 2>/dev/null || true" || true
+        } >"$local_log"
+        status="124"
+    else
+        ssh_control "$player_ssh" "cat '$remote_run_dir/kxdpgun.log'" >"$local_log" 2>&1 || status="$?"
+        if [[ "$status" == "255" ]]; then
+            status="$(ssh_control "$player_ssh" "cat '$remote_run_dir/status'" 2>/dev/null || printf '255')"
+        fi
+    fi
+    ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$local_log" || true
+    ssh_control "$player_ssh" "rm -rf '$remote_run_dir'" >/dev/null 2>&1 || true
+    rm -f "$local_log"
+    [[ "$status" == "0" ]]
+}
+
 if [[ "$include_knot" == true ]]; then
     for rate in $rates_list; do
         select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
         run_knot_reference_start "$run_abs" "$interface"
-        ssh_control "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$knot_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
-        ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
-        rm -f "$run_id.kxdpgun.tmp"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate"
         run_server_finish "$run_abs" "knot" "n/a" "$rate" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -809,9 +876,7 @@ for workers in $workers_list; do
                     run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
                     run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                     run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                    ssh_control "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
-                    ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
-                    rm -f "$run_id.kxdpgun.tmp"
+                    run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate"
                     run_server_socket_sample_finish "$run_abs" "$socket_sample"
                     run_server_perf_finish "$run_abs" "$perf_record"
                     run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_prefix_arg" "$interface"

@@ -184,8 +184,12 @@ host/NIC context.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
-performing SSH key exchange for every setup, finish, and artifact-copy step; the
-control sockets are closed during local cleanup.
+performing SSH key exchange for every setup, finish, and artifact-copy step.
+The timed `kxdpgun` step is started as a detached player-host process that
+writes `kxdpgun.log`, `status`, and a done marker; the local wrapper polls and
+collects those files afterward. A transient SSH disconnect during the timed
+window should not kill the benchmark process. The control sockets are closed
+during local cleanup.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
