@@ -30,7 +30,9 @@ socket_receive_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES:-$s
 socket_send_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_buffer_bytes}"
 worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
+server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
+original_server_txqueuelen=""
 
 require_tool() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -56,6 +58,13 @@ resolve_stage() {
 
 cleanup_remote() {
     ssh "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    if [[ -n "$server_txqueuelen" && -n "$original_server_txqueuelen" ]]; then
+        ssh "$server_ssh" bash -s -- "$interface" "$original_server_txqueuelen" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+txqueuelen="$2"
+sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
+REMOTE
+    fi
 }
 
 trap cleanup_remote EXIT
@@ -70,7 +79,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -88,6 +97,42 @@ select_run_id() {
     fi
 }
 
+server_link_txqueuelen() {
+    ssh "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+ip -o link show dev "$iface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p'
+REMOTE
+}
+
+configure_server_link_tuning() {
+    local effective_txqueuelen
+
+    ssh "$server_ssh" "mkdir -p '$out_abs/host'"
+    original_server_txqueuelen="$(server_link_txqueuelen)"
+    if [[ -n "$server_txqueuelen" ]]; then
+        ssh "$server_ssh" bash -s -- "$interface" "$server_txqueuelen" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+txqueuelen="$2"
+sudo ip link set dev "$iface" txqueuelen "$txqueuelen"
+REMOTE
+    fi
+    effective_txqueuelen="$(server_link_txqueuelen)"
+    ssh "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-}" "$effective_txqueuelen" <<'REMOTE'
+set -euo pipefail
+out_abs="$1"
+original_txqueuelen="$2"
+requested_txqueuelen="$3"
+effective_txqueuelen="$4"
+cat >"$out_abs/host/server-link-tuning.txt" <<EOF
+original_txqueuelen=$original_txqueuelen
+requested_txqueuelen=$requested_txqueuelen
+effective_txqueuelen=$effective_txqueuelen
+EOF
+REMOTE
+}
+
 capture_static_host_context() {
     local player_context
 
@@ -103,6 +148,8 @@ mkdir -p "$out_abs/host"
     nproc
 } >"$out_abs/host/server-system.txt"
 lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE >"$out_abs/host/server-lscpu.tsv" 2>&1 || true
+ip -s link show dev "$server_interface" >"$out_abs/host/server-ip-link.txt" 2>&1 || true
+tc -s qdisc show dev "$server_interface" >"$out_abs/host/server-tc-qdisc.txt" 2>&1 || true
 cp /proc/interrupts "$out_abs/host/server-proc-interrupts.txt"
 cp /proc/softirqs "$out_abs/host/server-proc-softirqs.txt"
 ethtool -i "$server_interface" >"$out_abs/host/server-ethtool-driver.txt" 2>&1 || true
@@ -135,6 +182,7 @@ REMOTE
     printf '%s\n' "$player_context" | ssh "$server_ssh" "cat > '$out_abs/host/player-context.txt'"
 }
 
+configure_server_link_tuning
 capture_static_host_context
 
 run_knot_reference_start() {
@@ -168,6 +216,7 @@ cp /proc/net/dev "$run_abs/server-proc-net-dev-before.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-before.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-before.txt" 2>&1 || true
+tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-before.txt" 2>&1 || true
 REMOTE
 }
 
@@ -406,17 +455,19 @@ server_prefix=""
 if [[ "$server_prefix_b64" != "__none__" ]]; then
     server_prefix="$(printf '%s' "$server_prefix_b64" | base64 -d)"
 fi
+server_txqueuelen="$(ip -o link show dev "$server_interface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p')"
 
 cp /proc/net/dev "$run_abs/server-proc-net-dev-after.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-after.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
+tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, cpus, server_prefix, interface, run_abs, log = sys.argv[1:14]
+target, workers, rate, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, cpus, server_prefix, interface, run_abs, log = sys.argv[1:15]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -486,6 +537,7 @@ print("\t".join([
     idle_strategy,
     socket_receive_buffer or "default",
     socket_send_buffer or "default",
+    server_txqueuelen or "unknown",
     cpus or "unbound",
     server_prefix or "none",
     replies.group(1).replace(",", "") if replies else "",

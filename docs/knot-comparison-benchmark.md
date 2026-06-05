@@ -173,12 +173,13 @@ Knot only long enough for OxideDNS to transfer the zone, then runs `kxdpgun`
 from the player host against the idle OxideDNS secondary. It writes one
 artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, UDP batch size, replies per second, reply
-percentage, average DNS reply size, Ethernet reply bit rate, server RX/TX packet
-deltas, Linux UDP `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/
-`SndbufErrors` deltas, and aggregate softnet drop and time-squeeze deltas. Each
-artifact directory also includes `host/` context files for server CPU topology,
-server NIC driver/channel/RSS/offload state, server interrupts/softirqs, and
-player host/NIC context.
+percentage, average DNS reply size, Ethernet reply bit rate, effective server
+`txqueuelen`, server RX/TX packet deltas, Linux UDP `InDatagrams`/
+`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas, and aggregate
+softnet drop and time-squeeze deltas. Each artifact directory also includes
+`host/` context files for server CPU topology, server NIC driver/channel/RSS/
+offload state, server link/qdisc state, server interrupts/softirqs, and player
+host/NIC context.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
@@ -196,6 +197,11 @@ experiments:
   `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES=4194304` override receive and send
   buffers independently. Use these for send-side loss experiments where
   `SndbufErrors` is non-zero but receive counters are clean.
+- `OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN=5000` temporarily sets the server
+  interface transmit queue length for the comparison run and restores the
+  original value during cleanup. Use it only for retained packet-loss
+  experiments where qdisc drops or `SndbufErrors` identify transmit queueing as
+  the active gate.
 - `OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="16 32 64"` sweeps
   `[limits].udp_batch_size` in the staged config. The default `staged` value
   preserves the staged directory's existing batch size.
