@@ -462,6 +462,32 @@ and `flows_plimit` about 1.5k. A previous same-tuning comparison at
 `physical-udp-knot-comparison-20260605T204713Z` was noisy, with both rows far
 below their normal reply rates, so retain `205029Z` as the passing comparison
 artifact.
+A role-reversed validation pass shows that the passing forward-role profile is
+not yet portable across the two dedicated hosts. For this pass `oxidegun-1`
+served `198.18.0.2` and `oxidedns-1` generated traffic from `198.18.0.1`; Knot
+was installed and disabled on `oxidegun-1`, the staged zone and query database
+were mirrored to the opposite hosts, a stale generic XDP program was detached,
+and the server NIC's zero-handle `mq` root was normalized to a replaceable
+`mq 8001:` root with `pfifo_fast` children. With the retained forward tuning
+at 48 workers and 4.8M offered QPS,
+`physical-udp-knot-comparison-20260605T211343Z` measured Knot at about 97.41%
+reply rate but OxideDNS at only about 51.22%, with about 9.54M
+`RcvbufErrors`, no send-buffer errors, and no qdisc drops. This makes the
+reversed loss a receive/CPU path problem rather than the previous forward-role
+qdisc/send-buffer gate.
+The follow-up reversed tuning did not recover the 4.8M packet-loss gate.
+`physical-udp-knot-comparison-20260605T211502Z` found 72 workers best among
+56/63/64/72, at about 89.37% reply rate. Raising the receive-buffer ceiling to
+64 MiB at `20260605T211616Z` was worse at about 61.02%, batch 128 in
+`20260605T211704Z` reached only about 87.69%, and all-CPU pinning in
+`20260605T211826Z` reached about 88.94%. A rate sweep at
+`physical-udp-knot-comparison-20260605T211910Z` with 72 workers passed 4.0M and
+4.25M at about 99.998% reply rate, then fell to about 92.38% at 4.5M and
+58.83% at 4.75M. The bracket artifact `20260605T212028Z` confirmed the cliff:
+4.35M measured about 96.58% and 4.40M about 71.19%. Treat 4.25M as the current
+role-reversed OxideDNS ceiling on `oxidegun-1`; reaching 4.8M on both host
+directions likely needs receive-loop, queue/IRQ-affinity, or AF_XDP/XDP work
+rather than more retained send-buffer/qdisc tuning.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
