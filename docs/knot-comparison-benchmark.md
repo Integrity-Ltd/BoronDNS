@@ -436,8 +436,29 @@ to 200000 was worse at about 97.33% with about 629k drops. Treat `fq limit`
 `physical-udp-knot-comparison-20260605T191048Z` measured only about 96.45%,
 97.42%, and 97.87% reply rate. The same rows restored host state afterward, but
 still accumulated about 1.69M/1.15M/1.02M qdisc-send-buffer drops and occasional
-receive errors. Keep the default `fq` flow-limit unless a more targeted
-pacing/queueing design is measured.
+receive errors, leaving per-flow queueing as the next measured target.
+Adding `flows_plimit` to the summary confirmed that the remaining child `fq`
+drops at this boundary are mostly per-flow-limit drops rather than requeues or
+scheduler throttling. Raising `fq flow_limit` to 500 under the same 48-worker/
+4.8M/batch-64/`fq limit=50000`/32 MiB send-buffer profile produced the first
+strong 4.8M row: `physical-udp-knot-comparison-20260605T204230Z` measured about
+99.70% reply rate, with about 55k qdisc/`SndbufErrors`, only 63 receive-buffer
+errors, and about 9k `flows_plimit` drops. A same-tuning comparison artifact at
+`physical-udp-knot-comparison-20260605T204346Z` still had OxideDNS ahead of
+Knot, about 98.65% versus 90.32%, but OxideDNS missed the packet-loss gate as
+loss shifted into about 129k receive-buffer errors.
+Raising the receive-buffer ceiling then reduced that shifted receive loss. With
+`net.core.rmem_max=16777216`, an 8 MiB requested receive buffer, the same 32 MiB
+send buffer, and `fq flow_limit=500`, `physical-udp-knot-comparison-20260605T204624Z`
+measured about 99.50% reply rate at 4.8M. A three-row OxideDNS-only repeat at
+`physical-udp-knot-comparison-20260605T204808Z` measured about 99.87%, 99.96%,
+and 99.97%, with qdisc drops down to about 4k/6k/7k and low receive loss. Treat
+the combined `fq limit=50000`, `flow_limit=500`, 16 MiB receive ceiling, and
+64 MiB send ceiling profile as the current retained 4.8M candidate. A noisy
+same-artifact comparison at `physical-udp-knot-comparison-20260605T204713Z`
+still had OxideDNS ahead of Knot, but both rows were far below their normal
+reply rates, so repeat the clean Knot comparison before treating the full
+hardware-profile objective as complete.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
