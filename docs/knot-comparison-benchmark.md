@@ -285,6 +285,11 @@ hardware-profile claim. The first higher-rate `fq` sweep moved the previous
 ceiling upward but did not remove the saturation cliff: 4.6M and 4.65M offered
 QPS stayed above 99% reply rate, while 4.7M fell to about 98.2% and 4.75M fell
 to about 96.5%, with receive-buffer errors and `SndbufErrors` rising together.
+A small worker sweep at 4.7M showed that 40 workers was better than 32 or 36
+under `fq`, reaching about 99.0% reply rate, but 40 workers still fell below
+99% at 4.75M and collapsed by 4.8M. Treat 40 workers as the next 4.7M candidate
+and keep 36 workers for the more stable 4.5M comparison point until repeated
+rows prove otherwise.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
