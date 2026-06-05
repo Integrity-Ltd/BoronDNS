@@ -454,6 +454,13 @@ measured per-socket pacing rates 8M/9M/10M/11M/12M bytes/s at about 96.44%,
 97.60%, 97.30%, 97.08%, and 97.25% reply rate respectively. The best paced row
 was below the unpaced short batch-64 row, so keep the pacing knob for future
 host experiments but do not treat fixed socket pacing as the current fix.
+Extending that pacing range higher also did not clear the 4.8M gate. The
+retained `physical-udp-knot-comparison-20260605T203429Z` sweep measured
+14M/16M/20M/24M bytes/s per socket at about 96.66%, 98.12%, 97.85%, and 97.91%
+reply rate respectively. The 16M row had zero receive errors but still had
+about 449k qdisc/`SndbufErrors`, while higher pacing rates accumulated even
+more qdisc drops. Keep the unpaced socket setting for the current retained
+profile.
 A reduced-metrics diagnostic row at
 `physical-udp-knot-comparison-20260605T193038Z` confirmed that the dedicated
 worker `sendmmsg` path was not seeing direct syscall backpressure: it retained
