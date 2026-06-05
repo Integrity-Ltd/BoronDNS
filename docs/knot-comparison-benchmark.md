@@ -193,6 +193,29 @@ collects those files afterward. A transient SSH disconnect during the timed
 window should not kill the benchmark process. The control sockets are closed
 during local cleanup.
 
+For long multi-row batches, start the same physical wrapper through the local
+detached runner and read the files later:
+
+```sh
+OXIDEDNS_PHYSICAL_WORKERS="48" \
+OXIDEDNS_PHYSICAL_RATES="4750000 4800000" \
+OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="64" \
+OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq \
+OXIDEDNS_PHYSICAL_SERVER_TX_FQ_LIMIT=50000 \
+scripts/physical-udp-detached-batch.sh start
+```
+
+The start command prints a local `detached_run_dir`. Check it after reconnecting
+with:
+
+```sh
+scripts/physical-udp-detached-batch.sh status target/physical-detached-runs/YYYYMMDDTHHMMSSZ
+```
+
+Each detached run retains `command.txt`, `environment.txt`, `monitor.log`,
+`harness.log`, the fetched `summary.tsv` when the physical harness reaches the
+remote artifact, and post-run server/player cleanup checks.
+
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
 
