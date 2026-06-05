@@ -206,6 +206,11 @@ experiments:
   evidence-gated NUMA experiments; leave it unset for baseline comparisons.
 - `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
   `perf-report-*.txt` files beside the run logs on the server host.
+- `OXIDEDNS_PHYSICAL_SOCKET_SAMPLE=true` captures repeated
+  `ss -u -n -m` samples for the OxideDNS UDP service port during the kxdpgun
+  window. Use this when `SndbufErrors` is the active gate and per-socket queue
+  state is needed; `OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL=0.25` controls the
+  sample interval in seconds.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL

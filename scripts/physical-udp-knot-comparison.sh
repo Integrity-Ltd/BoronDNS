@@ -18,6 +18,8 @@ batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
 perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
+socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
+socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
@@ -494,6 +496,73 @@ fi
 REMOTE
 }
 
+run_server_socket_sample_start() {
+    local run_abs="$1"
+    local enabled="$2"
+    local port="$3"
+    local seconds="$4"
+    local interval="$5"
+
+    if [[ "$enabled" != true ]]; then
+        return 0
+    fi
+
+    ssh "$server_ssh" bash -s -- "$run_abs" "$port" "$seconds" "$interval" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+port="$2"
+seconds="$3"
+interval="$4"
+(
+    end="$(python3 - "$seconds" <<'PY'
+import sys
+import time
+
+print(time.monotonic() + float(sys.argv[1]) + 1.0)
+PY
+)"
+    while python3 - "$end" <<'PY'
+import sys
+import time
+
+raise SystemExit(0 if time.monotonic() < float(sys.argv[1]) else 1)
+PY
+    do
+        {
+            date -u +%Y-%m-%dT%H:%M:%S.%NZ
+            printf 'oxidedns_udp_port=%s\n' "$port"
+            ss -H -u -a -n -m 2>&1 || true
+        } >>"$run_abs/udp-socket-samples.txt"
+        sleep "$interval"
+    done
+) &
+echo $! >"$run_abs/udp-socket-sample.pid"
+REMOTE
+}
+
+run_server_socket_sample_finish() {
+    local run_abs="$1"
+    local enabled="$2"
+
+    if [[ "$enabled" != true ]]; then
+        return 0
+    fi
+
+    ssh "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+if [[ -f "$run_abs/udp-socket-sample.pid" ]]; then
+    sample_pid="$(cat "$run_abs/udp-socket-sample.pid")"
+    for _ in $(seq 1 80); do
+        if ! ps -p "$sample_pid" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.1
+    done
+fi
+REMOTE
+}
+
 for workers in $workers_list; do
     for rate in $rates_list; do
         for udp_batch_size in $udp_batch_sizes; do
@@ -504,9 +573,11 @@ for workers in $workers_list; do
                     printf 'running %s\n' "$run_id"
                     run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
                     run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
+                    run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
                     ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
                     ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
                     rm -f "$run_id.kxdpgun.tmp"
+                    run_server_socket_sample_finish "$run_abs" "$socket_sample"
                     run_server_perf_finish "$run_abs" "$perf_record"
                     run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_prefix_arg" "$interface"
                 done
