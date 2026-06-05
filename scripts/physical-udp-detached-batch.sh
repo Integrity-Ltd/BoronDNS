@@ -128,6 +128,8 @@ set -euo pipefail
 iface="$1"
 printf 'net.core.wmem_max='
 sysctl -n net.core.wmem_max
+printf 'net.core.rmem_max='
+sysctl -n net.core.rmem_max
 ip -o link show dev "$iface" || true
 tc qdisc show dev "$iface" || true
 pgrep -a oxidedns || true

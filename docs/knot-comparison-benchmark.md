@@ -176,8 +176,8 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
 ring size, effective per-queue server TX qdisc, effective `fq` limit/flow
-limit, requested UDP socket pacing rate, effective server `net.core.wmem_max`,
-server RX/TX packet deltas, Linux UDP
+limit, requested UDP socket pacing rate, effective server `net.core.rmem_max`
+and `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
 enabled, root or child qdisc drop and requeue deltas, child `fq`
@@ -281,6 +281,11 @@ experiments:
   Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES` value when
   proving send-buffer headroom; retained rows record the effective
   `server_wmem_max`.
+- `OXIDEDNS_PHYSICAL_SERVER_RMEM_MAX=16777216` temporarily raises the server
+  `net.core.rmem_max` sysctl and restores the original value during cleanup.
+  Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES` value
+  when rows shift from qdisc/`SndbufErrors` into Linux UDP `RcvbufErrors`;
+  retained rows record the effective `server_rmem_max`.
 - `OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="16 32 64"` sweeps
   `[limits].udp_batch_size` in the staged config. The default `staged` value
   preserves the staged directory's existing batch size.
