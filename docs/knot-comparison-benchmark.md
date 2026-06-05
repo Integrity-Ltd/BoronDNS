@@ -236,7 +236,9 @@ experiments:
   `limits.udp_socket_max_pacing_rate_bytes_per_second` into each run config.
   This requests Linux `SO_MAX_PACING_RATE` per UDP socket, so use it with `fq`
   qdisc rows where aggregate send bursts are the active hypothesis. Retained
-  rows record the requested `socket_max_pacing_rate_bytes_per_second`.
+  rows record the requested `socket_max_pacing_rate_bytes_per_second`. Use
+  `OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATES_BYTES_PER_SECOND="9000000 12000000"`
+  to sweep multiple per-socket pacing rates in one retained artifact.
 - `OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN=5000` temporarily sets the server
   interface transmit queue length for the comparison run and restores the
   original value during cleanup. Use it only for retained packet-loss

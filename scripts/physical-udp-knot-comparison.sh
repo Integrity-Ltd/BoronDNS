@@ -30,7 +30,7 @@ idle_strategy_list="${OXIDEDNS_PHYSICAL_IDLE_STRATEGIES:-park spin}"
 socket_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_BUFFER_BYTES:-}"
 socket_receive_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES:-$socket_buffer_bytes}"
 socket_send_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_buffer_bytes}"
-socket_max_pacing_rate_bytes_per_second="${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND:-}"
+socket_max_pacing_rates_bytes_per_second="${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATES_BYTES_PER_SECOND:-${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND:-__none__}}"
 worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
 server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
@@ -973,16 +973,25 @@ for workers in $workers_list; do
         for udp_batch_size in $udp_batch_sizes; do
             for hot_path in $hot_path_list; do
                 for idle_strategy in $idle_strategy_list; do
-                    select_run_id "oxidedns-w${workers}-q${rate}-batch-${udp_batch_size}-metrics-${hot_path}-idle-${idle_strategy}"
-                    run_abs="$out_abs/$run_id"
-                    printf 'running %s\n' "$run_id"
-                    run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_bytes_per_second" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
-                    run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
-                    run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                    run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate"
-                    run_server_socket_sample_finish "$run_abs" "$socket_sample"
-                    run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
-                    run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_bytes_per_second" "$worker_cpus" "$server_prefix_arg" "$interface"
+                    for socket_max_pacing_rate in $socket_max_pacing_rates_bytes_per_second; do
+                        pacing_run_suffix=""
+                        socket_max_pacing_rate_arg="$socket_max_pacing_rate"
+                        if [[ "$socket_max_pacing_rate" == "__none__" ]]; then
+                            socket_max_pacing_rate_arg=""
+                        else
+                            pacing_run_suffix="-pace-${socket_max_pacing_rate}"
+                        fi
+                        select_run_id "oxidedns-w${workers}-q${rate}-batch-${udp_batch_size}-metrics-${hot_path}-idle-${idle_strategy}${pacing_run_suffix}"
+                        run_abs="$out_abs/$run_id"
+                        printf 'running %s\n' "$run_id"
+                        run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
+                        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
+                        run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
+                        run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate"
+                        run_server_socket_sample_finish "$run_abs" "$socket_sample"
+                        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+                        run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$worker_cpus" "$server_prefix_arg" "$interface"
+                    done
                 done
             done
         done
