@@ -18,6 +18,7 @@ Usage:
 
 Environment:
   OXIDEDNS_PHYSICAL_* variables are passed through to the detached harness.
+  SSH_AUTH_SOCK is passed through when set so systemd-launched monitors can SSH.
   OXIDEDNS_PHYSICAL_DETACHED_ROOT overrides the local run directory root.
 EOF
 }
@@ -52,9 +53,9 @@ record_command() {
             printf 'EOF\n'
         fi
     } >"$run_dir/command.txt"
-    env | LC_ALL=C sort | awk -F= '$1 ~ /^OXIDEDNS_PHYSICAL_/ { print }' >"$run_dir/environment.txt"
+    env | LC_ALL=C sort | awk -F= '$1 ~ /^OXIDEDNS_PHYSICAL_/ || $1 == "SSH_AUTH_SOCK" || $1 == "SSH_AGENT_PID" { print }' >"$run_dir/environment.txt"
     while IFS='=' read -r name value; do
-        if [[ "$name" =~ ^OXIDEDNS_PHYSICAL_ ]]; then
+        if [[ "$name" =~ ^OXIDEDNS_PHYSICAL_ || "$name" == "SSH_AUTH_SOCK" || "$name" == "SSH_AGENT_PID" ]]; then
             printf 'export %s=%q\n' "$name" "$value"
         fi
     done < <(env | LC_ALL=C sort) >"$run_dir/environment.sh"
