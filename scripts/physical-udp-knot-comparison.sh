@@ -72,6 +72,22 @@ fi
 
 ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
+declare -A run_id_counts=()
+run_id=""
+
+select_run_id() {
+    local base_run_id="$1"
+    local count
+
+    count="${run_id_counts[$base_run_id]:-0}"
+    run_id_counts["$base_run_id"]=$((count + 1))
+    if ((count == 0)); then
+        run_id="$base_run_id"
+    else
+        run_id="${base_run_id}-repeat${count}"
+    fi
+}
+
 capture_static_host_context() {
     local player_context
 
@@ -613,7 +629,7 @@ REMOTE
 
 if [[ "$include_knot" == true ]]; then
     for rate in $rates_list; do
-        run_id="knot-q${rate}"
+        select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
         run_knot_reference_start "$run_abs" "$interface"
@@ -630,7 +646,7 @@ for workers in $workers_list; do
         for udp_batch_size in $udp_batch_sizes; do
             for hot_path in $hot_path_list; do
                 for idle_strategy in $idle_strategy_list; do
-                    run_id="oxidedns-w${workers}-q${rate}-batch-${udp_batch_size}-metrics-${hot_path}-idle-${idle_strategy}"
+                    select_run_id "oxidedns-w${workers}-q${rate}-batch-${udp_batch_size}-metrics-${hot_path}-idle-${idle_strategy}"
                     run_abs="$out_abs/$run_id"
                     printf 'running %s\n' "$run_id"
                     run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$udp_batch_size"
