@@ -321,6 +321,12 @@ measured Knot at about 92.21% reply rate and OxideDNS at about 98.72%, so
 OxideDNS stayed clearly ahead but still below the packet-loss gate. Batch 64
 did not carry 4.8M, which fell to about 95.54%, and combining batch 64 with
 `txqueuelen=5000` was worse than `fq` alone at about 98.31%.
+Changing the standard UDP `sendmmsg` `WouldBlock` retry constant was not a
+useful code fix for this boundary: reducing retries from 256 to 64 nearly
+eliminated receive errors but dropped the 4.75M batch-64 `fq` row to about
+97.46%, while increasing retries to 512 stayed near 98.91% and did not clearly
+beat the original constant. Keep the current retry policy until a stronger
+send/receive pacing change is measured.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
