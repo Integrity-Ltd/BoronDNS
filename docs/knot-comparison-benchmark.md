@@ -155,6 +155,34 @@ affinity settings as the Knot reference run. The generated `runbook.sh` local
 load-client path is useful for local and preflight evidence; physical
 Knot-comparison claims should use kxdpgun/NIC counters.
 
+For repeatable OxideDNS socket-path sweeps on the two physical hosts, use the
+checked-in wrapper instead of ad-hoc SSH commands:
+
+```bash
+OXIDEDNS_PHYSICAL_WORKERS="12 16 24" \
+OXIDEDNS_PHYSICAL_RATES="2000000 2500000 3000000" \
+OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS="reduced off" \
+OXIDEDNS_PHYSICAL_IDLE_STRATEGIES="park spin" \
+scripts/physical-udp-knot-comparison.sh
+```
+
+The wrapper expects a staged Knot-primary comparison directory on the server
+host, copies the staged OxideDNS config for each run, applies the selected
+worker count, hot-path metric detail, and dedicated-worker idle strategy, starts
+Knot only long enough for OxideDNS to transfer the zone, then runs `kxdpgun`
+from the player host against the idle OxideDNS secondary. It writes one
+artifact directory under the staged directory's `evidence/` folder and emits a
+`summary.tsv` containing offered rate, replies per second, reply percentage,
+average DNS reply size, and Ethernet reply bit rate.
+
+Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
+Use `"off"` only for saturation profiling where per-query counters would distort
+the transport result; worker/batch counters and post-run logs remain available,
+but DNS query, rcode, DNS Cookie, RRL, and per-zone hot-path counters are no
+longer representative while that profile is active. `limits.udp_idle_strategy =
+"spin"` is only valid with `limits.udp_runtime = "dedicated"` and should remain
+an evidence-gated knob because it burns CPU while idle.
+
 Normalize an OxideDNS benchmark artifact:
 
 ```bash

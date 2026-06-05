@@ -1142,6 +1142,12 @@ layout can be phased out.
   full detail and about 479k responses/s with reduced detail, or about 103k and
   120k responses/s per configured server thread. This is local loopback
   evidence only, not physical NIC evidence.
+- [x] Add saturation-only hot-path metrics-off mode for physical UDP profiling:
+  `[metrics].hot_path_detail = "off"` suppresses per-query coarse counters as
+  well as detailed mutex-backed series so transport and response composition can
+  be measured without shared counter contention. It is a benchmark profile only;
+  query, RCODE, DNS Cookie, RRL, and per-zone hot-path counters are not
+  representative while the profile is active.
 - [x] Add standard UDP `SO_REUSEPORT` worker scaffolding:
   `[limits].udp_reuseport_workers` defaults to `1`, preserving the current
   single standard UDP listener per configured address, and values above `1`

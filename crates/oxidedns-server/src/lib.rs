@@ -443,6 +443,7 @@ impl Runtime {
             let udp_batch_size = self.config.limits.udp_batch_size;
             let udp_backend = self.config.limits.udp_backend;
             let udp_runtime = self.config.limits.udp_runtime;
+            let udp_idle_strategy = self.config.limits.udp_idle_strategy;
             let xdp = self.config.xdp.clone();
             let max_cname_chain = self.config.limits.max_cname_chain;
             let nsec3_max_iterations = self.config.dnssec.nsec3_max_iterations;
@@ -463,6 +464,7 @@ impl Runtime {
                 udp_batch_size,
                 udp_backend,
                 udp_runtime,
+                udp_idle_strategy,
                 xdp,
                 max_cname_chain,
                 nsec3_max_iterations,

@@ -667,6 +667,13 @@ collection internally even if `pipeline_timing_enabled` is set. Reduced mode is
 an observability/performance tradeoff for benchmarking and does not change DNS
 answer behavior.
 
+Saturation-only packet-path experiments may use
+`[metrics].hot_path_detail = "off"` to suppress per-query hot-path counters as
+well. This profile is intended for isolating transport, response composition,
+and kernel/socket overhead from shared counter cost. It keeps worker and batch
+metrics available after the run, but query, RCODE, DNS Cookie, RRL, and per-zone
+hot-path metrics are not representative while the profile is active.
+
 ### AF_XDP Evaluation
 
 AF_XDP is an advanced UDP backend, not a default server dependency.

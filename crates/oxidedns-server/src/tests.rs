@@ -3347,6 +3347,40 @@ fn reduced_hot_path_metrics_skip_mutex_backed_query_detail() {
 }
 
 #[test]
+fn off_hot_path_metrics_skip_per_query_counters() {
+    let zones = ZoneStore::new();
+    let active_origin = DomainName::from_absolute_str("example.test.").unwrap();
+    zones.insert_snapshot(ZoneSnapshot::active(active_origin, Some(1), Vec::new()));
+    let metrics = RuntimeMetrics::new_with_settings(
+        1,
+        DEFAULT_LATENCY_HISTOGRAM_BUCKETS.to_vec(),
+        false,
+        MetricsHotPathDetail::Off,
+    );
+
+    let observation = observe_query_metrics(
+        &query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1),
+        &zones,
+        &metrics,
+        query_observation_options(),
+    );
+
+    assert!(!observation.is_query);
+    assert_eq!(metrics.snapshot().queries_received, 0);
+    assert!(metrics.zone_query_counts().is_empty());
+
+    let mut truncated = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
+    truncated[2] |= 0x82;
+    record_query_response_metric(&observation, &truncated, &metrics);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.queries_truncated, 0);
+    assert!(metrics.query_rcode_counts().is_empty());
+    assert!(metrics.zone_query_rcode_counts().is_empty());
+    assert!(metrics.query_latency_histograms().is_empty());
+}
+
+#[test]
 fn query_metrics_count_response_rcodes_for_queries_only() {
     let zones = ZoneStore::new();
     let metrics = RuntimeMetrics::new();
@@ -4100,6 +4134,7 @@ async fn udp_query_records_cname_chain_limit_metric() {
             udp_batch_size: 1,
             udp_backend: UdpBackend::Std,
             udp_runtime: UdpRuntime::Tokio,
+            udp_idle_strategy: Default::default(),
             xdp: XdpConfig::default(),
             max_cname_chain: 1,
             nsec3_max_iterations: 100,
@@ -4385,6 +4420,7 @@ async fn udp_rrl_slips_and_drops_limited_query_responses() {
             udp_batch_size: 1,
             udp_backend: UdpBackend::Std,
             udp_runtime: UdpRuntime::Tokio,
+            udp_idle_strategy: Default::default(),
             xdp: XdpConfig::default(),
             max_cname_chain: 8,
             nsec3_max_iterations: 100,
@@ -4478,6 +4514,7 @@ async fn udp_tsig_authenticated_query_bypasses_rrl_and_signs_response() {
             udp_batch_size: 1,
             udp_backend: UdpBackend::Std,
             udp_runtime: UdpRuntime::Tokio,
+            udp_idle_strategy: Default::default(),
             xdp: XdpConfig::default(),
             max_cname_chain: 8,
             nsec3_max_iterations: 100,
@@ -8580,6 +8617,7 @@ fn udp_settings_for_test(metrics: RuntimeMetrics, rrl_config: RrlConfig) -> UdpS
         udp_batch_size: 1,
         udp_backend: UdpBackend::Std,
         udp_runtime: UdpRuntime::Tokio,
+        udp_idle_strategy: Default::default(),
         xdp: XdpConfig::default(),
         max_cname_chain: 8,
         nsec3_max_iterations: 100,

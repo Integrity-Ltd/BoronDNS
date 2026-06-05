@@ -502,7 +502,10 @@ outside benchmark or diagnostic captures. For high-rate local packet-path
 experiments, `[metrics].hot_path_detail = "reduced"` can remove detailed
 mutex-backed query, RCODE, latency, and cookie-prefix metric updates from the
 query path while preserving coarse counters; leave it at the default `"full"`
-for ordinary operations.
+for ordinary operations. The `"off"` hot-path detail mode is a saturation
+benchmark profile only; it removes per-query counters from the packet path, so
+query, RCODE, DNS Cookie, RRL, and per-zone hot-path metrics are intentionally
+incomplete while that profile is active.
 
 Query serving uses the immutable `ZoneImage` response path. Internal plan,
 DNSSEC-plan, or response-build failures return SERVFAIL and increment fixed

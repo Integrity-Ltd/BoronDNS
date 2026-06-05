@@ -59,6 +59,7 @@ bash -n scripts/capture-unsafe-dependency-evidence.sh
 bash -n scripts/capture-interface-compatibility-evidence.sh
 bash -n scripts/benchmark-dns-clients.sh
 bash -n scripts/benchmark-zone-image-prototype.sh
+bash -n scripts/physical-udp-knot-comparison.sh
 bash -n scripts/zone-image-evidence-gate.sh
 bash -n scripts/fuzz-campaign.sh
 bash -n scripts/engineering-mvp-evidence.sh

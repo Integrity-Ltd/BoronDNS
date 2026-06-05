@@ -1002,6 +1002,8 @@ pub enum MetricsHotPathDetail {
     Full,
     #[serde(rename = "reduced")]
     Reduced,
+    #[serde(rename = "off")]
+    Off,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1546,6 +1548,8 @@ pub struct Limits {
     #[serde(default)]
     pub udp_runtime: UdpRuntime,
     #[serde(default)]
+    pub udp_idle_strategy: UdpIdleStrategy,
+    #[serde(default)]
     pub udp_backend: UdpBackend,
     #[serde(default = "default_max_cname_chain")]
     pub max_cname_chain: usize,
@@ -1603,6 +1607,7 @@ impl Default for Limits {
             udp_reuseport_workers: default_udp_reuseport_workers(),
             udp_worker_cpu_affinity: None,
             udp_runtime: UdpRuntime::default(),
+            udp_idle_strategy: UdpIdleStrategy::default(),
             udp_backend: UdpBackend::default(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
@@ -1651,6 +1656,14 @@ impl Limits {
                     .to_owned(),
             ));
         }
+        if self.udp_idle_strategy != UdpIdleStrategy::Park
+            && self.udp_runtime != UdpRuntime::Dedicated
+        {
+            return Err(ConfigError::Invalid(
+                "limits.udp_idle_strategy other than \"park\" requires limits.udp_runtime = \"dedicated\""
+                    .to_owned(),
+            ));
+        }
         if let Some(cpus) = &self.udp_worker_cpu_affinity {
             if cpus.is_empty() {
                 return Err(ConfigError::Invalid(
@@ -1687,6 +1700,15 @@ pub enum UdpRuntime {
     Tokio,
     #[serde(rename = "dedicated")]
     Dedicated,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum UdpIdleStrategy {
+    #[serde(rename = "park")]
+    #[default]
+    Park,
+    #[serde(rename = "spin")]
+    Spin,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -2723,6 +2745,7 @@ mod tests {
         assert_eq!(config.limits.udp_reuseport_workers, 1);
         assert!(config.limits.udp_worker_cpu_affinity.is_none());
         assert_eq!(config.limits.udp_runtime, UdpRuntime::Tokio);
+        assert_eq!(config.limits.udp_idle_strategy, UdpIdleStrategy::Park);
         assert_eq!(config.limits.udp_backend, UdpBackend::Std);
         assert_eq!(config.xdp, XdpConfig::default());
         assert_eq!(config.limits.max_cname_chain, 8);
@@ -4377,6 +4400,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_metrics_hot_path_detail_off() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [metrics]
+                hot_path_detail = "off"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid metrics config");
+
+        assert_eq!(config.metrics.hot_path_detail, MetricsHotPathDetail::Off);
+    }
+
+    #[test]
     fn parses_observability_configuration() {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -4731,6 +4774,7 @@ mod tests {
                 udp_reuseport_workers = 4
                 udp_worker_cpu_affinity = [0, 1, 2, 3]
                 udp_runtime = "dedicated"
+                udp_idle_strategy = "spin"
 
                 [[zones]]
                 name = "example.test."
@@ -4746,6 +4790,7 @@ mod tests {
             Some([0, 1, 2, 3].as_slice())
         );
         assert_eq!(config.limits.udp_runtime, UdpRuntime::Dedicated);
+        assert_eq!(config.limits.udp_idle_strategy, UdpIdleStrategy::Spin);
     }
 
     #[test]

@@ -585,6 +585,10 @@ Interpretation:
   suppresses per-zone query maps, RCODE maps, query latency histograms, DNS
   Cookie prefix maps, and pipeline/cache-planning histograms. Do not compare a
   reduced-detail run against a full-detail run without noting the metrics mode.
+- For saturation-only transport experiments, `OXIDEDNS_BENCH_HOT_PATH_DETAIL=off`
+  also removes the per-query coarse counters. Use it only to isolate packet-path
+  throughput; the run's query, RCODE, DNS Cookie, RRL, and per-zone hot-path
+  counters are not representative.
 - The `zone_shape_single_rdata_rrsets`, `zone_shape_multi_rdata_rrsets`, and
   `zone_shape_spilled_rdata_rrsets` rows show whether `SmallVec<[T; 1]>` matches
   the loaded corpus or whether a wider inline capacity should be tested. The

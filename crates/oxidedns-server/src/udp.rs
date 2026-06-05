@@ -6,7 +6,7 @@ use std::{
 };
 
 use oxidedns_core::{
-    config::{UdpBackend, UdpRuntime, XdpConfig},
+    config::{UdpBackend, UdpIdleStrategy, UdpRuntime, XdpConfig},
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
         DatagramAction, DnsCookieContext, DnsCookieRequestStatus, DomainName,
@@ -315,12 +315,12 @@ fn run_dedicated_std_udp_worker(
     while !stop.load(std::sync::atomic::Ordering::Acquire) {
         let active = match packet_io.recv_batch(&socket, &mut inbound) {
             Ok(0) => {
-                idle_dedicated_udp_worker(&mut idle_spins);
+                idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
                 continue;
             }
             Ok(active) => active,
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                idle_dedicated_udp_worker(&mut idle_spins);
+                idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
                 continue;
             }
             Err(error) => return Err(RuntimeError::Udp(error)),
@@ -426,13 +426,18 @@ fn send_std_udp_batch_fallback(
     Ok(sent)
 }
 
-fn idle_dedicated_udp_worker(idle_spins: &mut usize) {
-    if *idle_spins < 64 {
-        *idle_spins += 1;
-        std::hint::spin_loop();
-    } else {
-        *idle_spins = 0;
-        std::thread::park_timeout(Duration::from_micros(50));
+fn idle_dedicated_udp_worker(idle_spins: &mut usize, strategy: UdpIdleStrategy) {
+    match strategy {
+        UdpIdleStrategy::Spin => std::hint::spin_loop(),
+        UdpIdleStrategy::Park => {
+            if *idle_spins < 64 {
+                *idle_spins += 1;
+                std::hint::spin_loop();
+            } else {
+                *idle_spins = 0;
+                std::thread::park_timeout(Duration::from_micros(50));
+            }
+        }
     }
 }
 
@@ -819,6 +824,9 @@ pub(crate) fn observe_query_metrics(
         return not_query();
     }
 
+    if !metrics.hot_path_counters_enabled() {
+        return not_query();
+    }
     metrics.record_query_received();
     if !metrics.hot_path_detail_enabled() {
         return observed_query(None);
@@ -1201,6 +1209,8 @@ pub(crate) struct UdpServerSettings {
     pub(crate) udp_backend: UdpBackend,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) udp_runtime: UdpRuntime,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) udp_idle_strategy: UdpIdleStrategy,
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) xdp: XdpConfig,
     pub(crate) max_cname_chain: usize,

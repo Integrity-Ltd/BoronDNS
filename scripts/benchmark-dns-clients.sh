@@ -176,9 +176,9 @@ true | false) ;;
     ;;
 esac
 case "$hot_path_detail" in
-full | reduced) ;;
+full | reduced | off) ;;
 *)
-    printf 'OXIDEDNS_BENCH_HOT_PATH_DETAIL must be full or reduced, got %q\n' "$hot_path_detail" >&2
+    printf 'OXIDEDNS_BENCH_HOT_PATH_DETAIL must be full, reduced, or off, got %q\n' "$hot_path_detail" >&2
     exit 64
     ;;
 esac

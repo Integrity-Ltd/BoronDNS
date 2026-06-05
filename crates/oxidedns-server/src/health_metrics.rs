@@ -553,7 +553,7 @@ async fn observability_security(
                     "valid_server": snapshot.dns_cookie_valid_server,
                     "invalid_server": snapshot.dns_cookie_invalid_server,
                     "badcookie": snapshot.dns_cookie_badcookie,
-                    "prefix_detail": if state.metrics.hot_path_detail_enabled() { "full" } else { "reduced" },
+                    "prefix_detail": state.metrics.hot_path_detail_label(),
                 },
                 "rrl": {
                     "subject": snapshot.rrl_subject,
@@ -2954,10 +2954,15 @@ impl RuntimeMetrics {
         self.inner.hot_path_detail == MetricsHotPathDetail::Full
     }
 
+    pub(crate) fn hot_path_counters_enabled(&self) -> bool {
+        self.inner.hot_path_detail != MetricsHotPathDetail::Off
+    }
+
     pub(crate) fn hot_path_detail_label(&self) -> &'static str {
         match self.inner.hot_path_detail {
             MetricsHotPathDetail::Full => "full",
             MetricsHotPathDetail::Reduced => "reduced",
+            MetricsHotPathDetail::Off => "off",
         }
     }
 
