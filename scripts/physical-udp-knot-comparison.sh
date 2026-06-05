@@ -69,6 +69,55 @@ fi
 
 ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
+capture_static_host_context() {
+    local player_context
+
+    ssh "$server_ssh" bash -s -- "$out_abs" "$interface" <<'REMOTE'
+set -euo pipefail
+out_abs="$1"
+server_interface="$2"
+mkdir -p "$out_abs/host"
+{
+    hostname
+    date -u +%Y-%m-%dT%H:%M:%SZ
+    uname -a
+    nproc
+} >"$out_abs/host/server-system.txt"
+lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE >"$out_abs/host/server-lscpu.tsv" 2>&1 || true
+cp /proc/interrupts "$out_abs/host/server-proc-interrupts.txt"
+cp /proc/softirqs "$out_abs/host/server-proc-softirqs.txt"
+ethtool -i "$server_interface" >"$out_abs/host/server-ethtool-driver.txt" 2>&1 || true
+ethtool -l "$server_interface" >"$out_abs/host/server-ethtool-channels.txt" 2>&1 || true
+ethtool -x "$server_interface" >"$out_abs/host/server-ethtool-rss.txt" 2>&1 || true
+ethtool -k "$server_interface" >"$out_abs/host/server-ethtool-features.txt" 2>&1 || true
+REMOTE
+
+    player_context="$(
+        ssh "$player_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+player_interface="$1"
+{
+    printf 'system\n'
+    hostname
+    date -u +%Y-%m-%dT%H:%M:%SZ
+    uname -a
+    nproc
+    printf '\nlscpu\n'
+    lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE 2>&1 || true
+    printf '\nethtool_channels\n'
+    ethtool -l "$player_interface" 2>&1 || true
+    printf '\nethtool_driver\n'
+    ethtool -i "$player_interface" 2>&1 || true
+    printf '\ninterrupts\n'
+    grep -E "$player_interface|mlx|enp|eth" /proc/interrupts 2>/dev/null || true
+}
+REMOTE
+    )"
+    printf '%s\n' "$player_context" | ssh "$server_ssh" "cat > '$out_abs/host/player-context.txt'"
+}
+
+capture_static_host_context
+
 run_server_start() {
     local run_abs="$1"
     local workers="$2"

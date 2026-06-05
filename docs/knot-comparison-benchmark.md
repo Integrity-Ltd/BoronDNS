@@ -175,7 +175,10 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, UDP batch size, replies per second, reply
 percentage, average DNS reply size, Ethernet reply bit rate, server RX/TX packet
 deltas, Linux UDP `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/
-`SndbufErrors` deltas, and aggregate softnet drop and time-squeeze deltas.
+`SndbufErrors` deltas, and aggregate softnet drop and time-squeeze deltas. Each
+artifact directory also includes `host/` context files for server CPU topology,
+server NIC driver/channel/RSS/offload state, server interrupts/softirqs, and
+player host/NIC context.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
@@ -221,6 +224,16 @@ replies/s and 98.97% reply rate with zero receive errors and about 231k
 UDP batch-size sweep did not remove send-buffer errors. Treat send-side socket
 pressure as the next measured gate before returning to ZoneImage composition
 work.
+
+A follow-up worker-placement sweep showed that unbound 32-36 worker profiles
+are currently better than the earlier 24-worker pinned profile at 4.5M offered
+QPS. The best observed row was 36 unbound workers with counters off, spin idle,
+and 2 MiB receive/send buffers at about 4.46M replies/s and 99.12% reply rate,
+but repeat rows varied from about 98.4% to 99.1% and the 4.6M offered-QPS row
+fell to about 98.74%. A 40-worker spin profile and the accidental
+single-socket/sibling CPU placement were worse. The send-loss gate remains: the
+best rows still show Linux UDP `SndbufErrors`, while NIC TX queue drops and
+softnet drops are not the dominant signal.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
