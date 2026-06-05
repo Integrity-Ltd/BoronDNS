@@ -294,7 +294,11 @@ A small worker sweep at 4.7M showed that 40 workers was better than 32 or 36
 under `fq`, reaching about 99.0% reply rate, but 40 workers still fell below
 99% at 4.75M and collapsed by 4.8M. Treat 40 workers as the next 4.7M candidate
 and keep 36 workers for the more stable 4.5M comparison point until repeated
-rows prove otherwise.
+rows prove otherwise. Follow-up socket-buffer rows under the 40-worker `fq`
+profile did not remove the 4.7M/4.75M gate: increasing only the receive buffer
+to 4 MiB made the 4.7M row worse at about 97.5% reply rate, while increasing
+only the send buffer to 4 MiB was roughly neutral at 4.7M and improved 4.75M
+only to about 98.4%.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
