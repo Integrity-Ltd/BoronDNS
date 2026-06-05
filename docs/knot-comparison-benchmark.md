@@ -509,6 +509,15 @@ the 4.75M batch-64 `fq` edge collapsed to about 73.85% reply rate with about
 6.21M receive-buffer errors and no send-buffer errors. That profile starves
 receive capacity before the send-side gate, so cross-socket/unbound scheduling
 remains the retained baseline.
+The current 4.8M host state also has 48 combined queues, an even RSS
+indirection table, RPS disabled, irqbalance inactive, and IRQ/XPS CPU order
+`0,2,4,...,46,1,3,...,47`. Pinning 48 workers to that exact IRQ/XPS order at
+`physical-udp-knot-comparison-20260605T194518Z` was still negative: reply rate
+fell to about 96.17%, with about 905k qdisc/`SndbufErrors` and almost no
+receive-buffer loss. Keep unbound scheduling for the current 4.8M/`fq
+limit=50000` profile; the next placement experiment should change kernel queue
+mapping or worker/socket ownership rather than only pinning the existing worker
+set.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
