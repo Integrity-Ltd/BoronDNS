@@ -532,6 +532,16 @@ reply rate with the same 48-worker/batch-64/`fq limit=50000`/32 MiB send-buffer
 profile. Keep the cleanup because it removes discarded work from the benchmark
 path, but treat it as a small hot-path hygiene change rather than a proven
 transport fix.
+A symbolized profile after the borrowed published-zone lookup at
+`physical-udp-knot-comparison-20260605T200945Z` showed the refcount bucket gone
+and kept `recv_batch_linux` as the largest user-space bucket, with the expected
+empty nonblocking `recvmmsg` poll path still visible through `std::io::Error`
+drop work. Mapping `EAGAIN`/`EWOULDBLOCK` to an empty receive batch removes that
+per-idle-poll error construction, but it did not clear the 4.8M packet-loss
+gate: the retained non-profiled row at
+`physical-udp-knot-comparison-20260605T201401Z` measured about 98.17% reply
+rate with about 428k qdisc/`SndbufErrors`. Keep it as receive-loop cleanup, not
+as a proven transport-loss fix.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

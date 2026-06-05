@@ -149,7 +149,11 @@ impl StdUdpMmsg {
             )
         };
         if result < 0 {
-            return Err(io::Error::last_os_error());
+            let errno = current_errno();
+            if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
+                return Ok(0);
+            }
+            return Err(io::Error::from_raw_os_error(errno));
         }
 
         let received = result as usize;
@@ -272,6 +276,12 @@ fn zeroed_vec<T>(len: usize) -> Vec<T> {
             unsafe { std::mem::zeroed() }
         })
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn current_errno() -> libc::c_int {
+    // SAFETY: Linux exposes thread-local errno through __errno_location.
+    unsafe { *libc::__errno_location() }
 }
 
 #[cfg(target_os = "linux")]
@@ -413,6 +423,21 @@ mod tests {
         let mut payloads = [inbound[0].payload(), inbound[1].payload()];
         payloads.sort();
         assert_eq!(payloads, [b"one".as_slice(), b"two".as_slice()]);
+    }
+
+    #[test]
+    fn recvmmsg_returns_empty_batch_on_wouldblock() {
+        let server = UdpSocket::bind("127.0.0.1:0").expect("bind server");
+        server.set_nonblocking(true).expect("nonblocking server");
+        let mut batch = StdUdpMmsg::new(4);
+        let mut inbound = (0..4).map(|_| UdpInbound::new()).collect::<Vec<_>>();
+
+        assert_eq!(
+            batch
+                .recv_batch(&server, &mut inbound)
+                .expect("empty nonblocking receive"),
+            0
+        );
     }
 
     #[test]
