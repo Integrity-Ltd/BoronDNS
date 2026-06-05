@@ -175,8 +175,8 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
 size, replies per second, reply percentage, average DNS reply size, Ethernet
 reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-qdisc, effective `fq` flow limit, effective server `net.core.wmem_max`, server
-RX/TX packet deltas, Linux UDP
+qdisc, effective `fq` limit/flow limit, effective server `net.core.wmem_max`,
+server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 root or child qdisc drop and requeue deltas, and aggregate softnet drop and
 time-squeeze deltas. Each artifact directory also includes `host/` context
@@ -219,6 +219,10 @@ experiments:
   qdisc kinds during cleanup. The current wrapper accepts `fq`, `fq_codel`, and
   `pfifo_fast`; use it only for send-side queueing experiments where the
   retained qdisc before/after files prove the host state was restored.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_LIMIT=50000` sets the aggregate `fq limit`
+  when `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` is active. The default is
+  `10000`, matching the previously retained `fq` rows. Retained rows record the
+  effective `server_tx_fq_limit`.
 - `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT=1000` sets `fq flow_limit` when
   `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` is active. Retained rows record the
   effective `server_tx_fq_flow_limit`. Leave it unset for baseline rows unless
@@ -366,8 +370,15 @@ qdisc drops closely. With the summary parser updated to include child qdisc
 drops, raising `fq flow_limit` from the default 100 to 1000 still left about
 699k/216k qdisc drops in two 4.75M rows, with reply rates about 97.05% and
 99.05%. Raising `flow_limit` to 10000 was worse at about 98.16% and 97.83%,
-with about 433k/942k qdisc drops. Treat the default `fq` flow limit as the
-baseline until a more targeted pacing/queueing design is measured.
+with about 433k/942k qdisc drops. Increasing the aggregate `fq limit` from
+10000 to 50000 was more useful: 4.75M rows reached about 98.42% and 99.37%,
+and a 4.8M row reached about 98.12% with zero receive errors and about 445k
+qdisc/send-buffer drops. A same-artifact 4.8M comparison with the same tuning
+measured Knot at about 91.34% and OxideDNS at about 97.83%, so OxideDNS widened
+the comparison lead but still missed the packet-loss gate. Raising `fq limit`
+to 200000 was worse at about 97.33% with about 629k drops. Treat `fq limit`
+50000 as the current best qdisc-depth candidate and keep the default `fq`
+flow-limit unless a more targeted pacing/queueing design is measured.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
