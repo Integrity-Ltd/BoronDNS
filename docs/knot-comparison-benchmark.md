@@ -459,6 +459,16 @@ about 144k and 372k and softnet `time_squeeze` rose to 403 and 618. Cleanup
 restored the server interface to TX ring 1024. Keep the default TX ring for the
 current 4.8M profile unless a separate interrupt/queue-affinity change makes a
 larger ring useful.
+Rechecking qdisc alternatives with the large 64 MiB `wmem_max` and 32 MiB
+requested send buffer kept `fq limit=50000` as the least-bad current queueing
+profile. The retained `fq_codel` row at
+`physical-udp-knot-comparison-20260605T194231Z` reached about 97.29% reply rate:
+it reduced qdisc drops to about 203k but shifted loss to about 182k
+receive-buffer errors and 1268 softnet `time_squeeze` events. The matched
+`pfifo_fast` control row at `physical-udp-knot-comparison-20260605T194318Z`
+fell to about 86.36% reply rate with about 3.27M qdisc/`SndbufErrors`. Keep
+`fq limit=50000` for 4.8M comparison rows until a stronger queue-affinity,
+interrupt, or pacing design is measured.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
