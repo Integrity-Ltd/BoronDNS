@@ -174,12 +174,13 @@ from the player host against the idle OxideDNS secondary. It writes one
 artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, UDP batch size, replies per second, reply
 percentage, average DNS reply size, Ethernet reply bit rate, effective server
-`txqueuelen`, server RX/TX packet deltas, Linux UDP `InDatagrams`/
-`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas, root qdisc drop
-and requeue deltas, and aggregate softnet drop and time-squeeze deltas. Each
-artifact directory also includes `host/` context files for server CPU topology,
-server NIC driver/channel/RSS/offload state, server link/qdisc state, server
-interrupts/softirqs, and player host/NIC context.
+`txqueuelen`, effective per-queue server TX qdisc, server RX/TX packet deltas,
+Linux UDP `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/
+`SndbufErrors` deltas, root qdisc drop and requeue deltas, and aggregate
+softnet drop and time-squeeze deltas. Each artifact directory also includes
+`host/` context files for server CPU topology, server NIC driver/channel/RSS/
+offload state, server link/qdisc state, server interrupts/softirqs, and player
+host/NIC context.
 
 The wrapper also accepts host-tuning knobs for repeatable packet-loss
 experiments:
@@ -202,6 +203,11 @@ experiments:
   original value during cleanup. Use it only for retained packet-loss
   experiments where qdisc drops or `SndbufErrors` identify transmit queueing as
   the active gate.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` temporarily replaces each existing
+  per-queue child qdisc on the server interface and restores the original child
+  qdisc kinds during cleanup. The current wrapper accepts `fq`, `fq_codel`, and
+  `pfifo_fast`; use it only for send-side queueing experiments where the
+  retained qdisc before/after files prove the host state was restored.
 - `OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES="16 32 64"` sweeps
   `[limits].udp_batch_size` in the staged config. The default `staged` value
   preserves the staged directory's existing batch size.
@@ -250,12 +256,28 @@ single-socket/sibling CPU placement were worse. The send-loss gate remains: the
 best rows still show Linux UDP `SndbufErrors`, while NIC TX queue drops and
 softnet drops are not the dominant signal.
 
-The first same-artifact Knot reference row at 4.5M offered QPS measured Knot at
-about 4.43M replies/s and 98.46% reply rate, while OxideDNS with 36 unbound
-workers, batch size 8, counters off, spin idle, and 2 MiB receive/send buffers
-measured about 4.45M replies/s and 98.91% reply rate. That sample is favorable
-to OxideDNS on raw replies, but both rows still miss the packet-loss/reply-rate
-gate, so it is not a completed comparison claim.
+A retained 4.5M offered-QPS run with `txqueuelen=5000` measured Knot at about
+4.42M replies/s and 98.35% reply rate, while OxideDNS with 36 unbound workers,
+batch size 8, counters off, spin idle, and 2 MiB receive/send buffers measured
+about 4.47M replies/s and 99.40% reply rate. Manual repeats with the same
+OxideDNS profile reached about 99.7% reply rate, so the transmit queue length
+is the first clearly positive packet-loss gate fix on the 25G comparison host.
+The same profile at 4.6M offered QPS remained below 99%, and 4.75M collapsed,
+so this is not yet evidence for a higher saturation target.
+
+The next server qdisc pass found that increasing the NIC TX ring from 1024 to
+4096 was negative: the default-queue row stayed near 98.7%, and combining the
+larger TX ring with `txqueuelen=5000` fell below the earlier queue-length-only
+result. Replacing each per-queue `pfifo_fast` child qdisc with `fq limit 10000`
+was positive in a controlled pair: `fq` reached about 4.48M replies/s and
+99.65% reply rate at default `txqueuelen=1000`, while the restored
+`pfifo_fast` control row returned to about 4.44M replies/s and 98.65% reply
+rate. A follow-up same-artifact run with `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq`
+measured Knot at about 4.35M replies/s and 96.80% reply rate, while OxideDNS
+measured about 4.49M replies/s and 99.86% reply rate; cleanup restored the
+server interface to `pfifo_fast:48` and `txqueuelen=1000`. Treat `fq` as a
+strong evidence-gated candidate, but repeat the row before making a final
+hardware-profile claim.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

@@ -31,6 +31,7 @@ socket_send_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_
 worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
 server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
+server_tx_qdisc="${OXIDEDNS_PHYSICAL_SERVER_TX_QDISC:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
 original_server_txqueuelen=""
 
@@ -58,6 +59,18 @@ resolve_stage() {
 
 cleanup_remote() {
     ssh "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
+        ssh "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+restore_file="$2"
+if [[ -f "$restore_file" ]]; then
+    while IFS=$'\t' read -r parent kind; do
+        [[ -n "$parent" && -n "$kind" ]] || continue
+        sudo tc qdisc replace dev "$iface" parent "$parent" "$kind" || true
+    done <"$restore_file"
+fi
+REMOTE
+    fi
     if [[ -n "$server_txqueuelen" && -n "$original_server_txqueuelen" ]]; then
         ssh "$server_ssh" bash -s -- "$interface" "$original_server_txqueuelen" <<'REMOTE' >/dev/null 2>&1 || true
 iface="$1"
@@ -79,7 +92,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
+ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tserver_txqueuelen\\tserver_tx_qdisc\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -109,6 +122,40 @@ configure_server_link_tuning() {
     local effective_txqueuelen
 
     ssh "$server_ssh" "mkdir -p '$out_abs/host'"
+    if [[ -n "$server_tx_qdisc" ]]; then
+        case "$server_tx_qdisc" in
+        fq | fq_codel | pfifo_fast) ;;
+        *)
+            printf 'unsupported OXIDEDNS_PHYSICAL_SERVER_TX_QDISC: %s\n' "$server_tx_qdisc" >&2
+            exit 64
+            ;;
+        esac
+        ssh "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+requested_qdisc="$2"
+out_abs="$3"
+restore_file="$out_abs/host/server-tx-qdisc-restore.tsv"
+tc qdisc show dev "$iface" >"$out_abs/host/server-tx-qdisc-before.txt" 2>&1 || true
+tc qdisc show dev "$iface" |
+    awk '$1 == "qdisc" && $4 == "parent" {print $5 "\t" $2}' >"$restore_file"
+if [[ ! -s "$restore_file" ]]; then
+    printf 'no per-queue qdisc children found for %s\n' "$iface" >&2
+    exit 65
+fi
+while IFS=$'\t' read -r parent _kind; do
+    case "$requested_qdisc" in
+    fq)
+        sudo tc qdisc replace dev "$iface" parent "$parent" fq limit 10000
+        ;;
+    fq_codel | pfifo_fast)
+        sudo tc qdisc replace dev "$iface" parent "$parent" "$requested_qdisc"
+        ;;
+    esac
+done <"$restore_file"
+tc qdisc show dev "$iface" >"$out_abs/host/server-tx-qdisc-after.txt" 2>&1 || true
+REMOTE
+    fi
     original_server_txqueuelen="$(server_link_txqueuelen)"
     if [[ -n "$server_txqueuelen" ]]; then
         ssh "$server_ssh" bash -s -- "$interface" "$server_txqueuelen" <<'REMOTE'
@@ -459,6 +506,22 @@ if [[ "$server_prefix_b64" != "__none__" ]]; then
     server_prefix="$(printf '%s' "$server_prefix_b64" | base64 -d)"
 fi
 server_txqueuelen="$(ip -o link show dev "$server_interface" | sed -n 's/.*qlen \([0-9][0-9]*\).*/\1/p')"
+server_tx_qdisc="$(tc qdisc show dev "$server_interface" | awk '
+    $1 == "qdisc" && $4 == "parent" {count[$2] += 1}
+    END {
+        first = 1
+        for (kind in count) {
+            if (!first) {
+                printf ","
+            }
+            printf "%s:%d", kind, count[kind]
+            first = 0
+        }
+        if (first) {
+            printf "unknown"
+        }
+    }
+')"
 
 cp /proc/net/dev "$run_abs/server-proc-net-dev-after.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-after.txt"
@@ -466,11 +529,11 @@ cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$server_txqueuelen" "$server_tx_qdisc" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, cpus, server_prefix, interface, run_abs, log = sys.argv[1:15]
+target, workers, rate, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, server_txqueuelen, server_tx_qdisc, cpus, server_prefix, interface, run_abs, log = sys.argv[1:16]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -557,6 +620,7 @@ print("\t".join([
     socket_receive_buffer or "default",
     socket_send_buffer or "default",
     server_txqueuelen or "unknown",
+    server_tx_qdisc or "unknown",
     cpus or "unbound",
     server_prefix or "none",
     replies.group(1).replace(",", "") if replies else "",
