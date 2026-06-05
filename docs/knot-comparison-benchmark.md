@@ -414,6 +414,12 @@ profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 send-buffer drops but traded them for much larger receive errors, while the
 48-worker row still had about 359k `SndbufErrors` and remained below the
 packet-loss gate.
+Static UDP batch-size tuning around 64 also did not clear the 4.8M boundary.
+With the same 48-worker/`fq limit=50000`/32 MiB send-buffer profile, the
+retained `physical-udp-knot-comparison-20260605T191533Z` sweep measured batch
+48 at about 97.08%, batch 56 at about 98.44%, batch 64 at about 98.86%, and
+batch 80 at about 97.06% reply rate. Keep batch 64 as the best static setting
+until an adaptive pacing or backpressure change is measured.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
