@@ -275,8 +275,12 @@ was positive in a controlled pair: `fq` reached about 4.48M replies/s and
 rate. A follow-up same-artifact run with `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq`
 measured Knot at about 4.35M replies/s and 96.80% reply rate, while OxideDNS
 measured about 4.49M replies/s and 99.86% reply rate; cleanup restored the
-server interface to `pfifo_fast:48` and `txqueuelen=1000`. Treat `fq` as a
-strong evidence-gated candidate, but repeat the row before making a final
+server interface to `pfifo_fast:48` and `txqueuelen=1000`. Two additional
+OxideDNS-only `fq` repeats measured about 99.60% and 99.84% reply rate. Combining
+`fq` with `txqueuelen=5000` still beat Knot in the same artifact, but the
+OxideDNS row fell to about 99.73%, below the best `fq`-only row, so prefer
+`fq` alone for the next repeated comparison pass. Treat `fq` as a strong
+evidence-gated candidate, but repeat the row before making a final
 hardware-profile claim.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
