@@ -184,7 +184,8 @@ enabled, root or child qdisc drop and requeue deltas, child `fq`
 `flows_plimit` deltas when present, and aggregate softnet drop and time-squeeze
 deltas. Each artifact directory also includes `host/` context files for server
 CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
-state, server interrupts/softirqs, and player host/NIC context.
+state, server IRQ affinity, RPS/XPS queue steering, interrupt coalescing,
+server interrupts/softirqs, and player host/NIC context.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
@@ -488,6 +489,28 @@ The follow-up reversed tuning did not recover the 4.8M packet-loss gate.
 role-reversed OxideDNS ceiling on `oxidegun-1`; reaching 4.8M on both host
 directions likely needs receive-loop, queue/IRQ-affinity, or AF_XDP/XDP work
 rather than more retained send-buffer/qdisc tuning.
+The retained reverse-role IRQ/RSS/queue-affinity slice then ruled out several
+host-only fixes for the 4.8M goal. The live baseline on `oxidegun-1` had 63
+combined queues, UDP RSS hashing over source/destination IP and UDP ports,
+completion IRQs for `0000:19:00.0` spread over CPUs
+`0,2,...,70,1,3,...,53`, RPS disabled on all RX queues, and per-queue XPS
+already set. Pinning 72 workers in that IRQ CPU order at
+`physical-udp-knot-comparison-20260605T214542Z` still missed the gate, with
+about 91.03% at 4.35M, 95.45% at 4.40M, 75.38% at 4.50M, and 90.71% at 4.8M.
+Using exactly 63 workers pinned to the 63 completion-IRQ CPUs at
+`20260605T214657Z` was worse: about 98.99% at 4.25M, 86.21% at 4.35M, 92.32%
+at 4.50M, and 81.37% at 4.8M. A temporary 4096-entry RX ring at
+`20260605T214824Z` produced one near-pass 4.50M row at about 98.80%, but it
+regressed 4.25M/4.35M and still reached only about 88.85% at 4.8M. Reducing RX
+interrupt coalescing to `adaptive-rx off rx-usecs 0 rx-frames 1` at
+`20260605T214943Z` was not useful: it removed receive-buffer errors by reducing
+effective received traffic to roughly 15.8M packets per 5-second row, leaving
+reply rates around 77-79%. Enabling RPS across CPUs 0-71 at
+`20260605T215114Z` also failed, adding softnet drops/time-squeeze and falling
+from about 89.28% at 4.25M to about 67.17% at 4.8M. Restore RPS disabled, RX
+ring 1024, and adaptive RX coalescing as the reverse-role baseline; the next
+reverse-role work should be application receive-loop/AF_XDP evidence rather
+than more IRQ/RSS/RPS/XPS placement.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,

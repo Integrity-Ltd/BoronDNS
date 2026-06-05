@@ -383,6 +383,46 @@ ethtool -g "$server_interface" >"$out_abs/host/server-ethtool-ring.txt" 2>&1 || 
 ethtool -l "$server_interface" >"$out_abs/host/server-ethtool-channels.txt" 2>&1 || true
 ethtool -x "$server_interface" >"$out_abs/host/server-ethtool-rss.txt" 2>&1 || true
 ethtool -k "$server_interface" >"$out_abs/host/server-ethtool-features.txt" 2>&1 || true
+ethtool -c "$server_interface" >"$out_abs/host/server-ethtool-coalesce.txt" 2>&1 || true
+ethtool -a "$server_interface" >"$out_abs/host/server-ethtool-pause.txt" 2>&1 || true
+{
+    printf 'path\tvalue\n'
+    for path in \
+        /sys/class/net/"$server_interface"/queues/rx-*/rps_cpus \
+        /sys/class/net/"$server_interface"/queues/rx-*/rps_flow_cnt \
+        /sys/class/net/"$server_interface"/queues/tx-*/xps_cpus; do
+        [[ -e "$path" ]] || continue
+        printf '%s\t%s\n' "$path" "$(cat "$path")"
+    done
+} >"$out_abs/host/server-queue-steering.tsv" 2>&1 || true
+python3 - "$server_interface" "$out_abs/host/server-irq-affinity.tsv" <<'PY' 2>/dev/null || true
+import pathlib
+import sys
+
+interface, output = sys.argv[1:3]
+device_link = pathlib.Path("/sys/class/net") / interface / "device"
+try:
+    bus_id = device_link.resolve().name
+except FileNotFoundError:
+    bus_id = ""
+
+rows = ["irq\tname\tsmp_affinity_list"]
+for raw in pathlib.Path("/proc/interrupts").read_text(encoding="utf-8", errors="ignore").splitlines():
+    fields = raw.split()
+    if not fields or not fields[0].endswith(":"):
+        continue
+    irq = fields[0].rstrip(":")
+    name = fields[-1]
+    if bus_id and bus_id not in name:
+        continue
+    try:
+        affinity = pathlib.Path(f"/proc/irq/{irq}/smp_affinity_list").read_text().strip()
+    except OSError:
+        affinity = ""
+    rows.append(f"{irq}\t{name}\t{affinity}")
+
+pathlib.Path(output).write_text("\n".join(rows) + "\n", encoding="utf-8")
+PY
 REMOTE
 
     player_context="$(
@@ -401,6 +441,8 @@ player_interface="$1"
     ethtool -l "$player_interface" 2>&1 || true
     printf '\nethtool_driver\n'
     ethtool -i "$player_interface" 2>&1 || true
+    printf '\nethtool_coalesce\n'
+    ethtool -c "$player_interface" 2>&1 || true
     printf '\ninterrupts\n'
     grep -E "$player_interface|mlx|enp|eth" /proc/interrupts 2>/dev/null || true
 }
