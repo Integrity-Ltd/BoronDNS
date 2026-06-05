@@ -427,6 +427,13 @@ retained `physical-udp-knot-comparison-20260605T191533Z` sweep measured batch
 48 at about 97.08%, batch 56 at about 98.44%, batch 64 at about 98.86%, and
 batch 80 at about 97.06% reply rate. Keep batch 64 as the best static setting
 until an adaptive pacing or backpressure change is measured.
+Linux `SO_MAX_PACING_RATE` socket pacing is now configurable, but the first
+retained pacing sweep was also negative. At the same 48-worker/4.8M/batch-64/
+`fq limit=50000` profile, `physical-udp-knot-comparison-20260605T192656Z`
+measured per-socket pacing rates 8M/9M/10M/11M/12M bytes/s at about 96.44%,
+97.60%, 97.30%, 97.08%, and 97.25% reply rate respectively. The best paced row
+was below the unpaced short batch-64 row, so keep the pacing knob for future
+host experiments but do not treat fixed socket pacing as the current fix.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
