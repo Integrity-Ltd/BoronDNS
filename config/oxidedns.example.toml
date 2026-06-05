@@ -212,6 +212,17 @@ zsm_loading_warning_threshold_secs = 3600
 #bearer_token = "udns-node-token"
 #timeout_secs = 5
 
+#[control_plane.operations]
+# Optional uDNS operation polling. This keeps OxideDNS secondary-only and
+# static-config based while allowing uDNS to drive durable node commands.
+#enabled = true
+#endpoint_url = "https://udns.example.internal/api/v1"
+#node_id = "00000000-0000-0000-0000-000000000000"
+#bearer_token = "udns-node-token"
+#poll_interval_secs = 5
+#lease_seconds = 300
+#timeout_secs = 5
+
 [[zones]]
 # Zone apex in absolute DNS name form.
 name = "example.test."

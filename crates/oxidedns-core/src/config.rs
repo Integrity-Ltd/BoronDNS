@@ -136,6 +136,9 @@ impl ServerConfig {
         if redacted.control_plane.telemetry.bearer_token.is_some() {
             redacted.control_plane.telemetry.bearer_token = Some("<redacted>".to_owned());
         }
+        if redacted.control_plane.operations.bearer_token.is_some() {
+            redacted.control_plane.operations.bearer_token = Some("<redacted>".to_owned());
+        }
         if redacted.cookie.server_secret.is_some() {
             redacted.cookie.server_secret = Some("<redacted>".to_owned());
         }
@@ -1091,11 +1094,14 @@ impl ObservabilityConfig {
 pub struct ControlPlaneConfig {
     #[serde(default)]
     pub telemetry: ControlPlaneTelemetryConfig,
+    #[serde(default)]
+    pub operations: ControlPlaneOperationsConfig,
 }
 
 impl ControlPlaneConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        self.telemetry.validate()
+        self.telemetry.validate()?;
+        self.operations.validate()
     }
 }
 
@@ -1184,6 +1190,124 @@ impl ControlPlaneTelemetryConfig {
 
 fn default_control_plane_timeout_secs() -> u64 {
     5
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneOperationsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    #[serde(default = "default_control_plane_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_control_plane_operation_lease_secs")]
+    pub lease_seconds: u64,
+    #[serde(default = "default_control_plane_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ControlPlaneOperationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint_url: None,
+            node_id: None,
+            bearer_token: None,
+            poll_interval_secs: default_control_plane_poll_interval_secs(),
+            lease_seconds: default_control_plane_operation_lease_secs(),
+            timeout_secs: default_control_plane_timeout_secs(),
+        }
+    }
+}
+
+impl ControlPlaneOperationsConfig {
+    pub fn enabled(&self) -> bool {
+        self.enabled
+            && self.endpoint_url.is_some()
+            && self.node_id.is_some()
+            && self.bearer_token.is_some()
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let configured = [
+            self.endpoint_url.is_some(),
+            self.node_id.is_some(),
+            self.bearer_token.is_some(),
+        ];
+        if self.enabled && configured.iter().any(|configured| !*configured) {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations endpoint_url, node_id, and bearer_token must be set when operations polling is enabled".to_owned(),
+            ));
+        }
+        if configured.iter().any(|configured| *configured)
+            && configured.iter().any(|configured| !*configured)
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations endpoint_url, node_id, and bearer_token must be set together".to_owned(),
+            ));
+        }
+        if let Some(endpoint_url) = self.endpoint_url.as_deref() {
+            let endpoint_url = endpoint_url.trim();
+            if !(endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://")) {
+                return Err(ConfigError::Invalid(
+                    "control_plane.operations.endpoint_url must start with http:// or https://"
+                        .to_owned(),
+                ));
+            }
+            if endpoint_url.ends_with('/') {
+                return Err(ConfigError::Invalid(
+                    "control_plane.operations.endpoint_url must not end with '/'".to_owned(),
+                ));
+            }
+        }
+        if self
+            .node_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations.node_id must not be empty".to_owned(),
+            ));
+        }
+        if self
+            .bearer_token
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations.bearer_token must not be empty".to_owned(),
+            ));
+        }
+        if self.poll_interval_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations.poll_interval_secs must be greater than zero".to_owned(),
+            ));
+        }
+        if self.lease_seconds == 0 {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations.lease_seconds must be greater than zero".to_owned(),
+            ));
+        }
+        if self.timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "control_plane.operations.timeout_secs must be greater than zero".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_control_plane_poll_interval_secs() -> u64 {
+    5
+}
+
+fn default_control_plane_operation_lease_secs() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -2825,6 +2949,14 @@ mod tests {
                 node_id = "11111111-1111-1111-1111-111111111111"
                 bearer_token = "secret-node-token"
 
+                [control_plane.operations]
+                enabled = true
+                endpoint_url = "https://udns.example.internal/api/v1"
+                node_id = "11111111-1111-1111-1111-111111111111"
+                bearer_token = "secret-operation-token"
+                poll_interval_secs = 2
+                lease_seconds = 30
+
                 [[zones]]
                 name = "example.test."
                 primaries = ["192.0.2.53:53"]
@@ -2833,9 +2965,11 @@ mod tests {
         .expect("valid telemetry config");
 
         assert!(config.control_plane.telemetry.enabled());
+        assert!(config.control_plane.operations.enabled());
         let redacted = config.to_redacted_toml().expect("redacted config");
         assert!(redacted.contains("bearer_token = \"<redacted>\""));
         assert!(!redacted.contains("secret-node-token"));
+        assert!(!redacted.contains("secret-operation-token"));
     }
 
     #[test]
@@ -2856,6 +2990,30 @@ mod tests {
         .expect_err("partial telemetry config should fail");
 
         assert!(error.to_string().contains("must be set together"));
+    }
+
+    #[test]
+    fn rejects_enabled_control_plane_operations_without_credentials() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [control_plane.operations]
+                enabled = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("enabled operations config without credentials should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must be set when operations polling is enabled")
+        );
     }
 
     #[test]

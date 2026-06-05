@@ -417,6 +417,24 @@ impl Runtime {
             notify_refresh_tx.clone(),
             ZSM_SCHEDULER_TICK,
         ));
+        let control_plane_operations = ControlPlaneOperationClient::from_config(&self.config);
+        if control_plane_operations.enabled() {
+            let catalog_origins = self
+                .config
+                .catalog_zones
+                .iter()
+                .map(|catalog| {
+                    DomainName::from_absolute_str(&catalog.name)
+                        .expect("configuration validation rejects invalid catalog zone names")
+                })
+                .collect::<Vec<_>>();
+            listeners.spawn(serve_control_plane_operations(
+                control_plane_operations,
+                self.zones.clone(),
+                notify_refresh_tx.clone(),
+                catalog_origins,
+            ));
+        }
         for (listener, health_shutdown_rx) in bound_health_listeners {
             health_listeners.spawn(serve_health(
                 listener,
@@ -666,6 +684,7 @@ struct RefreshRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshReason {
     Catalog,
+    ControlPlane,
     Notify,
     Scheduled,
 }
@@ -674,6 +693,7 @@ impl RefreshReason {
     fn as_str(self) -> &'static str {
         match self {
             Self::Catalog => "catalog",
+            Self::ControlPlane => "control_plane",
             Self::Notify => "notify",
             Self::Scheduled => "scheduled",
         }
@@ -2408,6 +2428,317 @@ impl ControlPlaneTelemetryReporter {
             ),
         }
     }
+}
+
+#[derive(Clone)]
+struct ControlPlaneOperationClient {
+    endpoint_url: Option<Arc<str>>,
+    node_id: Option<Arc<str>>,
+    bearer_token: Option<Arc<str>>,
+    poll_interval: Duration,
+    lease_seconds: u64,
+    timeout: Duration,
+    client: reqwest::Client,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControlPlaneOperation {
+    id: i64,
+    zone_name: String,
+    operation: ControlPlaneOperationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlPlaneOperationKind {
+    Retry,
+    Pause,
+    Resume,
+    RepublishFeed,
+    RotateTsig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlPlaneOperationCompletionStatus {
+    Completed,
+    Failed,
+}
+
+impl ControlPlaneOperationCompletionStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl ControlPlaneOperationClient {
+    fn from_config(config: &ServerConfig) -> Self {
+        let operations = &config.control_plane.operations;
+        Self {
+            endpoint_url: operations
+                .endpoint_url
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().trim_end_matches('/').to_owned())),
+            node_id: operations
+                .node_id
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().to_owned())),
+            bearer_token: operations
+                .bearer_token
+                .as_ref()
+                .map(|value| Arc::<str>::from(value.trim().to_owned())),
+            poll_interval: Duration::from_secs(operations.poll_interval_secs),
+            lease_seconds: operations.lease_seconds,
+            timeout: Duration::from_secs(operations.timeout_secs),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.endpoint_url.is_some() && self.node_id.is_some() && self.bearer_token.is_some()
+    }
+
+    async fn poll(&self) -> Result<Vec<ControlPlaneOperation>, String> {
+        let (Some(endpoint_url), Some(node_id), Some(bearer_token)) = (
+            self.endpoint_url.as_deref(),
+            self.node_id.as_deref(),
+            self.bearer_token.as_deref(),
+        ) else {
+            return Ok(Vec::new());
+        };
+        let url = format!(
+            "{endpoint_url}/secondary-nodes/{node_id}/operations?limit=20&lease_seconds={}",
+            self.lease_seconds
+        );
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(bearer_token)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "uDNS operation poll returned {}",
+                response.status()
+            ));
+        }
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| error.to_string())?;
+        let operations = body
+            .as_array()
+            .ok_or_else(|| "uDNS operation poll returned non-array JSON".to_owned())?
+            .iter()
+            .map(parse_control_plane_operation)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(operations)
+    }
+
+    async fn complete(
+        &self,
+        operation_id: i64,
+        status: ControlPlaneOperationCompletionStatus,
+        failure_reason: Option<&str>,
+    ) {
+        let (Some(endpoint_url), Some(node_id), Some(bearer_token)) = (
+            self.endpoint_url.as_deref(),
+            self.node_id.as_deref(),
+            self.bearer_token.as_deref(),
+        ) else {
+            return;
+        };
+        let mut body = serde_json::json!({ "status": status.as_str() });
+        if let Some(failure_reason) = failure_reason {
+            body["failure_reason"] = serde_json::Value::String(failure_reason.to_owned());
+        }
+        let url =
+            format!("{endpoint_url}/secondary-nodes/{node_id}/operations/{operation_id}/complete");
+        match self
+            .client
+            .post(url)
+            .bearer_auth(bearer_token)
+            .timeout(self.timeout)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) => warn!(
+                category = "control_plane",
+                operation_id,
+                status = %response.status(),
+                "uDNS operation completion was rejected"
+            ),
+            Err(error) => warn!(
+                category = "control_plane",
+                operation_id,
+                %error,
+                "failed to complete uDNS operation"
+            ),
+        }
+    }
+}
+
+fn parse_control_plane_operation(
+    value: &serde_json::Value,
+) -> Result<ControlPlaneOperation, String> {
+    let id = value
+        .get("id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| "operation id missing or invalid".to_owned())?;
+    let zone_name = value
+        .get("zone_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "operation zone_name missing or invalid".to_owned())?
+        .to_owned();
+    let operation = value
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "operation kind missing or invalid".to_owned())
+        .and_then(parse_control_plane_operation_kind)?;
+    Ok(ControlPlaneOperation {
+        id,
+        zone_name,
+        operation,
+    })
+}
+
+fn parse_control_plane_operation_kind(value: &str) -> Result<ControlPlaneOperationKind, String> {
+    match value {
+        "retry" => Ok(ControlPlaneOperationKind::Retry),
+        "pause" => Ok(ControlPlaneOperationKind::Pause),
+        "resume" => Ok(ControlPlaneOperationKind::Resume),
+        "republish_feed" => Ok(ControlPlaneOperationKind::RepublishFeed),
+        "rotate_tsig" => Ok(ControlPlaneOperationKind::RotateTsig),
+        _ => Err(format!("unsupported operation kind {value}")),
+    }
+}
+
+async fn serve_control_plane_operations(
+    client: ControlPlaneOperationClient,
+    zones: ZoneStore,
+    refresh_tx: mpsc::Sender<RefreshRequest>,
+    catalog_origins: Vec<DomainName>,
+) -> Result<(), RuntimeError> {
+    let mut interval = tokio::time::interval(client.poll_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let operations = match client.poll().await {
+            Ok(operations) => operations,
+            Err(error) => {
+                warn!(
+                    category = "control_plane",
+                    %error,
+                    "failed to poll uDNS operations"
+                );
+                continue;
+            }
+        };
+        for operation in operations {
+            match execute_control_plane_operation(&operation, &zones, &refresh_tx, &catalog_origins)
+            {
+                Ok(()) => {
+                    client
+                        .complete(
+                            operation.id,
+                            ControlPlaneOperationCompletionStatus::Completed,
+                            None,
+                        )
+                        .await;
+                }
+                Err(error) => {
+                    client
+                        .complete(
+                            operation.id,
+                            ControlPlaneOperationCompletionStatus::Failed,
+                            Some(&error),
+                        )
+                        .await;
+                }
+            }
+        }
+    }
+}
+
+fn execute_control_plane_operation(
+    operation: &ControlPlaneOperation,
+    zones: &ZoneStore,
+    refresh_tx: &mpsc::Sender<RefreshRequest>,
+    catalog_origins: &[DomainName],
+) -> Result<(), String> {
+    let origin = DomainName::from_absolute_str(&operation.zone_name).map_err(|_| {
+        format!(
+            "operation zone_name {} is not absolute",
+            operation.zone_name
+        )
+    })?;
+    match operation.operation {
+        ControlPlaneOperationKind::Retry => {
+            require_known_control_zone(zones, &origin)?;
+            enqueue_control_plane_refresh(refresh_tx, origin, RefreshReason::ControlPlane)
+        }
+        ControlPlaneOperationKind::Pause => {
+            require_known_control_zone(zones, &origin)?;
+            zones.hide_zone(&origin);
+            info!(
+                zone = %origin,
+                operation_id = operation.id,
+                "paused uDNS-controlled zone serving"
+            );
+            Ok(())
+        }
+        ControlPlaneOperationKind::Resume => {
+            require_known_control_zone(zones, &origin)?;
+            zones.show_zone(&origin);
+            enqueue_control_plane_refresh(refresh_tx, origin, RefreshReason::ControlPlane)
+        }
+        ControlPlaneOperationKind::RepublishFeed => {
+            if catalog_origins.is_empty() {
+                return Ok(());
+            }
+            for catalog_origin in catalog_origins {
+                enqueue_control_plane_refresh(
+                    refresh_tx,
+                    catalog_origin.clone(),
+                    RefreshReason::ControlPlane,
+                )?;
+            }
+            Ok(())
+        }
+        ControlPlaneOperationKind::RotateTsig => {
+            require_known_control_zone(zones, &origin)?;
+            enqueue_control_plane_refresh(refresh_tx, origin, RefreshReason::ControlPlane)
+        }
+    }
+}
+
+fn require_known_control_zone(zones: &ZoneStore, origin: &DomainName) -> Result<(), String> {
+    if zones.contains_exact_zone_for_control(origin) {
+        Ok(())
+    } else {
+        Err(format!(
+            "zone {origin} is not configured on this OxideDNS node"
+        ))
+    }
+}
+
+fn enqueue_control_plane_refresh(
+    refresh_tx: &mpsc::Sender<RefreshRequest>,
+    zone: DomainName,
+    reason: RefreshReason,
+) -> Result<(), String> {
+    refresh_tx
+        .try_send(RefreshRequest {
+            zone,
+            requested_serial: None,
+            reason,
+        })
+        .map_err(|error| format!("refresh queue rejected control-plane operation: {error}"))
 }
 
 async fn serve_refresh_requests(

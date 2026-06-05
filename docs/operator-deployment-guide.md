@@ -53,6 +53,9 @@ Operational state boundaries:
   definitions. Changing those settings requires a process restart; there is no
   SIGHUP reload path. RFC 9432 catalog members are dynamic after a configured
   catalog zone has transferred successfully.
+- Optional uDNS control-plane integration can report transfer telemetry and poll
+  durable node operations. It does not add an inbound administrative API to
+  OxideDNS.
 - OxideDNS does not persist zone data, metrics, transfer history, or runtime state
   to disk.
 
@@ -308,10 +311,35 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   catalog-derived member zones accepted from that catalog.
 - `[[tsig_keys]]`: static TSIG keys referenced by zones. Each key uses exactly
   one of inline `secret` or filesystem `secret_file`.
+- `[control_plane.telemetry]`: optional outbound callback to uDNS for transfer
+  success, skipped/current, and failure reports.
+- `[control_plane.operations]`: optional outbound polling of uDNS durable node
+  operations using the node-scoped API token.
 
 Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
 NSID diagnostics for anycast or load-balanced deployments. The default is empty,
 which suppresses NSID responses even when clients request the option.
+
+### uDNS Control Plane
+
+When `[control_plane.operations] enabled = true`, OxideDNS polls
+`/api/v1/secondary-nodes/{node_id}/operations` with a bounded lease and
+completes each accepted operation through the matching uDNS completion endpoint.
+The mapping is intentionally small:
+
+- `retry`: enqueue an immediate refresh for the named configured zone.
+- `pause`: hide the zone from public query serving while leaving it available to
+  control-plane transfer/catalog logic.
+- `resume`: show the zone again and enqueue a refresh.
+- `republish_feed`: refresh configured RFC 9432 catalog zones so catalog-member
+  changes are reacquired from the primary.
+- `rotate_tsig`: enqueue a refresh for the named zone, exercising the node's
+  currently configured TSIG material.
+
+Listener addresses, static primary definitions, local TSIG secrets, and TLS
+trust/client material remain static. Changes to those files still require a
+process restart; uDNS operation polling is for durable control commands, not a
+general runtime reconfiguration interface.
 
 See [Catalog Zone support based on RFC 9432](catalog-zone-rfc9432.md)
 for the catalog-specific behavior, security boundary, and PowerDNS primary

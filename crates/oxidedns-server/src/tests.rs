@@ -42,25 +42,26 @@ use tracing::{
 
 use super::observability::{ObservabilityAuth, TransferMaterial};
 use super::{
-    BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig,
+    BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig, ControlPlaneOperation,
+    ControlPlaneOperationClient, ControlPlaneOperationCompletionStatus, ControlPlaneOperationKind,
     ControlPlaneTelemetryReporter, CookiePrefixMetricSettings, DEFAULT_COOKIE_PREFIX_METRIC_LIMIT,
     DEFAULT_LATENCY_HISTOGRAM_BUCKETS, DnsCookieRuntimeSettings, DnsCookieSecretStore,
     HealthEndpointState, IxfrCooldownRegistry, LoadingWarning, MetricsRateLimiter, NotifyAuthority,
     NotifyLogLimiter, NotifyLogSummary, NotifyRefreshAction, NotifyRefreshTracker,
     NotifyTsigResult, PacketIo, PreparedDnsMessage, QueryLatencyCategory, QueryLatencyHistogram,
     QueryMetricObservation, QueryObservationOptions, QueryPipelineStage, RefreshAttemptContext,
-    RefreshRequest, RefreshWorkerSettings, ResponseCacheCandidateCategory,
+    RefreshReason, RefreshRequest, RefreshWorkerSettings, ResponseCacheCandidateCategory,
     ResponseCacheIneligibleReason, RrlCategory, RrlDecision, RrlLimiter, RrlSummary, Runtime,
     RuntimeError, RuntimeMetrics, RuntimeStatus, StdUdpBatchIo, TcpServerSettings, TransferError,
     TransferPlan, TransferSession, TransferTsig, UdpRuntime, UdpServerSettings,
     ZoneRefreshRegistry, bind_udp_listeners, dns_cookie_secret_fingerprint,
     dns_cookie_secret_store_from_config, drain_task_set, drain_tcp_connections,
-    handle_tcp_connection, handle_tcp_connection_with_query_hook, jitter_interval, load_pem_certs,
-    load_pem_private_key_from_file as load_pem_private_key, log_loading_warning,
-    log_notify_log_summary, log_rrl_summary, metrics_body, observe_query_metrics,
-    poll_soa_from_primary, poll_soa_from_primary_with_tsig, prepare_notify_packet,
-    prepare_notify_packet_with_metrics, prepare_query_tsig_packet, query_id_from_random_bytes,
-    record_query_lookup_metrics, record_query_response_metric,
+    execute_control_plane_operation, handle_tcp_connection, handle_tcp_connection_with_query_hook,
+    jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
+    log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
+    observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
+    prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
+    query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
     refresh_zone_metadata_from_primaries, required_file_descriptor_limit, response_category,
     response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
     rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
@@ -3244,6 +3245,94 @@ async fn control_plane_telemetry_posts_failure_payload_and_logs_rejection() {
         "category=\"transfer\"",
         "status=503 Service Unavailable",
     ]));
+}
+
+#[tokio::test]
+async fn control_plane_operations_poll_and_complete_with_node_auth() {
+    let (endpoint, received) = spawn_operation_endpoint().await;
+    let client = control_plane_operation_client_for_endpoint(endpoint);
+
+    let operations = client.poll().await.expect("operation poll");
+    assert_eq!(
+        operations,
+        vec![ControlPlaneOperation {
+            id: 42,
+            zone_name: "alpha.test.".to_owned(),
+            operation: ControlPlaneOperationKind::Retry,
+        }]
+    );
+    client
+        .complete(42, ControlPlaneOperationCompletionStatus::Completed, None)
+        .await;
+
+    let requests = received.await.expect("operation requests");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0].starts_with(
+            "GET /secondary-nodes/node-a/operations?limit=20&lease_seconds=5 HTTP/1.1"
+        ),
+        "{}",
+        requests[0]
+    );
+    assert!(requests[0].contains("authorization: Bearer token-a"));
+    assert!(
+        requests[1].starts_with("POST /secondary-nodes/node-a/operations/42/complete HTTP/1.1")
+    );
+    assert_eq!(telemetry_json_body(&requests[1])["status"], "completed");
+}
+
+#[tokio::test]
+async fn control_plane_operations_pause_resume_and_queue_refresh() {
+    let zones = ZoneStore::new();
+    let origin = DomainName::from_absolute_str("alpha.test.").unwrap();
+    zones.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
+    let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+    let pause = ControlPlaneOperation {
+        id: 1,
+        zone_name: "alpha.test.".to_owned(),
+        operation: ControlPlaneOperationKind::Pause,
+    };
+    execute_control_plane_operation(&pause, &zones, &refresh_tx, &[])
+        .expect("pause operation should apply");
+    assert!(zones.is_hidden(&origin));
+
+    let resume = ControlPlaneOperation {
+        id: 2,
+        zone_name: "alpha.test.".to_owned(),
+        operation: ControlPlaneOperationKind::Resume,
+    };
+    execute_control_plane_operation(&resume, &zones, &refresh_tx, &[])
+        .expect("resume operation should apply");
+    assert!(!zones.is_hidden(&origin));
+    let refresh = refresh_rx.recv().await.expect("resume refresh request");
+    assert_eq!(refresh.zone, origin);
+    assert_eq!(refresh.requested_serial, None);
+    assert_eq!(refresh.reason, RefreshReason::ControlPlane);
+}
+
+#[tokio::test]
+async fn control_plane_republish_feed_refreshes_catalog_zones() {
+    let zones = ZoneStore::new();
+    let catalog = DomainName::from_absolute_str("catalog.test.").unwrap();
+    zones.insert_loading_hidden(catalog.clone());
+    let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+    let operation = ControlPlaneOperation {
+        id: 3,
+        zone_name: "alpha.test.".to_owned(),
+        operation: ControlPlaneOperationKind::RepublishFeed,
+    };
+
+    execute_control_plane_operation(
+        &operation,
+        &zones,
+        &refresh_tx,
+        std::slice::from_ref(&catalog),
+    )
+    .expect("republish-feed operation should refresh catalog");
+
+    let refresh = refresh_rx.recv().await.expect("catalog refresh request");
+    assert_eq!(refresh.zone, catalog);
+    assert_eq!(refresh.reason, RefreshReason::ControlPlane);
 }
 
 #[test]
@@ -8728,6 +8817,35 @@ async fn spawn_telemetry_endpoint(
     (addr, request_rx)
 }
 
+async fn spawn_operation_endpoint() -> (std::net::SocketAddr, oneshot::Receiver<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for index in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            requests.push(request);
+            if index == 0 {
+                let body = r#"[{"id":42,"zone_name":"alpha.test.","operation":"retry"}]"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            } else {
+                stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        }
+        let _ = request_tx.send(requests);
+    });
+    (addr, request_rx)
+}
+
 async fn read_http_request(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut header_end = None;
@@ -8783,6 +8901,33 @@ fn control_plane_reporter_for_endpoint(
     ))
     .expect("valid telemetry config");
     ControlPlaneTelemetryReporter::from_config(&config)
+}
+
+fn control_plane_operation_client_for_endpoint(
+    endpoint: std::net::SocketAddr,
+) -> ControlPlaneOperationClient {
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [control_plane.operations]
+                enabled = true
+                endpoint_url = "http://{endpoint}"
+                node_id = "node-a"
+                bearer_token = "token-a"
+                poll_interval_secs = 1
+                lease_seconds = 5
+                timeout_secs = 5
+
+                [[zones]]
+                name = "alpha.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+    ))
+    .expect("valid operations config");
+    ControlPlaneOperationClient::from_config(&config)
 }
 
 fn telemetry_zone_metadata(serial: Option<u32>, soa_timers: Option<SoaTimers>) -> ZoneMetadata {
