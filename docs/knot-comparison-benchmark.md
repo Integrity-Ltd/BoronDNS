@@ -263,6 +263,13 @@ experiments:
   `OXIDEDNS_PHYSICAL_SERVER_TX_QDISC=fq` is active. Retained rows record the
   effective `server_tx_fq_flow_limit`. Leave it unset for baseline rows unless
   child `fq` drops or `flows_plimit` counters are the active hypothesis.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_QUANTUM=1514` and
+  `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_INITIAL_QUANTUM=1514` pass `quantum` and
+  `initial_quantum` to each child `fq` qdisc. The retained
+  `server-link-tuning.txt` and `server-tx-qdisc-after.txt` files record the
+  requested and effective qdisc state. Use these only for qdisc burst-shaping
+  experiments after `fq limit` and `flow_limit` rows identify child qdisc drops
+  as the active gate.
 - `OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX=33554432` temporarily raises the server
   `net.core.wmem_max` sysctl and restores the original value during cleanup.
   Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES` value when
@@ -469,6 +476,13 @@ receive-buffer errors and 1268 softnet `time_squeeze` events. The matched
 fell to about 86.36% reply rate with about 3.27M qdisc/`SndbufErrors`. Keep
 `fq limit=50000` for 4.8M comparison rows until a stronger queue-affinity,
 interrupt, or pacing design is measured.
+Reducing child `fq` burst parameters was also negative at that boundary. The
+harness now supports `fq quantum` and `initial_quantum` so those rows are
+repeatable, but setting both to 1514 bytes at
+`physical-udp-knot-comparison-20260605T203018Z` fell to about 96.86% reply rate
+with about 465k qdisc/`SndbufErrors`, about 219k receive-buffer errors, and
+elevated softnet time-squeeze. Leave both quantum knobs unset for the retained
+4.8M profile.
 Changing the kxdpgun sender batch also did not remove the boundary. With the
 summary now retaining kxdpgun batch/mode, batch 1 fell to about 93.95% reply
 rate, batch 5 to about 97.11%, and batch 20 to about 97.88% at the same
