@@ -507,6 +507,14 @@ benchmark profile only; it removes per-query counters from the packet path, so
 query, RCODE, DNS Cookie, RRL, and per-zone hot-path metrics are intentionally
 incomplete while that profile is active.
 
+For standard UDP socket-path benchmarking, `limits.udp_worker_cpu_affinity` can
+pin dedicated `SO_REUSEPORT` workers to selected CPUs. The optional
+`limits.udp_socket_receive_buffer_bytes` and
+`limits.udp_socket_send_buffer_bytes` settings request Linux `SO_RCVBUF` and
+`SO_SNDBUF` values for each UDP socket. Keep both as evidence-gated host tuning:
+oversized buffers can increase latency or memory pressure and may reduce
+throughput on some kernels.
+
 Query serving uses the immutable `ZoneImage` response path. Internal plan,
 DNSSEC-plan, or response-build failures return SERVFAIL and increment fixed
 failure counters instead of falling back to ordinary snapshot lookup. The old

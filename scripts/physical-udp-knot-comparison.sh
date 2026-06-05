@@ -18,6 +18,8 @@ workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
 idle_strategy_list="${OXIDEDNS_PHYSICAL_IDLE_STRATEGIES:-park spin}"
+socket_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_BUFFER_BYTES:-}"
+worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
 
 require_tool() {
@@ -51,7 +53,7 @@ server_root_abs="$(remote_server_root)"
 stage_abs="$(resolve_stage)"
 out_abs="$stage_abs/evidence/physical-udp-knot-comparison-$(date -u +%Y%m%dT%H%M%SZ)"
 
-ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\thot_path_detail\\tidle_strategy\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\n' > '$out_abs/summary.tsv'"
+ssh "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tworkers\\trate\\thot_path_detail\\tidle_strategy\\tsocket_buffer_bytes\\tworker_cpus\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\n' > '$out_abs/summary.tsv'"
 
 run_server_start() {
     local run_abs="$1"
@@ -60,8 +62,12 @@ run_server_start() {
     local idle_strategy="$4"
     local knot_target_ip="$5"
     local knot_target_port="$6"
+    local socket_buffer="$7"
+    local cpus="$8"
+    local socket_buffer_arg="${socket_buffer:-__none__}"
+    local cpus_arg="${cpus:-__none__}"
 
-    ssh "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" <<'REMOTE'
+    ssh "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_buffer_arg" "$cpus_arg" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -71,6 +77,14 @@ hot_path="$5"
 idle_strategy="$6"
 knot_target_ip="$7"
 knot_target_port="$8"
+socket_buffer="$9"
+cpus="${10}"
+if [[ "$socket_buffer" == "__none__" ]]; then
+    socket_buffer=""
+fi
+if [[ "$cpus" == "__none__" ]]; then
+    cpus=""
+fi
 
 mkdir -p "$run_abs"
 pkill -u codex -x oxidedns 2>/dev/null || true
@@ -95,6 +109,43 @@ else:
     )
 open(path, "w", encoding="utf-8").write(text)
 PY
+if [[ -n "$socket_buffer" ]]; then
+    python3 - "$run_abs/oxidedns.toml" "$socket_buffer" <<'PY'
+import re
+import sys
+
+path, socket_buffer = sys.argv[1:3]
+text = open(path, encoding="utf-8").read()
+for key in ("udp_socket_receive_buffer_bytes", "udp_socket_send_buffer_bytes"):
+    if key in text:
+        text = re.sub(rf"{key} = \d+", f"{key} = {socket_buffer}", text)
+    else:
+        text = text.replace(
+            'udp_runtime = "dedicated"',
+            f'udp_runtime = "dedicated"\n{key} = {socket_buffer}',
+        )
+open(path, "w", encoding="utf-8").write(text)
+PY
+fi
+if [[ -n "$cpus" ]]; then
+    python3 - "$run_abs/oxidedns.toml" "$cpus" <<'PY'
+import re
+import sys
+
+path, cpus = sys.argv[1:3]
+cpu_values = [int(cpu.strip()) for cpu in cpus.split(",") if cpu.strip()]
+cpu_text = ", ".join(str(cpu) for cpu in cpu_values)
+text = open(path, encoding="utf-8").read()
+if "udp_worker_cpu_affinity" in text:
+    text = re.sub(r"udp_worker_cpu_affinity = \[[^\]]*\]", f"udp_worker_cpu_affinity = [{cpu_text}]", text)
+else:
+    text = text.replace(
+        'udp_reuseport_workers = ',
+        f'udp_worker_cpu_affinity = [{cpu_text}]\nudp_reuseport_workers = ',
+    )
+open(path, "w", encoding="utf-8").write(text)
+PY
+fi
 
 "$server_root/target/release/oxidedns" --validate-config "$run_abs/oxidedns.toml" >"$run_abs/validate.out" 2>&1
 
@@ -138,8 +189,12 @@ run_server_finish() {
     local rate="$4"
     local hot_path="$5"
     local idle_strategy="$6"
+    local socket_buffer="$7"
+    local cpus="$8"
+    local socket_buffer_arg="${socket_buffer:-__none__}"
+    local cpus_arg="${cpus:-__none__}"
 
-    ssh "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$hot_path" "$idle_strategy" <<'REMOTE'
+    ssh "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$workers" "$rate" "$hot_path" "$idle_strategy" "$socket_buffer_arg" "$cpus_arg" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 run_abs="$2"
@@ -148,14 +203,22 @@ workers="$4"
 rate="$5"
 hot_path="$6"
 idle_strategy="$7"
+socket_buffer="$8"
+cpus="${9}"
+if [[ "$socket_buffer" == "__none__" ]]; then
+    socket_buffer=""
+fi
+if [[ "$cpus" == "__none__" ]]; then
+    cpus=""
+fi
 
 cp /proc/net/dev "$run_abs/server-proc-net-dev-after.txt"
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" || true
-python3 - "$target" "$workers" "$rate" "$hot_path" "$idle_strategy" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$workers" "$rate" "$hot_path" "$idle_strategy" "$socket_buffer" "$cpus" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import re
 import sys
 
-target, workers, rate, hot_path, idle_strategy, log = sys.argv[1:7]
+target, workers, rate, hot_path, idle_strategy, socket_buffer, cpus, log = sys.argv[1:9]
 text = open(log, encoding="utf-8", errors="ignore").read()
 replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
 size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
@@ -167,6 +230,8 @@ print("\t".join([
     rate,
     hot_path,
     idle_strategy,
+    socket_buffer or "default",
+    cpus or "unbound",
     replies.group(1).replace(",", "") if replies else "",
     replies.group(2) if replies else "",
     size.group(1) if size else "",
@@ -189,11 +254,11 @@ for workers in $workers_list; do
                 run_id="oxidedns-w${workers}-q${rate}-metrics-${hot_path}-idle-${idle_strategy}"
                 run_abs="$out_abs/$run_id"
                 printf 'running %s\n' "$run_id"
-                run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port"
+                run_server_start "$run_abs" "$workers" "$hot_path" "$idle_strategy" "$target_ip" "$knot_port" "$socket_buffer_bytes" "$worker_cpus"
                 ssh "$player_ssh" "cd $player_workdir && sudo kxdpgun -t '$duration' -p '$oxidedns_port' -b '$batch' -Q '$rate' -I '$interface' -m '$kxdpgun_mode' -l '$source_ip' -i querydb '$target_ip'" >"$run_id.kxdpgun.tmp" 2>&1
                 ssh "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$run_id.kxdpgun.tmp"
                 rm -f "$run_id.kxdpgun.tmp"
-                run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$hot_path" "$idle_strategy"
+                run_server_finish "$run_abs" "oxidedns" "$workers" "$rate" "$hot_path" "$idle_strategy" "$socket_buffer_bytes" "$worker_cpus"
             done
         done
     done

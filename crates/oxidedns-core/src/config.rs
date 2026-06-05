@@ -1549,6 +1549,10 @@ pub struct Limits {
     pub udp_runtime: UdpRuntime,
     #[serde(default)]
     pub udp_idle_strategy: UdpIdleStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_socket_receive_buffer_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_socket_send_buffer_bytes: Option<usize>,
     #[serde(default)]
     pub udp_backend: UdpBackend,
     #[serde(default = "default_max_cname_chain")]
@@ -1608,6 +1612,8 @@ impl Default for Limits {
             udp_worker_cpu_affinity: None,
             udp_runtime: UdpRuntime::default(),
             udp_idle_strategy: UdpIdleStrategy::default(),
+            udp_socket_receive_buffer_bytes: None,
+            udp_socket_send_buffer_bytes: None,
             udp_backend: UdpBackend::default(),
             max_cname_chain: default_max_cname_chain(),
             tcp_idle_timeout_secs: default_tcp_idle_timeout_secs(),
@@ -1662,6 +1668,16 @@ impl Limits {
             return Err(ConfigError::Invalid(
                 "limits.udp_idle_strategy other than \"park\" requires limits.udp_runtime = \"dedicated\""
                     .to_owned(),
+            ));
+        }
+        if matches!(self.udp_socket_receive_buffer_bytes, Some(0)) {
+            return Err(ConfigError::Invalid(
+                "limits.udp_socket_receive_buffer_bytes must be greater than zero".to_owned(),
+            ));
+        }
+        if matches!(self.udp_socket_send_buffer_bytes, Some(0)) {
+            return Err(ConfigError::Invalid(
+                "limits.udp_socket_send_buffer_bytes must be greater than zero".to_owned(),
             ));
         }
         if let Some(cpus) = &self.udp_worker_cpu_affinity {
@@ -2746,6 +2762,8 @@ mod tests {
         assert!(config.limits.udp_worker_cpu_affinity.is_none());
         assert_eq!(config.limits.udp_runtime, UdpRuntime::Tokio);
         assert_eq!(config.limits.udp_idle_strategy, UdpIdleStrategy::Park);
+        assert_eq!(config.limits.udp_socket_receive_buffer_bytes, None);
+        assert_eq!(config.limits.udp_socket_send_buffer_bytes, None);
         assert_eq!(config.limits.udp_backend, UdpBackend::Std);
         assert_eq!(config.xdp, XdpConfig::default());
         assert_eq!(config.limits.max_cname_chain, 8);
@@ -4775,6 +4793,8 @@ mod tests {
                 udp_worker_cpu_affinity = [0, 1, 2, 3]
                 udp_runtime = "dedicated"
                 udp_idle_strategy = "spin"
+                udp_socket_receive_buffer_bytes = 4194304
+                udp_socket_send_buffer_bytes = 4194304
 
                 [[zones]]
                 name = "example.test."
@@ -4791,6 +4811,11 @@ mod tests {
         );
         assert_eq!(config.limits.udp_runtime, UdpRuntime::Dedicated);
         assert_eq!(config.limits.udp_idle_strategy, UdpIdleStrategy::Spin);
+        assert_eq!(
+            config.limits.udp_socket_receive_buffer_bytes,
+            Some(4_194_304)
+        );
+        assert_eq!(config.limits.udp_socket_send_buffer_bytes, Some(4_194_304));
     }
 
     #[test]

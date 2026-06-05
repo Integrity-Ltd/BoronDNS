@@ -53,10 +53,18 @@ pub(crate) async fn bind_udp_listeners(
     xdp: &XdpConfig,
     worker_count: usize,
     cpu_affinity: Option<&[usize]>,
+    socket_receive_buffer_bytes: Option<usize>,
+    socket_send_buffer_bytes: Option<usize>,
 ) -> Result<Vec<BoundUdpListener>, RuntimeError> {
     match backend {
-        UdpBackend::Std => bind_std_udp_listeners(addr, worker_count, cpu_affinity)
-            .map_err(|source| RuntimeError::BindUdp { addr, source }),
+        UdpBackend::Std => bind_std_udp_listeners(
+            addr,
+            worker_count,
+            cpu_affinity,
+            socket_receive_buffer_bytes,
+            socket_send_buffer_bytes,
+        )
+        .map_err(|source| RuntimeError::BindUdp { addr, source }),
         UdpBackend::AfXdp => {
             let socket = UdpSocket::bind(addr)
                 .await
@@ -70,13 +78,20 @@ fn bind_std_udp_listeners(
     addr: SocketAddr,
     worker_count: usize,
     cpu_affinity: Option<&[usize]>,
+    socket_receive_buffer_bytes: Option<usize>,
+    socket_send_buffer_bytes: Option<usize>,
 ) -> std::io::Result<Vec<BoundUdpListener>> {
     let worker_count = worker_count.max(1);
     let reuseport = worker_count > 1;
     let mut listeners = Vec::with_capacity(worker_count);
     let mut bind_addr = addr;
     for worker_id in 0..worker_count {
-        let socket = std_udp_socket::bind(bind_addr, reuseport)?;
+        let socket = std_udp_socket::bind(
+            bind_addr,
+            reuseport,
+            socket_receive_buffer_bytes,
+            socket_send_buffer_bytes,
+        )?;
         if worker_id == 0 {
             bind_addr = socket.local_addr()?;
         }
@@ -365,14 +380,18 @@ fn send_std_udp_batch(
         return Ok(());
     }
 
+    if !metrics.pipeline_timing_enabled() {
+        let sent = packet_io
+            .send_batch(socket, outbound)
+            .map_err(RuntimeError::Udp)?;
+        metrics.record_udp_send_batch(sent);
+        metrics.record_udp_worker_send_batch(worker_id, sent);
+        return Ok(());
+    }
+
     let send_started = outbound
         .iter()
-        .map(|packet| {
-            packet
-                .query_metrics
-                .as_ref()
-                .and_then(|_| metrics.start_pipeline_timer())
-        })
+        .map(|packet| packet.query_metrics.as_ref().map(|_| Instant::now()))
         .collect::<Vec<_>>();
     let sent = packet_io
         .send_batch(socket, outbound)
@@ -533,10 +552,10 @@ impl PacketIo for StdUdpBatchIo {
 
         let mut sent = 0usize;
         for packet in outbound {
-            let send_started = packet
-                .query_metrics
-                .as_ref()
-                .and_then(|_| metrics.start_pipeline_timer());
+            let send_started = metrics
+                .pipeline_timing_enabled()
+                .then(|| packet.query_metrics.as_ref().map(|_| Instant::now()))
+                .flatten();
             let peer = match packet.target {
                 UdpPacketTarget::Socket(peer) => peer,
                 #[cfg(feature = "af-xdp")]
@@ -761,7 +780,7 @@ fn handle_udp_datagram(
                     Some(UdpOutbound {
                         response,
                         target: UdpPacketTarget::Socket(peer),
-                        query_metrics: Some(query_metrics),
+                        query_metrics: query_metrics.is_query.then_some(query_metrics),
                     })
                 }
                 RrlDecision::Drop => None,
@@ -807,6 +826,9 @@ pub(crate) fn observe_query_metrics(
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
     };
+    if !metrics.hot_path_counters_enabled() {
+        return not_query();
+    }
     let observed_query = |zone_key| QueryMetricObservation {
         is_query: true,
         transport: options.transport,
@@ -824,9 +846,6 @@ pub(crate) fn observe_query_metrics(
         return not_query();
     }
 
-    if !metrics.hot_path_counters_enabled() {
-        return not_query();
-    }
     metrics.record_query_received();
     if !metrics.hot_path_detail_enabled() {
         return observed_query(None);

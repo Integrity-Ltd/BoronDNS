@@ -674,6 +674,14 @@ and kernel/socket overhead from shared counter cost. It keeps worker and batch
 metrics available after the run, but query, RCODE, DNS Cookie, RRL, and per-zone
 hot-path metrics are not representative while the profile is active.
 
+Physical UDP loss experiments should record worker affinity and socket buffer
+settings with the result. On the current 48-CPU 25G host, pinning 16 dedicated
+UDP workers to sibling-free even CPUs improved the 3M offered-QPS counters-off
+profile from about 2.33M replies/s and 77.6% reply rate to about 2.69M replies/s
+and 89.7% reply rate. A first 4 MiB `SO_RCVBUF`/`SO_SNDBUF` run was worse than
+the default on the same host, so socket-buffer sizing remains evidence-gated
+rather than a default recommendation.
+
 ### AF_XDP Evaluation
 
 AF_XDP is an advanced UDP backend, not a default server dependency.

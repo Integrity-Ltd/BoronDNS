@@ -4,8 +4,13 @@ use std::{io, net::SocketAddr};
 
 use tokio::net::UdpSocket;
 
-pub(crate) fn bind(addr: SocketAddr, reuseport: bool) -> io::Result<UdpSocket> {
-    let socket = bind_std(addr, reuseport)?;
+pub(crate) fn bind(
+    addr: SocketAddr,
+    reuseport: bool,
+    receive_buffer_bytes: Option<usize>,
+    send_buffer_bytes: Option<usize>,
+) -> io::Result<UdpSocket> {
+    let socket = bind_std(addr, reuseport, receive_buffer_bytes, send_buffer_bytes)?;
     socket.set_nonblocking(true)?;
     UdpSocket::from_std(socket)
 }
@@ -15,7 +20,12 @@ pub(crate) fn pin_current_thread_to_cpu(cpu: usize) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn bind_std(addr: SocketAddr, reuseport: bool) -> io::Result<std::net::UdpSocket> {
+fn bind_std(
+    addr: SocketAddr,
+    reuseport: bool,
+    receive_buffer_bytes: Option<usize>,
+    send_buffer_bytes: Option<usize>,
+) -> io::Result<std::net::UdpSocket> {
     use std::os::fd::FromRawFd;
 
     let domain = match addr {
@@ -50,6 +60,18 @@ fn bind_std(addr: SocketAddr, reuseport: bool) -> io::Result<std::net::UdpSocket
         close_on_error(fd);
         return Err(error);
     }
+    if let Some(bytes) = receive_buffer_bytes
+        && let Err(error) = set_socket_int(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, bytes)
+    {
+        close_on_error(fd);
+        return Err(error);
+    }
+    if let Some(bytes) = send_buffer_bytes
+        && let Err(error) = set_socket_int(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, bytes)
+    {
+        close_on_error(fd);
+        return Err(error);
+    }
     if let Err(error) = bind_socket_addr(fd, addr) {
         close_on_error(fd);
         return Err(error);
@@ -61,14 +83,26 @@ fn bind_std(addr: SocketAddr, reuseport: bool) -> io::Result<std::net::UdpSocket
 }
 
 #[cfg(not(target_os = "linux"))]
-fn bind_std(addr: SocketAddr, reuseport: bool) -> io::Result<std::net::UdpSocket> {
+fn bind_std(
+    addr: SocketAddr,
+    reuseport: bool,
+    receive_buffer_bytes: Option<usize>,
+    send_buffer_bytes: Option<usize>,
+) -> io::Result<std::net::UdpSocket> {
     if reuseport {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "SO_REUSEPORT UDP workers are only implemented on Linux",
         ));
     }
-    std::net::UdpSocket::bind(addr)
+    let socket = std::net::UdpSocket::bind(addr)?;
+    if receive_buffer_bytes.is_some() || send_buffer_bytes.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "UDP socket buffer sizing is only implemented on Linux",
+        ));
+    }
+    Ok(socket)
 }
 
 #[cfg(target_os = "linux")]
@@ -79,6 +113,37 @@ fn set_socket_bool(
     value: bool,
 ) -> io::Result<()> {
     let value: libc::c_int = i32::from(value);
+    // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
+    // is valid for the duration of the call with the correct size.
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            option,
+            (&value as *const libc::c_int).cast(),
+            std::mem::size_of_val(&value) as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn set_socket_int(
+    fd: libc::c_int,
+    level: libc::c_int,
+    option: libc::c_int,
+    value: usize,
+) -> io::Result<()> {
+    let value: libc::c_int = value.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "UDP socket buffer size exceeds platform integer range",
+        )
+    })?;
     // SAFETY: `fd` is a valid socket descriptor, and the option value pointer
     // is valid for the duration of the call with the correct size.
     let result = unsafe {

@@ -175,6 +175,19 @@ artifact directory under the staged directory's `evidence/` folder and emits a
 `summary.tsv` containing offered rate, replies per second, reply percentage,
 average DNS reply size, and Ethernet reply bit rate.
 
+The wrapper also accepts host-tuning knobs for repeatable packet-loss
+experiments:
+
+- `OXIDEDNS_PHYSICAL_WORKER_CPUS="0,2,4,..."` writes
+  `limits.udp_worker_cpu_affinity` into each run config. On the current 48-CPU
+  25G server, pinning 16 workers to sibling-free even CPUs improved the 3M
+  offered-QPS saturation profile from about 2.33M replies/s and 77.6% reply
+  rate to about 2.69M replies/s and 89.7% reply rate.
+- `OXIDEDNS_PHYSICAL_SOCKET_BUFFER_BYTES=4194304` writes both UDP socket buffer
+  settings into each run config. This is host specific: the first 4 MiB test on
+  the current server was worse than the default, so retain the setting only when
+  the run evidence proves it helps.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
 the transport result; worker/batch counters and post-run logs remain available,

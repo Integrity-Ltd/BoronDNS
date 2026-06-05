@@ -4238,6 +4238,8 @@ async fn std_udp_reuseport_binds_multiple_workers_to_one_effective_port() {
         &XdpConfig::default(),
         2,
         Some(&[0, 1]),
+        None,
+        None,
     )
     .await
     {
