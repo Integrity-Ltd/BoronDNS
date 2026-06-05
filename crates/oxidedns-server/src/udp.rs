@@ -44,7 +44,11 @@ pub(crate) enum BoundUdpListener {
         cpu_affinity: Option<usize>,
     },
     #[cfg(feature = "af-xdp")]
-    AfXdp(af_xdp::AfXdpPacketIo),
+    AfXdp {
+        packet_io: af_xdp::AfXdpPacketIo,
+        worker_id: usize,
+        worker_count: usize,
+    },
 }
 
 pub(crate) async fn bind_udp_listeners(
@@ -71,7 +75,7 @@ pub(crate) async fn bind_udp_listeners(
             let socket = UdpSocket::bind(addr)
                 .await
                 .map_err(|source| RuntimeError::BindUdp { addr, source })?;
-            bind_af_xdp_udp_listener(socket, xdp).map(|listener| vec![listener])
+            bind_af_xdp_udp_listeners(socket, xdp, worker_count)
         }
     }
 }
@@ -110,10 +114,11 @@ fn bind_std_udp_listeners(
 }
 
 #[cfg(not(feature = "af-xdp"))]
-fn bind_af_xdp_udp_listener(
+fn bind_af_xdp_udp_listeners(
     _socket: UdpSocket,
     _xdp: &XdpConfig,
-) -> Result<BoundUdpListener, RuntimeError> {
+    _worker_count: usize,
+) -> Result<Vec<BoundUdpListener>, RuntimeError> {
     Err(RuntimeError::UdpBackendUnavailable {
         backend: "af_xdp",
         reason: "oxidedns-server was built without the af-xdp feature",
@@ -121,12 +126,24 @@ fn bind_af_xdp_udp_listener(
 }
 
 #[cfg(feature = "af-xdp")]
-fn bind_af_xdp_udp_listener(
+fn bind_af_xdp_udp_listeners(
     socket: UdpSocket,
     xdp: &XdpConfig,
-) -> Result<BoundUdpListener, RuntimeError> {
-    af_xdp::AfXdpPacketIo::bind(socket, xdp)
-        .map(BoundUdpListener::AfXdp)
+    worker_count: usize,
+) -> Result<Vec<BoundUdpListener>, RuntimeError> {
+    let worker_count = worker_count.max(1);
+    af_xdp::AfXdpPacketIo::bind_queues(socket, xdp, worker_count)
+        .map(|listeners| {
+            listeners
+                .into_iter()
+                .enumerate()
+                .map(|(worker_id, packet_io)| BoundUdpListener::AfXdp {
+                    packet_io,
+                    worker_id,
+                    worker_count,
+                })
+                .collect()
+        })
         .map_err(RuntimeError::Udp)
 }
 
@@ -157,9 +174,11 @@ pub(crate) async fn serve_bound_udp(
             serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await
         }
         #[cfg(feature = "af-xdp")]
-        BoundUdpListener::AfXdp(packet_io) => {
-            serve_udp_packet_io(packet_io, zones, settings, 0, 1).await
-        }
+        BoundUdpListener::AfXdp {
+            packet_io,
+            worker_id,
+            worker_count,
+        } => serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await,
     }
 }
 

@@ -10,6 +10,7 @@ use std::{
     ops::Range,
     os::fd::RawFd,
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
@@ -215,9 +216,9 @@ pub(crate) fn prepare_xdp_config(
 }
 
 pub(crate) struct AfXdpPacketIo {
-    _udp_socket: UdpSocket,
+    _udp_socket: Arc<UdpSocket>,
     socket: xdp::socket::XdpSocket,
-    _redirect: XdpRedirectGuard,
+    _redirect: Option<Arc<XdpRedirectGuard>>,
     rx_ring: xdp::RxRing,
     tx_ring: xdp::WakableTxRing,
     fill_ring: xdp::WakableFillRing,
@@ -259,8 +260,7 @@ impl XdpRedirectGuard {
         interface: &str,
         mode: XdpMode,
         udp_dest_port: u16,
-        queue_id: u32,
-        socket_fd: RawFd,
+        xsk_entries: &[(u32, RawFd)],
     ) -> io::Result<Self> {
         let mut bpf = Ebpf::load_file(object).map_err(|error| {
             io::Error::new(
@@ -296,8 +296,10 @@ impl XdpRedirectGuard {
                     "OXIDEDNS_XSKS map missing from OxideDNS XDP redirect object",
                 )
             })?;
-            let mut xsks = XskMap::try_from(map).map_err(aya_error)?;
-            xsks.set(queue_id, socket_fd, 0).map_err(aya_error)?;
+            let mut xsk_map = XskMap::try_from(map).map_err(aya_error)?;
+            for (queue_id, socket_fd) in xsk_entries {
+                xsk_map.set(*queue_id, *socket_fd, 0).map_err(aya_error)?;
+            }
         }
         {
             let program: &mut Xdp = bpf
@@ -328,6 +330,17 @@ unsafe impl Send for AfXdpPacketIo {}
 
 impl AfXdpPacketIo {
     pub(crate) fn bind(udp_socket: UdpSocket, config: &XdpConfig) -> io::Result<Self> {
+        Self::bind_queues(udp_socket, config, 1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| io::Error::other("AF_XDP bind produced no packet adapters"))
+    }
+
+    pub(crate) fn bind_queues(
+        udp_socket: UdpSocket,
+        config: &XdpConfig,
+        queue_count: usize,
+    ) -> io::Result<Vec<Self>> {
         let local_addr = udp_socket.local_addr()?;
         let prepared = prepare_xdp_config(config).map_err(xdp_config_error)?;
         if prepared.interface.is_empty() {
@@ -363,7 +376,61 @@ impl AfXdpPacketIo {
                 "xdp.zero_copy = \"require\" but interface does not report zero-copy support",
             ));
         }
+        let queue_count = queue_count.max(1);
+        let queue_count_u32 = u32::try_from(queue_count).map_err(|_| {
+            io::Error::new(
+                ErrorKind::InvalidInput,
+                "AF_XDP worker count is too large for queue indexing",
+            )
+        })?;
+        let last_queue_id = prepared
+            .queue_id
+            .checked_add(queue_count_u32.saturating_sub(1))
+            .ok_or_else(|| {
+                io::Error::new(ErrorKind::InvalidInput, "AF_XDP queue range overflows u32")
+            })?;
+        if last_queue_id >= caps.queue_count {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "AF_XDP queue range {}..={} is outside interface queue count {}",
+                    prepared.queue_id, last_queue_id, caps.queue_count
+                ),
+            ));
+        }
 
+        let udp_socket = Arc::new(udp_socket);
+        let mut adapters = Vec::with_capacity(queue_count);
+        let mut xsk_entries = Vec::with_capacity(queue_count);
+        for offset in 0..queue_count_u32 {
+            let queue_id = prepared.queue_id + offset;
+            let (adapter, socket_fd) =
+                Self::bind_queue(udp_socket.clone(), local_addr, config, nic, queue_id)?;
+            adapters.push(adapter);
+            xsk_entries.push((queue_id, socket_fd));
+        }
+        let redirect = Arc::new(XdpRedirectGuard::attach(
+            redirect_object,
+            &prepared.interface,
+            config.mode,
+            local_addr.port(),
+            &xsk_entries,
+        )?);
+        for adapter in &mut adapters {
+            adapter._redirect = Some(redirect.clone());
+        }
+        Ok(adapters)
+    }
+
+    fn bind_queue(
+        udp_socket: Arc<UdpSocket>,
+        local_addr: SocketAddr,
+        config: &XdpConfig,
+        nic: xdp::nic::NicIndex,
+        queue_id: u32,
+    ) -> io::Result<(Self, RawFd)> {
+        let mut prepared = prepare_xdp_config(config).map_err(xdp_config_error)?;
+        prepared.queue_id = queue_id;
         let mut umem = xdp::Umem::map(prepared.umem)?;
         let mut builder = XdpSocketBuilder::new().map_err(xdp_socket_error)?;
         let (mut rings, mut bind_flags) = builder
@@ -377,14 +444,7 @@ impl AfXdpPacketIo {
         let socket = builder
             .bind(nic, prepared.queue_id, bind_flags)
             .map_err(xdp_socket_error)?;
-        let redirect = XdpRedirectGuard::attach(
-            redirect_object,
-            &prepared.interface,
-            config.mode,
-            local_addr.port(),
-            prepared.queue_id,
-            socket.raw_fd(),
-        )?;
+        let socket_fd = socket.raw_fd();
         let rx_ring = rings
             .rx_ring
             .take()
@@ -410,27 +470,30 @@ impl AfXdpPacketIo {
                 })?;
         }
 
-        Ok(Self {
-            _udp_socket: udp_socket,
-            socket,
-            _redirect: redirect,
-            rx_ring,
-            tx_ring,
-            fill_ring: rings.fill_ring,
-            completion_ring: rings.completion_ring,
-            umem,
-            local_addr,
-            batch_size: prepared.batch_size,
-            fill_ring_size,
-            completion_ring_size: config.completion_ring_size as usize,
-            inbound: (0..prepared.batch_size)
-                .map(|_| UdpInbound::new())
-                .collect(),
-            active_inbound: 0,
-            frames: Vec::with_capacity(prepared.batch_size),
-            recv_slab: HeapSlab::with_capacity(prepared.batch_size),
-            tx_slab: HeapSlab::with_capacity(prepared.batch_size),
-        })
+        Ok((
+            Self {
+                _udp_socket: udp_socket,
+                socket,
+                _redirect: None,
+                rx_ring,
+                tx_ring,
+                fill_ring: rings.fill_ring,
+                completion_ring: rings.completion_ring,
+                umem,
+                local_addr,
+                batch_size: prepared.batch_size,
+                fill_ring_size,
+                completion_ring_size: config.completion_ring_size as usize,
+                inbound: (0..prepared.batch_size)
+                    .map(|_| UdpInbound::new())
+                    .collect(),
+                active_inbound: 0,
+                frames: Vec::with_capacity(prepared.batch_size),
+                recv_slab: HeapSlab::with_capacity(prepared.batch_size),
+                tx_slab: HeapSlab::with_capacity(prepared.batch_size),
+            },
+            socket_fd,
+        ))
     }
 
     fn drain_completions(&mut self) {

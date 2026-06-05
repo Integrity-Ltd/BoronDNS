@@ -1777,12 +1777,6 @@ impl Limits {
                 "limits.udp_reuseport_workers must be at least 1".to_owned(),
             ));
         }
-        if self.udp_backend == UdpBackend::AfXdp && self.udp_reuseport_workers != 1 {
-            return Err(ConfigError::Invalid(
-                "limits.udp_reuseport_workers must be 1 when limits.udp_backend = \"af_xdp\""
-                    .to_owned(),
-            ));
-        }
         if self.udp_backend == UdpBackend::AfXdp && self.udp_runtime != UdpRuntime::Tokio {
             return Err(ConfigError::Invalid(
                 "limits.udp_runtime must be \"tokio\" when limits.udp_backend = \"af_xdp\""
@@ -5058,8 +5052,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_af_xdp_with_reuseport_workers() {
-        let error = ServerConfig::from_toml_str(
+    fn accepts_af_xdp_with_multiple_queue_workers() {
+        let config = ServerConfig::from_toml_str(
             r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
@@ -5077,9 +5071,10 @@ mod tests {
                 primaries = ["192.0.2.53:53"]
             "#,
         )
-        .expect_err("AF_XDP backend owns queue binding instead of SO_REUSEPORT workers");
+        .expect("AF_XDP queue workers are valid configuration");
 
-        assert!(error.to_string().contains("udp_reuseport_workers"));
+        assert_eq!(config.limits.udp_backend, UdpBackend::AfXdp);
+        assert_eq!(config.limits.udp_reuseport_workers, 2);
     }
 
     #[test]

@@ -4423,7 +4423,7 @@ async fn std_udp_reuseport_binds_multiple_workers_to_one_effective_port() {
                 cpu_affinity,
             )),
             #[cfg(feature = "af-xdp")]
-            BoundUdpListener::AfXdp(_) => panic!("standard backend must not bind AF_XDP"),
+            BoundUdpListener::AfXdp { .. } => panic!("standard backend must not bind AF_XDP"),
         }
     }
 

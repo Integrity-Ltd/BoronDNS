@@ -315,22 +315,41 @@ experiments:
   each offered rate. The harness copies the staged `knot.conf`, appends an
   `xdp:` section for the benchmark interface/port, and starts Knot through
   `sudo` because XDP attach normally requires elevated capabilities.
+  `OXIDEDNS_PHYSICAL_KNOT_BIN=/path/to/knotd` selects a source-built Knot
+  binary without replacing the packaged system daemon.
 - `OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS="std af_xdp"` selects which OxideDNS
   packet backends to sweep. `std` preserves the existing standard UDP matrix.
-  `af_xdp` forces the valid AF_XDP config shape: one reuseport worker, Tokio
-  runtime, `udp_idle_strategy = "park"`, the configured XDP interface, one
-  queue, ring/UMEM sizes, and the project-built redirect object.
+  `af_xdp` forces the valid AF_XDP config shape: Tokio runtime,
+  `udp_idle_strategy = "park"`, the configured XDP interface, ring/UMEM sizes,
+  and the project-built redirect object. In AF_XDP mode,
+  `OXIDEDNS_PHYSICAL_WORKERS` maps to contiguous XDP queue workers starting at
+  `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID`; it is not a SO_REUSEPORT worker count.
 - XDP rows are controlled with `OXIDEDNS_PHYSICAL_XDP_MODE=drv`,
   `OXIDEDNS_PHYSICAL_XDP_ZERO_COPY=require`,
   `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=4096`,
   `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
   `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`, and optionally
   `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
-  server checkout. Knot XDP uses `OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=on` and
-  `OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE=2048`.
+  server checkout. AF_XDP rows are started through `sudo` and set
+  `process.run_as_user` to `OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER=codex` by default
+  so the process does not continue serving as root. Use
+  `OXIDEDNS_PHYSICAL_XDP_MTU=1500` when the benchmark NIC is configured with a
+  jumbo MTU that the native XDP driver rejects. The harness restores the
+  original MTU during cleanup. Knot XDP omits the `zero-copy` config item by
+  default (`OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=__omit__`) and uses
+  `OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE=2048`. The generated Knot XDP config
+  drops privileges to `OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER=codex:codex` so
+  it can read and write the staged benchmark artifacts after the privileged XDP
+  attach.
   The summary rows retain `server_udp_backend`, `xdp_mode`, and
   `xdp_zero_copy` so standard, Knot-XDP, and OxideDNS-AF_XDP rows cannot be
   confused.
+- The requester-side XDP mode is controlled with
+  `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=generic|copy|auto`. Use
+  `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` when trying `auto` on a jumbo-MTU NIC;
+  the harness detaches stale requester XDP programs, records the original and
+  effective requester MTU in `host/player-link-tuning.txt`, and restores the
+  original requester MTU during cleanup.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL

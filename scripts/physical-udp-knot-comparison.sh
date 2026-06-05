@@ -16,6 +16,7 @@ knot_port="${OXIDEDNS_PHYSICAL_KNOT_PORT:-5301}"
 duration="${OXIDEDNS_PHYSICAL_DURATION:-5}"
 batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
+kxdpgun_mtu="${OXIDEDNS_PHYSICAL_KXDPGUN_MTU:-}"
 perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
 perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
@@ -25,6 +26,7 @@ socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
 include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
 include_knot_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP:-false}"
 oxidedns_udp_backends="${OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS:-std}"
+knot_bin="${OXIDEDNS_PHYSICAL_KNOT_BIN:-knotd}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
@@ -53,12 +55,17 @@ xdp_queue_id="${OXIDEDNS_PHYSICAL_XDP_QUEUE_ID:-0}"
 xdp_ring_size="${OXIDEDNS_PHYSICAL_XDP_RING_SIZE:-4096}"
 xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-16384}"
 xdp_batch_size="${OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE:-1024}"
-knot_xdp_zero_copy="${OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY:-on}"
+xdp_run_as_user="${OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER:-codex}"
+xdp_mtu="${OXIDEDNS_PHYSICAL_XDP_MTU:-}"
+knot_xdp_run_as_user="${OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER:-codex:codex}"
+knot_xdp_zero_copy="${OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY:-__omit__}"
 knot_xdp_ring_size="${OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE:-2048}"
 original_server_txqueuelen=""
 original_server_tx_ring=""
 original_server_rmem_max=""
 original_server_wmem_max=""
+original_server_mtu=""
+original_player_mtu=""
 
 require_tool() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -107,7 +114,10 @@ remote_player_workdir() {
 
 cleanup_remote() {
     ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "sudo pkill -x oxidedns 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null); do sudo kill \"\$pid\" 2>/dev/null || true; done; sleep 0.2; for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null); do sudo kill -9 \"\$pid\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
         ssh_control "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
 iface="$1"
@@ -139,6 +149,21 @@ REMOTE
     fi
     if [[ -n "$server_wmem_max" && -n "$original_server_wmem_max" ]]; then
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$original_server_wmem_max'" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$xdp_mtu" && -n "$original_server_mtu" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$original_server_mtu" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+mtu="$2"
+sudo ip link set dev "$iface" mtu "$mtu"
+REMOTE
+    fi
+    ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
+    if [[ -n "$kxdpgun_mtu" && -n "$original_player_mtu" ]]; then
+        ssh_control "$player_ssh" bash -s -- "$interface" "$original_player_mtu" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+mtu="$2"
+sudo ip link set dev "$iface" mtu "$mtu"
+REMOTE
     fi
     close_ssh_control
 }
@@ -193,8 +218,56 @@ ethtool -g "$iface" 2>/dev/null | awk '
 REMOTE
 }
 
+server_link_mtu() {
+    ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+cat "/sys/class/net/$iface/mtu"
+REMOTE
+}
+
+player_link_mtu() {
+    ssh_control "$player_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+cat "/sys/class/net/$iface/mtu"
+REMOTE
+}
+
+configure_player_xdp_tuning() {
+    local effective_player_mtu
+
+    ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
+    original_player_mtu="$(player_link_mtu)"
+    if [[ -n "$kxdpgun_mtu" ]]; then
+        ssh_control "$player_ssh" bash -s -- "$interface" "$kxdpgun_mtu" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+mtu="$2"
+sudo ip link set dev "$iface" mtu "$mtu"
+REMOTE
+    fi
+    effective_player_mtu="$(player_link_mtu)"
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" <<'REMOTE'
+set -euo pipefail
+out_abs="$1"
+original_player_mtu="$2"
+requested_player_mtu="$3"
+effective_player_mtu="$4"
+if [[ "$requested_player_mtu" == "__none__" ]]; then
+    requested_player_mtu=""
+fi
+cat >"$out_abs/host/player-link-tuning.txt" <<EOF
+original_mtu=$original_player_mtu
+requested_mtu=$requested_player_mtu
+effective_mtu=$effective_player_mtu
+EOF
+REMOTE
+}
+
 configure_server_link_tuning() {
     local effective_txqueuelen
+    local effective_mtu
     local effective_wmem_max
 
     ssh_control "$server_ssh" "mkdir -p '$out_abs/host'"
@@ -305,7 +378,17 @@ REMOTE
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$server_wmem_max'" >/dev/null
     fi
     effective_wmem_max="$(ssh_control "$server_ssh" "sysctl -n net.core.wmem_max")"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" "$original_server_rmem_max" "${server_rmem_max:-__none__}" "$effective_rmem_max" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
+    original_server_mtu="$(server_link_mtu)"
+    if [[ -n "$xdp_mtu" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$xdp_mtu" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+mtu="$2"
+sudo ip link set dev "$iface" mtu "$mtu"
+REMOTE
+    fi
+    effective_mtu="$(server_link_mtu)"
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" "$original_server_rmem_max" "${server_rmem_max:-__none__}" "$effective_rmem_max" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" "$original_server_mtu" "${xdp_mtu:-__none__}" "$effective_mtu" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
@@ -325,6 +408,9 @@ effective_rmem_max="${15}"
 original_wmem_max="${16}"
 requested_wmem_max="${17}"
 effective_wmem_max="${18}"
+original_mtu="${19}"
+requested_mtu="${20}"
+effective_mtu="${21}"
 if [[ "$requested_txqueuelen" == "__none__" ]]; then
     requested_txqueuelen=""
 fi
@@ -349,6 +435,9 @@ fi
 if [[ "$requested_wmem_max" == "__none__" ]]; then
     requested_wmem_max=""
 fi
+if [[ "$requested_mtu" == "__none__" ]]; then
+    requested_mtu=""
+fi
 cat >"$out_abs/host/server-link-tuning.txt" <<EOF
 original_txqueuelen=$original_txqueuelen
 requested_txqueuelen=$requested_txqueuelen
@@ -367,6 +456,9 @@ effective_rmem_max=$effective_rmem_max
 original_wmem_max=$original_wmem_max
 requested_wmem_max=$requested_wmem_max
 effective_wmem_max=$effective_wmem_max
+original_mtu=$original_mtu
+requested_mtu=$requested_mtu
+effective_mtu=$effective_mtu
 EOF
 REMOTE
 }
@@ -464,6 +556,7 @@ REMOTE
 }
 
 configure_server_link_tuning
+configure_player_xdp_tuning
 capture_static_host_context
 
 run_knot_reference_start() {
@@ -471,7 +564,7 @@ run_knot_reference_start() {
     local server_interface="$2"
     local knot_backend="${3:-std}"
 
-    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" "$knot_backend" "$knot_xdp_zero_copy" "$knot_xdp_ring_size" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" "$knot_backend" "$knot_xdp_zero_copy" "$knot_xdp_ring_size" "$knot_bin" "$knot_xdp_run_as_user" <<'REMOTE'
 set -euo pipefail
 stage_abs="$1"
 run_abs="$2"
@@ -481,6 +574,8 @@ server_interface="$5"
 knot_backend="$6"
 knot_xdp_zero_copy="$7"
 knot_xdp_ring_size="$8"
+knot_bin="$9"
+knot_xdp_run_as_user="${10}"
 
 mkdir -p "$run_abs"
 pkill -u codex -x oxidedns 2>/dev/null || true
@@ -489,21 +584,40 @@ sudo pkill -x knotd 2>/dev/null || true
 sleep 0.2
 
 cd "$stage_abs"
+ulimit -n 65536
+ulimit -l unlimited 2>/dev/null || true
 knot_conf="$stage_abs/knot.conf"
-knot_cmd=(knotd -c "$knot_conf" -v)
+knot_cmd=("$knot_bin" -c "$knot_conf" -v)
 if [[ "$knot_backend" == "xdp" ]]; then
     cp "$stage_abs/knot.conf" "$run_abs/knot-xdp.conf"
+    if [[ -n "$knot_xdp_run_as_user" ]]; then
+        python3 - "$run_abs/knot-xdp.conf" "$knot_xdp_run_as_user" <<'PY'
+import re
+import sys
+
+path, run_as_user = sys.argv[1:3]
+text = open(path, encoding="utf-8").read()
+replacement = f"server:\n    user: {run_as_user}"
+if re.search(r"(?m)^server:\n(?:    .*\n)*?    user:", text):
+    text = re.sub(r"(?m)^(server:\n(?:    .*\n)*?    user:).*$", rf"\1 {run_as_user}", text, count=1)
+else:
+    text = text.replace("server:", replacement, 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+    fi
     cat >>"$run_abs/knot-xdp.conf" <<EOF
 
 xdp:
     listen: $server_interface@$knot_target_port
     udp: on
     tcp: off
-    zero-copy: $knot_xdp_zero_copy
     ring-size: $knot_xdp_ring_size
 EOF
+    if [[ "$knot_xdp_zero_copy" != "__omit__" ]]; then
+        printf '    zero-copy: %s\n' "$knot_xdp_zero_copy" >>"$run_abs/knot-xdp.conf"
+    fi
     knot_conf="$run_abs/knot-xdp.conf"
-    knot_cmd=(sudo knotd -c "$knot_conf" -v)
+    knot_cmd=(sudo "$knot_bin" -c "$knot_conf" -v)
 fi
 "${knot_cmd[@]}" >"$run_abs/knot.log" 2>&1 &
 echo $! >"$run_abs/knot.pid"
@@ -525,14 +639,33 @@ REMOTE
 run_knot_reference_stop() {
     local run_abs="$1"
 
-    ssh_control "$server_ssh" bash -s -- "$run_abs" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$interface" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
+server_interface="$2"
 if [[ -f "$run_abs/knot.pid" ]]; then
-    kill "$(cat "$run_abs/knot.pid")" 2>/dev/null || true
-    sudo kill "$(cat "$run_abs/knot.pid")" 2>/dev/null || true
-    wait "$(cat "$run_abs/knot.pid")" 2>/dev/null || true
+    knot_pid="$(cat "$run_abs/knot.pid")"
+    kill "$knot_pid" 2>/dev/null || true
+    sudo kill "$knot_pid" 2>/dev/null || true
+    for _ in $(seq 1 80); do
+        if ! ps -p "$knot_pid" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.1
+    done
+    if ps -p "$knot_pid" >/dev/null 2>&1; then
+        sudo kill -9 "$knot_pid" 2>/dev/null || true
+    fi
 fi
+for pid in $(pgrep -x knotd 2>/dev/null); do
+    sudo kill "$pid" 2>/dev/null || true
+done
+sleep 0.2
+for pid in $(pgrep -x knotd 2>/dev/null); do
+    sudo kill -9 "$pid" 2>/dev/null || true
+done
+sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
+sudo ip link set dev "$server_interface" xdpgeneric off 2>/dev/null || true
 REMOTE
 }
 
@@ -557,8 +690,9 @@ run_server_start() {
     local socket_max_pacing_rate_arg="${socket_max_pacing_rate:-__none__}"
     local cpus_arg="${cpus:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
+    local xdp_redirect_object_arg="${xdp_redirect_object:-__default__}"
 
-    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -583,7 +717,8 @@ xdp_zero_copy="${20}"
 xdp_queue_id="${21}"
 xdp_ring_size="${22}"
 xdp_umem_frame_count="${23}"
-xdp_batch_size="${24}"
+xdp_run_as_user="${24}"
+xdp_batch_size="$udp_batch_size"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
 fi
@@ -601,7 +736,7 @@ if [[ "$server_bin" == "__default__" ]]; then
 elif [[ "$server_bin" != /* ]]; then
     server_bin="$server_root/$server_bin"
 fi
-if [[ -z "$xdp_redirect_object" ]]; then
+if [[ "$xdp_redirect_object" == "__default__" ]]; then
     xdp_redirect_object="$server_root/crates/oxidedns-server-ebpf/target/bpfel-unknown-none/release/oxidedns-xdp-redirect.bpf.o"
 elif [[ "$xdp_redirect_object" != /* ]]; then
     xdp_redirect_object="$server_root/$xdp_redirect_object"
@@ -615,10 +750,16 @@ if [[ -n "$server_prefix" ]]; then
     read -r -a server_cmd <<< "$server_prefix"
 fi
 server_cmd+=("$server_bin")
+serve_cmd=("${server_cmd[@]}")
+if [[ "$udp_backend" == "af_xdp" ]]; then
+    serve_cmd=(sudo "${server_cmd[@]}")
+fi
 
 mkdir -p "$run_abs"
 pkill -u codex -x oxidedns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
+sudo pkill -x oxidedns 2>/dev/null || true
+sudo pkill -x knotd 2>/dev/null || true
 sleep 0.2
 
 cp "$stage_abs/oxidedns.toml" "$run_abs/oxidedns.toml"
@@ -640,11 +781,11 @@ else:
 open(path, "w", encoding="utf-8").write(text)
 PY
 if [[ "$udp_backend" == "af_xdp" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" <<'PY'
+    python3 - "$run_abs/oxidedns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" "$xdp_run_as_user" "$workers" <<'PY'
 import re
 import sys
 
-path, interface, redirect_object, xdp_mode, zero_copy, queue_id, ring_size, umem_frame_count, xdp_batch_size = sys.argv[1:10]
+path, interface, redirect_object, xdp_mode, zero_copy, queue_id, ring_size, umem_frame_count, xdp_batch_size, run_as_user, workers = sys.argv[1:12]
 text = open(path, encoding="utf-8").read()
 
 def set_key(section, key, value):
@@ -665,9 +806,10 @@ def set_key(section, key, value):
 
 set_key("limits", "udp_backend", '"af_xdp"')
 set_key("limits", "udp_runtime", '"tokio"')
-set_key("limits", "udp_reuseport_workers", "1")
+set_key("limits", "udp_reuseport_workers", workers)
 set_key("limits", "udp_idle_strategy", '"park"')
 set_key("limits", "udp_batch_size", xdp_batch_size)
+set_key("process", "run_as_user", f'"{run_as_user}"')
 set_key("xdp", "interface", f'"{interface}"')
 set_key("xdp", "redirect_object", f'"{redirect_object}"')
 set_key("xdp", "mode", f'"{xdp_mode}"')
@@ -748,7 +890,8 @@ for _ in $(seq 1 80); do
 done
 
 ulimit -n 65536
-"${server_cmd[@]}" serve --config "$run_abs/oxidedns.toml" >"$run_abs/oxidedns.log" 2>&1 &
+ulimit -l unlimited 2>/dev/null || true
+"${serve_cmd[@]}" serve --config "$run_abs/oxidedns.toml" >"$run_abs/oxidedns.log" 2>&1 &
 echo $! >"$run_abs/oxidedns.pid"
 
 ready=""
@@ -1047,9 +1190,28 @@ print("\t".join([
 PY
 
 if [[ -f "$run_abs/oxidedns.pid" ]]; then
-    kill "$(cat "$run_abs/oxidedns.pid")" 2>/dev/null || true
-    wait "$(cat "$run_abs/oxidedns.pid")" 2>/dev/null || true
+    oxidedns_pid="$(cat "$run_abs/oxidedns.pid")"
+    kill "$oxidedns_pid" 2>/dev/null || true
+    sudo kill "$oxidedns_pid" 2>/dev/null || true
+    for _ in $(seq 1 80); do
+        if ! ps -p "$oxidedns_pid" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.1
+    done
+    if ps -p "$oxidedns_pid" >/dev/null 2>&1; then
+        sudo kill -9 "$oxidedns_pid" 2>/dev/null || true
+    fi
 fi
+for pid in $(pgrep -x oxidedns 2>/dev/null); do
+    sudo kill "$pid" 2>/dev/null || true
+done
+sleep 0.2
+for pid in $(pgrep -x oxidedns 2>/dev/null); do
+    sudo kill -9 "$pid" 2>/dev/null || true
+done
+sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
+sudo ip link set dev "$server_interface" xdpgeneric off 2>/dev/null || true
 REMOTE
 }
 
@@ -1238,6 +1400,7 @@ REMOTE
         fi
     fi
     ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$local_log" || true
+    ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$player_ssh" "rm -rf '$remote_run_dir'" >/dev/null 2>&1 || true
     rm -f "$local_log"
     [[ "$status" == "0" ]]
@@ -1288,7 +1451,6 @@ for udp_backend in $oxidedns_udp_backends; do
                                 pacing_run_suffix="-pace-${socket_max_pacing_rate}"
                             fi
                             if [[ "$udp_backend" == "af_xdp" ]]; then
-                                effective_workers="1"
                                 effective_idle_strategy="park"
                                 effective_udp_batch_size="$xdp_batch_size"
                                 effective_worker_cpus=""
