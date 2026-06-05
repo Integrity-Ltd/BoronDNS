@@ -1199,6 +1199,11 @@ pub struct PublishedZone {
     entry: Arc<ZoneStoreEntry>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PublishedZoneRef<'a> {
+    entry: &'a ZoneStoreEntry,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransferZoneSnapshot {
     snapshot: Arc<ZoneSnapshot>,
@@ -1460,6 +1465,21 @@ impl ZoneStore {
             .map(|entry| PublishedZone { entry })
     }
 
+    /// Borrow the most-specific published zone for the duration of `visit`.
+    ///
+    /// This avoids cloning the underlying published-zone handle on hot query
+    /// paths while keeping the loaded directory snapshot alive for the closure.
+    pub fn with_published_zone_with_ascii_lowercase_hint<R>(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+        visit: impl FnOnce(PublishedZoneRef<'_>) -> R,
+    ) -> Option<R> {
+        let zones = self.zones.load();
+        let entry = zones.find_best_match_ref(qname, qname_ascii_lowercase)?;
+        Some(visit(PublishedZoneRef { entry }))
+    }
+
     /// Return cheap published-zone metadata for status and metrics without
     /// cloning the underlying snapshots. Query serving should use
     /// `find_published_zone` and answer from the published `ZoneImage`.
@@ -1540,6 +1560,22 @@ impl ZoneStore {
     }
 }
 
+pub trait PublishedZoneView {
+    fn origin(&self) -> &DomainName;
+
+    fn origin_key(&self) -> &str;
+
+    fn origin_label_count(&self) -> usize;
+
+    fn origin_key_arc(&self) -> Arc<str>;
+
+    fn serial(&self) -> Option<u32>;
+
+    fn state(&self) -> ZoneState;
+
+    fn active_zone_image_ref(&self) -> &ZoneImage;
+}
+
 impl PublishedZone {
     pub fn origin(&self) -> &DomainName {
         &self.entry.origin
@@ -1566,6 +1602,70 @@ impl PublishedZone {
     }
 
     pub fn active_zone_image_ref(&self) -> &ZoneImage {
+        debug_assert_eq!(self.entry.state, ZoneState::Active);
+        self.entry
+            .image
+            .as_deref()
+            .expect("active published zone must include a compiled ZoneImage")
+    }
+}
+
+impl PublishedZoneView for PublishedZone {
+    fn origin(&self) -> &DomainName {
+        PublishedZone::origin(self)
+    }
+
+    fn origin_key(&self) -> &str {
+        PublishedZone::origin_key(self)
+    }
+
+    fn origin_label_count(&self) -> usize {
+        PublishedZone::origin_label_count(self)
+    }
+
+    fn origin_key_arc(&self) -> Arc<str> {
+        PublishedZone::origin_key_arc(self)
+    }
+
+    fn serial(&self) -> Option<u32> {
+        PublishedZone::serial(self)
+    }
+
+    fn state(&self) -> ZoneState {
+        PublishedZone::state(self)
+    }
+
+    fn active_zone_image_ref(&self) -> &ZoneImage {
+        PublishedZone::active_zone_image_ref(self)
+    }
+}
+
+impl PublishedZoneView for PublishedZoneRef<'_> {
+    fn origin(&self) -> &DomainName {
+        &self.entry.origin
+    }
+
+    fn origin_key(&self) -> &str {
+        &self.entry.origin_key
+    }
+
+    fn origin_label_count(&self) -> usize {
+        self.entry.origin_label_count
+    }
+
+    fn origin_key_arc(&self) -> Arc<str> {
+        self.entry.origin_key.clone()
+    }
+
+    fn serial(&self) -> Option<u32> {
+        self.entry.serial
+    }
+
+    fn state(&self) -> ZoneState {
+        self.entry.state
+    }
+
+    fn active_zone_image_ref(&self) -> &ZoneImage {
         debug_assert_eq!(self.entry.state, ZoneState::Active);
         self.entry
             .image
@@ -1627,19 +1727,37 @@ impl ZoneDirectory {
         qname: &DomainName,
         qname_ascii_lowercase: bool,
     ) -> Option<Arc<ZoneStoreEntry>> {
+        self.find_best_match_arc(qname, qname_ascii_lowercase)
+            .cloned()
+    }
+
+    fn find_best_match_ref(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+    ) -> Option<&ZoneStoreEntry> {
+        self.find_best_match_arc(qname, qname_ascii_lowercase)
+            .map(Arc::as_ref)
+    }
+
+    fn find_best_match_arc(
+        &self,
+        qname: &DomainName,
+        qname_ascii_lowercase: bool,
+    ) -> Option<&Arc<ZoneStoreEntry>> {
         let (qname_key, prefix_lengths) =
             canonical_reverse_label_key_with_prefixes(qname, qname_ascii_lowercase);
         for prefix_len in prefix_lengths.into_iter().rev() {
             if let Some(entry) = self.suffix_index.get(&qname_key[..prefix_len])
                 && !entry.hidden
             {
-                return Some(entry.clone());
+                return Some(entry);
             }
         }
         if let Some(entry) = self.suffix_index.get([].as_slice())
             && !entry.hidden
         {
-            return Some(entry.clone());
+            return Some(entry);
         }
         None
     }
@@ -2272,6 +2390,39 @@ mod tests {
             .find_published_zone_with_ascii_lowercase_hint(&mixed_case_qname, false)
             .expect("published child zone for mixed case query");
         assert_eq!(mixed_case_published.origin(), &child);
+    }
+
+    #[test]
+    fn borrowed_published_zone_lookup_matches_owned_suffix_behavior() {
+        let store = ZoneStore::new();
+        let parent = DomainName::from_absolute_str("example.test.").unwrap();
+        let child = DomainName::from_absolute_str("child.example.test.").unwrap();
+        let qname = DomainName::from_absolute_str("www.child.example.test.").unwrap();
+        let mixed_case_qname = DomainName::from_absolute_str("WWW.Child.Example.Test.").unwrap();
+
+        store.insert_snapshot(ZoneSnapshot::active(parent.clone(), Some(1), Vec::new()));
+        store.insert_snapshot(ZoneSnapshot::active(child.clone(), Some(2), Vec::new()));
+
+        let borrowed = store
+            .with_published_zone_with_ascii_lowercase_hint(&qname, true, |zone| {
+                (
+                    zone.origin().clone(),
+                    zone.origin_key().to_owned(),
+                    zone.serial(),
+                )
+            })
+            .expect("borrowed child zone");
+        assert_eq!(
+            borrowed,
+            (child.clone(), "child.example.test.".to_owned(), Some(2))
+        );
+
+        let mixed_case_borrowed = store
+            .with_published_zone_with_ascii_lowercase_hint(&mixed_case_qname, false, |zone| {
+                zone.origin().clone()
+            })
+            .expect("borrowed mixed-case child zone");
+        assert_eq!(mixed_case_borrowed, child);
     }
 
     #[test]

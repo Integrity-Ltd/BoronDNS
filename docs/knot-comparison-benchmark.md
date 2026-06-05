@@ -486,12 +486,17 @@ eliminated receive errors but dropped the 4.75M batch-64 `fq` row to about
 97.46%, while increasing retries to 512 stayed near 98.91% and did not clearly
 beat the original constant. Keep the current retry policy until a stronger
 send/receive pacing change is measured.
-Removing the per-query `Arc<ZoneStoreEntry>` clone/drop from the borrowed
-published-zone lookup also did not improve the primary 4.75M batch-64 `fq`
-gate. The retained perf profile showed the refcount path as visible CPU work,
-but three unprofiled edge rows with the borrowed lookup measured about 97.63%,
-98.84%, and 98.39% reply rate. Treat that ownership cleanup as neutral for the
-current transport-loss boundary rather than a retained performance fix.
+Removing the per-query `Arc<ZoneStoreEntry>` clone/drop from the DNS query path
+also did not improve the primary 4.75M-4.8M batch-64 `fq` gate. The retained
+perf profile showed the refcount path as visible CPU work, but three unprofiled
+edge rows with the borrowed lookup measured about 97.63%, 98.84%, and 98.39%
+reply rate. A later symbolized 4.8M profiling row with `target/profiling/oxidedns`
+reached about 98.54% and attributed about 1.6%-1.7% of samples to the
+published-zone clone/drop subpaths; retaining the borrowed lookup then measured
+about 98.28% at `physical-udp-knot-comparison-20260605T200338Z`. Keep the
+ownership cleanup because it removes profile-visible refcount work, but treat it
+as neutral for the current transport-loss boundary rather than a proven
+reply-rate improvement.
 Server NIC feature and coalescing experiments were also negative at the same
 profile. Disabling generic receive offload fell to about 98.35%. Disabling
 adaptive coalescing and forcing `rx-usecs=0`, `tx-usecs=0`, and one frame

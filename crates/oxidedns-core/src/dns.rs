@@ -6,7 +6,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    zone::{PublishedZone, ResourceRecord, Rrset, ZoneState, ZoneStore},
+    zone::{PublishedZoneView, ResourceRecord, Rrset, ZoneState, ZoneStore},
     zone_image::{
         PackedRdataEncoding, ZoneImage, ZoneImageLookupPlan, ZoneImagePlanResponseShape,
         ZoneImageWireRecord,
@@ -782,10 +782,10 @@ pub enum DatagramAction {
 }
 
 pub type ZoneImageProvider<'a> =
-    &'a dyn for<'published> Fn(&'published PublishedZone) -> &'published ZoneImage;
+    &'a dyn for<'published> Fn(&'published dyn PublishedZoneView) -> &'published ZoneImage;
 
 /// Borrow the active immutable query image from a published zone.
-pub fn default_zone_image_provider(published: &PublishedZone) -> &ZoneImage {
+pub fn default_zone_image_provider(published: &dyn PublishedZoneView) -> &ZoneImage {
     published.active_zone_image_ref()
 }
 
@@ -1194,9 +1194,41 @@ fn answer_query_message(
         ));
     }
 
-    let Some(published_zone) = zone_store.find_published_zone_with_ascii_lowercase_hint(
+    let Some(action) = zone_store.with_published_zone_with_ascii_lowercase_hint(
         &question.qname,
         question.qname_ascii_lowercase(),
+        |published_zone| {
+            if published_zone.state() != ZoneState::Active {
+                return DatagramAction::Respond(build_response(
+                    header,
+                    Rcode::ServFail,
+                    false,
+                    Some(&question),
+                    &[],
+                    &[],
+                    &[],
+                    metadata.with_extended_dns_error(ExtendedDnsError::NotReady),
+                    options,
+                ));
+            }
+            match try_answer_with_zone_image(
+                header,
+                &question,
+                metadata,
+                options,
+                query_observer,
+                zone_image_provider,
+                &published_zone,
+            ) {
+                ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
+                ZoneImageAnswerAttempt::Failure(reason) => {
+                    query_observer.observe_zone_image_failure(reason);
+                    DatagramAction::Respond(build_zone_image_failure_response(
+                        header, &question, metadata, options,
+                    ))
+                }
+            }
+        },
     ) else {
         return DatagramAction::Respond(build_response(
             header,
@@ -1210,36 +1242,7 @@ fn answer_query_message(
             options,
         ));
     };
-    if published_zone.state() != ZoneState::Active {
-        return DatagramAction::Respond(build_response(
-            header,
-            Rcode::ServFail,
-            false,
-            Some(&question),
-            &[],
-            &[],
-            &[],
-            metadata.with_extended_dns_error(ExtendedDnsError::NotReady),
-            options,
-        ));
-    }
-    match try_answer_with_zone_image(
-        header,
-        &question,
-        metadata,
-        options,
-        query_observer,
-        zone_image_provider,
-        &published_zone,
-    ) {
-        ZoneImageAnswerAttempt::Respond(response) => DatagramAction::Respond(response),
-        ZoneImageAnswerAttempt::Failure(reason) => {
-            query_observer.observe_zone_image_failure(reason);
-            DatagramAction::Respond(build_zone_image_failure_response(
-                header, &question, metadata, options,
-            ))
-        }
-    }
+    action
 }
 
 enum ZoneImageAnswerAttempt {
@@ -1254,7 +1257,7 @@ fn try_answer_with_zone_image(
     options: AnswerOptions,
     query_observer: &impl AnswerQueryObserver,
     zone_image_provider: ZoneImageProvider<'_>,
-    published_zone: &PublishedZone,
+    published_zone: &dyn PublishedZoneView,
 ) -> ZoneImageAnswerAttempt {
     let image = zone_image_provider(published_zone);
     let dnssec_requested = metadata.dnssec_requested();
