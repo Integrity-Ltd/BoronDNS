@@ -39,6 +39,7 @@ server_tx_fq_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_LIMIT:-10000}"
 server_tx_fq_flow_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT:-}"
 server_tx_fq_quantum="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_QUANTUM:-}"
 server_tx_fq_initial_quantum="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_INITIAL_QUANTUM:-}"
+server_tx_fq_pacing="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_PACING:-}"
 server_tx_ring="${OXIDEDNS_PHYSICAL_SERVER_TX_RING:-}"
 server_wmem_max="${OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
 stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
@@ -188,7 +189,14 @@ configure_server_link_tuning() {
             exit 64
             ;;
         esac
-        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" <<'REMOTE'
+        case "$server_tx_fq_pacing" in
+        "" | pacing | nopacing) ;;
+        *)
+            printf 'unsupported OXIDEDNS_PHYSICAL_SERVER_TX_FQ_PACING: %s\n' "$server_tx_fq_pacing" >&2
+            exit 64
+            ;;
+        esac
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_tx_qdisc" "$out_abs" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 requested_qdisc="$2"
@@ -197,6 +205,7 @@ requested_fq_limit="$4"
 requested_fq_flow_limit="$5"
 requested_fq_quantum="$6"
 requested_fq_initial_quantum="$7"
+requested_fq_pacing="$8"
 restore_file="$out_abs/host/server-tx-qdisc-restore.tsv"
 if [[ "$requested_fq_flow_limit" == "__none__" ]]; then
     requested_fq_flow_limit=""
@@ -206,6 +215,9 @@ if [[ "$requested_fq_quantum" == "__none__" ]]; then
 fi
 if [[ "$requested_fq_initial_quantum" == "__none__" ]]; then
     requested_fq_initial_quantum=""
+fi
+if [[ "$requested_fq_pacing" == "__none__" ]]; then
+    requested_fq_pacing=""
 fi
 tc qdisc show dev "$iface" >"$out_abs/host/server-tx-qdisc-before.txt" 2>&1 || true
 tc qdisc show dev "$iface" |
@@ -226,6 +238,9 @@ while IFS=$'\t' read -r parent _kind; do
         fi
         if [[ -n "$requested_fq_initial_quantum" ]]; then
             qdisc_args+=(initial_quantum "$requested_fq_initial_quantum")
+        fi
+        if [[ -n "$requested_fq_pacing" ]]; then
+            qdisc_args+=("$requested_fq_pacing")
         fi
         sudo tc qdisc replace dev "$iface" parent "$parent" "${qdisc_args[@]}"
         ;;
@@ -262,7 +277,7 @@ REMOTE
         ssh_control "$server_ssh" "sudo sysctl -w net.core.wmem_max='$server_wmem_max'" >/dev/null
     fi
     effective_wmem_max="$(ssh_control "$server_ssh" "sysctl -n net.core.wmem_max")"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
@@ -275,9 +290,10 @@ requested_fq_limit="$8"
 requested_fq_flow_limit="$9"
 requested_fq_quantum="${10}"
 requested_fq_initial_quantum="${11}"
-original_wmem_max="${12}"
-requested_wmem_max="${13}"
-effective_wmem_max="${14}"
+requested_fq_pacing="${12}"
+original_wmem_max="${13}"
+requested_wmem_max="${14}"
+effective_wmem_max="${15}"
 if [[ "$requested_txqueuelen" == "__none__" ]]; then
     requested_txqueuelen=""
 fi
@@ -289,6 +305,9 @@ if [[ "$requested_fq_quantum" == "__none__" ]]; then
 fi
 if [[ "$requested_fq_initial_quantum" == "__none__" ]]; then
     requested_fq_initial_quantum=""
+fi
+if [[ "$requested_fq_pacing" == "__none__" ]]; then
+    requested_fq_pacing=""
 fi
 if [[ "$requested_tx_ring" == "__none__" ]]; then
     requested_tx_ring=""
@@ -307,6 +326,7 @@ requested_fq_limit=$requested_fq_limit
 requested_fq_flow_limit=$requested_fq_flow_limit
 requested_fq_quantum=$requested_fq_quantum
 requested_fq_initial_quantum=$requested_fq_initial_quantum
+requested_fq_pacing=$requested_fq_pacing
 original_wmem_max=$original_wmem_max
 requested_wmem_max=$requested_wmem_max
 effective_wmem_max=$effective_wmem_max

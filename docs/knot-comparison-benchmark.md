@@ -270,6 +270,12 @@ experiments:
   requested and effective qdisc state. Use these only for qdisc burst-shaping
   experiments after `fq limit` and `flow_limit` rows identify child qdisc drops
   as the active gate.
+- `OXIDEDNS_PHYSICAL_SERVER_TX_FQ_PACING=nopacing` appends `nopacing` to each
+  child `fq` qdisc, while `pacing` explicitly requests the default pacing mode.
+  Use this to distinguish `fq` flow isolation from the scheduler's
+  non-work-conserving pacing behavior; retained rows record the requested value
+  in `server-link-tuning.txt` and the effective qdisc state in
+  `server-tx-qdisc-after.txt`.
 - `OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX=33554432` temporarily raises the server
   `net.core.wmem_max` sysctl and restores the original value during cleanup.
   Use it with a matching `OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES` value when
