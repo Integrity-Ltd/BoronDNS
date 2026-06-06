@@ -1319,13 +1319,26 @@ restored forward-role headroom. The Oxide-only probe
 100.000000%. The fair Knot-first comparison
 `physical-udp-knot-comparison-20260606T082449Z` measured Knot XDP at 2341327
 replies/s and 100.000000%, while OxideDNS AF_XDP measured 2400687 replies/s and
-100.000000%. The same profile is not yet order-robust:
+100.000000%. The first OxideDNS-first attempt with that exact source list was
+not order-robust:
 `physical-udp-knot-comparison-20260606T082612Z` measured OxideDNS-first at
 2393526 replies/s and 99.997862%, then Knot XDP at 2401280 replies/s and
-100.000000%. Promote 8192/32768 as the physical comparison default because it is
-the strongest current server capacity profile, but keep the forward gate open
-until the OxideDNS-first miss is eliminated or explained by a controlled
-attach-state cleanup.
+100.000000%. Parsing the requester queue JSON showed only requester queues 5
+and 41 missed replies, by 128 replies each, and both calibrated source ports
+mapped to server AF_XDP worker 40. Replacing the queue-5 source port `53727`
+with the weighted calibration alternative `53087` kept the high-rate list
+mostly intact and passed both run orders at the same temporary XDP MTU 1500:
+`physical-udp-knot-comparison-20260606T083657Z` measured OxideDNS-first at
+2398763 replies/s and 100.000000%, then Knot XDP at 2397750 replies/s and
+100.000000%; `physical-udp-knot-comparison-20260606T084306Z` measured
+Knot-first at 2367847 replies/s and 100.000000%, then OxideDNS AF_XDP at
+2402461 replies/s and 100.000000%. More aggressive one-port repairs that moved
+other doubled workers also cleared loss but reduced OxideDNS to 2.30-2.34M
+replies/s, so the retained conclusion is source-port/queue weighting, not MTU
+or multi-buffer work, for these small DNS packets. Promote 8192/32768 plus the
+weighted queue-5 source-port repair as the current forward physical comparison
+profile, but keep requiring repeated 100% reply rows because the raw QPS margin
+can be narrow in OxideDNS-first order.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
