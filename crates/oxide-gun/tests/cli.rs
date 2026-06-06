@@ -90,6 +90,8 @@ fn print_config_accepts_cli_overrides() {
             "1024",
             "--xdp-rx-drain-passes",
             "16",
+            "--xdp-tx-wakeup-interval",
+            "4",
             "--xdp-umem-frame-count",
             "16384",
             "--xdp-tx-ring-size",
@@ -123,6 +125,7 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("reply_tracking = \"count\""));
     assert!(stdout.contains("batch_size = 1024"));
     assert!(stdout.contains("rx_drain_passes = 16"));
+    assert!(stdout.contains("tx_wakeup_interval = 4"));
     assert!(stdout.contains("umem_frame_count = 16384"));
     assert!(stdout.contains("tx_ring_size = 4096"));
     assert!(stdout.contains("rx_ring_size = 4096"));

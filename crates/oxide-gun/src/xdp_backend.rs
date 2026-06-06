@@ -51,6 +51,7 @@ struct XdpOutputRecord<'a> {
     recv_mode: RecvMode,
     xdp_reply_tracking: XdpReplyTracking,
     xdp_rx_drain_passes: usize,
+    xdp_tx_wakeup_interval: usize,
     drop_implementation: DropImplementation,
     target: SocketAddr,
     source_ip: IpAddr,
@@ -758,6 +759,8 @@ fn run_bound_worker(
     let mut stats = Stats::default();
     let batch_size = worker.batch_size;
     let rx_drain_passes = config.xdp.rx_drain_passes;
+    let tx_wakeup_interval = config.xdp.tx_wakeup_interval;
+    let mut tx_send_passes = 0_usize;
     let mut send_slab = PacketSlab::with_capacity(batch_size);
     let mut send_lengths = Vec::with_capacity(batch_size);
     let process_responses = config.recv.mode == RecvMode::Process;
@@ -849,7 +852,9 @@ fn run_bound_worker(
         // SAFETY: every packet in `send_slab` was allocated from `umem`, and
         // `umem` outlives the socket and TX ring for the entire send loop.
         let queued_before = send_slab.len();
-        let sent = match unsafe { worker.tx_ring.send(&mut send_slab, true) } {
+        let wakeup = should_wakeup_tx(tx_wakeup_interval, tx_send_passes);
+        tx_send_passes = tx_send_passes.wrapping_add(1);
+        let sent = match unsafe { worker.tx_ring.send(&mut send_slab, wakeup) } {
             Ok(sent) => sent,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
@@ -1147,6 +1152,10 @@ fn sleep_for_sent(per_packet_delay: Option<Duration>, sent: usize) {
     }
 }
 
+fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
+    interval != 0 && send_passes % interval == 0
+}
+
 #[derive(Debug, Clone, Copy)]
 struct DropScope {
     target: Ipv4Addr,
@@ -1343,6 +1352,7 @@ fn emit_xdp_record(
         recv_mode: config.recv.mode,
         xdp_reply_tracking: config.xdp.reply_tracking,
         xdp_rx_drain_passes: config.xdp.rx_drain_passes,
+        xdp_tx_wakeup_interval: config.xdp.tx_wakeup_interval,
         drop_implementation: drop_implementation(
             config.recv.mode,
             config.xdp.drop_object.is_some(),
@@ -2073,6 +2083,18 @@ mod tests {
         assert_eq!(worker.source.port, 53000);
         assert_eq!(worker.source.port_range.as_deref(), Some("53000-53003"));
         assert_eq!(worker.source.port_select, PortSelect::Random);
+    }
+
+    #[test]
+    fn tx_wakeup_interval_wakes_first_and_then_every_n_passes() {
+        assert!(should_wakeup_tx(1, 0));
+        assert!(should_wakeup_tx(1, 7));
+        assert!(should_wakeup_tx(4, 0));
+        assert!(!should_wakeup_tx(4, 1));
+        assert!(!should_wakeup_tx(4, 3));
+        assert!(should_wakeup_tx(4, 4));
+        assert!(!should_wakeup_tx(0, 0));
+        assert!(!should_wakeup_tx(0, 4));
     }
 
     #[test]

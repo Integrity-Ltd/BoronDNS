@@ -81,6 +81,9 @@ struct Cli {
     /// Maximum ready RX batches drained after each XDP TX pass.
     #[arg(long)]
     xdp_rx_drain_passes: Option<usize>,
+    /// Explicit AF_XDP TX wakeup interval in successful send passes. 0 disables explicit wakeups.
+    #[arg(long)]
+    xdp_tx_wakeup_interval: Option<usize>,
     /// AF_XDP UMEM frame count.
     #[arg(long)]
     xdp_umem_frame_count: Option<u32>,
@@ -446,6 +449,7 @@ struct XdpConfig {
     reply_tracking: XdpReplyTracking,
     batch_size: usize,
     rx_drain_passes: usize,
+    tx_wakeup_interval: usize,
     umem_frame_count: u32,
     tx_ring_size: u32,
     rx_ring_size: u32,
@@ -463,6 +467,7 @@ impl Default for XdpConfig {
             reply_tracking: XdpReplyTracking::Latency,
             batch_size: 64,
             rx_drain_passes: 4,
+            tx_wakeup_interval: 1,
             umem_frame_count: 8192,
             tx_ring_size: 4096,
             rx_ring_size: 4096,
@@ -988,6 +993,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     }
     if let Some(xdp_rx_drain_passes) = cli.xdp_rx_drain_passes {
         config.xdp.rx_drain_passes = xdp_rx_drain_passes;
+    }
+    if let Some(xdp_tx_wakeup_interval) = cli.xdp_tx_wakeup_interval {
+        config.xdp.tx_wakeup_interval = xdp_tx_wakeup_interval;
     }
     if let Some(xdp_umem_frame_count) = cli.xdp_umem_frame_count {
         config.xdp.umem_frame_count = xdp_umem_frame_count;

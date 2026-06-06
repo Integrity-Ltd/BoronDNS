@@ -50,9 +50,13 @@ back to the OxideGun host. `--xdp-zerocopy auto` is the default; use
 drivers without multi-buffer program support may reject jumbo MTUs; the 25G
 comparison harness lowers the benchmark interfaces to MTU 1500 for XDP rows and
 restores the original MTU afterward. Lab runs should tune `--xdp-batch-size`,
-`--xdp-rx-drain-passes`, `--xdp-umem-frame-count`, and the four XDP ring-size
-flags to match the NIC, queue count, locked-memory limit, and benchmark rate
-instead of relying on the conservative CI defaults.
+`--xdp-rx-drain-passes`, `--xdp-tx-wakeup-interval`,
+`--xdp-umem-frame-count`, and the four XDP ring-size flags to match the NIC,
+queue count, locked-memory limit, and benchmark rate instead of relying on the
+conservative CI defaults. `--xdp-tx-wakeup-interval 1` preserves the default
+behavior of explicitly waking TX after each successful batch; larger values
+reduce `sendto()` wakeups, and `0` disables explicit TX wakeups for lab
+experiments.
 
 The AF_XDP implementation binds one or more contiguous queue pairs in one
 process. `rx_queue` and `tx_queue` must match and act as the first queue;
