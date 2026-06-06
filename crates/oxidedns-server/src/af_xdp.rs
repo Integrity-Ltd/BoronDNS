@@ -528,6 +528,11 @@ impl AfXdpPacketIo {
         }
     }
 
+    fn return_full_inbound(&mut self) -> io::Result<&[UdpInbound]> {
+        self.replenish_fill_ring()?;
+        Ok(&self.inbound[..self.active_inbound])
+    }
+
     fn drain_tx_slab_to_umem(&mut self) {
         while let Some(packet) = self.tx_slab.pop_back() {
             self.umem.free_packet(packet);
@@ -617,7 +622,7 @@ impl PacketIo for AfXdpPacketIo {
                     Ok(frame) => {
                         self.push_inbound(packet, frame);
                         if self.active_inbound == self.batch_size {
-                            return Ok(&self.inbound[..self.active_inbound]);
+                            return self.return_full_inbound();
                         }
                     }
                     Err(_) => {

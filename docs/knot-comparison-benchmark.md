@@ -1205,6 +1205,61 @@ AF_XDP measured 1975927 replies/s at 100.000000%, while Knot XDP measured
 cleaned forward 2.5M profile, while keeping interval 8 as historical evidence
 for earlier requester shapes.
 
+A refreshed reverse-role pass with the fixed requester moved the remaining
+miss back to server AF_XDP receive pressure rather than requester TX drain or
+MTU. `physical-udp-knot-comparison-20260606T064802Z` used the reverse balanced
+source list with the original 4096-ring/16384-frame profile and measured Knot
+XDP at 2456713 replies/s and 99.982406%, while OxideDNS AF_XDP measured
+2452517 replies/s and 99.906255%. The requester reported all 12322816 packets
+completed with zero outstanding TX completions, while the server NIC reported
+`rx_xsk_buff_alloc_err=6846` and `rx_out_of_buffer=9289`; this makes the miss a
+server receive/fill shortage before userspace, not a final requester-flush or
+MTU symptom. Increasing OxideDNS to ring size 8192, UMEM frame count 32768, and
+`xdp.tx_wakeup_interval = 16` improved the loss mode but did not clear the
+Knot-first row: `physical-udp-knot-comparison-20260606T065117Z` measured Knot
+XDP at 2457188 replies/s and 99.988122%, while OxideDNS AF_XDP measured
+2454751 replies/s and 99.991690%; the remaining 1024 unanswered queries matched
+the server NIC `rx_out_of_buffer` delta. A larger 16384-ring/65536-frame probe
+regressed to 2453818 replies/s at 99.997662%, so treat 8192/32768 as the useful
+capacity step for this reverse host.
+
+The next receive-path slice replenishes the AF_XDP fill ring before returning a
+full userspace receive batch. This keeps spare UMEM frames visible to the NIC
+while the worker builds responses for the current full batch, addressing the
+single-batch `rx_out_of_buffer` signature without changing partial-batch return
+paths. With the same reverse 8192/32768, interval-16 profile,
+`physical-udp-knot-comparison-20260606T071132Z` measured OxideDNS AF_XDP at
+2456286 replies/s and 100.000000% in an Oxide-only row. The fair Knot-first
+row, `physical-udp-knot-comparison-20260606T071226Z`, measured Knot XDP at
+2458300 replies/s and 99.998444%, while OxideDNS AF_XDP measured
+2456011 replies/s and 100.000000%. This improves the reverse reply-percentage
+gate but does not yet make reverse retained QPS dominant in Knot-first order.
+An explicit reverse source-list recalibration
+(`physical-udp-knot-comparison-20260606T070302Z`) confirmed the old reverse list
+was already one port per requester queue and one port per active server worker;
+the newly selected 48-port list regressed slightly at high rate
+(`physical-udp-knot-comparison-20260606T070416Z`, 2454957 replies/s at
+100.000000%). A reverse 48-worker server probe was invalid for this port list
+because packets targeted queues above 47 and reply percentage fell to
+87.494803%. Interval 32 also regressed
+(`physical-udp-knot-comparison-20260606T070506Z`, 2453259 replies/s at
+99.969691%).
+
+MTU remains a setup gate rather than the active reverse bottleneck. All
+successful native-XDP rows above forced the server and requester links to MTU
+1500 during traffic and restored them to MTU 9000 during cleanup; the failing
+reverse rows instead correlate with AF_XDP fill counters. Code-generation probes
+also do not explain the gap yet: a workstation `target-cpu=native` binary failed
+on the Intel reverse server with `Illegal instruction`, and an explicit
+`target-cpu=skylake-avx512` binary was compatible but regressed to 2453199
+replies/s at 99.969088%. The follow-up reverse work should focus on reducing
+userspace AF_XDP packet cost or changing the requester/server batching model,
+not more MTU or RSS port-list tuning. A forward Oxide-only replay with the
+actual `064300Z` calibrated port list and the full-batch refill binary,
+`physical-udp-knot-comparison-20260606T071525Z`, measured 2015954 replies/s at
+100.000000%, so this receive-path slice does not invalidate the existing
+forward-role proof.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
 `oxidedns_udp_worker_source_port_datagrams_total{worker,source_port}`, which is
