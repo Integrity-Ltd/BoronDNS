@@ -309,6 +309,117 @@ def select_weighted_ports(
     return [selected_by_queue[queue] for queue in sorted(selected_by_queue)]
 
 
+def repair_existing_ports(
+    existing: list[int],
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+    max_replacements: int,
+    repair_server_workers: set[int],
+) -> list[int]:
+    if not existing:
+        raise ValueError("--repair-existing requires --existing-list")
+    if max_replacements < 1:
+        raise ValueError("--max-replacements must be at least 1")
+
+    by_requester: dict[int, list[int]] = collections.defaultdict(list)
+    for port in sorted(set(server_by_port) & set(requester_by_port)):
+        by_requester[requester_by_port[port]].append(port)
+
+    original_by_queue: dict[int, int] = {}
+    for port in existing:
+        if port not in server_by_port or port not in requester_by_port:
+            raise ValueError(f"existing source port {port} is missing from calibration data")
+        queue = requester_by_port[port]
+        if queue in original_by_queue:
+            raise ValueError(f"existing list contains more than one port for requester queue {queue}")
+        original_by_queue[queue] = port
+
+    selected_by_queue = dict(original_by_queue)
+    best_weighted = weighted_score(
+        selected_by_queue.values(), server_by_port, requester_by_port, requester_weights
+    )
+    replacements = 0
+    while replacements < max_replacements:
+        used_ports = set(selected_by_queue.values())
+        best_candidate: tuple[
+            tuple[int, ...],
+            tuple[int, int, int],
+            tuple[int, int, int, int],
+            dict[int, int],
+        ] | None = None
+        for queue in sorted(selected_by_queue):
+            current = selected_by_queue[queue]
+            if repair_server_workers and server_by_port[current] not in repair_server_workers:
+                continue
+            original = original_by_queue[queue]
+            for port in by_requester[queue]:
+                if port == current or port in used_ports:
+                    continue
+                if repair_server_workers and server_by_port[port] == server_by_port[current]:
+                    continue
+                candidate = dict(selected_by_queue)
+                candidate[queue] = port
+                weighted = weighted_score(
+                    candidate.values(), server_by_port, requester_by_port, requester_weights
+                )
+                target_load = repair_target_load(
+                    candidate.values(),
+                    server_by_port,
+                    requester_by_port,
+                    requester_weights,
+                    repair_server_workers,
+                )
+                current_target_load = repair_target_load(
+                    selected_by_queue.values(),
+                    server_by_port,
+                    requester_by_port,
+                    requester_weights,
+                    repair_server_workers,
+                )
+                if repair_server_workers:
+                    if target_load >= current_target_load:
+                        continue
+                elif weighted >= best_weighted:
+                    continue
+                replacement_count = sum(
+                    candidate[q] != original_by_queue[q] for q in candidate
+                )
+                delta_sum = sum(abs(candidate[q] - original_by_queue[q]) for q in candidate)
+                tie_break = (
+                    replacement_count,
+                    delta_sum,
+                    requester_weights.get(queue, 1),
+                    port,
+                )
+                ranked = (target_load, weighted, tie_break, candidate)
+                if best_candidate is None or ranked < best_candidate:
+                    best_candidate = ranked
+
+        if best_candidate is None:
+            break
+        _, best_weighted, _, selected_by_queue = best_candidate
+        replacements += 1
+
+    return [selected_by_queue[queue] for queue in sorted(selected_by_queue)]
+
+
+def repair_target_load(
+    ports: collections.abc.Iterable[int],
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+    repair_server_workers: set[int],
+) -> tuple[int, ...]:
+    if not repair_server_workers:
+        return ()
+    server_load: collections.Counter[int] = collections.Counter()
+    for port in ports:
+        queue = requester_by_port[port]
+        server_load[server_by_port[port]] += requester_weights.get(queue, 1)
+    return tuple(server_load[worker] for worker in sorted(repair_server_workers))
+
+
 def weighted_score(
     ports: collections.abc.Iterable[int],
     server_by_port: dict[int, int],
@@ -457,6 +568,24 @@ def main() -> int:
         action="store_true",
         help="Select one port per server AF_XDP worker and emit the sparse requester queue list",
     )
+    parser.add_argument(
+        "--repair-existing",
+        action="store_true",
+        help="Preserve --existing-list order and make weighted substitutions that improve server balance",
+    )
+    parser.add_argument(
+        "--max-replacements",
+        type=int,
+        default=1,
+        help="Maximum substitutions allowed with --repair-existing",
+    )
+    parser.add_argument(
+        "--repair-server-worker",
+        action="append",
+        type=int,
+        default=[],
+        help="With --repair-existing, move flows away from this calibrated server worker",
+    )
     args = parser.parse_args()
 
     metrics_path = args.artifact / "metrics-after.prom"
@@ -497,7 +626,17 @@ def main() -> int:
     requester_weights = (
         parse_requester_weights(args.requester_weight_log) if args.requester_weight_log else None
     )
-    if args.server_exact:
+    if args.repair_existing:
+        existing = parse_port_list(args.existing_list)
+        selected = repair_existing_ports(
+            existing,
+            server_by_port,
+            requester_by_port,
+            requester_weights or {},
+            args.max_replacements,
+            set(args.repair_server_worker),
+        )
+    elif args.server_exact:
         selected = select_server_exact_ports(
             server_by_port,
             requester_by_port,

@@ -411,7 +411,12 @@ experiments:
   `tx_packets_total` while the selected ports are mapped through the low-rate
   server-worker calibration. Add `--server-exact` when the goal is exactly one
   flow per server AF_XDP worker; this is a diagnostic mode, not necessarily the
-  highest-throughput mode.
+  highest-throughput mode. If a saturation row misses replies on a small set of
+  requester queues that map to a specific server worker, rerun the selector with
+  `--repair-existing --repair-server-worker <worker>` and the known high-rate
+  `--existing-list`; this preserves the list shape and emits targeted
+  source-port repair candidates, but the repaired list still needs physical
+  A/B validation because better balance is not always better QPS.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
   `--xdp-pace-wait-fraction` to a new enough `oxide-gun` requester. Leave it
   unset for promotion rows unless a local probe shows that shortening the
