@@ -388,7 +388,12 @@ experiments:
   hosts, so source-port lists should be calibrated per server target port:
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST=...` for Knot rows and
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_SOURCE_PORT_LIST=...` for OxideDNS
-  rows.
+  rows. After a reduced AF_XDP calibration row, run
+  `scripts/select-oxide-gun-source-ports.py <row-artifact> --existing-list ...`
+  on the row that contains `metrics-after.prom` and the oxide-gun
+  `kxdpgun.log` JSON summary. The helper selects a source-port list that keeps
+  one reply stream per requester RX queue while also balancing requests across
+  server AF_XDP workers.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
   reply-drain timeout after the offered send window; raising it is useful when
   separating late requester RX drain from true packet loss.
@@ -1036,6 +1041,34 @@ counters in `physical-udp-knot-comparison-20260606T052254Z` measured 2454423
 replies/s at 99.929599%. Treat fill-wakeup suppression and extra fill counters
 as negative evidence for the saturation profile unless a later XDP socket API
 can use kernel need-wakeup state instead of blind wakeup cadence.
+A reduced calibration row then found a reverse-role source list that balanced
+both sides of the packet path instead of only the requester. Running
+`scripts/select-oxide-gun-source-ports.py` on
+`physical-udp-knot-comparison-20260606T041857Z` selected 48 ports with
+48 active requester RX queues, one source port per requester queue, 48 active
+server AF_XDP workers, and one calibrated source port per active server worker:
+`53321,53072,53133,53397,53243,53132,53310,53105,53082,53036,53453,53204,53118,53410,53000,53113,53088,53125,53185,53342,53208,53399,53110,53095,53244,53130,53358,53327,53111,53305,53426,53163,53487,53401,53299,53345,53206,53152,53015,53349,53061,53364,53296,53199,53220,53237,53020,53052`.
+The previous reverse list was already balanced on requester ingress
+(48 requester queues active, max one port per requester queue), but only hit
+27 server workers and placed up to three ports on a single server worker.
+With the balanced list, an Oxide-only reverse-role row,
+`physical-udp-knot-comparison-20260606T052658Z`, measured OxideDNS AF_XDP at
+2456483 replies/s and 100.000000%; the server reported 48 active AF_XDP
+workers with received and sent packet ranges of 256000 to 258048 packets.
+The fair Knot-first comparison,
+`physical-udp-knot-comparison-20260606T052751Z`, measured Knot XDP at
+2457093 replies/s and 99.983058%, while OxideDNS AF_XDP measured
+2454219 replies/s and 100.000000%. The reverse order,
+`physical-udp-knot-comparison-20260606T052910Z`, measured OxideDNS AF_XDP at
+2456797 replies/s and 100.000000%, while Knot XDP measured 2454823 replies/s
+and 99.980519%. This makes the reverse-role AF_XDP profile stronger on the
+reply-percentage gate in both orders and stronger on retained replies/s in the
+OxideDNS-first order, but reply-rate dominance remains order-sensitive until
+the forward role is repeated with the same per-target calibration discipline.
+MTU remains a hard setup requirement, not the current receive-path explanation:
+jumbo MTU failed zero-copy bind in the earlier `041346Z` row, while all of the
+successful native-XDP rows above forced MTU 1500 during traffic and restored
+MTU 9000 during cleanup.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
