@@ -92,16 +92,16 @@ use dns_cookie::{
     dns_cookie_settings,
 };
 pub use errors::{RuntimeError, TransferError};
+pub(crate) use health_metrics::{
+    AfXdpPacketIoStats, QueryLatencyCategory, QueryPipelineStage, ResponseCacheCandidateCategory,
+    ResponseCacheIneligibleReason, RuntimeMetricsSnapshot,
+};
 #[cfg(test)]
 use health_metrics::{
     DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS, QueryLatencyHistogram,
     metrics_body,
 };
 use health_metrics::{HealthEndpointState, MetricsRateLimiter, RuntimeMetrics, serve_health};
-pub(crate) use health_metrics::{
-    QueryLatencyCategory, QueryPipelineStage, ResponseCacheCandidateCategory,
-    ResponseCacheIneligibleReason, RuntimeMetricsSnapshot,
-};
 use observability::{ObservabilityAuth, TransferMaterial};
 use rate_limit::{
     IpPrefix, NotifyLogLimiter, RrlDecision, RrlLimiter, response_opt_record,

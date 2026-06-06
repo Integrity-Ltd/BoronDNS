@@ -992,6 +992,7 @@ pub(crate) fn metrics_body(
     append_build_info_metric(&mut body);
     append_udp_packet_io_metrics(&mut body, snapshot);
     append_udp_mmsg_metrics(&mut body, metrics);
+    append_af_xdp_packet_io_metrics(&mut body, metrics);
     append_udp_worker_packet_io_metrics(&mut body, metrics);
     append_query_rcode_metrics(&mut body, metrics);
     append_query_latency_metrics(&mut body, metrics);
@@ -1101,6 +1102,85 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
         metrics
             .inner
             .udp_mmsg_send_wouldblock_retries
+            .load(Ordering::Relaxed),
+    ));
+}
+
+fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    body.push_str(
+        "# HELP oxidedns_af_xdp_rx_recv_calls_total AF_XDP RX ring recv calls issued by server packet workers.\n\
+         # TYPE oxidedns_af_xdp_rx_recv_calls_total counter\n\
+         # HELP oxidedns_af_xdp_rx_empty_recv_calls_total AF_XDP RX ring recv calls that returned no packets.\n\
+         # TYPE oxidedns_af_xdp_rx_empty_recv_calls_total counter\n\
+         # HELP oxidedns_af_xdp_rx_received_packets_total AF_XDP packets returned by RX rings.\n\
+         # TYPE oxidedns_af_xdp_rx_received_packets_total counter\n\
+         # HELP oxidedns_af_xdp_rx_parse_errors_total AF_XDP packets dropped by userspace packet parsing.\n\
+         # TYPE oxidedns_af_xdp_rx_parse_errors_total counter\n\
+         # HELP oxidedns_af_xdp_tx_send_calls_total AF_XDP TX ring send calls issued by server packet workers.\n\
+         # TYPE oxidedns_af_xdp_tx_send_calls_total counter\n\
+         # HELP oxidedns_af_xdp_tx_queued_packets_total AF_XDP packets accepted by TX rings.\n\
+         # TYPE oxidedns_af_xdp_tx_queued_packets_total counter\n\
+         # HELP oxidedns_af_xdp_tx_empty_send_calls_total AF_XDP TX ring send calls that queued no packets.\n\
+         # TYPE oxidedns_af_xdp_tx_empty_send_calls_total counter\n\
+         # HELP oxidedns_af_xdp_tx_wakeups_total AF_XDP TX send calls made with wakeup requested.\n\
+         # TYPE oxidedns_af_xdp_tx_wakeups_total counter\n\
+         # HELP oxidedns_af_xdp_tx_poll_write_calls_total AF_XDP socket poll_write calls after zero-descriptor TX sends.\n\
+         # TYPE oxidedns_af_xdp_tx_poll_write_calls_total counter\n\
+         # HELP oxidedns_af_xdp_tx_poll_write_ready_total AF_XDP socket poll_write calls that reported write readiness.\n\
+         # TYPE oxidedns_af_xdp_tx_poll_write_ready_total counter\n\
+         # HELP oxidedns_af_xdp_completion_dequeues_total AF_XDP completion-ring dequeue calls.\n\
+         # TYPE oxidedns_af_xdp_completion_dequeues_total counter\n\
+         # HELP oxidedns_af_xdp_completed_packets_total AF_XDP completion-ring packets returned to UMEM.\n\
+         # TYPE oxidedns_af_xdp_completed_packets_total counter\n",
+    );
+    body.push_str(&format!(
+        "oxidedns_af_xdp_rx_recv_calls_total {}\n\
+         oxidedns_af_xdp_rx_empty_recv_calls_total {}\n\
+         oxidedns_af_xdp_rx_received_packets_total {}\n\
+         oxidedns_af_xdp_rx_parse_errors_total {}\n\
+         oxidedns_af_xdp_tx_send_calls_total {}\n\
+         oxidedns_af_xdp_tx_queued_packets_total {}\n\
+         oxidedns_af_xdp_tx_empty_send_calls_total {}\n\
+         oxidedns_af_xdp_tx_wakeups_total {}\n\
+         oxidedns_af_xdp_tx_poll_write_calls_total {}\n\
+         oxidedns_af_xdp_tx_poll_write_ready_total {}\n\
+         oxidedns_af_xdp_completion_dequeues_total {}\n\
+         oxidedns_af_xdp_completed_packets_total {}\n",
+        metrics.inner.af_xdp_rx_recv_calls.load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_rx_empty_recv_calls
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_rx_received_packets
+            .load(Ordering::Relaxed),
+        metrics.inner.af_xdp_rx_parse_errors.load(Ordering::Relaxed),
+        metrics.inner.af_xdp_tx_send_calls.load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_queued_packets
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_empty_send_calls
+            .load(Ordering::Relaxed),
+        metrics.inner.af_xdp_tx_wakeups.load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_poll_write_calls
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_poll_write_ready
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_completion_dequeues
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_completed_packets
             .load(Ordering::Relaxed),
     ));
 }
@@ -2248,6 +2328,18 @@ struct RuntimeMetricsInner {
     udp_mmsg_sent_datagrams: AtomicU64,
     udp_mmsg_send_partial_syscalls: AtomicU64,
     udp_mmsg_send_wouldblock_retries: AtomicU64,
+    af_xdp_rx_recv_calls: AtomicU64,
+    af_xdp_rx_empty_recv_calls: AtomicU64,
+    af_xdp_rx_received_packets: AtomicU64,
+    af_xdp_rx_parse_errors: AtomicU64,
+    af_xdp_tx_send_calls: AtomicU64,
+    af_xdp_tx_queued_packets: AtomicU64,
+    af_xdp_tx_empty_send_calls: AtomicU64,
+    af_xdp_tx_wakeups: AtomicU64,
+    af_xdp_tx_poll_write_calls: AtomicU64,
+    af_xdp_tx_poll_write_ready: AtomicU64,
+    af_xdp_completion_dequeues: AtomicU64,
+    af_xdp_completed_packets: AtomicU64,
     udp_worker_receive_batches: Vec<AtomicU64>,
     udp_worker_received_datagrams: Vec<AtomicU64>,
     udp_worker_send_batches: Vec<AtomicU64>,
@@ -2300,6 +2392,22 @@ struct RuntimeMetricsInner {
     query_pipeline_latency: Mutex<HashMap<QueryPipelineKey, QueryLatencyHistogram>>,
     response_cache_candidates: Mutex<HashMap<ResponseCacheCandidateCategory, u64>>,
     response_cache_ineligible: Mutex<HashMap<ResponseCacheIneligibleReason, u64>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AfXdpPacketIoStats {
+    pub(crate) rx_recv_calls: u64,
+    pub(crate) rx_empty_recv_calls: u64,
+    pub(crate) rx_received_packets: u64,
+    pub(crate) rx_parse_errors: u64,
+    pub(crate) tx_send_calls: u64,
+    pub(crate) tx_queued_packets: u64,
+    pub(crate) tx_empty_send_calls: u64,
+    pub(crate) tx_wakeups: u64,
+    pub(crate) tx_poll_write_calls: u64,
+    pub(crate) tx_poll_write_ready: u64,
+    pub(crate) completion_dequeues: u64,
+    pub(crate) completed_packets: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2747,6 +2855,48 @@ impl RuntimeMetrics {
                 .udp_mmsg_send_wouldblock_retries
                 .fetch_add(stats.send_wouldblock_retries, Ordering::Relaxed);
         }
+    }
+
+    pub(crate) fn record_af_xdp_packet_io_stats(&self, stats: AfXdpPacketIoStats) {
+        if !self.hot_path_counters_enabled() {
+            return;
+        }
+        self.inner
+            .af_xdp_rx_recv_calls
+            .fetch_add(stats.rx_recv_calls, Ordering::Relaxed);
+        self.inner
+            .af_xdp_rx_empty_recv_calls
+            .fetch_add(stats.rx_empty_recv_calls, Ordering::Relaxed);
+        self.inner
+            .af_xdp_rx_received_packets
+            .fetch_add(stats.rx_received_packets, Ordering::Relaxed);
+        self.inner
+            .af_xdp_rx_parse_errors
+            .fetch_add(stats.rx_parse_errors, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_send_calls
+            .fetch_add(stats.tx_send_calls, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_queued_packets
+            .fetch_add(stats.tx_queued_packets, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_empty_send_calls
+            .fetch_add(stats.tx_empty_send_calls, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_wakeups
+            .fetch_add(stats.tx_wakeups, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_poll_write_calls
+            .fetch_add(stats.tx_poll_write_calls, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_poll_write_ready
+            .fetch_add(stats.tx_poll_write_ready, Ordering::Relaxed);
+        self.inner
+            .af_xdp_completion_dequeues
+            .fetch_add(stats.completion_dequeues, Ordering::Relaxed);
+        self.inner
+            .af_xdp_completed_packets
+            .fetch_add(stats.completed_packets, Ordering::Relaxed);
     }
 
     pub(crate) fn record_udp_worker_receive_batch(&self, worker_id: usize, datagrams: usize) {

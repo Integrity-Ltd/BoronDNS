@@ -189,6 +189,13 @@ directory also includes `host/` context files for server
 CPU topology, server NIC driver/channel/RSS/offload state, server link/qdisc
 state, server IRQ affinity, RPS/XPS queue steering, interrupt coalescing,
 server interrupts/softirqs, and player host/NIC context.
+AF_XDP server rows also retain aggregate packet-I/O counters in `summary.tsv`
+when hot-path counters are enabled: RX ring recv calls, empty RX calls, packets
+returned by RX, parser drops, TX ring send calls, queued packets, zero-packet TX
+send calls, TX wakeups, `poll_write` calls/readiness, completion dequeues, and
+completed packets. These counters are intentionally suppressed by
+`[metrics].hot_path_detail = "off"` so candidate saturation rows keep the
+lowest-overhead profile.
 
 The wrapper uses temporary SSH ControlMaster sockets for the server and player
 hosts during one invocation. This keeps long physical sweeps from repeatedly
@@ -621,8 +628,21 @@ replies/s and 99.878854%, while OxideDNS AF_XDP measured 1965472 replies/s and
 favored Knot on both retained QPS and reply percentage. Treat the current
 reverse AF_XDP profile as stronger than the old standard-UDP reverse path, but
 not yet sufficient for the full "better than Knot XDP in both roles" gate.
-The next server-side work should profile AF_XDP send completion/kick behavior
-and batch latency rather than continue blind IRQ/RSS or MTU tuning.
+The first reduced-metrics AF_XDP diagnostic row,
+`physical-udp-knot-comparison-20260606T025324Z`, showed that the reverse 2.5M
+loss is not caused by zero-descriptor server TX sends or server TX wakeup waits:
+the row recorded 7407616 AF_XDP packets received by the server, 7407616 queued
+to TX, zero parser drops, zero empty TX sends, zero `poll_write` calls, and
+7407330 completion packets observed by metrics scrape time. The requester sent
+7408640 queries and received 7406592 replies, so the retained loss was roughly
+one batch before server RX plus one batch after server TX rather than a large
+server-side ring stall. Follow-up saturation rows with intermediate batch sizes
+did not recover a retained-QPS win: `physical-udp-knot-comparison-20260606T025426Z`
+with batch 192 measured 2452906 replies/s at 99.990927%, and
+`physical-udp-knot-comparison-20260606T025459Z` with batch 224 measured 2449503
+replies/s at 99.977184%. The next server-side work should use the new counters
+to separate requester ingress, server egress completion timing, and AF_XDP
+batch latency rather than continue blind IRQ/RSS or MTU tuning.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,

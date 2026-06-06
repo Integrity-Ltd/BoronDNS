@@ -27,8 +27,8 @@ use xdp::{
 };
 
 use super::{
-    PacketIo, RuntimeMetrics, UDP_PACKET_BUFFER_LEN, UdpInbound, UdpOutbound, UdpPacketTarget,
-    record_query_send_metric,
+    AfXdpPacketIoStats, PacketIo, RuntimeMetrics, UDP_PACKET_BUFFER_LEN, UdpInbound, UdpOutbound,
+    UdpPacketTarget, record_query_send_metric,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -236,6 +236,7 @@ pub(crate) struct AfXdpPacketIo {
     frames: Vec<Option<ReceivedFrame>>,
     recv_slab: HeapSlab,
     tx_slab: HeapSlab,
+    pending_stats: AfXdpPacketIoStats,
 }
 
 struct ReceivedFrame {
@@ -497,14 +498,18 @@ impl AfXdpPacketIo {
                 frames: Vec::with_capacity(prepared.batch_size),
                 recv_slab: HeapSlab::with_capacity(prepared.batch_size),
                 tx_slab: HeapSlab::with_capacity(prepared.batch_size),
+                pending_stats: AfXdpPacketIoStats::default(),
             },
             socket_fd,
         ))
     }
 
     fn drain_completions(&mut self) {
-        self.completion_ring
+        let completed = self
+            .completion_ring
             .dequeue(&mut self.umem, self.completion_ring_size);
+        self.pending_stats.completion_dequeues += 1;
+        self.pending_stats.completed_packets += completed as u64;
     }
 
     fn release_unsent_frames(&mut self) {
@@ -551,6 +556,10 @@ impl AfXdpPacketIo {
         self.active_inbound += 1;
         true
     }
+
+    fn flush_pending_stats(&mut self, metrics: &RuntimeMetrics) {
+        metrics.record_af_xdp_packet_io_stats(std::mem::take(&mut self.pending_stats));
+    }
 }
 
 impl PacketIo for AfXdpPacketIo {
@@ -584,6 +593,12 @@ impl PacketIo for AfXdpPacketIo {
             // only until `send_batch` or the next `recv_batch`, both of which
             // either transmit them or return them to the same UMEM.
             let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
+            self.pending_stats.rx_recv_calls += 1;
+            if received == 0 {
+                self.pending_stats.rx_empty_recv_calls += 1;
+            } else {
+                self.pending_stats.rx_received_packets += received as u64;
+            }
             if received == 0 && self.active_inbound > 0 {
                 return Ok(&self.inbound[..self.active_inbound]);
             }
@@ -601,7 +616,10 @@ impl PacketIo for AfXdpPacketIo {
                             return Ok(&self.inbound[..self.active_inbound]);
                         }
                     }
-                    Err(_) => self.umem.free_packet(packet),
+                    Err(_) => {
+                        self.pending_stats.rx_parse_errors += 1;
+                        self.umem.free_packet(packet);
+                    }
                 }
             }
             if self.active_inbound > 0 && receive_passes >= self.rx_drain_passes {
@@ -669,18 +687,32 @@ impl PacketIo for AfXdpPacketIo {
             self.tx_send_passes = self.tx_send_passes.wrapping_add(1);
             match unsafe { self.tx_ring.send(&mut self.tx_slab, wakeup) } {
                 Ok(queued) if queued > 0 => {
+                    self.pending_stats.tx_send_calls += 1;
+                    self.pending_stats.tx_queued_packets += queued as u64;
+                    if wakeup {
+                        self.pending_stats.tx_wakeups += 1;
+                    }
                     self.drain_completions();
                 }
                 Ok(_) => {
+                    self.pending_stats.tx_send_calls += 1;
+                    self.pending_stats.tx_empty_send_calls += 1;
+                    if wakeup {
+                        self.pending_stats.tx_wakeups += 1;
+                    }
                     self.drain_completions();
-                    if !self
+                    self.pending_stats.tx_poll_write_calls += 1;
+                    let ready = self
                         .socket
-                        .poll_write(PollTimeout::new(Some(Duration::from_millis(10))))?
-                    {
+                        .poll_write(PollTimeout::new(Some(Duration::from_millis(10))))?;
+                    if ready {
+                        self.pending_stats.tx_poll_write_ready += 1;
+                    } else {
                         tokio::task::yield_now().await;
                     }
                 }
                 Err(error) => {
+                    self.flush_pending_stats(metrics);
                     self.drain_tx_slab_to_umem();
                     return Err(error);
                 }
@@ -692,6 +724,7 @@ impl PacketIo for AfXdpPacketIo {
         if sent > 0 {
             metrics.record_udp_send_batch(sent);
         }
+        self.flush_pending_stats(metrics);
         Ok(())
     }
 }

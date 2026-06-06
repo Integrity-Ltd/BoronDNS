@@ -3913,6 +3913,20 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
         send_partial_syscalls: 1,
         send_wouldblock_retries: 2,
     });
+    metrics.record_af_xdp_packet_io_stats(super::AfXdpPacketIoStats {
+        rx_recv_calls: 11,
+        rx_empty_recv_calls: 2,
+        rx_received_packets: 100,
+        rx_parse_errors: 3,
+        tx_send_calls: 7,
+        tx_queued_packets: 96,
+        tx_empty_send_calls: 1,
+        tx_wakeups: 4,
+        tx_poll_write_calls: 1,
+        tx_poll_write_ready: 1,
+        completion_dequeues: 9,
+        completed_packets: 88,
+    });
     metrics.record_udp_worker_receive_batch(1, 17);
     metrics.record_udp_worker_send_batch(1, 16);
 
@@ -3935,6 +3949,53 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     assert!(body.contains("oxidedns_udp_worker_received_datagrams_total{worker=\"1\"} 17"));
     assert!(body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"1\"} 16"));
     assert!(!body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"2\"}"));
+}
+
+#[test]
+fn af_xdp_packet_io_metrics_are_reported() {
+    let zones = ZoneStore::new();
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(3600),
+    );
+    let metrics = RuntimeMetrics::new();
+    metrics.record_af_xdp_packet_io_stats(super::AfXdpPacketIoStats {
+        rx_recv_calls: 11,
+        rx_empty_recv_calls: 2,
+        rx_received_packets: 100,
+        rx_parse_errors: 3,
+        tx_send_calls: 7,
+        tx_queued_packets: 96,
+        tx_empty_send_calls: 1,
+        tx_wakeups: 4,
+        tx_poll_write_calls: 1,
+        tx_poll_write_ready: 1,
+        completion_dequeues: 9,
+        completed_packets: 88,
+    });
+
+    let body = metrics_body(
+        &zones,
+        &metrics,
+        &CatalogManager::default(),
+        &refresh_registry,
+        0,
+        false,
+    );
+
+    assert!(body.contains("oxidedns_af_xdp_rx_recv_calls_total 11"));
+    assert!(body.contains("oxidedns_af_xdp_rx_empty_recv_calls_total 2"));
+    assert!(body.contains("oxidedns_af_xdp_rx_received_packets_total 100"));
+    assert!(body.contains("oxidedns_af_xdp_rx_parse_errors_total 3"));
+    assert!(body.contains("oxidedns_af_xdp_tx_send_calls_total 7"));
+    assert!(body.contains("oxidedns_af_xdp_tx_queued_packets_total 96"));
+    assert!(body.contains("oxidedns_af_xdp_tx_empty_send_calls_total 1"));
+    assert!(body.contains("oxidedns_af_xdp_tx_wakeups_total 4"));
+    assert!(body.contains("oxidedns_af_xdp_tx_poll_write_calls_total 1"));
+    assert!(body.contains("oxidedns_af_xdp_tx_poll_write_ready_total 1"));
+    assert!(body.contains("oxidedns_af_xdp_completion_dequeues_total 9"));
+    assert!(body.contains("oxidedns_af_xdp_completed_packets_total 88"));
 }
 
 #[test]
@@ -3988,6 +4049,9 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     assert!(body.contains("oxidedns_udp_sent_datagrams_total 0"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 0"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total 0"));
+    assert!(body.contains("oxidedns_af_xdp_rx_recv_calls_total 0"));
+    assert!(body.contains("oxidedns_af_xdp_tx_send_calls_total 0"));
+    assert!(body.contains("oxidedns_af_xdp_completed_packets_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_direct_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_semantic_hits_total 0"));
