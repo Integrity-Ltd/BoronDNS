@@ -2858,9 +2858,6 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_af_xdp_packet_io_stats(&self, stats: AfXdpPacketIoStats) {
-        if !self.hot_path_counters_enabled() {
-            return;
-        }
         self.inner
             .af_xdp_rx_recv_calls
             .fetch_add(stats.rx_recv_calls, Ordering::Relaxed);

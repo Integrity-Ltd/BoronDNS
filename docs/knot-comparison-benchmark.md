@@ -932,14 +932,19 @@ replies/s at 99.942036%, but Knot XDP still measured 2456673 replies/s at
 hosts were run at temporary MTU 1500 for native XDP and restored to 9000 by the
 harness. The next XDP slice needs to reduce the remaining scattered AF_XDP
 reply misses before this reverse-role profile can be promoted as a Knot-XDP
-win.
+win. After retaining AF_XDP packet-I/O counters under `hot_path_detail = "off"`,
+`physical-udp-knot-comparison-20260606T035249Z` showed the remaining 793
+unanswered queries matching the NIC `rx_out_of_buffer` delta: OxideDNS received
+12332263 AF_XDP packets and queued 12332263 AF_XDP TX packets, so the immediate
+loss is before userspace receives the request, not in server response TX.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
 the transport result; post-run benchmark logs and kernel packet counters remain
-available, but DNS query, UDP packet-I/O, ZoneImage serve, rcode, DNS Cookie,
-RRL, and per-zone hot-path counters are no longer representative while that
-profile is active. `limits.udp_idle_strategy =
+available, and AF_XDP packet-I/O counters are still retained for transport
+diagnostics. DNS query, standard UDP packet-I/O, ZoneImage serve, rcode, DNS
+Cookie, RRL, and per-zone hot-path counters are no longer representative while
+that profile is active. `limits.udp_idle_strategy =
 "spin"` is only valid with `limits.udp_runtime = "dedicated"` and should remain
 an evidence-gated knob because it burns CPU while idle.
 
