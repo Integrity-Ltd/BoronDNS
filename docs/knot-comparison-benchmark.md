@@ -353,8 +353,9 @@ experiments:
   it can read and write the staged benchmark artifacts after the privileged XDP
   attach.
   The summary rows retain `server_udp_backend`, `xdp_mode`, `xdp_zero_copy`,
-  `xdp_rx_drain_passes`, and `xdp_tx_wakeup_interval` so standard, Knot-XDP,
-  and OxideDNS-AF_XDP rows cannot be confused.
+  `xdp_rx_drain_passes`, `xdp_tx_wakeup_interval`, and
+  `oxide_gun_response_timeout_ms` so standard, Knot-XDP, OxideDNS-AF_XDP, and
+  requester-drain timeout rows cannot be confused.
 - The requester-side XDP mode is controlled with
   `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=generic|copy|auto`. Use
   `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` when trying `auto` on a jumbo-MTU NIC;
@@ -375,6 +376,9 @@ experiments:
   used, one source port is auto-assigned per queue starting at 53000, and
   summary parsing comes from the JSON `summary` record. The effective requester
   queue count is retained in `host/player-link-tuning.txt`.
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
+  reply-drain timeout after the offered send window; raising it is useful when
+  separating late requester RX drain from true packet loss.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
@@ -643,6 +647,17 @@ with batch 192 measured 2452906 replies/s at 99.990927%, and
 replies/s at 99.977184%. The next server-side work should use the new counters
 to separate requester ingress, server egress completion timing, and AF_XDP
 batch latency rather than continue blind IRQ/RSS or MTU tuning.
+A later requester-drain probe kept both reverse-role NICs at effective MTU 1500
+during native XDP and restored them to 9000 after cleanup, which makes MTU an
+unlikely explanation for the remaining small loss tail. With
+`OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=3000`,
+`physical-udp-knot-comparison-20260606T030335Z` measured OxideDNS AF_XDP at
+2454002 replies/s and 99.995237% at requested 2.5M, leaving 353 unanswered
+queries out of 7410688. Extending the same timeout to 5000 ms in
+`physical-udp-knot-comparison-20260606T030430Z` regressed to 2452074 replies/s
+and 99.977453%, so the remaining issue is not a simple final-drain timeout
+setting; keep investigating requester RX distribution or AF_XDP queue service
+variance.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
