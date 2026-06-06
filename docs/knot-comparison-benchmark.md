@@ -754,6 +754,18 @@ to 570479 replies. Server interval 8 at
 574223. Keep the default interval 1 for correctness-preserving behavior and
 treat interval 8 as a candidate for a broader repeated sweep, not as proof that
 the AF_XDP server now consistently beats Knot XDP.
+Removing unused per-packet redirect counters from the OxideDNS server redirect
+object and the OxideGun reply redirect object reduces shared XDP fast-path work,
+but it does not close the server gap. With the counter-free objects, OxideDNS
+interval 1 at `oxidegun-xdp-nocounters-serverwakeup1-630k-20260606T013355Z`
+measured 579837 positive replies, up from the same-binary countered interval-1
+control at 574223. The same counter-free requester against Knot XDP at
+`knot-xdp-nocounters-oxidegun-wakeup4-630k-20260606T013446Z` measured 607583
+positive replies, so the common requester-side improvement widened the
+apples-to-apples Knot lead. OxideDNS interval 8 with counter-free objects at
+`oxidegun-xdp-nocounters-serverwakeup8-630k-20260606T013549Z` measured 572831.
+Keep the counter-free redirect objects because they remove unused packet work,
+but treat the remaining deficit as server AF_XDP queue/packet-I/O behavior.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

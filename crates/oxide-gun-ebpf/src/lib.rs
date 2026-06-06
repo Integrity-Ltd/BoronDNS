@@ -40,12 +40,6 @@ static REPLY_REDIRECT_CONFIG: Array<ReplyRedirectConfig> = Array::with_max_entri
 #[map]
 static OXIDE_GUN_XSKS: XskMap = XskMap::with_max_entries(128, 0);
 
-#[map]
-static REPLY_REDIRECTED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
-
-#[map]
-static REPLY_PASSED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct EthHdr {
@@ -93,10 +87,7 @@ struct UdpHdr {
 pub fn oxide_gun_reply_redirect(ctx: XdpContext) -> u32 {
     match try_oxide_gun_reply_redirect(&ctx) {
         Ok(action) => action,
-        Err(()) => {
-            increment_counter(&REPLY_PASSED_PACKETS);
-            xdp_action::XDP_PASS
-        }
+        Err(()) => xdp_action::XDP_PASS,
     }
 }
 
@@ -104,11 +95,9 @@ fn try_oxide_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     let udp_offset = udp_offset(ctx)?;
     let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
     let Some(config) = REPLY_REDIRECT_CONFIG.get(0) else {
-        increment_counter(&REPLY_PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
     };
     if config.udp_source_port_be != 0 && udp.source != config.udp_source_port_be {
-        increment_counter(&REPLY_PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
     }
     if !port_in_range(
@@ -116,20 +105,13 @@ fn try_oxide_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
         config.udp_dest_port_start_be,
         config.udp_dest_port_end_be,
     ) {
-        increment_counter(&REPLY_PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
     }
 
     let queue_id = rx_queue_index(&ctx);
-    let action = OXIDE_GUN_XSKS
+    Ok(OXIDE_GUN_XSKS
         .redirect(queue_id, xdp_action::XDP_PASS as u64)
-        .unwrap_or(xdp_action::XDP_PASS);
-    if action == xdp_action::XDP_REDIRECT {
-        increment_counter(&REPLY_REDIRECTED_PACKETS);
-    } else {
-        increment_counter(&REPLY_PASSED_PACKETS);
-    }
-    Ok(action)
+        .unwrap_or(xdp_action::XDP_PASS))
 }
 
 #[xdp]

@@ -5,7 +5,7 @@
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{Array, PerCpuArray, XskMap},
+    maps::{Array, XskMap},
     programs::XdpContext,
 };
 use core::{mem, ptr};
@@ -21,12 +21,6 @@ static REDIRECT_CONFIG: Array<RedirectConfig> = Array::with_max_entries(1, 0);
 
 #[map]
 static OXIDEDNS_XSKS: XskMap = XskMap::with_max_entries(64, 0);
-
-#[map]
-static REDIRECTED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
-
-#[map]
-static PASSED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -75,10 +69,7 @@ struct UdpHdr {
 pub fn oxidedns_xdp_redirect(ctx: XdpContext) -> u32 {
     match try_oxidedns_xdp_redirect(&ctx) {
         Ok(action) => action,
-        Err(()) => {
-            increment_counter(&PASSED_PACKETS);
-            xdp_action::XDP_PASS
-        }
+        Err(()) => xdp_action::XDP_PASS,
     }
 }
 
@@ -88,32 +79,21 @@ fn try_oxidedns_xdp_redirect(ctx: &XdpContext) -> Result<u32, ()> {
     let udp_offset = match eth_proto {
         0x0800 => ipv4_udp_offset(ctx)?,
         0x86dd => ipv6_udp_offset(ctx)?,
-        _ => {
-            increment_counter(&PASSED_PACKETS);
-            return Ok(xdp_action::XDP_PASS);
-        }
+        _ => return Ok(xdp_action::XDP_PASS),
     };
 
     let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
     let Some(config) = REDIRECT_CONFIG.get(0) else {
-        increment_counter(&PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
     };
     if config.udp_dest_port_be != 0 && udp.dest != config.udp_dest_port_be {
-        increment_counter(&PASSED_PACKETS);
         return Ok(xdp_action::XDP_PASS);
     }
 
     let queue_id = rx_queue_index(ctx);
-    let action = OXIDEDNS_XSKS
+    Ok(OXIDEDNS_XSKS
         .redirect(queue_id, xdp_action::XDP_PASS as u64)
-        .unwrap_or(xdp_action::XDP_PASS);
-    if action == xdp_action::XDP_REDIRECT {
-        increment_counter(&REDIRECTED_PACKETS);
-    } else {
-        increment_counter(&PASSED_PACKETS);
-    }
-    Ok(action)
+        .unwrap_or(xdp_action::XDP_PASS))
 }
 
 fn ipv4_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
@@ -168,17 +148,6 @@ fn rx_queue_index(ctx: &XdpContext) -> u32 {
     // SAFETY: `ctx.ctx` is the kernel-provided xdp_md pointer for this program
     // invocation and remains valid for the duration of the call.
     unsafe { (*ctx.ctx).rx_queue_index }
-}
-
-fn increment_counter(counter: &PerCpuArray<u64>) {
-    let Some(value) = counter.get_ptr_mut(0) else {
-        return;
-    };
-    // SAFETY: the pointer comes from a valid per-CPU Array map entry for the
-    // current CPU, so a plain increment is sufficient.
-    unsafe {
-        *value += 1;
-    }
 }
 
 #[panic_handler]
