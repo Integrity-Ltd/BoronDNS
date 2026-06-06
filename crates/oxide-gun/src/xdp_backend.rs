@@ -26,9 +26,9 @@ use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 
 use super::{
     DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, PortSelect, QueryPool,
-    QueryTemplate, RecvMode, ResponseClass, SourceSelector, Stats, XdpMode, XdpZeroCopyMode,
-    build_dns_query, classify_response, drop_implementation, parse_ipv4_cidr, query_pool,
-    response_id, serde_plain_drop_implementation,
+    QueryTemplate, RecvMode, ResponseClass, SourceEndpoint, SourceSelector, Stats, XdpMode,
+    XdpZeroCopyMode, build_dns_query, classify_response, drop_implementation, parse_ipv4_cidr,
+    query_pool, response_id, serde_plain_drop_implementation,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -103,6 +103,22 @@ struct BoundXdpWorker {
     fill_ring: xdp::WakableFillRing,
     completion_ring: xdp::CompletionRing,
     batch_size: usize,
+}
+
+#[derive(Debug, Clone)]
+struct XdpPacketTemplate {
+    frame: Vec<u8>,
+    udp_start: usize,
+    udp_checksum: u16,
+    map_zero_udp_checksum: bool,
+}
+
+#[derive(Debug)]
+struct XdpPacketTemplates {
+    first_port: u16,
+    port_count: usize,
+    query_count: usize,
+    templates: Vec<XdpPacketTemplate>,
 }
 
 // SAFETY: the worker owns the AF_XDP socket, rings, UMEM, slabs, and packets as
@@ -383,9 +399,10 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         .as_deref()
         .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
     let queue_count = active_queue_count(config);
+    let auto_source_port_range = config.source.port_range.is_none();
     let mut aggregate_config = config.clone();
     aggregate_config.interface.queue_count = queue_count;
-    if aggregate_config.source.port_range.is_none() && queue_count > 1 {
+    if auto_source_port_range && queue_count > 1 {
         let last_port = aggregate_config.source.port + (queue_count - 1) as u16;
         aggregate_config.source.port_range =
             Some(format!("{}-{last_port}", aggregate_config.source.port));
@@ -397,7 +414,12 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     let mut xsk_entries = Vec::with_capacity(queue_count as usize);
 
     for worker_index in 0..queue_count {
-        let worker_config = worker_config(&aggregate_config, worker_index, queue_count)?;
+        let worker_config = worker_config(
+            &aggregate_config,
+            worker_index,
+            queue_count,
+            auto_source_port_range,
+        )?;
         let worker = bind_xdp_worker(&worker_config)?;
         xsk_entries.push((worker_config.interface.rx_queue, worker.socket_fd));
         workers.push((worker_config, worker));
@@ -460,7 +482,12 @@ fn active_queue_count(config: &FileConfig) -> u32 {
     queue_count.max(1)
 }
 
-fn worker_config(config: &FileConfig, worker_index: u32, queue_count: u32) -> Result<FileConfig> {
+fn worker_config(
+    config: &FileConfig,
+    worker_index: u32,
+    queue_count: u32,
+    auto_source_port_range: bool,
+) -> Result<FileConfig> {
     let mut worker = config.clone();
     worker.interface.tx_queue = config.interface.tx_queue + worker_index;
     worker.interface.rx_queue = config.interface.rx_queue + worker_index;
@@ -479,12 +506,13 @@ fn worker_config(config: &FileConfig, worker_index: u32, queue_count: u32) -> Re
         let remainder = config.run.max_packets % u64::from(queue_count);
         worker.run.max_packets = base + u64::from(worker_index < remainder as u32);
     }
-    if config.source.port_range.is_none() {
+    if auto_source_port_range {
         worker.source.port = config
             .source
             .port
             .checked_add(worker_index as u16)
             .ok_or_else(|| anyhow!("source.port plus queue worker index overflows u16"))?;
+        worker.source.port_range = None;
     }
     Ok(worker)
 }
@@ -661,6 +689,8 @@ fn run_bound_worker(
         .ok_or_else(|| anyhow!("backend xdp requires target.mac"))?;
     let query_pool = query_pool(&config)?;
     let encoded_queries = encoded_query_pool(&query_pool)?;
+    let packet_templates =
+        XdpPacketTemplates::new(&config, target_mac, source_mac, target, &encoded_queries)?;
     let mut source_selector = SourceSelector::new(&config.source, config.run.seed)?;
     let kernel_drop = if config.recv.mode == RecvMode::Drop {
         match config.xdp.drop_object.as_deref() {
@@ -718,9 +748,9 @@ fn run_bound_worker(
         {
             query_id = query_id.wrapping_add(1);
             let query_index = stats.tx_packets + send_slab.len() as u64;
-            let query =
-                select_encoded_query(&encoded_queries, &query_pool, &mut query_rng, query_index);
             let source = source_selector.next();
+            let selected_query_index = query_pool.select_index(&mut query_rng, query_index);
+            let query = &encoded_queries[selected_query_index];
             // SAFETY: returned packet stays within this function, is either handed
             // to the TX ring while `umem` and `socket` remain alive, or immediately
             // freed back to the same UMEM on error.
@@ -728,17 +758,24 @@ fn run_bound_worker(
                 worker.completion_ring.dequeue(&mut worker.umem, batch_size);
                 break;
             };
-            let frame_len = match write_ethernet_udp_dns_packet_with_query_id(
-                &mut packet,
-                target_mac,
-                source_mac,
-                source.ip,
-                target.ip(),
-                source.port,
-                target.port(),
-                query,
-                query_id,
-            ) {
+            let frame_len = match packet_templates
+                .as_ref()
+                .and_then(|templates| templates.get(source.port, selected_query_index))
+            {
+                Some(template) => template.write_packet(&mut packet, query_id),
+                None => write_ethernet_udp_dns_packet_with_query_id(
+                    &mut packet,
+                    target_mac,
+                    source_mac,
+                    source.ip,
+                    target.ip(),
+                    source.port,
+                    target.port(),
+                    query,
+                    query_id,
+                ),
+            };
+            let frame_len = match frame_len {
                 Ok(frame_len) => frame_len,
                 Err(error) => {
                     worker.umem.free_packet(packet);
@@ -916,13 +953,127 @@ fn encoded_query_pool(query_pool: &QueryPool) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
-fn select_encoded_query<'a>(
-    encoded_queries: &'a [Vec<u8>],
-    query_pool: &QueryPool,
-    rng: &mut super::XorShift64,
-    index: u64,
-) -> &'a [u8] {
-    &encoded_queries[query_pool.select_index(rng, index)]
+const MAX_PREBUILT_XDP_PACKET_TEMPLATES: usize = 65_536;
+
+impl XdpPacketTemplates {
+    fn new(
+        config: &FileConfig,
+        target_mac: MacAddr,
+        source_mac: MacAddr,
+        target: SocketAddr,
+        encoded_queries: &[Vec<u8>],
+    ) -> Result<Option<Self>> {
+        let Some(source_ip) = static_source_ip(config) else {
+            return Ok(None);
+        };
+        let (first_port, last_port) = source_port_bounds(config)?;
+        let port_count = usize::from(last_port - first_port) + 1;
+        let query_count = encoded_queries.len();
+        let template_count = port_count
+            .checked_mul(query_count)
+            .ok_or_else(|| anyhow!("XDP packet template count overflows usize"))?;
+        if template_count > MAX_PREBUILT_XDP_PACKET_TEMPLATES {
+            return Ok(None);
+        }
+
+        let mut templates = Vec::with_capacity(template_count);
+        for port_offset in 0..port_count {
+            let source_port = first_port + port_offset as u16;
+            let source = SourceEndpoint {
+                ip: source_ip,
+                port: source_port,
+            };
+            for query in encoded_queries {
+                templates.push(XdpPacketTemplate::new(
+                    target_mac, source_mac, source, target, query,
+                )?);
+            }
+        }
+
+        Ok(Some(Self {
+            first_port,
+            port_count,
+            query_count,
+            templates,
+        }))
+    }
+
+    fn get(&self, source_port: u16, query_index: usize) -> Option<&XdpPacketTemplate> {
+        let port_offset = source_port.checked_sub(self.first_port)?;
+        let port_offset = usize::from(port_offset);
+        if port_offset >= self.port_count || query_index >= self.query_count {
+            return None;
+        }
+        self.templates
+            .get(port_offset * self.query_count + query_index)
+    }
+}
+
+impl XdpPacketTemplate {
+    fn new(
+        target_mac: MacAddr,
+        source_mac: MacAddr,
+        source: SourceEndpoint,
+        target: SocketAddr,
+        dns_payload_template: &[u8],
+    ) -> Result<Self> {
+        let frame_len =
+            ethernet_udp_dns_frame_len(source.ip, target.ip(), dns_payload_template.len())
+                .map_err(|_| anyhow!("packet frame length is invalid"))?;
+        let mut frame = vec![0_u8; frame_len];
+        write_ethernet_udp_dns_slice_with_query_id(
+            &mut frame,
+            target_mac,
+            source_mac,
+            source.ip,
+            target.ip(),
+            source.port,
+            target.port(),
+            dns_payload_template,
+            None,
+        )
+        .map_err(|_| anyhow!("failed to build XDP packet template"))?;
+        let (udp_start, map_zero_udp_checksum) = match (source.ip, target.ip()) {
+            (IpAddr::V4(_), IpAddr::V4(_)) => (ETHERNET_HEADER_LEN + IPV4_HEADER_LEN, true),
+            (IpAddr::V6(_), IpAddr::V6(_)) => (ETHERNET_HEADER_LEN + IPV6_HEADER_LEN, false),
+            _ => bail!("source and target IP families do not match"),
+        };
+        let udp_checksum = u16::from_be_bytes([frame[udp_start + 6], frame[udp_start + 7]]);
+        Ok(Self {
+            frame,
+            udp_start,
+            udp_checksum,
+            map_zero_udp_checksum,
+        })
+    }
+
+    fn write_packet(
+        &self,
+        packet: &mut xdp::Packet,
+        query_id: u16,
+    ) -> Result<usize, xdp::packet::PacketError> {
+        packet.clear();
+        packet.adjust_tail(self.frame.len() as i32)?;
+        packet.copy_from_slice(&self.frame);
+        let query_id_offset = self.udp_start + UDP_HEADER_LEN;
+        packet[query_id_offset..query_id_offset + 2].copy_from_slice(&query_id.to_be_bytes());
+        let checksum = replace_checksum_word(self.udp_checksum, 0, query_id);
+        let checksum = if self.map_zero_udp_checksum && checksum == 0 {
+            0xffff
+        } else {
+            checksum
+        };
+        packet[self.udp_start + 6..self.udp_start + 8].copy_from_slice(&checksum.to_be_bytes());
+        Ok(self.frame.len())
+    }
+}
+
+fn static_source_ip(config: &FileConfig) -> Option<IpAddr> {
+    (config.source.cidr.is_none()
+        && config.source.list.is_empty()
+        && config.source.range_start.is_none()
+        && config.source.range_count.is_none())
+    .then_some(config.source.ip)
 }
 
 #[cfg(test)]
@@ -1585,6 +1736,14 @@ fn checksum(bytes: &[u8]) -> u16 {
     checksum_parts(&[bytes])
 }
 
+fn replace_checksum_word(checksum: u16, old_word: u16, new_word: u16) -> u16 {
+    let mut sum = u32::from(!checksum) + u32::from(!old_word) + u32::from(new_word);
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
 fn checksum_parts(parts: &[&[u8]]) -> u16 {
     let mut sum = 0_u32;
     let mut pending_high_byte = None;
@@ -1721,6 +1880,78 @@ mod tests {
     }
 
     #[test]
+    fn packet_template_patches_ipv4_dns_id_and_checksum() {
+        let config = FileConfig::default();
+        let pool = query_pool(&config).expect("query pool builds");
+        let encoded = encoded_query_pool(&pool).expect("query payloads prebuild");
+        let expected_dns = build_dns_query(pool.first(), 0x1234).expect("query builds");
+        let target_mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        let source_mac = MacAddr([0x02, 0, 0, 0, 0, 1]);
+        let source = SourceEndpoint {
+            ip: IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1)),
+            port: 53000,
+        };
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 18, 0, 53)), 53);
+        let expected_frame = build_ethernet_udp_dns_frame(
+            target_mac,
+            source_mac,
+            source.ip,
+            target.ip(),
+            source.port,
+            target.port(),
+            &expected_dns,
+        )
+        .expect("expected frame builds");
+        let template = XdpPacketTemplate::new(target_mac, source_mac, source, target, &encoded[0])
+            .expect("template builds");
+
+        let mut packet_buf = [0_u8; 2 * 1024];
+        let mut packet = xdp::Packet::testing_new(&mut packet_buf);
+        let len = template
+            .write_packet(&mut packet, 0x1234)
+            .expect("packet builds from template");
+
+        assert_eq!(len, expected_frame.len());
+        assert_eq!(&packet[..], expected_frame.as_slice());
+    }
+
+    #[test]
+    fn packet_template_patches_ipv6_dns_id_and_checksum() {
+        let config = FileConfig::default();
+        let pool = query_pool(&config).expect("query pool builds");
+        let encoded = encoded_query_pool(&pool).expect("query payloads prebuild");
+        let expected_dns = build_dns_query(pool.first(), 0x4321).expect("query builds");
+        let target_mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        let source_mac = MacAddr([0x02, 0, 0, 0, 0, 1]);
+        let source = SourceEndpoint {
+            ip: IpAddr::V6(Ipv6Addr::LOCALHOST),
+            port: 53000,
+        };
+        let target = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 53);
+        let expected_frame = build_ethernet_udp_dns_frame(
+            target_mac,
+            source_mac,
+            source.ip,
+            target.ip(),
+            source.port,
+            target.port(),
+            &expected_dns,
+        )
+        .expect("expected frame builds");
+        let template = XdpPacketTemplate::new(target_mac, source_mac, source, target, &encoded[0])
+            .expect("template builds");
+
+        let mut packet_buf = [0_u8; 2 * 1024];
+        let mut packet = xdp::Packet::testing_new(&mut packet_buf);
+        let len = template
+            .write_packet(&mut packet, 0x4321)
+            .expect("packet builds from template");
+
+        assert_eq!(len, expected_frame.len());
+        assert_eq!(&packet[..], expected_frame.as_slice());
+    }
+
+    #[test]
     fn checksum_parts_matches_contiguous_bytes_across_odd_boundaries() {
         let bytes = [1_u8, 2, 3, 4, 5, 6, 7];
         assert_eq!(
@@ -1756,6 +1987,40 @@ mod tests {
         config.rate.target_qps = Some(2);
 
         assert_eq!(active_queue_count(&config), 2);
+    }
+
+    #[test]
+    fn worker_config_pins_auto_source_port_per_queue() {
+        let mut config = FileConfig::default();
+        config.interface.tx_queue = 10;
+        config.interface.rx_queue = 10;
+        config.interface.queue_count = 4;
+        config.source.port = 53000;
+        config.source.port_range = Some("53000-53003".to_owned());
+        config.source.port_select = PortSelect::Sequential;
+
+        let worker = worker_config(&config, 2, 4, true).expect("worker config builds");
+
+        assert_eq!(worker.interface.tx_queue, 12);
+        assert_eq!(worker.interface.rx_queue, 12);
+        assert_eq!(worker.interface.queue_count, 1);
+        assert_eq!(worker.source.port, 53002);
+        assert_eq!(worker.source.port_range, None);
+    }
+
+    #[test]
+    fn worker_config_preserves_explicit_source_port_range() {
+        let mut config = FileConfig::default();
+        config.interface.queue_count = 4;
+        config.source.port = 53000;
+        config.source.port_range = Some("53000-53003".to_owned());
+        config.source.port_select = PortSelect::Random;
+
+        let worker = worker_config(&config, 2, 4, false).expect("worker config builds");
+
+        assert_eq!(worker.source.port, 53000);
+        assert_eq!(worker.source.port_range.as_deref(), Some("53000-53003"));
+        assert_eq!(worker.source.port_select, PortSelect::Random);
     }
 
     #[test]
