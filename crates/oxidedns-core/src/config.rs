@@ -2695,7 +2695,7 @@ fn default_xdp_rx_drain_passes() -> usize {
 }
 
 fn default_xdp_tx_wakeup_interval() -> usize {
-    1
+    8
 }
 
 fn default_max_cname_chain() -> usize {

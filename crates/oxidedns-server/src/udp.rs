@@ -235,13 +235,14 @@ where
 {
     let local_addr = packet_io.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
+    let mut outbound = Vec::with_capacity(settings.udp_batch_size.max(1));
 
     loop {
-        let outbound = {
+        {
             let inbound = packet_io.recv_batch().await.map_err(RuntimeError::Udp)?;
             settings.metrics.record_udp_receive_batch(inbound.len());
+            outbound.clear();
 
-            let mut outbound = Vec::with_capacity(inbound.len());
             for packet in inbound {
                 if let Some(response) =
                     handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
@@ -249,7 +250,6 @@ where
                     outbound.push(response.with_target(packet.target()));
                 }
             }
-            outbound
         };
         packet_io
             .send_batch(&outbound, &settings.metrics)

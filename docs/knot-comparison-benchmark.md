@@ -330,7 +330,7 @@ experiments:
   `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
   `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`,
   `OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES=1`,
-  `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=1`, and optionally
+  `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=8`, and optionally
   `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
   server checkout. AF_XDP rows are started through `sudo` and set
   `process.run_as_user` to `OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER=codex` by default
@@ -740,8 +740,9 @@ Two 4.8M rows at `physical-udp-knot-comparison-20260605T202558Z` and
 reply rate, with receive-buffer errors appearing in both rows and the first row
 showing elevated softnet time-squeeze. Keep the caller-owned inbound batch
 layout until a receive change also improves packet-loss behavior.
-AF_XDP server TX wakeup cadence is now a retained tuning axis, but it is not a
-stable win by itself. In the OxideGun AF_XDP requester comparison at 630k
+AF_XDP server TX wakeup cadence is now a retained tuning axis. Before the
+server stopped polling for TX writability ahead of every AF_XDP ring send, it
+was not a stable win by itself. In the OxideGun AF_XDP requester comparison at 630k
 packets with requester `--xdp-tx-wakeup-interval 4`, the prior Knot XDP row
 `knot-xdp-oxidegun-wakeup4-630k-20260606T011511Z` measured 591585 positive
 replies. OxideDNS with server `xdp.tx_wakeup_interval = 4` at
@@ -752,9 +753,7 @@ to 570479 replies. Server interval 8 at
 `oxidegun-xdp-serverwakeup8-repeat-latency-630k-20260606T012916Z` fell back to
 571061. The same-binary interval-1 control
 `oxidegun-xdp-serverwakeup1-shortknot-latency-630k-20260606T012946Z` measured
-574223. Keep the default interval 1 for correctness-preserving behavior and
-treat interval 8 as a candidate for a broader repeated sweep, not as proof that
-the AF_XDP server now consistently beats Knot XDP.
+574223.
 Removing unused per-packet redirect counters from the OxideDNS server redirect
 object and the OxideGun reply redirect object reduces shared XDP fast-path work,
 but it does not close the server gap. With the counter-free objects, OxideDNS
@@ -777,6 +776,27 @@ both below the interval-1 counter-free control at 579837 and below the current
 Knot XDP counter-free row at 607583. Keep `xdp.rx_drain_passes = 1` for the
 current profile unless a later queue ownership or worker placement change makes
 larger receive drains useful.
+After removing the unconditional AF_XDP server TX `poll_write` before each ring
+send, the retained `kxdpgun` copy-mode requester rows moved the current profile
+to practical Knot-XDP parity and a narrow repeat win with
+`xdp.tx_wakeup_interval = 8`. In
+`physical-udp-knot-comparison-20260606T015447Z` at 630k, Knot XDP measured
+629869 replies/s and OxideDNS AF_XDP with interval 1 measured 629848 replies/s,
+both at 99.998413% replies. In
+`physical-udp-knot-comparison-20260606T015652Z` at 900k, Knot XDP measured
+899740 replies/s and OxideDNS interval 1 measured 899751 replies/s, both at
+99.998422%. At 1.2M, interval 1 still trailed Knot in
+`physical-udp-knot-comparison-20260606T015741Z` with 1199614 replies/s versus
+1199750, and interval 4 at
+`physical-udp-knot-comparison-20260606T015831Z` only reached 1199627. Interval
+8 then reached 1199799 replies/s in
+`physical-udp-knot-comparison-20260606T015903Z`, and the same-directory
+Knot/OxideDNS comparison
+`physical-udp-knot-comparison-20260606T015938Z` measured Knot XDP at 1199613
+replies/s and OxideDNS AF_XDP at 1199624 replies/s with equal 99.998417% reply
+rate. Use `xdp.tx_wakeup_interval = 8` for the current AF_XDP comparison
+profile, but keep treating the margin as narrow until a broader rate/repeat
+sweep shows a larger saturation-knee lead.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

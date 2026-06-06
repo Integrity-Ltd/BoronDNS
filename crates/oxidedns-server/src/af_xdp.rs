@@ -663,21 +663,28 @@ impl PacketIo for AfXdpPacketIo {
 
         self.release_unsent_frames();
         while !self.tx_slab.is_empty() {
-            self.socket
-                .poll_write(PollTimeout::new(Some(Duration::from_millis(10))))?;
             // SAFETY: all packets in `tx_slab` came from this adapter's UMEM,
             // and the UMEM outlives the socket and TX ring.
             let wakeup = should_wakeup_tx(self.tx_wakeup_interval, self.tx_send_passes);
             self.tx_send_passes = self.tx_send_passes.wrapping_add(1);
             match unsafe { self.tx_ring.send(&mut self.tx_slab, wakeup) } {
-                Ok(queued) if queued > 0 => {}
-                Ok(_) => tokio::task::yield_now().await,
+                Ok(queued) if queued > 0 => {
+                    self.drain_completions();
+                }
+                Ok(_) => {
+                    self.drain_completions();
+                    if !self
+                        .socket
+                        .poll_write(PollTimeout::new(Some(Duration::from_millis(10))))?
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                }
                 Err(error) => {
                     self.drain_tx_slab_to_umem();
                     return Err(error);
                 }
             }
-            self.drain_completions();
         }
         self.drain_completions();
         self.replenish_fill_ring()?;
