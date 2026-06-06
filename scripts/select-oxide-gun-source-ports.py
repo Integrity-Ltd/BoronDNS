@@ -52,6 +52,26 @@ def parse_requester_queues(log_path: pathlib.Path) -> tuple[dict[int, int], int]
     return requester_by_port, int(summary.get("queue_count", 0))
 
 
+def parse_requester_weights(log_path: pathlib.Path) -> dict[int, int]:
+    summary = None
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("{"):
+            continue
+        record = json.loads(line)
+        if record.get("record_type") == "summary":
+            summary = record
+            break
+    if summary is None:
+        raise ValueError(f"{log_path} does not contain an oxide-gun summary record")
+
+    weights: dict[int, int] = {}
+    for queue in summary.get("queue_stats", []):
+        weights[int(queue["rx_queue"])] = int(queue.get("tx_packets_total", 0))
+    if not weights:
+        raise ValueError(f"{log_path} summary did not contain queue tx packet weights")
+    return weights
+
+
 def summarize(
     label: str,
     ports: list[int],
@@ -70,6 +90,29 @@ def summarize(
         ),
         f"{label}_server_top={server_counts.most_common(12)}",
         f"{label}_requester_top={requester_counts.most_common(12)}",
+    ]
+
+
+def summarize_weighted(
+    label: str,
+    ports: list[int],
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+) -> list[str]:
+    server_load: collections.Counter[int] = collections.Counter()
+    for port in ports:
+        queue = requester_by_port[port]
+        server_load[server_by_port[port]] += requester_weights.get(queue, 1)
+    weighted_values = list(server_load.values())
+    weighted_max = max(weighted_values, default=0)
+    weighted_min = min(weighted_values, default=0)
+    return [
+        (
+            f"{label}_weighted: server_weight_active={len(server_load)} "
+            f"server_weight_min={weighted_min} server_weight_max={weighted_max}"
+        ),
+        f"{label}_server_weight_top={server_load.most_common(12)}",
     ]
 
 
@@ -177,6 +220,107 @@ def select_ports(
     return best[1]
 
 
+def select_weighted_ports(
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+    port_count: int,
+) -> list[int]:
+    ports = sorted(set(server_by_port) & set(requester_by_port))
+    by_requester: dict[int, list[int]] = collections.defaultdict(list)
+    for port in ports:
+        by_requester[requester_by_port[port]].append(port)
+    for choices in by_requester.values():
+        choices.sort(key=lambda port: (server_by_port[port], port))
+
+    if port_count > len(by_requester):
+        raise ValueError(
+            f"requested {port_count} ports but only {len(by_requester)} requester queues have candidates"
+        )
+
+    requester_queues = sorted(by_requester)
+    weighted_queues = sorted(
+        requester_queues,
+        key=lambda queue: (-requester_weights.get(queue, 1), queue),
+    )
+    orders: list[list[int]] = [weighted_queues]
+    for seed in range(256):
+        orders.append(
+            sorted(
+                requester_queues,
+                key=lambda queue, seed=seed: (
+                    -requester_weights.get(queue, 1),
+                    (queue * 1_103_515_245 + 12_345 + seed * 2_654_435_761) & 0xFFFF_FFFF,
+                ),
+            )
+        )
+
+    best: tuple[tuple[int, int, int], dict[int, int]] | None = None
+    for order in orders:
+        selected_by_queue: dict[int, int] = {}
+        server_load: collections.Counter[int] = collections.Counter()
+        for queue in order[:port_count]:
+            weight = requester_weights.get(queue, 1)
+            port = min(
+                by_requester[queue],
+                key=lambda candidate: (
+                    server_load[server_by_port[candidate]] + weight,
+                    server_load[server_by_port[candidate]],
+                    server_by_port[candidate],
+                    candidate,
+                ),
+            )
+            selected_by_queue[queue] = port
+            server_load[server_by_port[port]] += weight
+        if len(selected_by_queue) != port_count:
+            continue
+        score = weighted_score(selected_by_queue.values(), server_by_port, requester_by_port, requester_weights)
+        if best is None or score < best[0]:
+            best = (score, selected_by_queue)
+
+    if best is None:
+        raise ValueError("could not select a complete weighted source-port list")
+
+    selected_by_queue = dict(best[1])
+    best_score = best[0]
+    improved = True
+    while improved:
+        improved = False
+        for queue in sorted(requester_queues, key=lambda queue: -requester_weights.get(queue, 1)):
+            current = selected_by_queue[queue]
+            for port in by_requester[queue]:
+                if port == current:
+                    continue
+                candidate = dict(selected_by_queue)
+                candidate[queue] = port
+                score = weighted_score(candidate.values(), server_by_port, requester_by_port, requester_weights)
+                if score < best_score:
+                    selected_by_queue = candidate
+                    best_score = score
+                    improved = True
+                    break
+            if improved:
+                break
+
+    return [selected_by_queue[queue] for queue in sorted(selected_by_queue)]
+
+
+def weighted_score(
+    ports: collections.abc.Iterable[int],
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+) -> tuple[int, int, int]:
+    server_load: collections.Counter[int] = collections.Counter()
+    for port in ports:
+        queue = requester_by_port[port]
+        server_load[server_by_port[port]] += requester_weights.get(queue, 1)
+    values = list(server_load.values())
+    max_load = max(values, default=0)
+    min_load = min(values, default=0)
+    return (max_load, max_load - min_load, sum(value * value for value in values))
+
+
 def parse_port_list(value: str) -> list[int]:
     if not value:
         return []
@@ -188,6 +332,11 @@ def main() -> int:
     parser.add_argument("artifact", type=pathlib.Path, help="Calibration row artifact directory")
     parser.add_argument("--port-count", type=int, default=None)
     parser.add_argument("--existing-list", default="")
+    parser.add_argument(
+        "--requester-weight-log",
+        type=pathlib.Path,
+        help="High-rate oxide-gun log used to weight requester queues by tx_packets_total",
+    )
     parser.add_argument(
         "--requester-only",
         action="store_true",
@@ -230,7 +379,18 @@ def main() -> int:
         raise ValueError("no ports were present in both server and requester calibration data")
 
     port_count = args.port_count or queue_count
-    selected = select_ports(server_by_port, requester_by_port, port_count)
+    requester_weights = (
+        parse_requester_weights(args.requester_weight_log) if args.requester_weight_log else None
+    )
+    if requester_weights is None:
+        selected = select_ports(server_by_port, requester_by_port, port_count)
+    else:
+        selected = select_weighted_ports(
+            server_by_port,
+            requester_by_port,
+            requester_weights,
+            port_count,
+        )
 
     print(
         f"candidates={len(candidate_ports)} range={candidate_ports[0]}-{candidate_ports[-1]} "
@@ -240,8 +400,18 @@ def main() -> int:
     if existing:
         for line in summarize("existing", existing, server_by_port, requester_by_port):
             print(line)
+        if requester_weights is not None:
+            for line in summarize_weighted(
+                "existing", existing, server_by_port, requester_by_port, requester_weights
+            ):
+                print(line)
     for line in summarize("selected", selected, server_by_port, requester_by_port):
         print(line)
+    if requester_weights is not None:
+        for line in summarize_weighted(
+            "selected", selected, server_by_port, requester_by_port, requester_weights
+        ):
+            print(line)
     print("source_port_list=" + ",".join(str(port) for port in selected))
     print(
         "mapping="

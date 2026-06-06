@@ -395,7 +395,11 @@ experiments:
   one reply stream per requester RX queue while also balancing requests across
   server AF_XDP workers. For Knot rows, where no OxideDNS server-worker metric
   exists, use `--requester-only` against a low-rate Knot-XDP calibration row to
-  select one source port per requester RX queue for that target port.
+  select one source port per requester RX queue for that target port. For a
+  follow-up weighted OxideDNS list, pass `--requester-weight-log <kxdpgun.log>`
+  from a saturation row so requester queues are weighted by observed
+  `tx_packets_total` while the selected ports are mapped through the low-rate
+  server-worker calibration.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
   `--xdp-pace-wait-fraction` to a new enough `oxide-gun` requester. Leave it
   unset for promotion rows unless a local probe shows that shortening the
@@ -1137,7 +1141,15 @@ fraction measured 1951746 replies/s at 94.338649%, and
 fraction measured 1872723 replies/s at 90.398396%.
 The next forward-rate work should keep the relative paced-wait requester shape
 and instead reduce per-queue AF_XDP service cost or improve requester TX/RX
-co-scheduling without starving reply drain.
+co-scheduling without starving reply drain. Weighted source-list selection is
+useful but not sufficient by itself. Weighting the `053738Z` calibration with
+the original 2.5M `054110Z` requester TX counts selected a list with modeled
+server weight max 299008 instead of 344064; the Oxide-only row
+`physical-udp-knot-comparison-20260606T061301Z` improved to 1984720 replies/s
+and 99.161520%, but still did not clear the retained Knot-XDP row. Reweighting
+again from `061301Z` did not promote a win:
+`physical-udp-knot-comparison-20260606T061429Z` measured 1963786 replies/s and
+99.082266%.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
