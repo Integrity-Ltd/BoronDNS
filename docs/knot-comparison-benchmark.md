@@ -1173,6 +1173,27 @@ than the unanswered gap and should be treated as a frame-reclamation pressure
 signal, not as a direct physical-TX counter. Continue forward 2.5M work in
 oxide-gun's AF_XDP TX service/pacing path before spending time on additional
 MTU tuning.
+The requester now performs a bounded final AF_XDP TX kick/dequeue pass after
+the active send window and before the final reply drain. With the original
+weighted list in `physical-udp-knot-comparison-20260606T063620Z`, OxideDNS
+AF_XDP measured 1996807 replies/s at 99.998747%; requester
+`tx_packets_total` was 10054656, requester `tx_packets_phy` was 10054662, the
+server received 10054530 AF_XDP packets, and only 126 queries were unanswered.
+That confirms the previous 80k-90k unanswered gap was primarily unflushed
+requester TX descriptors rather than MTU, link, or server receive loss.
+Under a same-requester Knot-XDP comparison in
+`physical-udp-knot-comparison-20260606T063825Z`, Knot XDP measured
+1998934 replies/s at 100.000000%, while OxideDNS AF_XDP measured
+1970490 replies/s at 100.000000%. Server `xdp.tx_wakeup_interval = 16`
+improved the cleaned Oxide-only row in
+`physical-udp-knot-comparison-20260606T063946Z` to 1997976 replies/s at
+100.000000%, but interval 32 regressed in
+`physical-udp-knot-comparison-20260606T064033Z` to 1980765 replies/s.
+Reweighting the source list from the cleaned `063620Z` row also regressed:
+`physical-udp-knot-comparison-20260606T063730Z` measured 1950940 replies/s at
+100.000000%. Keep the final requester flush because it restores a truthful
+reply-percent denominator; do not claim the forward 2.5M goal is complete until
+OxideDNS clears the same-requester Knot row in both run orders.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

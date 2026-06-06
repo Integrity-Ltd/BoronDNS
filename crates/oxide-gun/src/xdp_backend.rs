@@ -1119,6 +1119,15 @@ fn run_bound_worker(
 
     let send_duration = start.elapsed();
 
+    flush_xdp_tx(
+        worker.socket_fd,
+        &worker.socket,
+        &mut worker.completion_ring,
+        &mut worker.umem,
+        batch_size,
+        &mut stats,
+    )?;
+
     if process_responses {
         drain_xdp_replies(
             &worker.socket,
@@ -1389,6 +1398,63 @@ fn dequeue_xdp_completions(
     let completed = completion_ring.dequeue(umem, batch_size);
     stats.xdp_tx_completed_packets += completed as u64;
     completed
+}
+
+#[cold]
+#[inline(never)]
+fn flush_xdp_tx(
+    socket_fd: RawFd,
+    socket: &xdp::socket::XdpSocket,
+    completion_ring: &mut xdp::CompletionRing,
+    umem: &mut xdp::Umem,
+    batch_size: usize,
+    stats: &mut Stats,
+) -> Result<()> {
+    let mut idle_rounds = 0;
+    for _ in 0..16 {
+        kick_xdp_tx(socket_fd).context("failed to kick AF_XDP TX ring")?;
+        let completed = dequeue_xdp_completions(completion_ring, umem, batch_size, stats);
+        if completed == 0 {
+            idle_rounds += 1;
+        } else {
+            idle_rounds = 0;
+        }
+        if idle_rounds >= 2 {
+            break;
+        }
+        if !socket
+            .poll_write(PollTimeout::new(Some(Duration::from_millis(1))))
+            .context("failed to poll AF_XDP TX ring during final flush")?
+        {
+            thread::yield_now();
+        }
+    }
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn kick_xdp_tx(socket_fd: RawFd) -> io::Result<()> {
+    // SAFETY: zero-length AF_XDP sendto is the kernel wakeup/kick operation.
+    let ret = unsafe {
+        libc::sendto(
+            socket_fd,
+            std::ptr::null(),
+            0,
+            libc::MSG_DONTWAIT,
+            std::ptr::null(),
+            0,
+        )
+    };
+    if ret < 0 {
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock => Ok(()),
+            _ => Err(error),
+        }
+    } else {
+        Ok(())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
