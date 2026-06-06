@@ -1518,6 +1518,27 @@ the same noisy source-built Knot comparison band. Keep the source-built
 promotion wrapper at 2000 ms unless shorter-drain rows are explicitly being
 tested.
 
+Follow-up probes after that slice did not find another no-code promotion knob.
+The fresh symbolized profiling row
+`physical-udp-knot-comparison-20260606T210427Z`, using an unstripped server
+binary built from commit `136a4a9d`, measured OxideDNS AF_XDP at 2403738
+replies/s and 100.000000%. System-wide `cpu-clock` captured 240256 samples with
+no lost samples; most samples were idle CPUs, and the visible OxideDNS worker
+costs remained `DomainName::parse_with_ascii_lowercase`, allocator
+`malloc`/`cfree`, `udp::handle_udp_datagram`,
+`af_xdp::write_udp_ip_response`, `af_xdp::parse_udp_ip_frame`, ZoneImage
+lookup, and hashing. Server AF_XDP batch probes around the promoted 512 point
+did not improve it: `physical-udp-knot-comparison-20260606T210755Z` with batch
+384 measured 2290696 replies/s, `physical-udp-knot-comparison-20260606T210824Z`
+with batch 640 measured 2329985 replies/s, and
+`physical-udp-knot-comparison-20260606T210855Z` with batch 768 measured
+2402146 replies/s, all at 100.000000%. An allocator preload probe using
+`LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2` in
+`physical-udp-knot-comparison-20260606T210954Z` regressed to 2331010 replies/s
+at 100.000000%. Treat the next plausible gain as response ownership/copy
+avoidance or DNS name/layout work; do not keep cycling allocator preloads or
+nearby batch values without new profile evidence.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
 `oxidedns_udp_worker_source_port_datagrams_total{worker,source_port}`, which is
