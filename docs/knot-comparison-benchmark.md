@@ -983,7 +983,13 @@ OxideDNS at 99.932622%, and OxideDNS-first
 `physical-udp-knot-comparison-20260606T044354Z` measured OxideDNS at
 99.985772% versus Knot XDP at 99.998395%. Treat the remaining loss as AF_XDP
 fill/recycle or queue service behavior, not a simple ring/UMEM capacity
-default.
+default. A receive-path attempt to replenish the fill ring immediately after
+TX completion drains was also negative and was not kept:
+`physical-udp-knot-comparison-20260606T044810Z` measured 99.990393% with the
+baseline 4096 rings, while `physical-udp-knot-comparison-20260606T044913Z`
+measured 99.991437% with ring size 8192 and UMEM frame count 32768. That
+suggests the missing work is not just exposing already completed TX frames to
+the fill ring a few calls earlier.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
