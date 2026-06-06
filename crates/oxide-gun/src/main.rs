@@ -60,6 +60,9 @@ struct Cli {
     /// Number of contiguous XDP queue pairs to bind, starting at --tx-queue/--rx-queue.
     #[arg(long)]
     queue_count: Option<u32>,
+    /// Comma-separated sparse XDP queue ids to bind instead of a contiguous queue range.
+    #[arg(long, value_delimiter = ',')]
+    queue_list: Vec<u32>,
     /// XDP bind mode.
     #[arg(long, value_enum)]
     xdp_mode: Option<XdpMode>,
@@ -297,6 +300,8 @@ struct InterfaceConfig {
     rx_queue: u32,
     #[serde(default = "default_queue_count")]
     queue_count: u32,
+    #[serde(default)]
+    queue_list: Vec<u32>,
 }
 
 fn default_queue_count() -> u32 {
@@ -1001,6 +1006,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(queue_count) = cli.queue_count {
         config.interface.queue_count = queue_count;
     }
+    if !cli.queue_list.is_empty() {
+        config.interface.queue_list = cli.queue_list.clone();
+    }
     if let Some(xdp_mode) = cli.xdp_mode {
         config.xdp.mode = xdp_mode;
     }
@@ -1222,39 +1230,48 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     if config.interface.rx_queue != config.interface.tx_queue {
         bail!("backend xdp requires interface.rx_queue to match interface.tx_queue");
     }
-    if config.interface.queue_count == 0 {
+    validate_queue_list(&config.interface.queue_list)?;
+    let effective_queue_count = if config.interface.queue_list.is_empty() {
+        config.interface.queue_count
+    } else {
+        u32::try_from(config.interface.queue_list.len())
+            .map_err(|_| anyhow!("interface.queue_list has too many entries"))?
+    };
+    if effective_queue_count == 0 {
         bail!("backend xdp requires interface.queue_count to be non-zero");
     }
-    config
-        .interface
-        .tx_queue
-        .checked_add(config.interface.queue_count.saturating_sub(1))
-        .ok_or_else(|| anyhow!("interface.queue_count overflows tx_queue"))?;
-    config
-        .interface
-        .rx_queue
-        .checked_add(config.interface.queue_count.saturating_sub(1))
-        .ok_or_else(|| anyhow!("interface.queue_count overflows rx_queue"))?;
-    if config.interface.queue_count > 1 && config.xdp.drop_object.is_some() {
+    if config.interface.queue_list.is_empty() {
+        config
+            .interface
+            .tx_queue
+            .checked_add(config.interface.queue_count.saturating_sub(1))
+            .ok_or_else(|| anyhow!("interface.queue_count overflows tx_queue"))?;
+        config
+            .interface
+            .rx_queue
+            .checked_add(config.interface.queue_count.saturating_sub(1))
+            .ok_or_else(|| anyhow!("interface.queue_count overflows rx_queue"))?;
+    }
+    if effective_queue_count > 1 && config.xdp.drop_object.is_some() {
         bail!("backend xdp multi-queue does not yet support xdp.drop_object reply drops");
     }
-    if config.interface.queue_count > 1 && !config.source.port_list.is_empty() {
-        if config.source.port_list.len() < config.interface.queue_count as usize {
-            bail!("source.port_list must contain at least interface.queue_count entries");
+    if effective_queue_count > 1 && !config.source.port_list.is_empty() {
+        if config.source.port_list.len() < effective_queue_count as usize {
+            bail!("source.port_list must contain at least one entry per effective XDP queue");
         }
     }
-    if config.interface.queue_count > 1
+    if effective_queue_count > 1
         && config.source.port_range.is_none()
         && config.source.port_list.is_empty()
     {
-        if config.interface.queue_count > u32::from(u16::MAX) {
-            bail!("interface.queue_count is too large for automatic source port assignment");
+        if effective_queue_count > u32::from(u16::MAX) {
+            bail!("effective XDP queue count is too large for automatic source port assignment");
         }
         config
             .source
             .port
-            .checked_add((config.interface.queue_count - 1) as u16)
-            .ok_or_else(|| anyhow!("source.port plus interface.queue_count overflows u16"))?;
+            .checked_add((effective_queue_count - 1) as u16)
+            .ok_or_else(|| anyhow!("source.port plus effective XDP queue count overflows u16"))?;
     }
     if !config.xdp.umem_frame_count.is_power_of_two() {
         bail!("xdp.umem_frame_count must be a power of two");
@@ -1902,6 +1919,16 @@ fn validate_source_port_list(ports: &[u16]) -> Result<()> {
     for port in ports {
         if *port == 0 {
             bail!("source.port_list cannot include port 0");
+        }
+    }
+    Ok(())
+}
+
+fn validate_queue_list(queue_list: &[u32]) -> Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(queue_list.len());
+    for queue_id in queue_list {
+        if !seen.insert(*queue_id) {
+            bail!("interface.queue_list contains duplicate queue id {queue_id}");
         }
     }
     Ok(())

@@ -286,7 +286,11 @@ def select_weighted_ports(
     improved = True
     while improved:
         improved = False
-        for queue in sorted(requester_queues, key=lambda queue: -requester_weights.get(queue, 1)):
+        selected_queues = sorted(
+            selected_by_queue,
+            key=lambda queue: -requester_weights.get(queue, 1),
+        )
+        for queue in selected_queues:
             current = selected_by_queue[queue]
             for port in by_requester[queue]:
                 if port == current:
@@ -321,10 +325,116 @@ def weighted_score(
     return (max_load, max_load - min_load, sum(value * value for value in values))
 
 
+def select_server_exact_ports(
+    server_by_port: dict[int, int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int] | None,
+    port_count: int,
+) -> list[int]:
+    ports = sorted(set(server_by_port) & set(requester_by_port))
+    by_server: dict[int, list[int]] = collections.defaultdict(list)
+    for port in ports:
+        by_server[server_by_port[port]].append(port)
+    for choices in by_server.values():
+        choices.sort(key=lambda port: (requester_by_port[port], port))
+
+    if port_count > len(by_server):
+        raise ValueError(
+            f"requested {port_count} ports but only {len(by_server)} server workers have candidates"
+        )
+
+    requester_weights = requester_weights or {}
+    server_order = sorted(by_server, key=lambda worker: (len(by_server[worker]), worker))
+    selected_by_server: dict[int, int] = {}
+    requester_load: collections.Counter[int] = collections.Counter()
+    requester_weight_load: collections.Counter[int] = collections.Counter()
+    for server_worker in server_order[:port_count]:
+        port = min(
+            by_server[server_worker],
+            key=lambda candidate: (
+                requester_load[requester_by_port[candidate]] + 1,
+                requester_weight_load[requester_by_port[candidate]]
+                + requester_weights.get(requester_by_port[candidate], 1),
+                requester_by_port[candidate],
+                candidate,
+            ),
+        )
+        selected_by_server[server_worker] = port
+        requester_load[requester_by_port[port]] += 1
+        requester_weight_load[requester_by_port[port]] += requester_weights.get(
+            requester_by_port[port], 1
+        )
+
+    best_score = server_exact_score(
+        selected_by_server.values(), requester_by_port, requester_weights
+    )
+    improved = True
+    while improved:
+        improved = False
+        for server_worker in sorted(
+            selected_by_server,
+            key=lambda worker: len(by_server[worker]),
+        ):
+            current = selected_by_server[server_worker]
+            for port in by_server[server_worker]:
+                if port == current:
+                    continue
+                candidate = dict(selected_by_server)
+                candidate[server_worker] = port
+                score = server_exact_score(
+                    candidate.values(), requester_by_port, requester_weights
+                )
+                if score < best_score:
+                    selected_by_server = candidate
+                    best_score = score
+                    improved = True
+                    break
+            if improved:
+                break
+
+    return [selected_by_server[worker] for worker in sorted(selected_by_server)]
+
+
+def server_exact_score(
+    ports: collections.abc.Iterable[int],
+    requester_by_port: dict[int, int],
+    requester_weights: dict[int, int],
+) -> tuple[int, int, int, int]:
+    requester_load: collections.Counter[int] = collections.Counter()
+    requester_weight_load: collections.Counter[int] = collections.Counter()
+    selected = list(ports)
+    for port in selected:
+        queue = requester_by_port[port]
+        requester_load[queue] += 1
+        requester_weight_load[queue] += requester_weights.get(queue, 1)
+    return (
+        max(requester_load.values(), default=0),
+        max(requester_weight_load.values(), default=0),
+        sum(value * value for value in requester_weight_load.values()),
+        sum(port * port for port in selected),
+    )
+
+
 def parse_port_list(value: str) -> list[int]:
     if not value:
         return []
     return [int(part) for part in value.split(",") if part]
+
+
+def requester_ordered_ports(
+    ports: collections.abc.Iterable[int],
+    requester_by_port: dict[int, int],
+) -> list[int]:
+    return sorted(ports, key=lambda port: (requester_by_port[port], port))
+
+
+def print_queue_and_port_lists(
+    selected: list[int],
+    requester_by_port: dict[int, int],
+) -> None:
+    ordered = requester_ordered_ports(selected, requester_by_port)
+    print("queue_list=" + ",".join(str(requester_by_port[port]) for port in ordered))
+    print("source_port_list=" + ",".join(str(port) for port in ordered))
 
 
 def main() -> int:
@@ -341,6 +451,11 @@ def main() -> int:
         "--requester-only",
         action="store_true",
         help="Select one port per requester RX queue without server worker metrics",
+    )
+    parser.add_argument(
+        "--server-exact",
+        action="store_true",
+        help="Select one port per server AF_XDP worker and emit the sparse requester queue list",
     )
     args = parser.parse_args()
 
@@ -363,7 +478,7 @@ def main() -> int:
                 print(line)
         for line in summarize_requester_only("selected", selected, requester_by_port):
             print(line)
-        print("source_port_list=" + ",".join(str(port) for port in selected))
+        print_queue_and_port_lists(selected, requester_by_port)
         print(
             "mapping="
             + ",".join(
@@ -382,7 +497,14 @@ def main() -> int:
     requester_weights = (
         parse_requester_weights(args.requester_weight_log) if args.requester_weight_log else None
     )
-    if requester_weights is None:
+    if args.server_exact:
+        selected = select_server_exact_ports(
+            server_by_port,
+            requester_by_port,
+            requester_weights,
+            port_count,
+        )
+    elif requester_weights is None:
         selected = select_ports(server_by_port, requester_by_port, port_count)
     else:
         selected = select_weighted_ports(
@@ -412,7 +534,7 @@ def main() -> int:
             "selected", selected, server_by_port, requester_by_port, requester_weights
         ):
             print(line)
-    print("source_port_list=" + ",".join(str(port) for port in selected))
+    print_queue_and_port_lists(selected, requester_by_port)
     print(
         "mapping="
         + ",".join(

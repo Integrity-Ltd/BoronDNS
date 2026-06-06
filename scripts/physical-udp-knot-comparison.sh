@@ -29,6 +29,7 @@ oxide_gun_xdp_pace_wait_fraction="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FR
 oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
 oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
 oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
+oxide_gun_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
 oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
 oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
 oxide_gun_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
@@ -351,7 +352,7 @@ REMOTE
     if [[ "$player_tool" == "oxide-gun" && "$oxide_gun_queue_count" == "__auto__" ]]; then
         oxide_gun_queue_count="$(player_rx_queue_count)"
     fi
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" "$oxide_gun_queue_list" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_player_mtu="$2"
@@ -359,8 +360,12 @@ requested_player_mtu="$3"
 effective_player_mtu="$4"
 requested_oxide_gun_queue_count="$5"
 effective_oxide_gun_queue_count="$6"
+oxide_gun_queue_list="$7"
 if [[ "$requested_player_mtu" == "__none__" ]]; then
     requested_player_mtu=""
+fi
+if [[ "$oxide_gun_queue_list" == "__none__" ]]; then
+    oxide_gun_queue_list=""
 fi
 cat >"$out_abs/host/player-link-tuning.txt" <<EOF
 original_mtu=$original_player_mtu
@@ -368,6 +373,7 @@ requested_mtu=$requested_player_mtu
 effective_mtu=$effective_player_mtu
 oxide_gun_requested_queue_count=$requested_oxide_gun_queue_count
 oxide_gun_effective_queue_count=$effective_oxide_gun_queue_count
+oxide_gun_queue_list=$oxide_gun_queue_list
 EOF
 REMOTE
 }
@@ -1638,7 +1644,7 @@ run_player_kxdpgun() {
 
     capture_player_row_state "$run_abs" before
 
-    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_queue_list" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
 set -euo pipefail
 workdir="$1"
 run_dir="$2"
@@ -1662,13 +1668,14 @@ oxide_gun_xdp_pace_wait_fraction="${19}"
 oxide_gun_xdp_umem_frame_count="${20}"
 oxide_gun_xdp_ring_size="${21}"
 oxide_gun_queue_count="${22}"
-oxide_gun_source_port="${23}"
-oxide_gun_source_port_range="${24}"
-oxide_gun_source_port_list="${25}"
-oxide_gun_source_port_select="${26}"
-oxide_gun_source_mac="${27}"
-oxide_gun_target_mac="${28}"
-oxide_gun_response_timeout_ms="${29}"
+oxide_gun_queue_list="${23}"
+oxide_gun_source_port="${24}"
+oxide_gun_source_port_range="${25}"
+oxide_gun_source_port_list="${26}"
+oxide_gun_source_port_select="${27}"
+oxide_gun_source_mac="${28}"
+oxide_gun_target_mac="${29}"
+oxide_gun_response_timeout_ms="${30}"
 mkdir -p "$workdir/$run_dir"
 (
     cd "$workdir"
@@ -1694,6 +1701,10 @@ mkdir -p "$workdir/$run_dir"
             if [[ "$oxide_gun_source_port_list" != "__none__" ]]; then
                 source_port_args+=(--source-port-list "$oxide_gun_source_port_list")
             fi
+            queue_args=(--queue-count "$oxide_gun_queue_count")
+            if [[ "$oxide_gun_queue_list" != "__none__" ]]; then
+                queue_args+=(--queue-list "$oxide_gun_queue_list")
+            fi
             pace_args=()
             if [[ "$oxide_gun_xdp_pace_wait_fraction" != "__omit__" ]]; then
                 pace_args+=(--xdp-pace-wait-fraction "$oxide_gun_xdp_pace_wait_fraction")
@@ -1703,7 +1714,7 @@ mkdir -p "$workdir/$run_dir"
                 --interface "$interface" \
                 --tx-queue 0 \
                 --rx-queue 0 \
-                --queue-count "$oxide_gun_queue_count" \
+                "${queue_args[@]}" \
                 --xdp-mode "$oxide_gun_xdp_mode" \
                 --xdp-zerocopy "$oxide_gun_xdp_zerocopy" \
                 --xdp-redirect-object "$oxide_gun_xdp_redirect_object" \

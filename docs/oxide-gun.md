@@ -65,19 +65,22 @@ packets.
 
 The AF_XDP implementation binds one or more contiguous queue pairs in one
 process. `rx_queue` and `tx_queue` must match and act as the first queue;
-`--queue-count` controls the fanout. With more than one queue and no explicit
-`--source-port-range`, OxideGun assigns one fixed source port per worker starting
-at `--source-port`, which gives RSS a stable tuple spread and lets any RX worker
-match replies by UDP destination port plus DNS ID. `--recv-mode drop` keeps the
-userspace path TX-only for maximum send pressure, without response-tracking table
-allocation or per-query timestamps. Query payloads are prebuilt before the
-AF_XDP loop and patched with the current DNS ID directly in the AF_XDP frame
-before checksum calculation, so source/query variation does not rebuild the DNS
-question body or copy through an intermediate DNS buffer on every send. UDP
-checksums are folded over packet slices without allocating a pseudo-header buffer
-per packet. `--recv-mode process` also opens RX rings and classifies returned
-DNS responses by header fields. The default `--xdp-reply-tracking latency` keeps
-the port-plus-DNS-ID inflight table needed for latency percentiles and unmatched
+`--queue-count` controls the fanout. `--queue-list 0,17,62` is an optional
+sparse binding override for calibrated RSS runs; when it is set, the same
+position in `--source-port-list` belongs to that queue id, not to the contiguous
+queue index. With more than one queue and no explicit `--source-port-range`,
+OxideGun assigns one fixed source port per worker starting at `--source-port`,
+which gives RSS a stable tuple spread and lets any RX worker match replies by
+UDP destination port plus DNS ID. `--recv-mode drop` keeps the userspace path
+TX-only for maximum send pressure, without response-tracking table allocation or
+per-query timestamps. Query payloads are prebuilt before the AF_XDP loop and
+patched with the current DNS ID directly in the AF_XDP frame before checksum
+calculation, so source/query variation does not rebuild the DNS question body or
+copy through an intermediate DNS buffer on every send. UDP checksums are folded
+over packet slices without allocating a pseudo-header buffer per packet.
+`--recv-mode process` also opens RX rings and classifies returned DNS responses
+by header fields. The default `--xdp-reply-tracking latency` keeps the
+port-plus-DNS-ID inflight table needed for latency percentiles and unmatched
 reply accounting. `--xdp-reply-tracking count` skips that per-query timestamp
 table and is intended for physical comparison rows where reply percentage is the
 primary gate. Duration limits are checked at batch boundaries, so a

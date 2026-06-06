@@ -395,15 +395,19 @@ experiments:
   rows. After a reduced AF_XDP calibration row, run
   `scripts/select-oxide-gun-source-ports.py <row-artifact> --existing-list ...`
   on the row that contains `metrics-after.prom` and the oxide-gun
-  `kxdpgun.log` JSON summary. The helper selects a source-port list that keeps
-  one reply stream per requester RX queue while also balancing requests across
-  server AF_XDP workers. For Knot rows, where no OxideDNS server-worker metric
-  exists, use `--requester-only` against a low-rate Knot-XDP calibration row to
-  select one source port per requester RX queue for that target port. For a
-  follow-up weighted OxideDNS list, pass `--requester-weight-log <kxdpgun.log>`
-  from a saturation row so requester queues are weighted by observed
+  `kxdpgun.log` JSON summary. The helper emits both `queue_list=...` and
+  `source_port_list=...`; pass both to OxideGun when the selected requester
+  queues are sparse. The selected source-port list keeps one reply stream per
+  requester RX queue while also balancing requests across server AF_XDP workers.
+  For Knot rows, where no OxideDNS server-worker metric exists, use
+  `--requester-only` against a low-rate Knot-XDP calibration row to select one
+  source port per requester RX queue for that target port. For a follow-up
+  weighted OxideDNS list, pass `--requester-weight-log <kxdpgun.log>` from a
+  saturation row so requester queues are weighted by observed
   `tx_packets_total` while the selected ports are mapped through the low-rate
-  server-worker calibration.
+  server-worker calibration. Add `--server-exact` when the goal is exactly one
+  flow per server AF_XDP worker; this is a diagnostic mode, not necessarily the
+  highest-throughput mode.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
   `--xdp-pace-wait-fraction` to a new enough `oxide-gun` requester. Leave it
   unset for promotion rows unless a local probe shows that shortening the
@@ -1287,6 +1291,22 @@ measured 2369759 replies/s at 100.000000%. Keep requester batch 64 for
 OxideGun zero-copy rows on this 25G profile; it is lower QPS than the best
 copy-mode comparison, but it proves the project-owned requester can drive a
 zero-copy reverse-role row through the reply-percentage gate.
+
+Forward-role zero-copy steering checks on 2026-06-06 did not identify MTU as
+the active limiter. `physical-udp-knot-comparison-20260606T080632Z` used
+OxideGun sparse queue binding with 48 calibrated requester queues and one source
+port per server AF_XDP worker at XDP MTU 1500; it reached 2288619 replies/s at
+100.000000%, with AF_XDP worker packet counts tightly spread from 236224 to
+241984. Increasing requester fanout while keeping calibrated queue/source-port
+ordering improved throughput but did not beat the forward Knot XDP reference:
+56 queues in `physical-udp-knot-comparison-20260606T080851Z` reached 2317499
+replies/s at 100.000000%, and 60 queues in
+`physical-udp-knot-comparison-20260606T080942Z` reached 2321292 replies/s at
+100.000000%. In the same comparison setup, the retained forward Knot XDP row in
+`physical-udp-knot-comparison-20260606T075217Z` was 2349033 replies/s at
+100.000000%. Treat source-port/RSS steering as exhausted for this forward
+zero-copy slice; the next improvement needs a server/requester packet-I/O
+change rather than MTU or multi-buffer work for these small DNS packets.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

@@ -504,7 +504,7 @@ impl ReplyRedirectGuard {
 }
 
 pub(super) fn run(config: &FileConfig) -> Result<()> {
-    if config.interface.queue_count > 1 {
+    if config.interface.queue_count > 1 || !config.interface.queue_list.is_empty() {
         return run_multi_queue(config);
     }
     let _ = run_single(config.clone(), None, true)?;
@@ -518,11 +518,14 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         .nic
         .as_deref()
         .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
-    let queue_count = active_queue_count(config);
+    let queue_ids = active_queue_ids(config);
+    let queue_count = u32::try_from(queue_ids.len())
+        .map_err(|_| anyhow!("interface.queue_list has too many active entries"))?;
     let auto_source_port_range =
         config.source.port_range.is_none() && config.source.port_list.is_empty();
     let mut aggregate_config = config.clone();
     aggregate_config.interface.queue_count = queue_count;
+    aggregate_config.interface.queue_list = queue_ids.clone();
     if auto_source_port_range && queue_count > 1 {
         let last_port = aggregate_config.source.port + (queue_count - 1) as u16;
         aggregate_config.source.port_range =
@@ -535,10 +538,13 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     let mut workers = Vec::with_capacity(queue_count as usize);
     let mut xsk_entries = Vec::with_capacity(queue_count as usize);
 
-    for worker_index in 0..queue_count {
+    for (worker_index, queue_id) in queue_ids.into_iter().enumerate() {
+        let worker_index =
+            u32::try_from(worker_index).map_err(|_| anyhow!("too many XDP queue workers"))?;
         let worker_config = worker_config(
             &aggregate_config,
             worker_index,
+            queue_id,
             queue_count,
             auto_source_port_range,
         )?;
@@ -605,7 +611,10 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     )
 }
 
-fn active_queue_count(config: &FileConfig) -> u32 {
+fn active_queue_ids(config: &FileConfig) -> Vec<u32> {
+    if !config.interface.queue_list.is_empty() {
+        return config.interface.queue_list.clone();
+    }
     let mut queue_count = config.interface.queue_count;
     if config.run.max_packets != 0 {
         queue_count = queue_count.min(config.run.max_packets.min(u64::from(u32::MAX)) as u32);
@@ -615,19 +624,24 @@ fn active_queue_count(config: &FileConfig) -> u32 {
     {
         queue_count = queue_count.min(target_qps.min(u64::from(u32::MAX)) as u32);
     }
-    queue_count.max(1)
+    let queue_count = queue_count.max(1);
+    (0..queue_count)
+        .map(|offset| config.interface.rx_queue + offset)
+        .collect()
 }
 
 fn worker_config(
     config: &FileConfig,
     worker_index: u32,
+    queue_id: u32,
     queue_count: u32,
     auto_source_port_range: bool,
 ) -> Result<FileConfig> {
     let mut worker = config.clone();
-    worker.interface.tx_queue = config.interface.tx_queue + worker_index;
-    worker.interface.rx_queue = config.interface.rx_queue + worker_index;
+    worker.interface.tx_queue = queue_id;
+    worker.interface.rx_queue = queue_id;
     worker.interface.queue_count = 1;
+    worker.interface.queue_list.clear();
     worker.log.flush_interval_ms = 0;
     worker.run.seed = config.run.seed.wrapping_add(u64::from(worker_index));
     if let Some(target_qps) = config.rate.target_qps {
@@ -2416,13 +2430,26 @@ mod tests {
     }
 
     #[test]
-    fn active_queue_count_does_not_create_zero_limit_workers() {
+    fn active_queue_ids_do_not_create_zero_limit_workers() {
         let mut config = FileConfig::default();
+        config.interface.rx_queue = 10;
         config.interface.queue_count = 8;
         config.run.max_packets = 3;
         config.rate.target_qps = Some(2);
 
-        assert_eq!(active_queue_count(&config), 2);
+        assert_eq!(active_queue_ids(&config), vec![10, 11]);
+    }
+
+    #[test]
+    fn active_queue_ids_use_explicit_sparse_queue_list() {
+        let mut config = FileConfig::default();
+        config.interface.rx_queue = 10;
+        config.interface.queue_count = 8;
+        config.interface.queue_list = vec![0, 17, 62];
+        config.run.max_packets = 1;
+        config.rate.target_qps = Some(1);
+
+        assert_eq!(active_queue_ids(&config), vec![0, 17, 62]);
     }
 
     #[test]
@@ -2435,7 +2462,7 @@ mod tests {
         config.source.port_range = Some("53000-53003".to_owned());
         config.source.port_select = PortSelect::Sequential;
 
-        let worker = worker_config(&config, 2, 4, true).expect("worker config builds");
+        let worker = worker_config(&config, 2, 12, 4, true).expect("worker config builds");
 
         assert_eq!(worker.interface.tx_queue, 12);
         assert_eq!(worker.interface.rx_queue, 12);
@@ -2452,7 +2479,7 @@ mod tests {
         config.source.port_range = Some("53000-53003".to_owned());
         config.source.port_select = PortSelect::Random;
 
-        let worker = worker_config(&config, 2, 4, false).expect("worker config builds");
+        let worker = worker_config(&config, 2, 12, 4, false).expect("worker config builds");
 
         assert_eq!(worker.source.port, 53000);
         assert_eq!(worker.source.port_range.as_deref(), Some("53000-53003"));
@@ -2468,11 +2495,12 @@ mod tests {
         config.source.port_list = vec![53111, 53007, 53222, 53019];
         config.source.port_select = PortSelect::Sequential;
 
-        let worker = worker_config(&config, 2, 4, false).expect("worker config builds");
+        let worker = worker_config(&config, 2, 41, 4, false).expect("worker config builds");
 
-        assert_eq!(worker.interface.tx_queue, 12);
-        assert_eq!(worker.interface.rx_queue, 12);
+        assert_eq!(worker.interface.tx_queue, 41);
+        assert_eq!(worker.interface.rx_queue, 41);
         assert_eq!(worker.interface.queue_count, 1);
+        assert!(worker.interface.queue_list.is_empty());
         assert_eq!(worker.source.port, 53222);
         assert!(worker.source.port_list.is_empty());
         assert_eq!(worker.source.port_range, None);
