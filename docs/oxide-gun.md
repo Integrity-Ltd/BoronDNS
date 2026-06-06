@@ -27,6 +27,7 @@ sudo target/release/oxide-gun \
   --interface ens6f0 \
   --tx-queue 0 \
   --rx-queue 0 \
+  --queue-count 1 \
   --source-ip 198.18.0.1 \
   --source-port 53000 \
   --source-mac 02:00:00:00:00:01 \
@@ -43,22 +44,35 @@ The XDP backend uses Linux AF_XDP UMEM and TX/RX rings through the `xdp` crate.
 It requires a dedicated test interface, `CAP_NET_RAW` or root privileges, a
 correct target MAC address, and a network where the chosen source IP is routed
 back to the OxideGun host. `--xdp-zerocopy auto` is the default; use
-`--xdp-zerocopy force` only on drivers known to support zero-copy.
+`--xdp-zerocopy force` only on drivers known to support zero-copy. Native XDP on
+drivers without multi-buffer program support may reject jumbo MTUs; the 25G
+comparison harness lowers the benchmark interfaces to MTU 1500 for XDP rows and
+restores the original MTU afterward.
 
-The current AF_XDP implementation binds one queue per process, so `rx_queue` and
-`tx_queue` must match. Run multiple processes pinned to separate queues for
-multi-queue lab work. `--recv-mode drop` keeps the userspace path TX-only for
-maximum send pressure, without response-tracking table allocation or per-query
-timestamps. Query payloads are prebuilt before the AF_XDP loop and patched with
-the current DNS ID directly in the AF_XDP frame before checksum calculation, so
-source/query variation does not rebuild the DNS question body or copy through an
-intermediate DNS buffer on every send. UDP checksums are folded over packet
-slices without allocating a pseudo-header buffer per packet. `--recv-mode
-process` also opens RX rings and classifies returned DNS responses by header
-fields. Duration limits are checked at batch boundaries, so a duration-capped
-run can overshoot by up to the configured XDP batch size. Hardware-lab
-validation should compare OxideGun TX/RX counters with NIC counters and packet
-capture on the DUT-side link.
+The AF_XDP implementation binds one or more contiguous queue pairs in one
+process. `rx_queue` and `tx_queue` must match and act as the first queue;
+`--queue-count` controls the fanout. With more than one queue and no explicit
+`--source-port-range`, OxideGun assigns one fixed source port per worker starting
+at `--source-port`, which gives RSS a stable tuple spread and lets any RX worker
+match replies by UDP destination port plus DNS ID. `--recv-mode drop` keeps the
+userspace path TX-only for maximum send pressure, without response-tracking table
+allocation or per-query timestamps. Query payloads are prebuilt before the
+AF_XDP loop and patched with the current DNS ID directly in the AF_XDP frame
+before checksum calculation, so source/query variation does not rebuild the DNS
+question body or copy through an intermediate DNS buffer on every send. UDP
+checksums are folded over packet slices without allocating a pseudo-header buffer
+per packet. `--recv-mode process` also opens RX rings and classifies returned
+DNS responses by header fields. Duration limits are checked at batch boundaries,
+so a duration-capped run can overshoot by up to the configured XDP batch size.
+Hardware-lab validation should compare OxideGun TX/RX counters with NIC counters
+and packet capture on the DUT-side link.
+
+Current process-mode AF_XDP receive still requires an XDP program that redirects
+matching DNS replies into the bound XSK map. Without that requester-side redirect
+program, the TX path can generate packets but RX counters can remain zero even
+when RX rings are configured. The next XDP slice is to add the OxideGun reply
+redirect object and loader path so `--recv-mode process` can produce the same
+reply-percentage gate as `kxdpgun`.
 
 Source-address strategies require the XDP backend. Portable UDP uses the OS
 socket source address and is intended for CI, local sanity checks, and ordinary
@@ -73,6 +87,7 @@ sudo target/release/oxide-gun \
   --interface ens6f0 \
   --tx-queue 0 \
   --rx-queue 0 \
+  --queue-count 8 \
   --xdp-zerocopy auto \
   --source-ip 198.18.0.1 \
   --source-cidr 198.18.10.0/24 \
@@ -106,6 +121,7 @@ sudo target/release/oxide-gun \
   --interface ens6f0 \
   --tx-queue 0 \
   --rx-queue 0 \
+  --queue-count 1 \
   --xdp-zerocopy auto \
   --xdp-drop-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-drop.bpf.o \
   --source-ip 198.18.0.1 \

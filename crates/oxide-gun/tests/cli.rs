@@ -80,6 +80,8 @@ fn print_config_accepts_cli_overrides() {
             "drop",
             "--max-packets",
             "9",
+            "--queue-count",
+            "4",
         ])
         .output()
         .expect("oxide-gun print-config runs");
@@ -98,4 +100,5 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("select = \"sequential\""));
     assert!(stdout.contains("mode = \"drop\""));
     assert!(stdout.contains("max_packets = 9"));
+    assert!(stdout.contains("queue_count = 4"));
 }

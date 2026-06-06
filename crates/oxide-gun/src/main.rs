@@ -57,6 +57,9 @@ struct Cli {
     /// XDP RX queue id.
     #[arg(long)]
     rx_queue: Option<u32>,
+    /// Number of contiguous XDP queue pairs to bind, starting at --tx-queue/--rx-queue.
+    #[arg(long)]
+    queue_count: Option<u32>,
     /// XDP bind mode.
     #[arg(long, value_enum)]
     xdp_mode: Option<XdpMode>,
@@ -249,6 +252,12 @@ struct InterfaceConfig {
     nic: Option<String>,
     tx_queue: u32,
     rx_queue: u32,
+    #[serde(default = "default_queue_count")]
+    queue_count: u32,
+}
+
+fn default_queue_count() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -916,6 +925,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(rx_queue) = cli.rx_queue {
         config.interface.rx_queue = rx_queue;
     }
+    if let Some(queue_count) = cli.queue_count {
+        config.interface.queue_count = queue_count;
+    }
     if let Some(xdp_mode) = cli.xdp_mode {
         config.xdp.mode = xdp_mode;
     }
@@ -1094,7 +1106,33 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
         bail!("backend xdp requires target.mac or --target-mac");
     }
     if config.interface.rx_queue != config.interface.tx_queue {
-        bail!("backend xdp currently requires interface.rx_queue to match interface.tx_queue");
+        bail!("backend xdp requires interface.rx_queue to match interface.tx_queue");
+    }
+    if config.interface.queue_count == 0 {
+        bail!("backend xdp requires interface.queue_count to be non-zero");
+    }
+    config
+        .interface
+        .tx_queue
+        .checked_add(config.interface.queue_count.saturating_sub(1))
+        .ok_or_else(|| anyhow!("interface.queue_count overflows tx_queue"))?;
+    config
+        .interface
+        .rx_queue
+        .checked_add(config.interface.queue_count.saturating_sub(1))
+        .ok_or_else(|| anyhow!("interface.queue_count overflows rx_queue"))?;
+    if config.interface.queue_count > 1 && config.xdp.drop_object.is_some() {
+        bail!("backend xdp multi-queue does not yet support xdp.drop_object reply drops");
+    }
+    if config.interface.queue_count > 1 && config.source.port_range.is_none() {
+        if config.interface.queue_count > u32::from(u16::MAX) {
+            bail!("interface.queue_count is too large for automatic source port assignment");
+        }
+        config
+            .source
+            .port
+            .checked_add((config.interface.queue_count - 1) as u16)
+            .ok_or_else(|| anyhow!("source.port plus interface.queue_count overflows u16"))?;
     }
     if !config.xdp.umem_frame_count.is_power_of_two() {
         bail!("xdp.umem_frame_count must be a power of two");

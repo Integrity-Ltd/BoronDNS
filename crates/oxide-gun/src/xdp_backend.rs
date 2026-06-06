@@ -1,10 +1,12 @@
 #![allow(unsafe_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -19,10 +21,10 @@ use xdp::slab::{HeapSlab, Slab};
 use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 
 use super::{
-    DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, QueryPool, QueryTemplate,
-    RecvMode, ResponseClass, SourceSelector, Stats, XdpMode, XdpZeroCopyMode, build_dns_query,
-    classify_response, drop_implementation, parse_ipv4_cidr, query_pool, response_id,
-    serde_plain_drop_implementation,
+    DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, PortSelect, QueryPool,
+    QueryTemplate, RecvMode, ResponseClass, SourceSelector, Stats, XdpMode, XdpZeroCopyMode,
+    build_dns_query, classify_response, drop_implementation, parse_ipv4_cidr, query_pool,
+    response_id, serde_plain_drop_implementation,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -41,6 +43,7 @@ struct XdpOutputRecord<'a> {
     interface: &'a str,
     tx_queue: u32,
     rx_queue: u32,
+    queue_count: u32,
     recv_mode: RecvMode,
     drop_implementation: DropImplementation,
     target: SocketAddr,
@@ -80,6 +83,73 @@ struct XdpOutputRecord<'a> {
     latency_p999_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<&'a str>,
+}
+
+#[derive(Debug)]
+struct XdpRunOutcome {
+    stats: Stats,
+}
+
+#[derive(Debug)]
+struct SharedInflight {
+    shards: Vec<Mutex<HashMap<u32, Instant>>>,
+}
+
+impl SharedInflight {
+    fn new() -> Self {
+        let shards = (0..256).map(|_| Mutex::new(HashMap::new())).collect();
+        Self { shards }
+    }
+
+    fn insert(&self, port: u16, id: u16, sent_at: Instant) {
+        let key = inflight_key(port, id);
+        if let Ok(mut shard) = self.shards[inflight_shard(key)].lock() {
+            shard.insert(key, sent_at);
+        }
+    }
+
+    fn take(&self, port: u16, id: u16) -> Option<Instant> {
+        let key = inflight_key(port, id);
+        self.shards[inflight_shard(key)]
+            .lock()
+            .ok()
+            .and_then(|mut shard| shard.remove(&key))
+    }
+}
+
+#[derive(Debug)]
+enum InflightTracker {
+    Local(Vec<Option<Instant>>),
+    Shared(Arc<SharedInflight>),
+}
+
+impl InflightTracker {
+    fn record(&mut self, port: u16, id: u16, sent_at: Instant) {
+        match self {
+            Self::Local(inflight) => {
+                inflight[id as usize] = Some(sent_at);
+            }
+            Self::Shared(inflight) => inflight.insert(port, id, sent_at),
+        }
+    }
+
+    fn take(&mut self, port: u16, id: u16) -> Option<Instant> {
+        match self {
+            Self::Local(inflight) => {
+                let _ = port;
+                inflight[id as usize].take()
+            }
+            Self::Shared(inflight) => inflight.take(port, id),
+        }
+    }
+}
+
+fn inflight_key(port: u16, id: u16) -> u32 {
+    (u32::from(port) << 16) | u32::from(id)
+}
+
+fn inflight_shard(key: u32) -> usize {
+    key as usize & 0xff
 }
 
 #[repr(C)]
@@ -160,6 +230,136 @@ impl KernelDropGuard {
 }
 
 pub(super) fn run(config: &FileConfig) -> Result<()> {
+    if config.interface.queue_count > 1 {
+        return run_multi_queue(config);
+    }
+    let _ = run_single(config.clone(), None, true)?;
+    Ok(())
+}
+
+fn run_multi_queue(config: &FileConfig) -> Result<()> {
+    let target = config.target.address.unwrap_or(DEFAULT_TARGET);
+    let interface = config
+        .interface
+        .nic
+        .as_deref()
+        .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
+    let queue_count = active_queue_count(config);
+    let mut aggregate_config = config.clone();
+    aggregate_config.interface.queue_count = queue_count;
+    if aggregate_config.source.port_range.is_none() && queue_count > 1 {
+        let last_port = aggregate_config.source.port + (queue_count - 1) as u16;
+        aggregate_config.source.port_range =
+            Some(format!("{}-{last_port}", aggregate_config.source.port));
+        aggregate_config.source.port_select = PortSelect::Sequential;
+    }
+    let query_pool = query_pool(&aggregate_config)?;
+    let source_selector = SourceSelector::new(&aggregate_config.source, aggregate_config.run.seed)?;
+    let shared_inflight =
+        (config.recv.mode == RecvMode::Process).then(|| Arc::new(SharedInflight::new()));
+    let start = Instant::now();
+    let mut handles = Vec::with_capacity(queue_count as usize);
+
+    for worker_index in 0..queue_count {
+        let worker_config = worker_config(&aggregate_config, worker_index, queue_count)?;
+        let inflight = shared_inflight
+            .as_ref()
+            .map(|shared| InflightTracker::Shared(Arc::clone(shared)));
+        handles.push(thread::spawn(move || {
+            run_single(worker_config, inflight, false)
+        }));
+    }
+
+    let mut aggregate = Stats::default();
+    for handle in handles {
+        let outcome = handle
+            .join()
+            .map_err(|_| anyhow!("XDP queue worker panicked"))??;
+        merge_stats(&mut aggregate, outcome.stats);
+    }
+
+    emit_xdp_record(
+        &aggregate_config,
+        interface,
+        target,
+        query_pool.first(),
+        &query_pool,
+        &source_selector,
+        &aggregate,
+        start,
+        true,
+    )
+}
+
+fn active_queue_count(config: &FileConfig) -> u32 {
+    let mut queue_count = config.interface.queue_count;
+    if config.run.max_packets != 0 {
+        queue_count = queue_count.min(config.run.max_packets.min(u64::from(u32::MAX)) as u32);
+    }
+    if let Some(target_qps) = config.rate.target_qps
+        && target_qps > 0
+    {
+        queue_count = queue_count.min(target_qps.min(u64::from(u32::MAX)) as u32);
+    }
+    queue_count.max(1)
+}
+
+fn worker_config(config: &FileConfig, worker_index: u32, queue_count: u32) -> Result<FileConfig> {
+    let mut worker = config.clone();
+    worker.interface.tx_queue = config.interface.tx_queue + worker_index;
+    worker.interface.rx_queue = config.interface.rx_queue + worker_index;
+    worker.interface.queue_count = 1;
+    worker.log.flush_interval_ms = 0;
+    worker.run.seed = config.run.seed.wrapping_add(u64::from(worker_index));
+    if let Some(target_qps) = config.rate.target_qps {
+        if target_qps > 0 {
+            let base = target_qps / u64::from(queue_count);
+            let remainder = target_qps % u64::from(queue_count);
+            worker.rate.target_qps = Some(base + u64::from(worker_index < remainder as u32));
+        }
+    }
+    if config.run.max_packets != 0 {
+        let base = config.run.max_packets / u64::from(queue_count);
+        let remainder = config.run.max_packets % u64::from(queue_count);
+        worker.run.max_packets = base + u64::from(worker_index < remainder as u32);
+    }
+    if config.source.port_range.is_none() {
+        worker.source.port = config
+            .source
+            .port
+            .checked_add(worker_index as u16)
+            .ok_or_else(|| anyhow!("source.port plus queue worker index overflows u16"))?;
+    }
+    Ok(worker)
+}
+
+fn merge_stats(total: &mut Stats, stats: Stats) {
+    total.tx_packets += stats.tx_packets;
+    total.tx_bytes += stats.tx_bytes;
+    total.rx_packets += stats.rx_packets;
+    total.rx_bytes += stats.rx_bytes;
+    total.rx_dns_responses += stats.rx_dns_responses;
+    total.rx_dns_unmatched += stats.rx_dns_unmatched;
+    total.rx_truncated += stats.rx_truncated;
+    total.positive += stats.positive;
+    total.nxdomain += stats.nxdomain;
+    total.nodata += stats.nodata;
+    total.servfail += stats.servfail;
+    total.refused += stats.refused;
+    total.other_rcode += stats.other_rcode;
+    total.queries_unanswered += stats.queries_unanswered;
+    total.rx_kernel_dropped += stats.rx_kernel_dropped;
+    total.errors += stats.errors;
+    for (dst, src) in total.latency.counts.iter_mut().zip(stats.latency.counts) {
+        *dst += src;
+    }
+}
+
+fn run_single(
+    config: FileConfig,
+    shared_inflight: Option<InflightTracker>,
+    emit_records: bool,
+) -> Result<XdpRunOutcome> {
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
     let interface = config
         .interface
@@ -174,7 +374,7 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
         .target
         .mac
         .ok_or_else(|| anyhow!("backend xdp requires target.mac"))?;
-    let query_pool = query_pool(config)?;
+    let query_pool = query_pool(&config)?;
     let encoded_queries = encoded_query_pool(&query_pool)?;
     let mut source_selector = SourceSelector::new(&config.source, config.run.seed)?;
     let ifname = CString::new(interface).context("interface name contains NUL byte")?;
@@ -186,8 +386,8 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
     let kernel_drop = if config.recv.mode == RecvMode::Drop {
         match config.xdp.drop_object.as_deref() {
             Some(path) => {
-                let (port_start, port_end) = source_port_bounds(config)?;
-                let drop_scope = drop_scope(config, target)?;
+                let (port_start, port_end) = source_port_bounds(&config)?;
+                let drop_scope = drop_scope(&config, target)?;
                 Some(KernelDropGuard::attach(
                     path,
                     interface,
@@ -285,7 +485,9 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
     };
     let mut query_id = config.run.seed as u16;
     let mut query_rng = super::XorShift64::new(config.run.seed);
-    let mut inflight = track_responses.then(|| vec![None; u16::MAX as usize + 1]);
+    let mut inflight = track_responses.then(|| {
+        shared_inflight.unwrap_or_else(|| InflightTracker::Local(vec![None; u16::MAX as usize + 1]))
+    });
 
     while stats.tx_packets < max_packets {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -331,7 +533,7 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
                 bail!("internal AF_XDP send slab overflow");
             }
             if let Some(inflight) = inflight.as_mut() {
-                inflight[query_id as usize] = Some(Instant::now());
+                inflight.record(source.port, query_id, Instant::now());
             }
             send_lengths.push_back(frame_len as u64);
         }
@@ -349,6 +551,7 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
                 account_sent_packets(queued, &mut send_lengths, &mut stats);
+                sleep_for_sent(per_packet_delay, queued);
                 rings.completion_ring.dequeue(&mut umem, batch_size);
                 continue;
             }
@@ -374,12 +577,13 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
             )?;
         }
 
-        if config.log.flush_interval_ms > 0
+        if emit_records
+            && config.log.flush_interval_ms > 0
             && last_flush.elapsed() >= Duration::from_millis(config.log.flush_interval_ms)
         {
             refresh_kernel_drop_count(&mut stats, kernel_drop.as_ref())?;
             emit_xdp_record(
-                config,
+                &config,
                 interface,
                 target,
                 query_pool.first(),
@@ -392,23 +596,24 @@ pub(super) fn run(config: &FileConfig) -> Result<()> {
             last_flush = Instant::now();
         }
 
-        if let Some(delay) = per_packet_delay {
-            std::thread::sleep(delay.mul_f64(sent.max(1) as f64));
-        }
+        sleep_for_sent(per_packet_delay, sent);
     }
 
     refresh_kernel_drop_count(&mut stats, kernel_drop.as_ref())?;
-    emit_xdp_record(
-        config,
-        interface,
-        target,
-        query_pool.first(),
-        &query_pool,
-        &source_selector,
-        &stats,
-        start,
-        true,
-    )
+    if emit_records {
+        emit_xdp_record(
+            &config,
+            interface,
+            target,
+            query_pool.first(),
+            &query_pool,
+            &source_selector,
+            &stats,
+            start,
+            true,
+        )?;
+    }
+    Ok(XdpRunOutcome { stats })
 }
 
 fn source_port_bounds(config: &FileConfig) -> Result<(u16, u16)> {
@@ -457,6 +662,15 @@ fn account_sent_packets(sent: usize, send_lengths: &mut VecDeque<u64>, stats: &m
         if let Some(len) = send_lengths.pop_front() {
             stats.tx_bytes += len;
         }
+    }
+}
+
+fn sleep_for_sent(per_packet_delay: Option<Duration>, sent: usize) {
+    if sent == 0 {
+        return;
+    }
+    if let Some(delay) = per_packet_delay {
+        std::thread::sleep(delay.mul_f64(sent as f64));
     }
 }
 
@@ -534,7 +748,7 @@ fn receive_available_xdp(
     fill_ring: &mut xdp::WakableFillRing,
     umem: &mut xdp::Umem,
     recv_slab: &mut HeapSlab,
-    inflight: &mut [Option<Instant>],
+    inflight: &mut InflightTracker,
     stats: &mut Stats,
 ) -> Result<()> {
     let Some(rx_ring) = rx_ring else {
@@ -555,14 +769,14 @@ fn receive_available_xdp(
         };
         stats.rx_packets += 1;
         stats.rx_bytes += packet.len() as u64;
-        if let Some(dns_payload) = dns_payload_from_ethernet_frame(&packet) {
-            let Some(id) = response_id(dns_payload) else {
+        if let Some(received) = dns_payload_from_ethernet_frame(&packet) {
+            let Some(id) = response_id(received.payload) else {
                 stats.rx_dns_unmatched += 1;
                 umem.free_packet(packet);
                 continue;
             };
-            let sent_at = inflight[id as usize].take();
-            let response_class = classify_response(dns_payload, id);
+            let sent_at = inflight.take(received.destination_port, id);
+            let response_class = classify_response(received.payload, id);
             match response_class {
                 ResponseClass::Positive => {
                     stats.rx_dns_responses += 1;
@@ -648,6 +862,7 @@ fn emit_xdp_record(
         interface,
         tx_queue: config.interface.tx_queue,
         rx_queue: config.interface.rx_queue,
+        queue_count: config.interface.queue_count,
         recv_mode: config.recv.mode,
         drop_implementation: drop_implementation(
             config.recv.mode,
@@ -1016,7 +1231,13 @@ fn write_udp_slice_with_query_id(
     Ok(())
 }
 
-fn dns_payload_from_ethernet_frame(frame: &[u8]) -> Option<&[u8]> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReceivedDnsFrame<'a> {
+    payload: &'a [u8],
+    destination_port: u16,
+}
+
+fn dns_payload_from_ethernet_frame(frame: &[u8]) -> Option<ReceivedDnsFrame<'_>> {
     if frame.len() < ETHERNET_HEADER_LEN + UDP_HEADER_LEN {
         return None;
     }
@@ -1032,10 +1253,16 @@ fn dns_payload_from_ethernet_frame(frame: &[u8]) -> Option<&[u8]> {
                 return None;
             }
             let udp_start = ip_start + ihl;
-            let udp_len = u16::from_be_bytes([frame[udp_start + 4], frame[udp_start + 5]]) as usize;
+            let udp_header = frame.get(udp_start..udp_start + UDP_HEADER_LEN)?;
+            let destination_port = u16::from_be_bytes([udp_header[2], udp_header[3]]);
+            let udp_len = u16::from_be_bytes([udp_header[4], udp_header[5]]) as usize;
             let dns_start = udp_start + UDP_HEADER_LEN;
             let dns_end = udp_start.checked_add(udp_len)?;
-            frame.get(dns_start..dns_end)
+            let payload = frame.get(dns_start..dns_end)?;
+            Some(ReceivedDnsFrame {
+                payload,
+                destination_port,
+            })
         }
         0x86dd => {
             if frame.len() < ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN {
@@ -1046,10 +1273,16 @@ fn dns_payload_from_ethernet_frame(frame: &[u8]) -> Option<&[u8]> {
                 return None;
             }
             let udp_start = ip_start + IPV6_HEADER_LEN;
-            let udp_len = u16::from_be_bytes([frame[udp_start + 4], frame[udp_start + 5]]) as usize;
+            let udp_header = frame.get(udp_start..udp_start + UDP_HEADER_LEN)?;
+            let destination_port = u16::from_be_bytes([udp_header[2], udp_header[3]]);
+            let udp_len = u16::from_be_bytes([udp_header[4], udp_header[5]]) as usize;
             let dns_start = udp_start + UDP_HEADER_LEN;
             let dns_end = udp_start.checked_add(udp_len)?;
-            frame.get(dns_start..dns_end)
+            let payload = frame.get(dns_start..dns_end)?;
+            Some(ReceivedDnsFrame {
+                payload,
+                destination_port,
+            })
         }
         _ => None,
     }
@@ -1120,10 +1353,9 @@ mod tests {
             checksum(&frame[ETHERNET_HEADER_LEN..ETHERNET_HEADER_LEN + IPV4_HEADER_LEN]),
             0
         );
-        assert_eq!(
-            dns_payload_from_ethernet_frame(&frame),
-            Some(dns.as_slice())
-        );
+        let received = dns_payload_from_ethernet_frame(&frame).expect("DNS frame parses");
+        assert_eq!(received.payload, dns.as_slice());
+        assert_eq!(received.destination_port, 53);
     }
 
     #[test]
@@ -1222,6 +1454,29 @@ mod tests {
     }
 
     #[test]
+    fn shared_inflight_distinguishes_same_id_on_different_ports() {
+        let inflight = SharedInflight::new();
+        let first = Instant::now();
+        let second = first + Duration::from_micros(10);
+        inflight.insert(53000, 7, first);
+        inflight.insert(53001, 7, second);
+
+        assert_eq!(inflight.take(53001, 7), Some(second));
+        assert_eq!(inflight.take(53000, 7), Some(first));
+        assert_eq!(inflight.take(53000, 7), None);
+    }
+
+    #[test]
+    fn active_queue_count_does_not_create_zero_limit_workers() {
+        let mut config = FileConfig::default();
+        config.interface.queue_count = 8;
+        config.run.max_packets = 3;
+        config.rate.target_qps = Some(2);
+
+        assert_eq!(active_queue_count(&config), 2);
+    }
+
+    #[test]
     fn builds_ipv6_ethernet_udp_dns_frame() {
         let dns = b"\xab\xcd\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x1c\x00\x01";
         let frame = build_ethernet_udp_dns_frame(
@@ -1235,10 +1490,9 @@ mod tests {
         )
         .expect("frame builds");
         assert_eq!(u16::from_be_bytes([frame[12], frame[13]]), 0x86dd);
-        assert_eq!(
-            dns_payload_from_ethernet_frame(&frame),
-            Some(dns.as_slice())
-        );
+        let received = dns_payload_from_ethernet_frame(&frame).expect("DNS frame parses");
+        assert_eq!(received.payload, dns.as_slice());
+        assert_eq!(received.destination_port, 53);
     }
 
     #[test]
