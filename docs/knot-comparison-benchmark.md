@@ -1339,11 +1339,16 @@ mostly intact and passed both run orders at the same temporary XDP MTU 1500:
 Knot-first at 2367847 replies/s and 100.000000%, then OxideDNS AF_XDP at
 2402461 replies/s and 100.000000%. More aggressive one-port repairs that moved
 other doubled workers also cleared loss but reduced OxideDNS to 2.30-2.34M
-replies/s, so the retained conclusion is source-port/queue weighting, not MTU
-or multi-buffer work, for these small DNS packets. Promote 8192/32768 plus the
-weighted queue-5 source-port repair as the current forward physical comparison
-profile, but keep requiring repeated 100% reply rows because the raw QPS margin
-can be narrow in OxideDNS-first order.
+replies/s. The selector-targeted worker-40 repair candidate `53727` -> `53205`
+behaved the same way in `physical-udp-knot-comparison-20260606T085330Z`:
+OxideDNS AF_XDP reached 2326578 replies/s at 100.000000%, while Knot XDP
+reached 2362108 replies/s at 100.000000%. Treat `--repair-existing
+--repair-server-worker` as a candidate generator, not a promotion rule. The
+retained conclusion is source-port/queue weighting, not MTU or multi-buffer
+work, for these small DNS packets. Promote 8192/32768 plus the weighted queue-5
+source-port repair `53087` as the current forward physical comparison profile,
+but keep requiring repeated 100% reply rows because the raw QPS margin can be
+narrow in OxideDNS-first order.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
