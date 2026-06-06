@@ -1418,6 +1418,21 @@ loss, and the low-rate calibration list in
 QPS to Knot; do not replace the high-rate list with the earlier calibration
 list for promotion rows.
 
+Running the same high-rate profile against the existing source-built Knot
+install at `/home/codex/knot-xdp-3.5.4/sbin/knotd` reversed that packaged-Knot
+result. The source build reports Knot DNS 3.5.4 configured with
+`--enable-xdp=yes`, `XDP support: libxdp`, and accepts `zero-copy: on` in the
+generated XDP config. In
+`physical-udp-knot-comparison-20260606T194258Z`, OxideDNS-first measured
+OxideDNS AF_XDP at 2328733 replies/s and 100.000000%, while source-built Knot
+XDP reached 2345938 replies/s and 100.000000%. In
+`physical-udp-knot-comparison-20260606T194416Z`, Knot-first measured
+source-built Knot XDP at 2366863 replies/s and 100.000000%, while OxideDNS
+AF_XDP reached 2325380 replies/s and 100.000000%. Treat the packaged-Knot rows
+above as a useful compatibility comparison, not the final "better than Knot XDP"
+claim. The active performance gap is now against source-built Knot XDP with
+server-side zero-copy enabled.
+
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
 `oxidedns_udp_worker_source_port_datagrams_total{worker,source_port}`, which is
