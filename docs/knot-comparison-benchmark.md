@@ -402,6 +402,13 @@ experiments:
   artifact. The default `knot-first` preserves the original comparison flow;
   use `oxidedns-first` to check for XDP attach/detach or NIC-state order
   effects.
+- `scripts/physical-xdp-source-knot-profile.sh` is a narrow repeat wrapper for
+  the current source-built Knot XDP comparison. It defaults to the 2.5M
+  requester-owned AF_XDP profile, source-built Knot 3.5.4, server/requester
+  native XDP MTU 1500, requester zero-copy forced, and both comparison run
+  orders. Use `OXIDEDNS_SOURCE_KNOT_REPEATS=N` and, when needed,
+  `OXIDEDNS_SOURCE_KNOT_ORDERS="oxidedns-first knot-first"` to capture variance
+  before changing transport code.
 - `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|oxide-gun` selects the requester. The
   default remains `kxdpgun` for promotion rows. `oxide-gun` runs the
   project-owned AF_XDP requester with the staged `querydb` as `--query-list`,
@@ -1432,6 +1439,23 @@ AF_XDP reached 2325380 replies/s and 100.000000%. Treat the packaged-Knot rows
 above as a useful compatibility comparison, not the final "better than Knot XDP"
 claim. The active performance gap is now against source-built Knot XDP with
 server-side zero-copy enabled.
+
+Repeating the source-built Knot profile twice in both orders with
+`scripts/physical-xdp-source-knot-profile.sh` confirmed that the active gap is
+small but still order-sensitive, and that reply percentage remains a gate. In
+OxideDNS-first artifacts `physical-udp-knot-comparison-20260606T200457Z` and
+`physical-udp-knot-comparison-20260606T200627Z`, OxideDNS AF_XDP measured
+2356012 and 2346111 replies/s while source-built Knot XDP measured 2399713 and
+2400083 replies/s. The second OxideDNS-first row returned 99.998909% replies,
+so it does not satisfy the promotion gate even though server qdisc drops,
+softnet drops, and requester PHY drops stayed at zero. In knot-first artifacts
+`physical-udp-knot-comparison-20260606T200541Z` and
+`physical-udp-knot-comparison-20260606T200713Z`, source-built Knot XDP measured
+2367680 and 2390959 replies/s while OxideDNS AF_XDP measured 2405783 and
+2404190 replies/s, all at 100.000000% replies. Across the four artifacts,
+OxideDNS averaged 2378024 replies/s and source-built Knot averaged 2389609
+replies/s; do not claim parity or a win until both orders clear the 100% reply
+gate with lower variance.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
