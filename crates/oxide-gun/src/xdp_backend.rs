@@ -52,6 +52,7 @@ struct XdpOutputRecord<'a> {
     xdp_reply_tracking: XdpReplyTracking,
     xdp_rx_drain_passes: usize,
     xdp_tx_wakeup_interval: usize,
+    xdp_pace_wait_fraction: f64,
     drop_implementation: DropImplementation,
     target: SocketAddr,
     source_ip: IpAddr,
@@ -888,6 +889,7 @@ fn run_bound_worker(
     let batch_size = worker.batch_size;
     let rx_drain_passes = config.xdp.rx_drain_passes;
     let tx_wakeup_interval = config.xdp.tx_wakeup_interval;
+    let pace_wait_fraction = config.xdp.pace_wait_fraction;
     let mut tx_send_passes = 0_usize;
     let mut send_slab = PacketSlab::with_capacity(batch_size);
     let mut send_lengths = Vec::with_capacity(batch_size);
@@ -995,6 +997,7 @@ fn run_bound_worker(
                 pace_after_sent(
                     per_packet_delay,
                     queued,
+                    pace_wait_fraction,
                     &worker.socket,
                     worker.rx_ring.as_mut(),
                     &mut worker.fill_ring,
@@ -1066,6 +1069,7 @@ fn run_bound_worker(
         pace_after_sent(
             per_packet_delay,
             sent,
+            pace_wait_fraction,
             &worker.socket,
             worker.rx_ring.as_mut(),
             &mut worker.fill_ring,
@@ -1345,6 +1349,7 @@ fn account_sent_packets(sent: usize, send_lengths: &mut Vec<u64>, stats: &mut St
 fn pace_after_sent(
     per_packet_delay: Option<Duration>,
     sent: usize,
+    pace_wait_fraction: f64,
     socket: &xdp::socket::XdpSocket,
     rx_ring: Option<&mut xdp::RxRing>,
     fill_ring: &mut xdp::WakableFillRing,
@@ -1361,7 +1366,10 @@ fn pace_after_sent(
     let Some(delay) = per_packet_delay else {
         return Ok(());
     };
-    let wait = delay.mul_f64(sent as f64);
+    let wait = delay.mul_f64(sent as f64 * pace_wait_fraction);
+    if wait.is_zero() {
+        return Ok(());
+    }
     if !process_responses {
         std::thread::sleep(wait);
         return Ok(());
@@ -1600,6 +1608,7 @@ fn emit_xdp_record<'a>(
         xdp_reply_tracking: config.xdp.reply_tracking,
         xdp_rx_drain_passes: config.xdp.rx_drain_passes,
         xdp_tx_wakeup_interval: config.xdp.tx_wakeup_interval,
+        xdp_pace_wait_fraction: config.xdp.pace_wait_fraction,
         drop_implementation: drop_implementation(
             config.recv.mode,
             config.xdp.drop_object.is_some(),

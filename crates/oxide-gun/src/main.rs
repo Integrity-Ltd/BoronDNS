@@ -84,6 +84,9 @@ struct Cli {
     /// Explicit AF_XDP TX wakeup interval in successful send passes. 0 disables explicit wakeups.
     #[arg(long)]
     xdp_tx_wakeup_interval: Option<usize>,
+    /// Fraction of the per-batch XDP paced wait to keep after successful sends.
+    #[arg(long)]
+    xdp_pace_wait_fraction: Option<f64>,
     /// AF_XDP UMEM frame count.
     #[arg(long)]
     xdp_umem_frame_count: Option<u32>,
@@ -456,6 +459,7 @@ struct XdpConfig {
     batch_size: usize,
     rx_drain_passes: usize,
     tx_wakeup_interval: usize,
+    pace_wait_fraction: f64,
     umem_frame_count: u32,
     tx_ring_size: u32,
     rx_ring_size: u32,
@@ -474,6 +478,7 @@ impl Default for XdpConfig {
             batch_size: 64,
             rx_drain_passes: 4,
             tx_wakeup_interval: 1,
+            pace_wait_fraction: 1.0,
             umem_frame_count: 8192,
             tx_ring_size: 4096,
             rx_ring_size: 4096,
@@ -1019,6 +1024,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(xdp_tx_wakeup_interval) = cli.xdp_tx_wakeup_interval {
         config.xdp.tx_wakeup_interval = xdp_tx_wakeup_interval;
     }
+    if let Some(xdp_pace_wait_fraction) = cli.xdp_pace_wait_fraction {
+        config.xdp.pace_wait_fraction = xdp_pace_wait_fraction;
+    }
     if let Some(xdp_umem_frame_count) = cli.xdp_umem_frame_count {
         config.xdp.umem_frame_count = xdp_umem_frame_count;
     }
@@ -1255,6 +1263,11 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     }
     if config.xdp.rx_drain_passes == 0 {
         bail!("xdp.rx_drain_passes must be non-zero");
+    }
+    if !config.xdp.pace_wait_fraction.is_finite()
+        || !(0.0..=1.0).contains(&config.xdp.pace_wait_fraction)
+    {
+        bail!("xdp.pace_wait_fraction must be finite and between 0.0 and 1.0");
     }
     for (name, value) in [
         ("xdp.tx_ring_size", config.xdp.tx_ring_size),

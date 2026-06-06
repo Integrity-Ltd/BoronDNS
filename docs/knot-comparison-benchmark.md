@@ -396,6 +396,10 @@ experiments:
   server AF_XDP workers. For Knot rows, where no OxideDNS server-worker metric
   exists, use `--requester-only` against a low-rate Knot-XDP calibration row to
   select one source port per requester RX queue for that target port.
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION=0.875` passes
+  `--xdp-pace-wait-fraction` to a new enough `oxide-gun` requester. Leave it
+  unset for promotion rows unless a local probe shows that shortening the
+  paced-wait window preserves the reply-percentage gate.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
   reply-drain timeout after the offered send window; raising it is useful when
   separating late requester RX drain from true packet loss.
@@ -1109,6 +1113,22 @@ traffic for OxideDNS to queue 12200233 AF_XDP replies in
 `physical-udp-knot-comparison-20260606T054928Z`, but both Knot and OxideDNS
 fell to about 60% replies; increasing requester RX drain to 64 in
 `physical-udp-knot-comparison-20260606T055048Z` still only reached 63.255592%.
+The explicit requester pace-wait fraction knob is retained as a diagnostic
+control but is not promoted for this profile. Fractions below the default 1.0
+showed the same starvation curve at requested 2.5M: 0.875 in
+`physical-udp-knot-comparison-20260606T060112Z` reached 1957581 replies/s but
+only 97.625263%, 0.75 in `physical-udp-knot-comparison-20260606T060137Z`
+reached 1956853 replies/s at 95.454946%, and 0.625 in
+`physical-udp-knot-comparison-20260606T060202Z` fell to 1907030 replies/s at
+89.960603%. Smaller requester batches were not a fix either: batch 512 in
+`physical-udp-knot-comparison-20260606T055803Z` measured 1953259 replies/s at
+98.507922%, and batch 256 in `physical-udp-knot-comparison-20260606T055828Z`
+measured 1944505 replies/s at 98.810773%. Extending final reply drain to
+3000 ms in `physical-udp-knot-comparison-20260606T060423Z` measured
+1960352 replies/s at 98.841880%, and server ring size 8192 with UMEM frame
+count 32768 in `physical-udp-knot-comparison-20260606T060449Z` measured
+1931262 replies/s at 98.401731%, so the forward 2.5M miss is not just late
+drain timeout or a simple server ring-capacity issue.
 The next forward-rate work should keep the relative paced-wait requester shape
 and instead reduce per-queue AF_XDP service cost or improve requester TX/RX
 co-scheduling without starving reply drain.

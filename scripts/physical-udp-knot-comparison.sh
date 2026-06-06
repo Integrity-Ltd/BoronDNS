@@ -25,6 +25,7 @@ oxide_gun_xdp_zerocopy="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-copy}"
 oxide_gun_xdp_batch_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-1024}"
 oxide_gun_xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
 oxide_gun_xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
+oxide_gun_xdp_pace_wait_fraction="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION:-__omit__}"
 oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
 oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
 oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
@@ -1569,7 +1570,7 @@ run_player_kxdpgun() {
     player_run_dir=".oxidedns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     remote_run_dir="$player_workdir_abs/$player_run_dir"
 
-    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
 set -euo pipefail
 workdir="$1"
 run_dir="$2"
@@ -1589,16 +1590,17 @@ oxide_gun_xdp_zerocopy="${15}"
 oxide_gun_xdp_batch_size="${16}"
 oxide_gun_xdp_rx_drain_passes="${17}"
 oxide_gun_xdp_tx_wakeup_interval="${18}"
-oxide_gun_xdp_umem_frame_count="${19}"
-oxide_gun_xdp_ring_size="${20}"
-oxide_gun_queue_count="${21}"
-oxide_gun_source_port="${22}"
-oxide_gun_source_port_range="${23}"
-oxide_gun_source_port_list="${24}"
-oxide_gun_source_port_select="${25}"
-oxide_gun_source_mac="${26}"
-oxide_gun_target_mac="${27}"
-oxide_gun_response_timeout_ms="${28}"
+oxide_gun_xdp_pace_wait_fraction="${19}"
+oxide_gun_xdp_umem_frame_count="${20}"
+oxide_gun_xdp_ring_size="${21}"
+oxide_gun_queue_count="${22}"
+oxide_gun_source_port="${23}"
+oxide_gun_source_port_range="${24}"
+oxide_gun_source_port_list="${25}"
+oxide_gun_source_port_select="${26}"
+oxide_gun_source_mac="${27}"
+oxide_gun_target_mac="${28}"
+oxide_gun_response_timeout_ms="${29}"
 mkdir -p "$workdir/$run_dir"
 (
     cd "$workdir"
@@ -1624,6 +1626,10 @@ mkdir -p "$workdir/$run_dir"
             if [[ "$oxide_gun_source_port_list" != "__none__" ]]; then
                 source_port_args+=(--source-port-list "$oxide_gun_source_port_list")
             fi
+            pace_args=()
+            if [[ "$oxide_gun_xdp_pace_wait_fraction" != "__omit__" ]]; then
+                pace_args+=(--xdp-pace-wait-fraction "$oxide_gun_xdp_pace_wait_fraction")
+            fi
             sudo "$oxide_gun_bin" \
                 --backend xdp \
                 --interface "$interface" \
@@ -1637,6 +1643,7 @@ mkdir -p "$workdir/$run_dir"
                 --xdp-batch-size "$oxide_gun_xdp_batch_size" \
                 --xdp-rx-drain-passes "$oxide_gun_xdp_rx_drain_passes" \
                 --xdp-tx-wakeup-interval "$oxide_gun_xdp_tx_wakeup_interval" \
+                "${pace_args[@]}" \
                 --xdp-umem-frame-count "$oxide_gun_xdp_umem_frame_count" \
                 --xdp-tx-ring-size "$oxide_gun_xdp_ring_size" \
                 --xdp-rx-ring-size "$oxide_gun_xdp_ring_size" \
