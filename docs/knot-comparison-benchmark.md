@@ -1550,6 +1550,19 @@ same-profile comparison did not improve the source-built Knot gate:
 source-built Knot XDP at 2403218 replies/s and OxideDNS AF_XDP at 2399560
 replies/s, again both 100.000000%. Do not reintroduce that partial buffer-pool
 shape without a stronger direct-to-frame or broader composer redesign.
+A follow-up direct-to-frame prototype was also rejected. That candidate skipped
+the intermediate response `Vec` for AF_XDP-only direct ZoneImage answers by
+copying the request payload aside, composing the DNS answer directly into the
+received UMEM frame, and rewriting the UDP/IP headers in place. It passed local
+core/server tests and an AF_XDP release build, but both source-built Knot
+comparison orders regressed versus the promoted profile:
+`physical-udp-knot-comparison-20260606T224214Z` measured OxideDNS AF_XDP at
+2319432 replies/s and source-built Knot XDP at 2400236 replies/s, both
+100.000000%; `physical-udp-knot-comparison-20260606T224312Z` measured
+source-built Knot XDP at 2371387 replies/s and OxideDNS AF_XDP at 2322708
+replies/s, again both 100.000000%. Treat direct-to-frame UMEM composition as a
+negative slice unless a future design removes more orchestration cost than the
+extra eligibility/probe/copy work adds.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
