@@ -328,7 +328,8 @@ experiments:
   `OXIDEDNS_PHYSICAL_XDP_ZERO_COPY=require`,
   `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=4096`,
   `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
-  `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`, and optionally
+  `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`,
+  `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=1`, and optionally
   `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
   server checkout. AF_XDP rows are started through `sudo` and set
   `process.run_as_user` to `OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER=codex` by default
@@ -341,9 +342,9 @@ experiments:
   drops privileges to `OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER=codex:codex` so
   it can read and write the staged benchmark artifacts after the privileged XDP
   attach.
-  The summary rows retain `server_udp_backend`, `xdp_mode`, and
-  `xdp_zero_copy` so standard, Knot-XDP, and OxideDNS-AF_XDP rows cannot be
-  confused.
+  The summary rows retain `server_udp_backend`, `xdp_mode`, `xdp_zero_copy`,
+  and `xdp_tx_wakeup_interval` so standard, Knot-XDP, and OxideDNS-AF_XDP rows
+  cannot be confused.
 - The requester-side XDP mode is controlled with
   `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=generic|copy|auto`. Use
   `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` when trying `auto` on a jumbo-MTU NIC;
@@ -738,6 +739,21 @@ Two 4.8M rows at `physical-udp-knot-comparison-20260605T202558Z` and
 reply rate, with receive-buffer errors appearing in both rows and the first row
 showing elevated softnet time-squeeze. Keep the caller-owned inbound batch
 layout until a receive change also improves packet-loss behavior.
+AF_XDP server TX wakeup cadence is now a retained tuning axis, but it is not a
+stable win by itself. In the OxideGun AF_XDP requester comparison at 630k
+packets with requester `--xdp-tx-wakeup-interval 4`, the prior Knot XDP row
+`knot-xdp-oxidegun-wakeup4-630k-20260606T011511Z` measured 591585 positive
+replies. OxideDNS with server `xdp.tx_wakeup_interval = 4` at
+`oxidegun-xdp-serverwakeup4-shortknot-latency-630k-20260606T012743Z` regressed
+to 570479 replies. Server interval 8 at
+`oxidegun-xdp-serverwakeup8-shortknot-latency-630k-20260606T012840Z` reached
+592332 replies, narrowly beating that Knot row, but an immediate repeat
+`oxidegun-xdp-serverwakeup8-repeat-latency-630k-20260606T012916Z` fell back to
+571061. The same-binary interval-1 control
+`oxidegun-xdp-serverwakeup1-shortknot-latency-630k-20260606T012946Z` measured
+574223. Keep the default interval 1 for correctness-preserving behavior and
+treat interval 8 as a candidate for a broader repeated sweep, not as proof that
+the AF_XDP server now consistently beats Knot XDP.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
@@ -810,9 +826,9 @@ On the player host:
 For XDP promotion claims, include both `OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP=true`
 and `OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS="af_xdp"` in the retained run, and
 record whether OxideDNS `zero_copy=require` succeeds or fails on the selected
-NIC/queue. If zero-copy has to be relaxed to `auto` or disabled, the row is
-engineering evidence only and should not be described as the final Knot-XDP
-comparison.
+NIC/queue, plus the server `xdp.tx_wakeup_interval` used for each row. If
+zero-copy has to be relaxed to `auto` or disabled, the row is engineering
+evidence only and should not be described as the final Knot-XDP comparison.
 
 The meaningful result is the saturation knee: the highest offered rate where
 response percentage, drops/errors, p99/p999 latency, and byte throughput remain

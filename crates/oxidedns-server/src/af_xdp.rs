@@ -226,6 +226,8 @@ pub(crate) struct AfXdpPacketIo {
     umem: xdp::Umem,
     local_addr: SocketAddr,
     batch_size: usize,
+    tx_wakeup_interval: usize,
+    tx_send_passes: usize,
     fill_ring_size: usize,
     completion_ring_size: usize,
     inbound: Vec<UdpInbound>,
@@ -482,6 +484,8 @@ impl AfXdpPacketIo {
                 umem,
                 local_addr,
                 batch_size: prepared.batch_size,
+                tx_wakeup_interval: config.tx_wakeup_interval,
+                tx_send_passes: 0,
                 fill_ring_size,
                 completion_ring_size: config.completion_ring_size as usize,
                 inbound: (0..prepared.batch_size)
@@ -647,7 +651,9 @@ impl PacketIo for AfXdpPacketIo {
                 .poll_write(PollTimeout::new(Some(Duration::from_millis(10))))?;
             // SAFETY: all packets in `tx_slab` came from this adapter's UMEM,
             // and the UMEM outlives the socket and TX ring.
-            match unsafe { self.tx_ring.send(&mut self.tx_slab, true) } {
+            let wakeup = should_wakeup_tx(self.tx_wakeup_interval, self.tx_send_passes);
+            self.tx_send_passes = self.tx_send_passes.wrapping_add(1);
+            match unsafe { self.tx_ring.send(&mut self.tx_slab, wakeup) } {
                 Ok(queued) if queued > 0 => {}
                 Ok(_) => tokio::task::yield_now().await,
                 Err(error) => {
@@ -685,6 +691,10 @@ fn xdp_flags(mode: XdpMode) -> XdpFlags {
         XdpMode::Drv => XdpFlags::DRV_MODE,
         XdpMode::Hw => XdpFlags::HW_MODE,
     }
+}
+
+fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
+    interval != 0 && send_passes % interval == 0
 }
 
 pub(crate) fn parse_udp_ipv4_frame(frame: &[u8]) -> Result<UdpIpv4Frame, AfXdpFrameError> {
@@ -1137,6 +1147,17 @@ mod tests {
             target_for_frame(7),
             UdpPacketTarget::AfXdp { frame_index: 7 }
         );
+    }
+
+    #[test]
+    fn tx_wakeup_interval_wakes_first_and_then_every_n_passes() {
+        assert!(should_wakeup_tx(1, 0));
+        assert!(should_wakeup_tx(1, 7));
+        assert!(should_wakeup_tx(4, 0));
+        assert!(!should_wakeup_tx(4, 1));
+        assert!(!should_wakeup_tx(4, 3));
+        assert!(should_wakeup_tx(4, 4));
+        assert!(!should_wakeup_tx(0, 0));
     }
 
     #[test]

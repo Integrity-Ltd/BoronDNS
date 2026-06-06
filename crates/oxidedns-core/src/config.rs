@@ -1886,6 +1886,8 @@ pub struct XdpConfig {
     pub completion_ring_size: u32,
     #[serde(default = "default_xdp_batch_size")]
     pub batch_size: usize,
+    #[serde(default = "default_xdp_tx_wakeup_interval")]
+    pub tx_wakeup_interval: usize,
     #[serde(default)]
     pub zero_copy: XdpZeroCopyMode,
 }
@@ -1903,6 +1905,7 @@ impl Default for XdpConfig {
             fill_ring_size: default_xdp_fill_ring_size(),
             completion_ring_size: default_xdp_completion_ring_size(),
             batch_size: default_xdp_batch_size(),
+            tx_wakeup_interval: default_xdp_tx_wakeup_interval(),
             zero_copy: XdpZeroCopyMode::default(),
         }
     }
@@ -1965,6 +1968,11 @@ impl XdpConfig {
         if self.batch_size == 0 {
             return Err(ConfigError::Invalid(
                 "xdp.batch_size must be at least 1".to_owned(),
+            ));
+        }
+        if self.tx_wakeup_interval == 0 {
+            return Err(ConfigError::Invalid(
+                "xdp.tx_wakeup_interval must be at least 1".to_owned(),
             ));
         }
         Ok(())
@@ -2672,6 +2680,10 @@ fn default_xdp_completion_ring_size() -> u32 {
 
 fn default_xdp_batch_size() -> usize {
     64
+}
+
+fn default_xdp_tx_wakeup_interval() -> usize {
+    1
 }
 
 fn default_max_cname_chain() -> usize {
@@ -5149,6 +5161,7 @@ mod tests {
                 fill_ring_size = 4096
                 completion_ring_size = 2048
                 batch_size = 128
+                tx_wakeup_interval = 4
                 zero_copy = "require"
 
                 [[zones]]
@@ -5171,7 +5184,28 @@ mod tests {
         assert_eq!(config.xdp.fill_ring_size, 4096);
         assert_eq!(config.xdp.completion_ring_size, 2048);
         assert_eq!(config.xdp.batch_size, 128);
+        assert_eq!(config.xdp.tx_wakeup_interval, 4);
         assert_eq!(config.xdp.zero_copy, XdpZeroCopyMode::Require);
+    }
+
+    #[test]
+    fn rejects_zero_xdp_tx_wakeup_interval() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                tx_wakeup_interval = 0
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("zero XDP TX wakeup interval should be rejected");
+
+        assert!(error.to_string().contains("xdp.tx_wakeup_interval"));
     }
 
     #[test]
