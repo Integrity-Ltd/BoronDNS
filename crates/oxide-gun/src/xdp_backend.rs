@@ -85,6 +85,8 @@ struct XdpOutputRecord<'a> {
     tx_qps: f64,
     rx_qps: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    queue_stats: Option<&'a [XdpQueueOutputRecord]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     latency_p50_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     latency_p99_us: Option<u64>,
@@ -94,10 +96,31 @@ struct XdpOutputRecord<'a> {
     note: Option<&'a str>,
 }
 
+#[derive(Debug, Serialize)]
+struct XdpQueueOutputRecord {
+    tx_queue: u32,
+    rx_queue: u32,
+    source_port: u16,
+    requested_qps: Option<u64>,
+    tx_packets_total: u64,
+    rx_packets_total: u64,
+    rx_dns_responses_total: u64,
+    rx_dns_responses_minus_tx_packets: i64,
+    rx_kernel_dropped_total: u64,
+    errors_total: u64,
+    send_duration_seconds: f64,
+    tx_qps: f64,
+    rx_qps: f64,
+}
+
 #[derive(Debug)]
 struct XdpRunOutcome {
     stats: Stats,
     send_duration: Duration,
+    tx_queue: u32,
+    rx_queue: u32,
+    source_port: u16,
+    requested_qps: Option<u64>,
 }
 
 struct BoundXdpWorker {
@@ -494,11 +517,13 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
 
     let mut aggregate = Stats::default();
     let mut send_duration = Duration::ZERO;
+    let mut queue_stats = Vec::with_capacity(queue_count as usize);
     for handle in handles {
         let outcome = handle
             .join()
             .map_err(|_| anyhow!("XDP queue worker panicked"))??;
         send_duration = send_duration.max(outcome.send_duration);
+        queue_stats.push(XdpQueueOutputRecord::from_outcome(&outcome));
         merge_stats(&mut aggregate, outcome.stats);
     }
     aggregate.queries_unanswered = aggregate
@@ -515,6 +540,7 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         &aggregate,
         start,
         Some(send_duration),
+        Some(&queue_stats),
         true,
     )
 }
@@ -586,6 +612,35 @@ fn merge_stats(total: &mut Stats, stats: Stats) {
     total.errors += stats.errors;
     for (dst, src) in total.latency.counts.iter_mut().zip(stats.latency.counts) {
         *dst += src;
+    }
+}
+
+fn signed_delta(lhs: u64, rhs: u64) -> i64 {
+    let delta = i128::from(lhs) - i128::from(rhs);
+    delta.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+impl XdpQueueOutputRecord {
+    fn from_outcome(outcome: &XdpRunOutcome) -> Self {
+        let send_elapsed = outcome.send_duration.as_secs_f64().max(0.000_001);
+        Self {
+            tx_queue: outcome.tx_queue,
+            rx_queue: outcome.rx_queue,
+            source_port: outcome.source_port,
+            requested_qps: outcome.requested_qps,
+            tx_packets_total: outcome.stats.tx_packets,
+            rx_packets_total: outcome.stats.rx_packets,
+            rx_dns_responses_total: outcome.stats.rx_dns_responses,
+            rx_dns_responses_minus_tx_packets: signed_delta(
+                outcome.stats.rx_dns_responses,
+                outcome.stats.tx_packets,
+            ),
+            rx_kernel_dropped_total: outcome.stats.rx_kernel_dropped,
+            errors_total: outcome.stats.errors,
+            send_duration_seconds: send_elapsed,
+            tx_qps: outcome.stats.tx_packets as f64 / send_elapsed,
+            rx_qps: outcome.stats.rx_packets as f64 / send_elapsed,
+        }
     }
 }
 
@@ -929,6 +984,7 @@ fn run_bound_worker(
                 &stats,
                 start,
                 None,
+                None,
                 false,
             )?;
             last_flush = Instant::now();
@@ -977,12 +1033,17 @@ fn run_bound_worker(
             &stats,
             start,
             Some(send_duration),
+            None,
             true,
         )?;
     }
     Ok(XdpRunOutcome {
         stats,
         send_duration,
+        tx_queue: config.interface.tx_queue,
+        rx_queue: config.interface.rx_queue,
+        source_port: config.source.port,
+        requested_qps: config.rate.target_qps,
     })
 }
 
@@ -1408,7 +1469,7 @@ fn receive_available_xdp(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_xdp_record(
+fn emit_xdp_record<'a>(
     config: &FileConfig,
     interface: &str,
     target: SocketAddr,
@@ -1418,6 +1479,7 @@ fn emit_xdp_record(
     stats: &Stats,
     start: Instant,
     send_duration: Option<Duration>,
+    queue_stats: Option<&'a [XdpQueueOutputRecord]>,
     summary: bool,
 ) -> Result<()> {
     let elapsed = start.elapsed().as_secs_f64().max(0.000_001);
@@ -1473,6 +1535,7 @@ fn emit_xdp_record(
         send_duration_seconds: send_elapsed,
         tx_qps: stats.tx_packets as f64 / send_elapsed.unwrap_or(elapsed),
         rx_qps: stats.rx_packets as f64 / send_elapsed.unwrap_or(elapsed),
+        queue_stats,
         latency_p50_us,
         latency_p99_us,
         latency_p999_us,

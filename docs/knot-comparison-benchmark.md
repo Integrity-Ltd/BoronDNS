@@ -658,6 +658,17 @@ queries out of 7410688. Extending the same timeout to 5000 ms in
 and 99.977453%, so the remaining issue is not a simple final-drain timeout
 setting; keep investigating requester RX distribution or AF_XDP queue service
 variance.
+To make that visible, the project-owned requester summary now includes a
+`queue_stats` array for multi-queue XDP runs. The first high-rate diagnostic
+with that field, `physical-udp-knot-comparison-20260606T031149Z`, measured
+7398982 replies from 7406592 sent queries at requested 2.5M, and showed the
+requester RX imbalance directly: several queues received zero replies while
+others received about twice their own sent-query count. A rejected follow-up
+experiment that tried to redirect replies to the source-port owner queue
+returned zero replies, consistent with AF_XDP XSKMAP requiring the target XSK
+to match the packet's hardware RX queue. Treat the next requester work as
+RSS/source-port steering or queue-service balancing, not cross-queue XDP
+redirect or MTU tuning.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
