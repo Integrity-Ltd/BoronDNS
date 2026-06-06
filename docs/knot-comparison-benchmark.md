@@ -953,6 +953,12 @@ replies/s and 99.999400%, while OxideDNS AF_XDP measured 2454059 replies/s and
 99.898743%; the row still showed request-side AF_XDP loss before userspace, so
 future tuning should use the source-port map to avoid saturated or poorly
 serviced queues rather than merely maximizing distinct server workers.
+The follow-up single-port substitution attempt was invalid as a fair comparison
+when `physical-udp-knot-comparison-20260606T042816Z` failed before traffic:
+the standard Knot primary inside the OxideDNS row could not bind TCP 5301, then
+OxideDNS stayed in `LOADING`. The physical harness cleanup now kills recorded
+artifact pid files before name-based cleanup so renamed benchmark binaries do
+not survive failed AF_XDP runs and keep ports or XDP state pinned.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

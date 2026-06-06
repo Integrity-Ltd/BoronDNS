@@ -135,6 +135,27 @@ remote_player_workdir() {
 }
 
 cleanup_remote() {
+    if [[ -n "${out_abs:-}" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$out_abs" <<'REMOTE' >/dev/null 2>&1 || true
+set -euo pipefail
+out_abs="$1"
+if [[ -d "$out_abs" ]]; then
+    while IFS= read -r -d '' pid_file; do
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        sudo kill "$pid" 2>/dev/null || true
+    done < <(find "$out_abs" -mindepth 2 -maxdepth 2 -name '*.pid' -print0)
+    sleep 0.2
+    while IFS= read -r -d '' pid_file; do
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        if ps -p "$pid" >/dev/null 2>&1; then
+            sudo kill -9 "$pid" 2>/dev/null || true
+        fi
+    done < <(find "$out_abs" -mindepth 2 -maxdepth 2 -name '*.pid' -print0)
+fi
+REMOTE
+    fi
     ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x oxidedns 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
