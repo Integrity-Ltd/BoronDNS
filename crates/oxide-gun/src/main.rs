@@ -72,6 +72,24 @@ struct Cli {
     /// Compiled Aya eBPF object for process-mode AF_XDP reply redirects.
     #[arg(long)]
     xdp_redirect_object: Option<PathBuf>,
+    /// XDP TX/RX batch size.
+    #[arg(long)]
+    xdp_batch_size: Option<usize>,
+    /// AF_XDP UMEM frame count.
+    #[arg(long)]
+    xdp_umem_frame_count: Option<u32>,
+    /// AF_XDP TX ring size.
+    #[arg(long)]
+    xdp_tx_ring_size: Option<u32>,
+    /// AF_XDP RX ring size.
+    #[arg(long)]
+    xdp_rx_ring_size: Option<u32>,
+    /// AF_XDP fill ring size.
+    #[arg(long)]
+    xdp_fill_ring_size: Option<u32>,
+    /// AF_XDP completion ring size.
+    #[arg(long)]
+    xdp_completion_ring_size: Option<u32>,
     /// Source IP address placed into generated XDP packets.
     #[arg(long)]
     source_ip: Option<IpAddr>,
@@ -944,6 +962,24 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     }
     if let Some(xdp_redirect_object) = &cli.xdp_redirect_object {
         config.xdp.redirect_object = Some(xdp_redirect_object.clone());
+    }
+    if let Some(xdp_batch_size) = cli.xdp_batch_size {
+        config.xdp.batch_size = xdp_batch_size;
+    }
+    if let Some(xdp_umem_frame_count) = cli.xdp_umem_frame_count {
+        config.xdp.umem_frame_count = xdp_umem_frame_count;
+    }
+    if let Some(xdp_tx_ring_size) = cli.xdp_tx_ring_size {
+        config.xdp.tx_ring_size = xdp_tx_ring_size;
+    }
+    if let Some(xdp_rx_ring_size) = cli.xdp_rx_ring_size {
+        config.xdp.rx_ring_size = xdp_rx_ring_size;
+    }
+    if let Some(xdp_fill_ring_size) = cli.xdp_fill_ring_size {
+        config.xdp.fill_ring_size = xdp_fill_ring_size;
+    }
+    if let Some(xdp_completion_ring_size) = cli.xdp_completion_ring_size {
+        config.xdp.completion_ring_size = xdp_completion_ring_size;
     }
     if let Some(source_ip) = cli.source_ip {
         config.source.ip = source_ip;

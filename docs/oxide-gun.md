@@ -29,6 +29,7 @@ sudo target/release/oxide-gun \
   --rx-queue 0 \
   --queue-count 1 \
   --xdp-redirect-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-xdp.bpf.o \
+  --xdp-batch-size 256 \
   --source-ip 198.18.0.1 \
   --source-port 53000 \
   --source-mac 02:00:00:00:00:01 \
@@ -48,7 +49,10 @@ back to the OxideGun host. `--xdp-zerocopy auto` is the default; use
 `--xdp-zerocopy force` only on drivers known to support zero-copy. Native XDP on
 drivers without multi-buffer program support may reject jumbo MTUs; the 25G
 comparison harness lowers the benchmark interfaces to MTU 1500 for XDP rows and
-restores the original MTU afterward.
+restores the original MTU afterward. Lab runs should tune `--xdp-batch-size`,
+`--xdp-umem-frame-count`, and the four XDP ring-size flags to match the NIC,
+queue count, locked-memory limit, and benchmark rate instead of relying on the
+conservative CI defaults.
 
 The AF_XDP implementation binds one or more contiguous queue pairs in one
 process. `rx_queue` and `tx_queue` must match and act as the first queue;
@@ -91,6 +95,7 @@ sudo target/release/oxide-gun \
   --queue-count 8 \
   --xdp-zerocopy auto \
   --xdp-redirect-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-xdp.bpf.o \
+  --xdp-batch-size 256 \
   --source-ip 198.18.0.1 \
   --source-cidr 198.18.10.0/24 \
   --source-port-range 53000-53999 \

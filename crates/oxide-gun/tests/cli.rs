@@ -84,6 +84,18 @@ fn print_config_accepts_cli_overrides() {
             "4",
             "--xdp-redirect-object",
             "/tmp/oxide-gun-xdp.bpf.o",
+            "--xdp-batch-size",
+            "1024",
+            "--xdp-umem-frame-count",
+            "16384",
+            "--xdp-tx-ring-size",
+            "4096",
+            "--xdp-rx-ring-size",
+            "4096",
+            "--xdp-fill-ring-size",
+            "4096",
+            "--xdp-completion-ring-size",
+            "4096",
         ])
         .output()
         .expect("oxide-gun print-config runs");
@@ -104,4 +116,10 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("max_packets = 9"));
     assert!(stdout.contains("queue_count = 4"));
     assert!(stdout.contains("redirect_object = \"/tmp/oxide-gun-xdp.bpf.o\""));
+    assert!(stdout.contains("batch_size = 1024"));
+    assert!(stdout.contains("umem_frame_count = 16384"));
+    assert!(stdout.contains("tx_ring_size = 4096"));
+    assert!(stdout.contains("rx_ring_size = 4096"));
+    assert!(stdout.contains("fill_ring_size = 4096"));
+    assert!(stdout.contains("completion_ring_size = 4096"));
 }

@@ -1,12 +1,15 @@
 #![allow(unsafe_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -109,28 +112,60 @@ unsafe impl Send for BoundXdpWorker {}
 
 #[derive(Debug)]
 struct SharedInflight {
-    shards: Vec<Mutex<HashMap<u32, Instant>>>,
+    first_port: u16,
+    port_count: usize,
+    origin: Instant,
+    sent_micros: Vec<AtomicU64>,
+    outstanding: AtomicU64,
 }
 
 impl SharedInflight {
-    fn new() -> Self {
-        let shards = (0..256).map(|_| Mutex::new(HashMap::new())).collect();
-        Self { shards }
-    }
-
-    fn insert(&self, port: u16, id: u16, sent_at: Instant) {
-        let key = inflight_key(port, id);
-        if let Ok(mut shard) = self.shards[inflight_shard(key)].lock() {
-            shard.insert(key, sent_at);
+    fn new(first_port: u16, last_port: u16, origin: Instant) -> Self {
+        let port_count = usize::from(last_port - first_port) + 1;
+        let entry_count = port_count * (usize::from(u16::MAX) + 1);
+        let sent_micros = (0..entry_count).map(|_| AtomicU64::new(0)).collect();
+        Self {
+            first_port,
+            port_count,
+            origin,
+            sent_micros,
+            outstanding: AtomicU64::new(0),
         }
     }
 
-    fn take(&self, port: u16, id: u16) -> Option<Instant> {
-        let key = inflight_key(port, id);
-        self.shards[inflight_shard(key)]
-            .lock()
-            .ok()
-            .and_then(|mut shard| shard.remove(&key))
+    fn insert(&self, port: u16, id: u16, sent_at: Instant) {
+        if let Some(index) = self.index(port, id) {
+            let micros = sent_at
+                .duration_since(self.origin)
+                .as_micros()
+                .min(u128::from(u64::MAX - 1)) as u64
+                + 1;
+            let previous = self.sent_micros[index].swap(micros, Ordering::Relaxed);
+            if previous == 0 {
+                self.outstanding.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn take(&self, port: u16, id: u16, now: Instant) -> Option<Duration> {
+        let index = self.index(port, id)?;
+        let micros = self.sent_micros[index].swap(0, Ordering::Relaxed);
+        if micros == 0 {
+            return None;
+        }
+        self.outstanding.fetch_sub(1, Ordering::Relaxed);
+        let sent_at = self.origin + Duration::from_micros(micros - 1);
+        Some(now.saturating_duration_since(sent_at))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.outstanding.load(Ordering::Relaxed) == 0
+    }
+
+    fn index(&self, port: u16, id: u16) -> Option<usize> {
+        let port_offset = port.checked_sub(self.first_port)?;
+        let port_offset = usize::from(port_offset);
+        (port_offset < self.port_count).then_some((port_offset << 16) | usize::from(id))
     }
 }
 
@@ -150,23 +185,24 @@ impl InflightTracker {
         }
     }
 
-    fn take(&mut self, port: u16, id: u16) -> Option<Instant> {
+    fn take(&mut self, port: u16, id: u16, now: Instant) -> Option<Duration> {
         match self {
             Self::Local(inflight) => {
                 let _ = port;
-                inflight[id as usize].take()
+                inflight[id as usize]
+                    .take()
+                    .map(|sent_at| now.saturating_duration_since(sent_at))
             }
-            Self::Shared(inflight) => inflight.take(port, id),
+            Self::Shared(inflight) => inflight.take(port, id, now),
         }
     }
-}
 
-fn inflight_key(port: u16, id: u16) -> u32 {
-    (u32::from(port) << 16) | u32::from(id)
-}
-
-fn inflight_shard(key: u32) -> usize {
-    key as usize & 0xff
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Local(inflight) => inflight.iter().all(Option::is_none),
+            Self::Shared(inflight) => inflight.is_empty(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -357,9 +393,6 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     }
     let query_pool = query_pool(&aggregate_config)?;
     let source_selector = SourceSelector::new(&aggregate_config.source, aggregate_config.run.seed)?;
-    let shared_inflight =
-        (config.recv.mode == RecvMode::Process).then(|| Arc::new(SharedInflight::new()));
-    let start = Instant::now();
     let mut workers = Vec::with_capacity(queue_count as usize);
     let mut xsk_entries = Vec::with_capacity(queue_count as usize);
 
@@ -372,6 +405,13 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
 
     let _reply_redirect =
         attach_reply_redirect(&aggregate_config, interface, target, &xsk_entries)?;
+    let start = Instant::now();
+    let shared_inflight = if config.recv.mode == RecvMode::Process {
+        let (first_port, last_port) = source_port_bounds(&aggregate_config)?;
+        Some(Arc::new(SharedInflight::new(first_port, last_port, start)))
+    } else {
+        None
+    };
     let mut handles = Vec::with_capacity(queue_count as usize);
 
     for (worker_config, worker) in workers {
@@ -390,6 +430,9 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
             .map_err(|_| anyhow!("XDP queue worker panicked"))??;
         merge_stats(&mut aggregate, outcome.stats);
     }
+    aggregate.queries_unanswered = aggregate
+        .tx_packets
+        .saturating_sub(aggregate.rx_dns_responses);
 
     emit_xdp_record(
         &aggregate_config,
@@ -644,7 +687,7 @@ fn run_bound_worker(
     let mut send_slab = HeapSlab::with_capacity(batch_size);
     let mut send_lengths = VecDeque::with_capacity(batch_size);
     let track_responses = config.recv.mode == RecvMode::Process;
-    let mut recv_slab = HeapSlab::with_capacity(if track_responses { 64 } else { 0 });
+    let mut recv_slab = HeapSlab::with_capacity(if track_responses { batch_size } else { 0 });
     let start = Instant::now();
     let deadline = config
         .run
@@ -743,15 +786,20 @@ fn run_bound_worker(
         worker.completion_ring.dequeue(&mut worker.umem, batch_size);
 
         if let Some(inflight) = inflight.as_mut() {
-            receive_available_xdp(
-                &worker.socket,
-                worker.rx_ring.as_mut(),
-                &mut worker.fill_ring,
-                &mut worker.umem,
-                &mut recv_slab,
-                inflight,
-                &mut stats,
-            )?;
+            for _ in 0..4 {
+                let received = receive_available_xdp(
+                    &worker.socket,
+                    worker.rx_ring.as_mut(),
+                    &mut worker.fill_ring,
+                    &mut worker.umem,
+                    &mut recv_slab,
+                    inflight,
+                    &mut stats,
+                )?;
+                if received == 0 {
+                    break;
+                }
+            }
         }
 
         if emit_records
@@ -787,7 +835,9 @@ fn run_bound_worker(
             &mut stats,
             Duration::from_millis(config.recv.response_timeout_ms),
         )?;
-        stats.queries_unanswered = stats.tx_packets.saturating_sub(stats.rx_dns_responses);
+        if matches!(inflight, InflightTracker::Local(_)) {
+            stats.queries_unanswered = stats.tx_packets.saturating_sub(stats.rx_dns_responses);
+        }
     }
     refresh_kernel_drop_count(&mut stats, kernel_drop.as_ref())?;
     if emit_records {
@@ -822,8 +872,11 @@ fn drain_xdp_replies(
     };
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
+        if inflight.is_empty() {
+            break;
+        }
         let before = stats.rx_packets;
-        receive_available_xdp(
+        let received = receive_available_xdp(
             socket,
             Some(&mut *rx_ring),
             fill_ring,
@@ -832,7 +885,7 @@ fn drain_xdp_replies(
             inflight,
             stats,
         )?;
-        if stats.rx_packets == before {
+        if received == 0 || stats.rx_packets == before {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
@@ -973,15 +1026,15 @@ fn receive_available_xdp(
     recv_slab: &mut HeapSlab,
     inflight: &mut InflightTracker,
     stats: &mut Stats,
-) -> Result<()> {
+) -> Result<usize> {
     let Some(rx_ring) = rx_ring else {
-        return Ok(());
+        return Ok(0);
     };
     if !socket
         .poll_read(PollTimeout::new(Some(Duration::from_millis(0))))
         .context("failed to poll AF_XDP RX ring")?
     {
-        return Ok(());
+        return Ok(0);
     }
     // SAFETY: received packet views are consumed and returned to the same UMEM
     // before this function returns; `umem` outlives the RX ring and socket.
@@ -998,7 +1051,7 @@ fn receive_available_xdp(
                 umem.free_packet(packet);
                 continue;
             };
-            let sent_at = inflight.take(received.destination_port, id);
+            let latency = inflight.take(received.destination_port, id, Instant::now());
             let response_class = classify_response(received.payload, id);
             match response_class {
                 ResponseClass::Positive => {
@@ -1033,14 +1086,14 @@ fn receive_available_xdp(
                     stats.rx_dns_unmatched += 1;
                 }
             }
-            match sent_at {
-                Some(sent_at)
+            match latency {
+                Some(latency)
                     if !matches!(
                         response_class,
                         ResponseClass::Unmatched | ResponseClass::Timeout
                     ) =>
                 {
-                    stats.latency.record(sent_at.elapsed());
+                    stats.latency.record(latency);
                 }
                 None => stats.rx_dns_unmatched += 1,
                 Some(_) => {}
@@ -1057,7 +1110,7 @@ fn receive_available_xdp(
             .enqueue(umem, received, true)
             .context("failed to replenish AF_XDP fill ring")?;
     }
-    Ok(())
+    Ok(received)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1678,15 +1731,21 @@ mod tests {
 
     #[test]
     fn shared_inflight_distinguishes_same_id_on_different_ports() {
-        let inflight = SharedInflight::new();
         let first = Instant::now();
+        let inflight = SharedInflight::new(53000, 53001, first);
         let second = first + Duration::from_micros(10);
         inflight.insert(53000, 7, first);
         inflight.insert(53001, 7, second);
 
-        assert_eq!(inflight.take(53001, 7), Some(second));
-        assert_eq!(inflight.take(53000, 7), Some(first));
-        assert_eq!(inflight.take(53000, 7), None);
+        assert_eq!(
+            inflight.take(53001, 7, second + Duration::from_micros(5)),
+            Some(Duration::from_micros(5))
+        );
+        assert_eq!(
+            inflight.take(53000, 7, second + Duration::from_micros(5)),
+            Some(Duration::from_micros(15))
+        );
+        assert_eq!(inflight.take(53000, 7, second), None);
     }
 
     #[test]
