@@ -333,6 +333,11 @@ experiments:
   evidence-gated NUMA experiments; leave it unset for baseline comparisons.
 - `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
   `perf-report-*.txt` files beside the run logs on the server host.
+  `OXIDEDNS_PHYSICAL_PERF_SCOPE=process|system` controls whether `perf record`
+  attaches to the OxideDNS process PID or records system-wide on the server for
+  that row. Use `system` when process-PID sampling misses worker threads.
+  `OXIDEDNS_PHYSICAL_PERF_EVENT=cpu-clock` selects software CPU-clock sampling;
+  the default leaves perf's event selection unchanged.
   `OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT=30s` bounds each retained
   `perf report` pass so slow callgraph expansion cannot stall cleanup.
   `OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN=false` skips the children report when
@@ -405,8 +410,10 @@ experiments:
 - `scripts/physical-xdp-source-knot-profile.sh` is a narrow repeat wrapper for
   the current source-built Knot XDP comparison. It defaults to the 2.5M
   requester-owned AF_XDP profile, source-built Knot 3.5.4, server/requester
-  native XDP MTU 1500, requester zero-copy forced, and both comparison run
-  orders. Use `OXIDEDNS_SOURCE_KNOT_REPEATS=N` and, when needed,
+  native XDP MTU 1500, requester zero-copy forced, server AF_XDP batch 512,
+  server `xdp.tx_wakeup_interval = 8`, requester batch 64, requester final
+  response drain timeout 2000 ms, and both comparison run orders. Use
+  `OXIDEDNS_SOURCE_KNOT_REPEATS=N` and, when needed,
   `OXIDEDNS_SOURCE_KNOT_ORDERS="oxidedns-first knot-first"` to capture variance
   before changing transport code.
 - `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|oxide-gun` selects the requester. The
@@ -1456,6 +1463,49 @@ softnet drops, and requester PHY drops stayed at zero. In knot-first artifacts
 OxideDNS averaged 2378024 replies/s and source-built Knot averaged 2389609
 replies/s; do not claim parity or a win until both orders clear the 100% reply
 gate with lower variance.
+
+A profiling/counter pass on the same source-built profile found that process-PID
+`perf record` produced no samples for the OxideDNS worker threads, so the
+physical wrapper now supports row-local system-wide profiling with
+`OXIDEDNS_PHYSICAL_PERF_SCOPE=system` and explicit software sampling through
+`OXIDEDNS_PHYSICAL_PERF_EVENT=cpu-clock`. With a locally deployed unstripped
+profiling binary at `/home/codex/oxidedns-tools/xdp-profile/oxidedns`,
+`physical-udp-knot-comparison-20260606T201444Z` captured 22458 cpu-clock
+samples. Most system-wide samples were idle CPUs, but the symbolized OxideDNS
+worker samples were led by
+`oxidedns_core::dns::DomainName::parse_with_ascii_lowercase`,
+`oxidedns_server::udp::handle_udp_datagram`,
+`oxidedns_server::af_xdp::write_udp_ip_response`,
+`oxidedns_server::af_xdp::parse_udp_ip_frame`, ZoneImage lookup, hashing, and
+allocator/free paths. That evidence supports later packet/DNS hot-path work,
+but the row also missed 128 requester replies while the server AF_XDP worker
+received/sent counters matched, so the next slice first tested transport
+cadence and requester drain knobs rather than changing DNS layout.
+
+The no-code source-built sweep found a gate-clean profile. Raising
+`OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS` from 1000 to 2000 cleared the
+reply gate in `physical-udp-knot-comparison-20260606T201657Z`, but OxideDNS
+still trailed source-built Knot narrowly. Keeping the 2000 ms drain and lowering
+server `xdp.tx_wakeup_interval` from 16 to 8 cleared the gate and improved the
+overall average, but the repeated `1024`-batch profile still lost the
+knot-first average: artifacts `physical-udp-knot-comparison-20260606T201900Z`,
+`201948Z`, `202045Z`, and `202143Z` all returned 100.000000%, with OxideDNS
+averaging 2395169 replies/s and source-built Knot averaging 2389879 replies/s,
+but OxideDNS trailed the two knot-first rows on average. Reducing the server
+AF_XDP batch to 512 while keeping `xdp.tx_wakeup_interval = 8` and requester
+drain timeout 2000 ms then passed both orders in two consecutive passes:
+`physical-udp-knot-comparison-20260606T202300Z` measured knot-first Knot XDP at
+2354014 replies/s and OxideDNS AF_XDP at 2394584 replies/s;
+`physical-udp-knot-comparison-20260606T202348Z` measured OxideDNS-first
+OxideDNS at 2404016 replies/s and Knot XDP at 2398056 replies/s;
+`physical-udp-knot-comparison-20260606T202500Z` measured OxideDNS-first
+OxideDNS at 2406179 replies/s and Knot XDP at 2401377 replies/s; and
+`physical-udp-knot-comparison-20260606T202558Z` measured knot-first Knot XDP at
+2396931 replies/s and OxideDNS AF_XDP at 2401565 replies/s. All four rows
+returned 100.000000% replies with no requester/server PHY discards or softnet
+drops. Promote the source-built comparison profile to server batch 512,
+`xdp.tx_wakeup_interval = 8`, and requester final drain timeout 2000 ms; keep
+the symbolized perf evidence as the next code-path map if the margin regresses.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

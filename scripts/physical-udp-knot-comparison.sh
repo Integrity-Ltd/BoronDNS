@@ -42,6 +42,8 @@ oxide_gun_response_timeout_ms="${OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS
 oxide_gun_source_mac="${OXIDEDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
 oxide_gun_target_mac="${OXIDEDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
 perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
+perf_scope="${OXIDEDNS_PHYSICAL_PERF_SCOPE:-process}"
+perf_event="${OXIDEDNS_PHYSICAL_PERF_EVENT:-__default__}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
 perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
 perf_report_children="${OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN:-true}"
@@ -1619,18 +1621,38 @@ run_server_perf_start() {
     local record="$2"
     local frequency="$3"
     local seconds="$4"
+    local scope="$5"
+    local event="$6"
 
     if [[ "$record" != true ]]; then
         return 0
     fi
 
-    ssh_control "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" "$scope" "$event" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 frequency="$2"
 seconds="$3"
-pid="$(cat "$run_abs/oxidedns.pid")"
-sudo perf record -F "$frequency" -g -p "$pid" -o "$run_abs/perf.data" -- sleep "$seconds" >"$run_abs/perf-record.log" 2>&1 &
+scope="$4"
+event="$5"
+perf_args=(record -F "$frequency" -g -o "$run_abs/perf.data")
+if [[ "$event" != "__default__" ]]; then
+    perf_args+=(-e "$event")
+fi
+case "$scope" in
+process)
+    pid="$(cat "$run_abs/oxidedns.pid")"
+    perf_args+=(-p "$pid")
+    ;;
+system)
+    perf_args+=(-a)
+    ;;
+*)
+    printf 'unsupported OXIDEDNS_PHYSICAL_PERF_SCOPE %q; expected process or system\n' "$scope" >&2
+    exit 64
+    ;;
+esac
+sudo perf "${perf_args[@]}" -- sleep "$seconds" >"$run_abs/perf-record.log" 2>&1 &
 echo $! >"$run_abs/perf.pid"
 REMOTE
 }
@@ -1976,7 +1998,7 @@ for udp_backend in $oxidedns_udp_backends; do
                             printf 'running %s\n' "$run_id"
                             cleanup_server_row_state
                             run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
-                            run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
+                            run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
                             run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
                             run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list" "$oxide_gun_oxidedns_queue_list"
                             run_server_socket_sample_finish "$run_abs" "$socket_sample"
