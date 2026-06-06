@@ -362,6 +362,11 @@ experiments:
   the harness detaches stale requester XDP programs, records the original and
   effective requester MTU in `host/player-link-tuning.txt`, and restores the
   original requester MTU during cleanup.
+- `OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER=knot-first|oxidedns-first` controls
+  whether Knot reference rows run before or after OxideDNS rows in the same
+  artifact. The default `knot-first` preserves the original comparison flow;
+  use `oxidedns-first` to check for XDP attach/detach or NIC-state order
+  effects.
 - `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|oxide-gun` selects the requester. The
   default remains `kxdpgun` for promotion rows. `oxide-gun` runs the
   project-owned AF_XDP requester with the staged `querydb` as `--query-list`,
@@ -959,6 +964,26 @@ the standard Knot primary inside the OxideDNS row could not bind TCP 5301, then
 OxideDNS stayed in `LOADING`. The physical harness cleanup now kills recorded
 artifact pid files before name-based cleanup so renamed benchmark binaries do
 not survive failed AF_XDP runs and keep ports or XDP state pinned.
+After that cleanup fix, the previous 48-port reverse OxideDNS list remained the
+best source-port baseline but still missed the reply-percent gate:
+`physical-udp-knot-comparison-20260606T043500Z` measured Knot XDP at 2455879
+replies/s and 100.000000%, while OxideDNS AF_XDP measured 2457000 replies/s and
+99.994033%; only ports 53496 and 53501 missed replies, and the root
+`rx_out_of_buffer` delta matched the 736 unanswered queries. Capacity knobs
+were mixed: `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=32768` alone regressed to
+99.979601% in `physical-udp-knot-comparison-20260606T043655Z`;
+`OXIDEDNS_PHYSICAL_XDP_RING_SIZE=8192` alone produced a 100.000000% Oxide-only
+row in `physical-udp-knot-comparison-20260606T043819Z` but failed the fair
+Knot-XDP row at 99.988168% in `physical-udp-knot-comparison-20260606T043912Z`.
+Combining ring size 8192 with UMEM frame count 32768 nearly cleared an
+Oxide-only row at 99.999951% in
+`physical-udp-knot-comparison-20260606T044042Z`, but still failed in both fair
+orders: Knot-first `physical-udp-knot-comparison-20260606T044138Z` measured
+OxideDNS at 99.932622%, and OxideDNS-first
+`physical-udp-knot-comparison-20260606T044354Z` measured OxideDNS at
+99.985772% versus Knot XDP at 99.998395%. Treat the remaining loss as AF_XDP
+fill/recycle or queue service behavior, not a simple ring/UMEM capacity
+default.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

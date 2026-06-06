@@ -45,6 +45,7 @@ socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
 socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
 include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
 include_knot_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP:-false}"
+comparison_run_order="${OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER:-knot-first}"
 oxidedns_udp_backends="${OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS:-std}"
 knot_bin="${OXIDEDNS_PHYSICAL_KNOT_BIN:-knotd}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
@@ -1631,7 +1632,12 @@ REMOTE
     [[ "$status" == "0" ]]
 }
 
-if [[ "$include_knot" == true ]]; then
+if [[ "$comparison_run_order" != "knot-first" && "$comparison_run_order" != "oxidedns-first" ]]; then
+    printf 'OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER must be knot-first or oxidedns-first, got %q\n' "$comparison_run_order" >&2
+    exit 69
+fi
+
+if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; then
     for rate in $rates_list; do
         select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
@@ -1643,7 +1649,7 @@ if [[ "$include_knot" == true ]]; then
     done
 fi
 
-if [[ "$include_knot_xdp" == true ]]; then
+if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]]; then
     for rate in $rates_list; do
         select_run_id "knot-xdp-q${rate}"
         run_abs="$out_abs/$run_id"
@@ -1703,6 +1709,30 @@ for udp_backend in $oxidedns_udp_backends; do
         done
     done
 done
+
+if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "knot-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        run_knot_reference_start "$run_abs" "$interface" "std"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_knot_reference_stop "$run_abs"
+    done
+fi
+
+if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "knot-xdp-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        run_knot_reference_start "$run_abs" "$interface" "xdp"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_knot_reference_stop "$run_abs"
+    done
+fi
 
 printf 'artifact_dir=%s\n' "$out_abs"
 ssh_control "$server_ssh" "cat '$out_abs/summary.tsv'"
