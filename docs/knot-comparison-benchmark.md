@@ -1005,6 +1005,24 @@ used temporary native-XDP MTU 1500 and the server worker received/sent totals
 matched; the next useful receive-path work should instead target queue service,
 fill lifecycle, or source-port lists that avoid overloading the hot AF_XDP
 workers without repeating the distinct-worker regression.
+The physical harness now performs targeted row-local cleanup before every Knot,
+Knot-XDP, and OxideDNS row. This was needed after
+`physical-udp-knot-comparison-20260606T050523Z`: the Knot-XDP row completed, but
+the following OxideDNS row failed before traffic because TCP 5301 was still
+unavailable for the local Knot primary. With the cleanup fix,
+`physical-udp-knot-comparison-20260606T050912Z` completed the same Knot-first
+reverse-role comparison. Knot XDP measured 2457197 replies/s at 100.000000%;
+OxideDNS AF_XDP with `xdp.tx_wakeup_interval = 8` measured 2454981 replies/s at
+99.998044%. The opposite order in
+`physical-udp-knot-comparison-20260606T051026Z` was worse for OxideDNS
+AF_XDP, at 2456094 replies/s and 99.972494%, while Knot XDP again reached
+100.000000%. Further wakeup-cadence probes did not promote a stable win:
+`physical-udp-knot-comparison-20260606T051129Z` with interval 4 fell to
+99.932661%; `physical-udp-knot-comparison-20260606T051211Z` with interval 16
+cleared an Oxide-only row at 100.000000%, but the fair Knot-first row
+`physical-udp-knot-comparison-20260606T051259Z` measured OxideDNS at
+99.974414% versus Knot XDP at 99.997892%. Keep `xdp.tx_wakeup_interval` as a
+tuning axis, but do not treat wakeup cadence alone as the remaining fix.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

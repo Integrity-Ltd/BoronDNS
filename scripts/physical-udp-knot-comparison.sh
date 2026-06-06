@@ -243,6 +243,41 @@ select_run_id() {
     fi
 }
 
+cleanup_server_row_state() {
+    ssh_control "$server_ssh" bash -s -- "$interface" "$oxidedns_port" "$knot_port" <<'REMOTE' >/dev/null 2>&1 || true
+set -euo pipefail
+server_interface="$1"
+oxidedns_port="$2"
+knot_port="$3"
+
+pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x knotd 2>/dev/null || true
+sudo pkill -x oxidedns 2>/dev/null || true
+sudo pkill -x knotd 2>/dev/null || true
+
+for _ in $(seq 1 80); do
+    if pgrep -x oxidedns >/dev/null 2>&1 || pgrep -x knotd >/dev/null 2>&1; then
+        sleep 0.1
+        continue
+    fi
+    if ss -Hlnptu 2>/dev/null | awk -v oxi=":$oxidedns_port" -v knot=":$knot_port" '
+        $5 ~ oxi "$" || $5 ~ knot "$" { found = 1 }
+        END { exit found ? 0 : 1 }
+    '; then
+        sleep 0.1
+        continue
+    fi
+    break
+done
+
+for pid in $(pgrep -x oxidedns 2>/dev/null) $(pgrep -x knotd 2>/dev/null); do
+    sudo kill -9 "$pid" 2>/dev/null || true
+done
+sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
+sudo ip link set dev "$server_interface" xdpgeneric off 2>/dev/null || true
+REMOTE
+}
+
 server_link_txqueuelen() {
     ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
 set -euo pipefail
@@ -1671,6 +1706,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; the
         select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
@@ -1683,6 +1719,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
         select_run_id "knot-xdp-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
@@ -1724,6 +1761,7 @@ for udp_backend in $oxidedns_udp_backends; do
                             select_run_id "oxidedns-${udp_backend}-w${effective_workers}-q${rate}-batch-${effective_udp_batch_size}-metrics-${hot_path}-idle-${effective_idle_strategy}${pacing_run_suffix}"
                             run_abs="$out_abs/$run_id"
                             printf 'running %s\n' "$run_id"
+                            cleanup_server_row_state
                             run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
                             run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                             run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
@@ -1744,6 +1782,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]];
         select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
@@ -1756,6 +1795,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true
         select_run_id "knot-xdp-q${rate}"
         run_abs="$out_abs/$run_id"
         printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
