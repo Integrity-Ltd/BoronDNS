@@ -27,7 +27,7 @@ oxide_gun_xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES
 oxide_gun_xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
 oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
 oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
-oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-63}"
+oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
 oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
 oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
 oxide_gun_source_port_select="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
@@ -252,8 +252,27 @@ cat "/sys/class/net/$iface/mtu"
 REMOTE
 }
 
+player_rx_queue_count() {
+    ssh_control "$player_ssh" bash -s -- "$interface" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+count="$(find "/sys/class/net/$iface/queues" -maxdepth 1 -type d -name 'rx-*' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ -z "$count" || "$count" == "0" ]]; then
+    count="$(ethtool -l "$iface" 2>/dev/null | awk '
+        /^Current hardware settings:/ {current = 1; next}
+        current && $1 == "Combined:" {print $2; exit}
+    ')"
+fi
+if [[ -z "$count" || "$count" == "0" ]]; then
+    count="1"
+fi
+printf '%s\n' "$count"
+REMOTE
+}
+
 configure_player_xdp_tuning() {
     local effective_player_mtu
+    local requested_oxide_gun_queue_count="$oxide_gun_queue_count"
 
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     original_player_mtu="$(player_link_mtu)"
@@ -266,12 +285,17 @@ sudo ip link set dev "$iface" mtu "$mtu"
 REMOTE
     fi
     effective_player_mtu="$(player_link_mtu)"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" <<'REMOTE'
+    if [[ "$player_tool" == "oxide-gun" && "$oxide_gun_queue_count" == "__auto__" ]]; then
+        oxide_gun_queue_count="$(player_rx_queue_count)"
+    fi
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_player_mtu="$2"
 requested_player_mtu="$3"
 effective_player_mtu="$4"
+requested_oxide_gun_queue_count="$5"
+effective_oxide_gun_queue_count="$6"
 if [[ "$requested_player_mtu" == "__none__" ]]; then
     requested_player_mtu=""
 fi
@@ -279,6 +303,8 @@ cat >"$out_abs/host/player-link-tuning.txt" <<EOF
 original_mtu=$original_player_mtu
 requested_mtu=$requested_player_mtu
 effective_mtu=$effective_player_mtu
+oxide_gun_requested_queue_count=$requested_oxide_gun_queue_count
+oxide_gun_effective_queue_count=$effective_oxide_gun_queue_count
 EOF
 REMOTE
 }
@@ -639,12 +665,22 @@ EOF
 fi
 "${knot_cmd[@]}" >"$run_abs/knot.log" 2>&1 &
 echo $! >"$run_abs/knot.pid"
+knot_ready=false
 for _ in $(seq 1 80); do
     if dig @"$knot_target_ip" -p "$knot_target_port" perf.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
+        knot_ready=true
+        break
+    fi
+    if ! kill -0 "$(cat "$run_abs/knot.pid")" 2>/dev/null; then
         break
     fi
     sleep 0.25
 done
+if [[ "$knot_ready" != true ]]; then
+    printf 'Knot reference did not become queryable on %s:%s\n' "$knot_target_ip" "$knot_target_port" >&2
+    tail -200 "$run_abs/knot.log" >&2 || true
+    exit 1
+fi
 
 cp /proc/net/dev "$run_abs/server-proc-net-dev-before.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"

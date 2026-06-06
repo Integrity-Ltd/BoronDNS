@@ -361,10 +361,13 @@ experiments:
   `$player_workdir/xdp-template-slice/oxide-gun`, and
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT` or the default
   `$player_workdir/xdp-template-slice/oxide-gun-xdp.bpf.o`. The dedicated-host
-  defaults use `OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT=63`, source MAC
-  `b8:59:9f:4b:73:2c`, target MAC `1c:34:da:60:67:00`, XDP copy mode, one
-  auto-assigned source port per queue starting at 53000, and summary parsing
-  from the JSON `summary` record.
+  defaults use `OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT=__auto__`, which
+  detects the requester interface RX queue count so forward and reversed host
+  roles do not reuse the wrong 63-queue assumption. The default source MAC is
+  `b8:59:9f:4b:73:2c`, target MAC is `1c:34:da:60:67:00`, XDP copy mode is
+  used, one source port is auto-assigned per queue starting at 53000, and
+  summary parsing comes from the JSON `summary` record. The effective requester
+  queue count is retained in `host/player-link-tuning.txt`.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
@@ -590,6 +593,36 @@ treat idle sleeping/yielding as the reverse-role fix; the next substantial
 receive-path step should be a different packet-I/O design, most likely AF_XDP,
 unless a more targeted nonblocking poll/backoff design can be proven without
 losing responsiveness.
+The first reverse-role `oxide-gun` requester pass exposed two harness/profile
+issues before it produced comparable AF_XDP evidence. With the forward
+requester default of 63 queues, `physical-udp-knot-comparison-20260606T022927Z`
+failed on `oxidedns-1` because AF_XDP queue 48 did not exist. With the
+requester capped to 48 queues but the reverse server still capped to 48
+workers, `physical-udp-knot-comparison-20260606T023020Z` showed an artificial
+75% OxideDNS AF_XDP reply ceiling because `oxidegun-1` has 63 RX queues and the
+unbound server queues were still reachable by RSS. Matching the reverse server
+to 63 workers removed that ceiling:
+`physical-udp-knot-comparison-20260606T023338Z` measured Knot XDP at 1187197
+replies/s and 100.000000%, while OxideDNS AF_XDP measured 1185281 replies/s and
+99.942922% at requested 1.2M. Reducing the AF_XDP server batch to 512 and using
+`xdp.tx_wakeup_interval = 1` fixed the low-rate loss gate:
+`physical-udp-knot-comparison-20260606T023606Z` measured 1186135 replies/s at
+100.000000%, and the auto-queue proof row
+`physical-udp-knot-comparison-20260606T024404Z` retained
+`oxide_gun_effective_queue_count=48`.
+The same reverse profile is still not a clean retained-QPS win at higher rates.
+At requested 1.5M, `physical-udp-knot-comparison-20260606T023643Z` measured
+Knot XDP at 1478476 replies/s and 99.992577%, while OxideDNS AF_XDP measured
+1476928 replies/s and 100.000000%. At requested 2.0M,
+`physical-udp-knot-comparison-20260606T023745Z` measured Knot XDP at 1966958
+replies/s and 99.878854%, while OxideDNS AF_XDP measured 1965472 replies/s and
+99.991203%. At requested 2.5M,
+`physical-udp-knot-comparison-20260606T023846Z` was effectively tied but still
+favored Knot on both retained QPS and reply percentage. Treat the current
+reverse AF_XDP profile as stronger than the old standard-UDP reverse path, but
+not yet sufficient for the full "better than Knot XDP in both roles" gate.
+The next server-side work should profile AF_XDP send completion/kick behavior
+and batch latency rather than continue blind IRQ/RSS or MTU tuning.
 Reducing worker concurrency at the same 4.8M/`fq limit=50000`/32 MiB send-buffer
 profile also did not solve the boundary. A retained 36/40/44/48 worker sweep at
 `physical-udp-knot-comparison-20260605T191333Z` measured about 93.91%, 96.39%,
