@@ -1563,6 +1563,26 @@ source-built Knot XDP at 2371387 replies/s and OxideDNS AF_XDP at 2322708
 replies/s, again both 100.000000%. Treat direct-to-frame UMEM composition as a
 negative slice unless a future design removes more orchestration cost than the
 extra eligibility/probe/copy work adds.
+A retained AF_XDP fixed-response diagnostic can be enabled with
+`OXIDEDNS_BENCH_AF_XDP_FIXED_RESPONSE=1`. It is not production DNS behavior: it
+bypasses request parsing, ZoneImage lookup, RRL, cookies, TSIG, and response
+composition, then patches the incoming DNS ID into a fixed two-record positive
+answer before the normal AF_XDP UDP/IP header rewrite. Use it only to bound
+packet-I/O and frame-lifecycle cost on benchmark hosts. On the current
+source-built Knot profile it did not expose a higher server ceiling:
+`physical-udp-knot-comparison-20260606T231502Z` measured fixed-response
+OxideDNS AF_XDP at 2341024 replies/s and 99.999453% while source-built Knot XDP
+reached 2399650 replies/s and 100.000000%;
+`physical-udp-knot-comparison-20260606T231549Z` measured source-built Knot XDP
+at 2400739 replies/s and fixed-response OxideDNS AF_XDP at 2402187 replies/s,
+both 100.000000%; `physical-udp-knot-comparison-20260606T231646Z` measured
+fixed-response OxideDNS AF_XDP at 2348979 replies/s and 99.993464% while
+source-built Knot XDP reached 2399686 replies/s and 100.000000%; and
+`physical-udp-knot-comparison-20260606T231744Z` measured source-built Knot XDP
+at 2397606 replies/s and fixed-response OxideDNS AF_XDP at 2403520 replies/s,
+both 100.000000%. Treat this as evidence that the present hardware/profile is
+bounded mostly by AF_XDP userspace transport orchestration, not ZoneImage
+composition, while preserving the diagnostic for a future larger host pair.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

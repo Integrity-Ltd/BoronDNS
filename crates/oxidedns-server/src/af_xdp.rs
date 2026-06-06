@@ -38,6 +38,18 @@ const IPV4_MIN_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 const UDP_HEADER_LEN: usize = 8;
 const IP_PROTOCOL_UDP: u8 = 17;
+const BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE: [u8; 66] = [
+    0x00, 0x00, // ID, patched from the query.
+    0x84, 0x00, // QR + AA, NOERROR.
+    0x00, 0x01, // QDCOUNT.
+    0x00, 0x02, // ANCOUNT.
+    0x00, 0x00, // NSCOUNT.
+    0x00, 0x00, // ARCOUNT.
+    0x03, b'w', b'w', b'w', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x04, b't', b'e', b's',
+    b't', 0x00, 0x00, 0x01, 0x00, 0x01, // www.example.test. A IN.
+    0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 192, 0, 2, 10, 0xc0,
+    0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 192, 0, 2, 11,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UdpIpv4Frame {
@@ -644,8 +656,11 @@ impl PacketIo for AfXdpPacketIo {
                 .query_metrics
                 .as_ref()
                 .and_then(|_| metrics.start_pipeline_timer());
-            let write_result =
-                write_udp_ip_response(&mut frame.packet, frame.frame, &packet.response);
+            let write_result = if packet.benchmark_fixed_response {
+                write_benchmark_fixed_dns_response(&mut frame.packet, frame.frame)
+            } else {
+                write_udp_ip_response(&mut frame.packet, frame.frame, &packet.response)
+            };
             if let Err(error) = write_result {
                 self.umem.free_packet(frame.packet);
                 return Err(io::Error::new(ErrorKind::InvalidData, error.to_string()));
@@ -1046,6 +1061,34 @@ pub(crate) fn write_udp_ip_response(
     }
 }
 
+pub(crate) fn write_benchmark_fixed_dns_response(
+    packet: &mut xdp::Packet,
+    frame: UdpIpFrame,
+) -> Result<usize, AfXdpFrameError> {
+    match frame {
+        UdpIpFrame::Ipv4(frame) => {
+            let response = benchmark_fixed_dns_response(packet, frame.payload.clone())?;
+            write_udp_ipv4_response(packet, frame, &response)
+        }
+        UdpIpFrame::Ipv6(frame) => {
+            let response = benchmark_fixed_dns_response(packet, frame.payload.clone())?;
+            write_udp_ipv6_response(packet, frame, &response)
+        }
+    }
+}
+
+fn benchmark_fixed_dns_response(
+    packet: &[u8],
+    payload: Range<usize>,
+) -> Result<[u8; BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE.len()], AfXdpFrameError> {
+    let query_id = packet
+        .get(payload.start..payload.start + 2)
+        .ok_or(AfXdpFrameError::InvalidUdpLength)?;
+    let mut response = BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE;
+    response[..2].copy_from_slice(query_id);
+    Ok(response)
+}
+
 fn ipv4_checksum(header: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut chunks = header.chunks_exact(2);
@@ -1433,6 +1476,64 @@ mod tests {
                 &packet,
                 ETHERNET_HEADER_LEN + IPV6_HEADER_LEN,
                 UDP_HEADER_LEN + response.len()
+            ),
+            0xffff
+        );
+    }
+
+    #[test]
+    fn writes_benchmark_fixed_ipv4_response_into_xdp_packet() {
+        let mut storage = [0u8; 2 * 1024];
+        let mut packet = xdp::Packet::testing_new(&mut storage);
+        let frame = ipv4_udp_frame(&[0x12, 0x34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        packet
+            .insert(0, &frame[..ipv4_udp_frame_len(12)])
+            .expect("insert query frame");
+        let parsed = parse_udp_ip_frame(&packet).expect("UDP/IP frame");
+
+        let frame_len =
+            write_benchmark_fixed_dns_response(&mut packet, parsed).expect("write response");
+
+        assert_eq!(
+            frame_len,
+            ipv4_udp_frame_len(BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE.len())
+        );
+        assert_eq!(packet.len(), frame_len);
+        let payload = &packet[ETHERNET_HEADER_LEN + IPV4_MIN_HEADER_LEN + UDP_HEADER_LEN..];
+        assert_eq!(&payload[..2], &[0x12, 0x34]);
+        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x02]);
+        assert_eq!(
+            ipv4_checksum(&packet[ETHERNET_HEADER_LEN..ETHERNET_HEADER_LEN + 20]),
+            0
+        );
+    }
+
+    #[test]
+    fn writes_benchmark_fixed_ipv6_response_into_xdp_packet() {
+        let mut storage = [0u8; 2 * 1024];
+        let mut packet = xdp::Packet::testing_new(&mut storage);
+        let frame = ipv6_udp_frame(&[0xab, 0xcd, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        packet
+            .insert(0, &frame[..ipv6_udp_frame_len(12)])
+            .expect("insert query frame");
+        let parsed = parse_udp_ip_frame(&packet).expect("UDP/IP frame");
+
+        let frame_len =
+            write_benchmark_fixed_dns_response(&mut packet, parsed).expect("write response");
+
+        assert_eq!(
+            frame_len,
+            ipv6_udp_frame_len(BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE.len())
+        );
+        assert_eq!(packet.len(), frame_len);
+        let payload = &packet[ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN..];
+        assert_eq!(&payload[..2], &[0xab, 0xcd]);
+        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x02]);
+        assert_eq!(
+            udp_ipv6_checksum(
+                &packet,
+                ETHERNET_HEADER_LEN + IPV6_HEADER_LEN,
+                UDP_HEADER_LEN + BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE.len()
             ),
             0xffff
         );

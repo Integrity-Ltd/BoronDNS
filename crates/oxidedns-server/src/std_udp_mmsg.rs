@@ -457,11 +457,15 @@ mod tests {
                 response: b"one".to_vec(),
                 target: UdpPacketTarget::Socket(client_addr),
                 query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
             },
             UdpOutbound {
                 response: b"two".to_vec(),
                 target: UdpPacketTarget::Socket(client_addr),
                 query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
             },
         ];
         let mut batch = StdUdpMmsg::new(4);
