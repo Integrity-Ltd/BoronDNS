@@ -15,13 +15,13 @@ oxidedns_port="${OXIDEDNS_PHYSICAL_OXIDEDNS_PORT:-5300}"
 knot_port="${OXIDEDNS_PHYSICAL_KNOT_PORT:-5301}"
 duration="${OXIDEDNS_PHYSICAL_DURATION:-5}"
 batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
-kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
-kxdpgun_mtu="${OXIDEDNS_PHYSICAL_KXDPGUN_MTU:-}"
+kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-auto}"
+player_mtu="${OXIDEDNS_PHYSICAL_PLAYER_MTU:-${OXIDEDNS_PHYSICAL_KXDPGUN_MTU:-}}"
 player_tool="${OXIDEDNS_PHYSICAL_PLAYER_TOOL:-kxdpgun}"
 oxide_gun_bin="${OXIDEDNS_PHYSICAL_OXIDE_GUN_BIN:-__default__}"
 oxide_gun_xdp_redirect_object="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT:-__default__}"
 oxide_gun_xdp_mode="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_MODE:-drv}"
-oxide_gun_xdp_zerocopy="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-copy}"
+oxide_gun_xdp_zerocopy="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-auto}"
 oxide_gun_xdp_batch_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-64}"
 oxide_gun_xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
 oxide_gun_xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
@@ -88,11 +88,17 @@ xdp_mtu="${OXIDEDNS_PHYSICAL_XDP_MTU:-}"
 knot_xdp_run_as_user="${OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER:-codex:codex}"
 knot_xdp_zero_copy="${OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY:-__omit__}"
 knot_xdp_ring_size="${OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE:-2048}"
+knot_xdp_busypoll_budget="${OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_BUDGET:-__omit__}"
+knot_xdp_busypoll_timeout="${OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_TIMEOUT:-__omit__}"
+server_napi_defer_hard_irqs="${OXIDEDNS_PHYSICAL_SERVER_NAPI_DEFER_HARD_IRQS:-__omit__}"
+server_gro_flush_timeout="${OXIDEDNS_PHYSICAL_SERVER_GRO_FLUSH_TIMEOUT:-__omit__}"
 original_server_txqueuelen=""
 original_server_tx_ring=""
 original_server_rmem_max=""
 original_server_wmem_max=""
 original_server_mtu=""
+original_server_napi_defer_hard_irqs=""
+original_server_gro_flush_timeout=""
 original_player_mtu=""
 
 require_tool() {
@@ -206,8 +212,28 @@ mtu="$2"
 sudo ip link set dev "$iface" mtu "$mtu"
 REMOTE
     fi
+    if [[ "$server_napi_defer_hard_irqs" != "__omit__" && -n "$original_server_napi_defer_hard_irqs" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$original_server_napi_defer_hard_irqs" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+value="$2"
+path="/sys/class/net/$iface/napi_defer_hard_irqs"
+if [[ -e "$path" ]]; then
+    printf '%s\n' "$value" | sudo tee "$path" >/dev/null
+fi
+REMOTE
+    fi
+    if [[ "$server_gro_flush_timeout" != "__omit__" && -n "$original_server_gro_flush_timeout" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$original_server_gro_flush_timeout" <<'REMOTE' >/dev/null 2>&1 || true
+iface="$1"
+value="$2"
+path="/sys/class/net/$iface/gro_flush_timeout"
+if [[ -e "$path" ]]; then
+    printf '%s\n' "$value" | sudo tee "$path" >/dev/null
+fi
+REMOTE
+    fi
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
-    if [[ -n "$kxdpgun_mtu" && -n "$original_player_mtu" ]]; then
+    if [[ -n "$player_mtu" && -n "$original_player_mtu" ]]; then
         ssh_control "$player_ssh" bash -s -- "$interface" "$original_player_mtu" <<'REMOTE' >/dev/null 2>&1 || true
 iface="$1"
 mtu="$2"
@@ -342,8 +368,8 @@ configure_player_xdp_tuning() {
 
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     original_player_mtu="$(player_link_mtu)"
-    if [[ -n "$kxdpgun_mtu" ]]; then
-        ssh_control "$player_ssh" bash -s -- "$interface" "$kxdpgun_mtu" <<'REMOTE'
+    if [[ -n "$player_mtu" ]]; then
+        ssh_control "$player_ssh" bash -s -- "$interface" "$player_mtu" <<'REMOTE'
 set -euo pipefail
 iface="$1"
 mtu="$2"
@@ -354,7 +380,7 @@ REMOTE
     if [[ "$player_tool" == "oxide-gun" && "$oxide_gun_queue_count" == "__auto__" ]]; then
         oxide_gun_queue_count="$(player_rx_queue_count)"
     fi
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${kxdpgun_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" "$oxide_gun_queue_list" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_player_mtu" "${player_mtu:-__none__}" "$effective_player_mtu" "$requested_oxide_gun_queue_count" "$oxide_gun_queue_count" "$oxide_gun_queue_list" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_player_mtu="$2"
@@ -503,7 +529,69 @@ sudo ip link set dev "$iface" mtu "$mtu"
 REMOTE
     fi
     effective_mtu="$(server_link_mtu)"
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" "$original_server_rmem_max" "${server_rmem_max:-__none__}" "$effective_rmem_max" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" "$original_server_mtu" "${xdp_mtu:-__none__}" "$effective_mtu" <<'REMOTE'
+    original_server_napi_defer_hard_irqs="$(
+        ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+iface="$1"
+path="/sys/class/net/$iface/napi_defer_hard_irqs"
+if [[ -e "$path" ]]; then
+    cat "$path"
+fi
+REMOTE
+    )"
+    if [[ "$server_napi_defer_hard_irqs" != "__omit__" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_napi_defer_hard_irqs" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+value="$2"
+path="/sys/class/net/$iface/napi_defer_hard_irqs"
+if [[ ! -e "$path" ]]; then
+    printf 'interface %s does not expose %s\n' "$iface" "$path" >&2
+    exit 65
+fi
+printf '%s\n' "$value" | sudo tee "$path" >/dev/null
+REMOTE
+    fi
+    effective_server_napi_defer_hard_irqs="$(
+        ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+iface="$1"
+path="/sys/class/net/$iface/napi_defer_hard_irqs"
+if [[ -e "$path" ]]; then
+    cat "$path"
+fi
+REMOTE
+    )"
+    original_server_gro_flush_timeout="$(
+        ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+iface="$1"
+path="/sys/class/net/$iface/gro_flush_timeout"
+if [[ -e "$path" ]]; then
+    cat "$path"
+fi
+REMOTE
+    )"
+    if [[ "$server_gro_flush_timeout" != "__omit__" ]]; then
+        ssh_control "$server_ssh" bash -s -- "$interface" "$server_gro_flush_timeout" <<'REMOTE'
+set -euo pipefail
+iface="$1"
+value="$2"
+path="/sys/class/net/$iface/gro_flush_timeout"
+if [[ ! -e "$path" ]]; then
+    printf 'interface %s does not expose %s\n' "$iface" "$path" >&2
+    exit 65
+fi
+printf '%s\n' "$value" | sudo tee "$path" >/dev/null
+REMOTE
+    fi
+    effective_server_gro_flush_timeout="$(
+        ssh_control "$server_ssh" bash -s -- "$interface" <<'REMOTE'
+iface="$1"
+path="/sys/class/net/$iface/gro_flush_timeout"
+if [[ -e "$path" ]]; then
+    cat "$path"
+fi
+REMOTE
+    )"
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$original_server_txqueuelen" "${server_txqueuelen:-__none__}" "$effective_txqueuelen" "$original_server_tx_ring" "${server_tx_ring:-__none__}" "$effective_tx_ring" "$server_tx_fq_limit" "${server_tx_fq_flow_limit:-__none__}" "${server_tx_fq_quantum:-__none__}" "${server_tx_fq_initial_quantum:-__none__}" "${server_tx_fq_pacing:-__none__}" "$original_server_rmem_max" "${server_rmem_max:-__none__}" "$effective_rmem_max" "$original_server_wmem_max" "${server_wmem_max:-__none__}" "$effective_wmem_max" "$original_server_mtu" "${xdp_mtu:-__none__}" "$effective_mtu" "$original_server_napi_defer_hard_irqs" "$server_napi_defer_hard_irqs" "$effective_server_napi_defer_hard_irqs" "$original_server_gro_flush_timeout" "$server_gro_flush_timeout" "$effective_server_gro_flush_timeout" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 original_txqueuelen="$2"
@@ -526,6 +614,12 @@ effective_wmem_max="${18}"
 original_mtu="${19}"
 requested_mtu="${20}"
 effective_mtu="${21}"
+original_napi_defer_hard_irqs="${22}"
+requested_napi_defer_hard_irqs="${23}"
+effective_napi_defer_hard_irqs="${24}"
+original_gro_flush_timeout="${25}"
+requested_gro_flush_timeout="${26}"
+effective_gro_flush_timeout="${27}"
 if [[ "$requested_txqueuelen" == "__none__" ]]; then
     requested_txqueuelen=""
 fi
@@ -553,6 +647,12 @@ fi
 if [[ "$requested_mtu" == "__none__" ]]; then
     requested_mtu=""
 fi
+if [[ "$requested_napi_defer_hard_irqs" == "__omit__" ]]; then
+    requested_napi_defer_hard_irqs=""
+fi
+if [[ "$requested_gro_flush_timeout" == "__omit__" ]]; then
+    requested_gro_flush_timeout=""
+fi
 cat >"$out_abs/host/server-link-tuning.txt" <<EOF
 original_txqueuelen=$original_txqueuelen
 requested_txqueuelen=$requested_txqueuelen
@@ -574,6 +674,12 @@ effective_wmem_max=$effective_wmem_max
 original_mtu=$original_mtu
 requested_mtu=$requested_mtu
 effective_mtu=$effective_mtu
+original_napi_defer_hard_irqs=$original_napi_defer_hard_irqs
+requested_napi_defer_hard_irqs=$requested_napi_defer_hard_irqs
+effective_napi_defer_hard_irqs=$effective_napi_defer_hard_irqs
+original_gro_flush_timeout=$original_gro_flush_timeout
+requested_gro_flush_timeout=$requested_gro_flush_timeout
+effective_gro_flush_timeout=$effective_gro_flush_timeout
 EOF
 REMOTE
 }
@@ -679,7 +785,7 @@ run_knot_reference_start() {
     local server_interface="$2"
     local knot_backend="${3:-std}"
 
-    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" "$knot_backend" "$knot_xdp_zero_copy" "$knot_xdp_ring_size" "$knot_bin" "$knot_xdp_run_as_user" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$knot_port" "$server_interface" "$knot_backend" "$knot_xdp_zero_copy" "$knot_xdp_ring_size" "$knot_bin" "$knot_xdp_run_as_user" "$knot_xdp_busypoll_budget" "$knot_xdp_busypoll_timeout" <<'REMOTE'
 set -euo pipefail
 stage_abs="$1"
 run_abs="$2"
@@ -691,6 +797,8 @@ knot_xdp_zero_copy="$7"
 knot_xdp_ring_size="$8"
 knot_bin="$9"
 knot_xdp_run_as_user="${10}"
+knot_xdp_busypoll_budget="${11}"
+knot_xdp_busypoll_timeout="${12}"
 
 mkdir -p "$run_abs"
 pkill -u codex -x oxidedns 2>/dev/null || true
@@ -731,9 +839,16 @@ EOF
     if [[ "$knot_xdp_zero_copy" != "__omit__" ]]; then
         printf '    zero-copy: %s\n' "$knot_xdp_zero_copy" >>"$run_abs/knot-xdp.conf"
     fi
+    if [[ "$knot_xdp_busypoll_budget" != "__omit__" ]]; then
+        printf '    busypoll-budget: %s\n' "$knot_xdp_busypoll_budget" >>"$run_abs/knot-xdp.conf"
+    fi
+    if [[ "$knot_xdp_busypoll_timeout" != "__omit__" ]]; then
+        printf '    busypoll-timeout: %s\n' "$knot_xdp_busypoll_timeout" >>"$run_abs/knot-xdp.conf"
+    fi
     knot_conf="$run_abs/knot-xdp.conf"
     knot_cmd=(sudo "$knot_bin" -c "$knot_conf" -v)
 fi
+"$knot_bin" -VV >"$run_abs/knot-version.txt" 2>&1 || true
 "${knot_cmd[@]}" >"$run_abs/knot.log" 2>&1 &
 echo $! >"$run_abs/knot.pid"
 knot_ready=false
@@ -758,6 +873,8 @@ cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-before.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-before.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-before.txt" 2>&1 || true
+ip -details link show dev "$server_interface" >"$run_abs/server-ip-link-before-benchmark.txt" 2>&1 || true
+sudo bpftool net show dev "$server_interface" >"$run_abs/server-bpftool-net-before-benchmark.txt" 2>&1 || true
 REMOTE
 }
 
@@ -1062,6 +1179,10 @@ cp /proc/net/dev "$run_abs/server-proc-net-dev-before.txt"
 cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-before.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-before.txt" 2>&1 || true
+ip -details link show dev "$server_interface" >"$run_abs/server-ip-link-before-benchmark.txt" 2>&1 || true
+if [[ "$udp_backend" == "af_xdp" ]]; then
+    sudo bpftool net show dev "$server_interface" >"$run_abs/server-bpftool-net-before-benchmark.txt" 2>&1 || true
+fi
 REMOTE
 }
 
@@ -1179,6 +1300,8 @@ cp /proc/net/snmp "$run_abs/server-proc-net-snmp-after.txt"
 cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
+ip -details link show dev "$server_interface" >"$run_abs/server-ip-link-after-benchmark.txt" 2>&1 || true
+sudo bpftool net show dev "$server_interface" >"$run_abs/server-bpftool-net-after-benchmark.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
 python3 - "$target" "$server_udp_backend" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$oxide_gun_response_timeout_ms" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_rmem_max" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
 import json
@@ -1554,12 +1677,12 @@ capture_player_row_state() {
     local run_abs="$1"
     local suffix="$2"
 
-    ssh_control "$player_ssh" "cat /proc/net/dev" \
-        | ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-dev-$suffix.txt'" || true
-    ssh_control "$player_ssh" "cat /proc/net/softnet_stat" \
-        | ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-softnet-$suffix.txt'" || true
-    ssh_control "$player_ssh" "ethtool -S '$interface' 2>&1 || true" \
-        | ssh_control "$server_ssh" "cat > '$run_abs/player-ethtool-stats-$suffix.txt'" || true
+    ssh_control "$player_ssh" "cat /proc/net/dev" |
+        ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-dev-$suffix.txt'" || true
+    ssh_control "$player_ssh" "cat /proc/net/softnet_stat" |
+        ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-softnet-$suffix.txt'" || true
+    ssh_control "$player_ssh" "ethtool -S '$interface' 2>&1 || true" |
+        ssh_control "$server_ssh" "cat > '$run_abs/player-ethtool-stats-$suffix.txt'" || true
 }
 
 run_server_socket_sample_start() {

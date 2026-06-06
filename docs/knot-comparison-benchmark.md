@@ -141,6 +141,32 @@ BENCH_NETWORK_DEVICE=eth0 \
 ./runbook.sh
 ```
 
+Hardware XDP comparison defaults are intentionally different from the veth and
+generic smoke profiles. `scripts/physical-udp-knot-comparison.sh` defaults
+`OXIDEDNS_PHYSICAL_KXDPGUN_MODE=auto` so kxdpgun can select native driver XDP
+and zero-copy when the NIC supports it, and defaults
+`OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY=auto` for the project-owned requester.
+Use `copy` or `generic` only as an explicit compatibility or driver-debug
+fallback; do not use those modes for a headline hardware XDP claim. Packaged
+Knot 3.5.3 exposes XDP support but rejects the newer server-side
+`xdp.zero-copy` config item, so Knot XDP rows omit that item by default. Set
+`OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=on` only with a Knot build whose
+configuration parser accepts it, and retain `knot-version.txt` plus the
+generated `knot-xdp.conf` with the row.
+
+Knot XDP busy-poll experiments are opt-in through
+`OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_BUDGET` and
+`OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_TIMEOUT`. When those are used, also set
+the documented interface prerequisites with
+`OXIDEDNS_PHYSICAL_SERVER_NAPI_DEFER_HARD_IRQS` and
+`OXIDEDNS_PHYSICAL_SERVER_GRO_FLUSH_TIMEOUT`; the wrapper records and restores
+those sysfs values in `host/server-link-tuning.txt`. XDP rows also retain
+`server-ip-link-*-benchmark.txt` and `server-bpftool-net-*-benchmark.txt` so the
+attached program mode can be audited after the fact.
+Use `OXIDEDNS_PHYSICAL_PLAYER_MTU=1500` for native-XDP requester rows on this
+hardware; the legacy `OXIDEDNS_PHYSICAL_KXDPGUN_MTU` name is still accepted for
+older command lines.
+
 For a Knot reference run against the same staged zone and query mix, start Knot
 with `knot.conf` and run kxdpgun from the player host:
 
@@ -348,22 +374,29 @@ experiments:
   so the process does not continue serving as root. Use
   `OXIDEDNS_PHYSICAL_XDP_MTU=1500` when the benchmark NIC is configured with a
   jumbo MTU that the native XDP driver rejects. The harness restores the
-  original MTU during cleanup. Knot XDP omits the `zero-copy` config item by
-  default (`OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=__omit__`) and uses
-  `OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE=2048`. The generated Knot XDP config
-  drops privileges to `OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER=codex:codex` so
-  it can read and write the staged benchmark artifacts after the privileged XDP
-  attach.
+  original MTU during cleanup. Knot XDP omits the server-side `zero-copy` item
+  by default for packaged Knot 3.5.3 compatibility
+  (`OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=__omit__`) and uses
+  `OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE=2048`. Set
+  `OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=on` only after confirming the selected
+  `OXIDEDNS_PHYSICAL_KNOT_BIN` accepts the config item. Busy polling is disabled
+  unless `OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_BUDGET` or
+  `OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_TIMEOUT` is set. The generated Knot XDP
+  config drops privileges to `OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER=codex:codex`
+  so it can read and write the staged benchmark artifacts after the privileged
+  XDP attach.
   The summary rows retain `server_udp_backend`, `xdp_mode`, `xdp_zero_copy`,
   `xdp_rx_drain_passes`, `xdp_tx_wakeup_interval`, and
   `oxide_gun_response_timeout_ms` so standard, Knot-XDP, OxideDNS-AF_XDP, and
   requester-drain timeout rows cannot be confused.
 - The requester-side XDP mode is controlled with
-  `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=generic|copy|auto`. Use
-  `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` when trying `auto` on a jumbo-MTU NIC;
-  the harness detaches stale requester XDP programs, records the original and
-  effective requester MTU in `host/player-link-tuning.txt`, and restores the
-  original requester MTU during cleanup.
+  `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=auto|copy|generic` and defaults to `auto` for
+  physical hardware comparisons. Use `OXIDEDNS_PHYSICAL_PLAYER_MTU=1500` when
+  trying native XDP on a jumbo-MTU NIC; the legacy
+  `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` name is still accepted. The harness
+  detaches stale requester XDP programs, records the original and effective
+  requester MTU in `host/player-link-tuning.txt`, and restores the original
+  requester MTU during cleanup.
 - `OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER=knot-first|oxidedns-first` controls
   whether Knot reference rows run before or after OxideDNS rows in the same
   artifact. The default `knot-first` preserves the original comparison flow;
@@ -1363,6 +1396,27 @@ work, for these small DNS packets. Promote 8192/32768 plus the weighted queue-5
 source-port repair `53087` as the current forward physical comparison profile,
 but keep requiring repeated 100% reply rows because the raw QPS margin can be
 narrow in OxideDNS-first order.
+
+Rechecking the promoted forward profile after rebuilding both the server binary
+and the project-owned requester kept the same conclusion and exposed one Knot
+packaging caveat. Ubuntu-packaged Knot 3.5.3 reports `XDP support: libxdp` and
+starts XDP in native mode, but rejects the newer `xdp.zero-copy` configuration
+item; keep `OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY=__omit__` for that package and
+use `knot-version.txt` plus `server-bpftool-net-*-benchmark.txt` to retain the
+actual mode evidence. With OxideDNS commit `acd8c7fb`, current `oxide-gun`, the
+extracted high-rate source-port list, requester zero-copy forced, server
+ring-size 8192, UMEM frame count 32768, server batch 1024, and
+`xdp.tx_wakeup_interval = 16`, both run orders passed at requested 2.5M:
+`physical-udp-knot-comparison-20260606T191956Z` measured OxideDNS-first at
+2399795 replies/s and 100.000000%, then Knot XDP at 2337671 replies/s and
+100.000000%; `physical-udp-knot-comparison-20260606T192112Z` measured
+Knot-first at 2331951 replies/s and 100.000000%, then OxideDNS AF_XDP at
+2402522 replies/s and 100.000000%. A deliberately untuned default-source run at
+`physical-udp-knot-comparison-20260606T191530Z` still showed order-sensitive
+loss, and the low-rate calibration list in
+`physical-udp-knot-comparison-20260606T191831Z` cleared loss but lost retained
+QPS to Knot; do not replace the high-rate list with the earlier calibration
+list for promotion rows.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
