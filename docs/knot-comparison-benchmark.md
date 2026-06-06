@@ -1194,6 +1194,16 @@ Reweighting the source list from the cleaned `063620Z` row also regressed:
 100.000000%. Keep the final requester flush because it restores a truthful
 reply-percent denominator; do not claim the forward 2.5M goal is complete until
 OxideDNS clears the same-requester Knot row in both run orders.
+Repeating the full comparison with server `xdp.tx_wakeup_interval = 16` cleared
+that forward-role gate in both orders. In
+`physical-udp-knot-comparison-20260606T064300Z` with Knot first, Knot XDP
+measured 1976298 replies/s at 100.000000%, while OxideDNS AF_XDP measured
+1982288 replies/s at 100.000000%. In
+`physical-udp-knot-comparison-20260606T064408Z` with OxideDNS first, OxideDNS
+AF_XDP measured 1975927 replies/s at 100.000000%, while Knot XDP measured
+1950136 replies/s at 100.000000%. Promote `xdp.tx_wakeup_interval = 16` for the
+cleaned forward 2.5M profile, while keeping interval 8 as historical evidence
+for earlier requester shapes.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
