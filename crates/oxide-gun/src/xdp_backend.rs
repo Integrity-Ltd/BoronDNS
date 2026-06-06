@@ -27,8 +27,8 @@ use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 use super::{
     DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, PortSelect, QueryPool,
     QueryTemplate, RecvMode, ResponseClass, SourceEndpoint, SourceSelector, Stats, XdpMode,
-    XdpZeroCopyMode, build_dns_query, classify_response, drop_implementation, parse_ipv4_cidr,
-    query_pool, response_id, serde_plain_drop_implementation,
+    XdpReplyTracking, XdpZeroCopyMode, build_dns_query, classify_response, drop_implementation,
+    parse_ipv4_cidr, query_pool, response_id, serde_plain_drop_implementation,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -49,6 +49,8 @@ struct XdpOutputRecord<'a> {
     rx_queue: u32,
     queue_count: u32,
     recv_mode: RecvMode,
+    xdp_reply_tracking: XdpReplyTracking,
+    xdp_rx_drain_passes: usize,
     drop_implementation: DropImplementation,
     target: SocketAddr,
     source_ip: IpAddr,
@@ -714,10 +716,12 @@ fn run_bound_worker(
 
     let mut stats = Stats::default();
     let batch_size = worker.batch_size;
+    let rx_drain_passes = config.xdp.rx_drain_passes;
     let mut send_slab = HeapSlab::with_capacity(batch_size);
     let mut send_lengths = VecDeque::with_capacity(batch_size);
-    let track_responses = config.recv.mode == RecvMode::Process;
-    let mut recv_slab = HeapSlab::with_capacity(if track_responses { batch_size } else { 0 });
+    let process_responses = config.recv.mode == RecvMode::Process;
+    let track_latency = process_responses && config.xdp.reply_tracking == XdpReplyTracking::Latency;
+    let mut recv_slab = HeapSlab::with_capacity(if process_responses { batch_size } else { 0 });
     let start = Instant::now();
     let deadline = config
         .run
@@ -735,7 +739,8 @@ fn run_bound_worker(
     };
     let mut query_id = config.run.seed as u16;
     let mut query_rng = super::XorShift64::new(config.run.seed);
-    let mut inflight = track_responses.then(|| {
+    let uses_shared_inflight = shared_inflight.is_some();
+    let mut inflight = track_latency.then(|| {
         shared_inflight.unwrap_or_else(|| InflightTracker::Local(vec![None; u16::MAX as usize + 1]))
     });
 
@@ -822,15 +827,15 @@ fn run_bound_worker(
         }
         worker.completion_ring.dequeue(&mut worker.umem, batch_size);
 
-        if let Some(inflight) = inflight.as_mut() {
-            for _ in 0..4 {
+        if process_responses {
+            for _ in 0..rx_drain_passes {
                 let received = receive_available_xdp(
                     &worker.socket,
                     worker.rx_ring.as_mut(),
                     &mut worker.fill_ring,
                     &mut worker.umem,
                     &mut recv_slab,
-                    inflight,
+                    inflight.as_mut(),
                     &mut stats,
                 )?;
                 if received == 0 {
@@ -861,18 +866,18 @@ fn run_bound_worker(
         sleep_for_sent(per_packet_delay, sent);
     }
 
-    if let Some(inflight) = inflight.as_mut() {
+    if process_responses {
         drain_xdp_replies(
             &worker.socket,
             worker.rx_ring.as_mut(),
             &mut worker.fill_ring,
             &mut worker.umem,
             &mut recv_slab,
-            inflight,
+            inflight.as_mut(),
             &mut stats,
             Duration::from_millis(config.recv.response_timeout_ms),
         )?;
-        if matches!(inflight, InflightTracker::Local(_)) {
+        if !uses_shared_inflight {
             stats.queries_unanswered = stats.tx_packets.saturating_sub(stats.rx_dns_responses);
         }
     }
@@ -900,7 +905,7 @@ fn drain_xdp_replies(
     fill_ring: &mut xdp::WakableFillRing,
     umem: &mut xdp::Umem,
     recv_slab: &mut HeapSlab,
-    inflight: &mut InflightTracker,
+    mut inflight: Option<&mut InflightTracker>,
     stats: &mut Stats,
     timeout: Duration,
 ) -> Result<()> {
@@ -909,7 +914,7 @@ fn drain_xdp_replies(
     };
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if inflight.is_empty() {
+        if inflight.as_ref().is_some_and(|tracker| tracker.is_empty()) {
             break;
         }
         let before = stats.rx_packets;
@@ -919,7 +924,7 @@ fn drain_xdp_replies(
             fill_ring,
             umem,
             recv_slab,
-            inflight,
+            inflight.as_mut().map(|tracker| &mut **tracker),
             stats,
         )?;
         if received == 0 || stats.rx_packets == before {
@@ -1175,7 +1180,7 @@ fn receive_available_xdp(
     fill_ring: &mut xdp::WakableFillRing,
     umem: &mut xdp::Umem,
     recv_slab: &mut HeapSlab,
-    inflight: &mut InflightTracker,
+    mut inflight: Option<&mut InflightTracker>,
     stats: &mut Stats,
 ) -> Result<usize> {
     let Some(rx_ring) = rx_ring else {
@@ -1202,7 +1207,9 @@ fn receive_available_xdp(
                 umem.free_packet(packet);
                 continue;
             };
-            let latency = inflight.take(received.destination_port, id, Instant::now());
+            let latency = inflight
+                .as_mut()
+                .and_then(|tracker| tracker.take(received.destination_port, id, Instant::now()));
             let response_class = classify_response(received.payload, id);
             match response_class {
                 ResponseClass::Positive => {
@@ -1237,17 +1244,19 @@ fn receive_available_xdp(
                     stats.rx_dns_unmatched += 1;
                 }
             }
-            match latency {
-                Some(latency)
-                    if !matches!(
-                        response_class,
-                        ResponseClass::Unmatched | ResponseClass::Timeout
-                    ) =>
-                {
-                    stats.latency.record(latency);
+            if inflight.is_some() {
+                match latency {
+                    Some(latency)
+                        if !matches!(
+                            response_class,
+                            ResponseClass::Unmatched | ResponseClass::Timeout
+                        ) =>
+                    {
+                        stats.latency.record(latency);
+                    }
+                    None => stats.rx_dns_unmatched += 1,
+                    Some(_) => {}
                 }
-                None => stats.rx_dns_unmatched += 1,
-                Some(_) => {}
             }
         } else {
             stats.rx_dns_unmatched += 1;
@@ -1291,6 +1300,8 @@ fn emit_xdp_record(
         rx_queue: config.interface.rx_queue,
         queue_count: config.interface.queue_count,
         recv_mode: config.recv.mode,
+        xdp_reply_tracking: config.xdp.reply_tracking,
+        xdp_rx_drain_passes: config.xdp.rx_drain_passes,
         drop_implementation: drop_implementation(
             config.recv.mode,
             config.xdp.drop_object.is_some(),

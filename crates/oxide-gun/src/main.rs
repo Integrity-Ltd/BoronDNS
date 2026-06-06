@@ -72,9 +72,15 @@ struct Cli {
     /// Compiled Aya eBPF object for process-mode AF_XDP reply redirects.
     #[arg(long)]
     xdp_redirect_object: Option<PathBuf>,
+    /// XDP response accounting detail.
+    #[arg(long, value_enum)]
+    xdp_reply_tracking: Option<XdpReplyTracking>,
     /// XDP TX/RX batch size.
     #[arg(long)]
     xdp_batch_size: Option<usize>,
+    /// Maximum ready RX batches drained after each XDP TX pass.
+    #[arg(long)]
+    xdp_rx_drain_passes: Option<usize>,
     /// AF_XDP UMEM frame count.
     #[arg(long)]
     xdp_umem_frame_count: Option<u32>,
@@ -210,6 +216,13 @@ enum XdpZeroCopyMode {
     Auto,
     Force,
     Copy,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum XdpReplyTracking {
+    Latency,
+    Count,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
@@ -430,7 +443,9 @@ struct XdpConfig {
     zerocopy: XdpZeroCopyMode,
     drop_object: Option<PathBuf>,
     redirect_object: Option<PathBuf>,
+    reply_tracking: XdpReplyTracking,
     batch_size: usize,
+    rx_drain_passes: usize,
     umem_frame_count: u32,
     tx_ring_size: u32,
     rx_ring_size: u32,
@@ -445,7 +460,9 @@ impl Default for XdpConfig {
             zerocopy: XdpZeroCopyMode::Auto,
             drop_object: None,
             redirect_object: None,
+            reply_tracking: XdpReplyTracking::Latency,
             batch_size: 64,
+            rx_drain_passes: 4,
             umem_frame_count: 8192,
             tx_ring_size: 4096,
             rx_ring_size: 4096,
@@ -963,8 +980,14 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(xdp_redirect_object) = &cli.xdp_redirect_object {
         config.xdp.redirect_object = Some(xdp_redirect_object.clone());
     }
+    if let Some(xdp_reply_tracking) = cli.xdp_reply_tracking {
+        config.xdp.reply_tracking = xdp_reply_tracking;
+    }
     if let Some(xdp_batch_size) = cli.xdp_batch_size {
         config.xdp.batch_size = xdp_batch_size;
+    }
+    if let Some(xdp_rx_drain_passes) = cli.xdp_rx_drain_passes {
+        config.xdp.rx_drain_passes = xdp_rx_drain_passes;
     }
     if let Some(xdp_umem_frame_count) = cli.xdp_umem_frame_count {
         config.xdp.umem_frame_count = xdp_umem_frame_count;
@@ -1183,6 +1206,9 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     }
     if config.xdp.batch_size == 0 {
         bail!("xdp.batch_size must be non-zero");
+    }
+    if config.xdp.rx_drain_passes == 0 {
+        bail!("xdp.rx_drain_passes must be non-zero");
     }
     for (name, value) in [
         ("xdp.tx_ring_size", config.xdp.tx_ring_size),

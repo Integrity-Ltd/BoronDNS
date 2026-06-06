@@ -50,9 +50,9 @@ back to the OxideGun host. `--xdp-zerocopy auto` is the default; use
 drivers without multi-buffer program support may reject jumbo MTUs; the 25G
 comparison harness lowers the benchmark interfaces to MTU 1500 for XDP rows and
 restores the original MTU afterward. Lab runs should tune `--xdp-batch-size`,
-`--xdp-umem-frame-count`, and the four XDP ring-size flags to match the NIC,
-queue count, locked-memory limit, and benchmark rate instead of relying on the
-conservative CI defaults.
+`--xdp-rx-drain-passes`, `--xdp-umem-frame-count`, and the four XDP ring-size
+flags to match the NIC, queue count, locked-memory limit, and benchmark rate
+instead of relying on the conservative CI defaults.
 
 The AF_XDP implementation binds one or more contiguous queue pairs in one
 process. `rx_queue` and `tx_queue` must match and act as the first queue;
@@ -67,8 +67,12 @@ before checksum calculation, so source/query variation does not rebuild the DNS
 question body or copy through an intermediate DNS buffer on every send. UDP
 checksums are folded over packet slices without allocating a pseudo-header buffer
 per packet. `--recv-mode process` also opens RX rings and classifies returned
-DNS responses by header fields. Duration limits are checked at batch boundaries,
-so a duration-capped run can overshoot by up to the configured XDP batch size.
+DNS responses by header fields. The default `--xdp-reply-tracking latency` keeps
+the port-plus-DNS-ID inflight table needed for latency percentiles and unmatched
+reply accounting. `--xdp-reply-tracking count` skips that per-query timestamp
+table and is intended for physical comparison rows where reply percentage is the
+primary gate. Duration limits are checked at batch boundaries, so a
+duration-capped run can overshoot by up to the configured XDP batch size.
 Hardware-lab validation should compare OxideGun TX/RX counters with NIC counters
 and packet capture on the DUT-side link.
 
