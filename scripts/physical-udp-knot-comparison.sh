@@ -17,6 +17,22 @@ duration="${OXIDEDNS_PHYSICAL_DURATION:-5}"
 batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
 kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-generic}"
 kxdpgun_mtu="${OXIDEDNS_PHYSICAL_KXDPGUN_MTU:-}"
+player_tool="${OXIDEDNS_PHYSICAL_PLAYER_TOOL:-kxdpgun}"
+oxide_gun_bin="${OXIDEDNS_PHYSICAL_OXIDE_GUN_BIN:-__default__}"
+oxide_gun_xdp_redirect_object="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT:-__default__}"
+oxide_gun_xdp_mode="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_MODE:-drv}"
+oxide_gun_xdp_zerocopy="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-copy}"
+oxide_gun_xdp_batch_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-1024}"
+oxide_gun_xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
+oxide_gun_xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
+oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
+oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
+oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-63}"
+oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
+oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
+oxide_gun_source_port_select="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
+oxide_gun_source_mac="${OXIDEDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
+oxide_gun_target_mac="${OXIDEDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
 perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
 perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
 perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
@@ -183,7 +199,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -950,7 +966,7 @@ run_server_finish() {
     local server_prefix_arg="${selected_server_prefix_b64:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
 
-    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$server_udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$workers" "$rate" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$out_abs" "$run_abs" "$target" "$server_udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$selected_kxdpgun_batch" "$selected_kxdpgun_mode" "$udp_batch_size_arg" "$hot_path" "$idle_strategy" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$server_prefix_arg" "$server_interface" <<'REMOTE'
 set -euo pipefail
 out_abs="$1"
 run_abs="$2"
@@ -962,17 +978,18 @@ xdp_rx_drain_passes="$7"
 xdp_tx_wakeup_interval="$8"
 workers="$9"
 rate="${10}"
-kxdpgun_batch="${11}"
-kxdpgun_mode="${12}"
-udp_batch_size="${13}"
-hot_path="${14}"
-idle_strategy="${15}"
-socket_receive_buffer="${16}"
-socket_send_buffer="${17}"
-socket_max_pacing_rate="${18}"
-cpus="${19}"
-server_prefix_b64="${20}"
-server_interface="${21}"
+player_tool="${11}"
+kxdpgun_batch="${12}"
+kxdpgun_mode="${13}"
+udp_batch_size="${14}"
+hot_path="${15}"
+idle_strategy="${16}"
+socket_receive_buffer="${17}"
+socket_send_buffer="${18}"
+socket_max_pacing_rate="${19}"
+cpus="${20}"
+server_prefix_b64="${21}"
+server_interface="${22}"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
 fi
@@ -1035,16 +1052,55 @@ cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-after.txt"
 ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-after.txt" 2>&1 || true
 tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-after.txt" 2>&1 || true
 curl -fsS http://127.0.0.1:8080/metrics >"$run_abs/metrics-after.prom" 2>/dev/null || true
-python3 - "$target" "$server_udp_backend" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$workers" "$rate" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_rmem_max" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+python3 - "$target" "$server_udp_backend" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$workers" "$rate" "$player_tool" "$kxdpgun_batch" "$kxdpgun_mode" "$udp_batch_size" "$hot_path" "$idle_strategy" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" "$server_txqueuelen" "$server_tx_ring" "$server_tx_qdisc" "$server_tx_fq_limit" "$server_tx_fq_flow_limit" "$server_rmem_max" "$server_wmem_max" "$cpus" "$server_prefix" "$server_interface" "$run_abs" "$run_abs/kxdpgun.log" >>"$out_abs/summary.tsv" <<'PY'
+import json
 import re
 import sys
 
-target, server_udp_backend, xdp_mode, xdp_zero_copy, xdp_rx_drain_passes, xdp_tx_wakeup_interval, workers, rate, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_ring, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_rmem_max, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:29]
+target, server_udp_backend, xdp_mode, xdp_zero_copy, xdp_rx_drain_passes, xdp_tx_wakeup_interval, workers, rate, player_tool, kxdpgun_batch, kxdpgun_mode, udp_batch_size, hot_path, idle_strategy, socket_receive_buffer, socket_send_buffer, socket_max_pacing_rate, server_txqueuelen, server_tx_ring, server_tx_qdisc, server_tx_fq_limit, server_tx_fq_flow_limit, server_rmem_max, server_wmem_max, cpus, server_prefix, interface, run_abs, log = sys.argv[1:30]
 text = open(log, encoding="utf-8", errors="ignore").read()
-replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
-size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
-bps = re.search(r"average Ethernet reply rate:\s+([0-9]+) bps", text)
-duration = re.search(r"duration:\s+([0-9.]+) s", text)
+replies_per_second = ""
+reply_percent = ""
+dns_reply_size = ""
+ethernet_reply_bps = ""
+duration_seconds = ""
+if player_tool == "oxide-gun":
+    summary = None
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if record.get("summary") or record.get("record_type") == "summary":
+            summary = record
+    if summary is not None:
+        duration_value = float(summary.get("duration_seconds") or 0.0)
+        tx_packets = int(summary.get("tx_packets_total") or 0)
+        rx_packets = int(summary.get("rx_packets_total") or 0)
+        rx_bytes = int(summary.get("rx_bytes_total") or 0)
+        positive = int(summary.get("positive_total") or 0)
+        if duration_value > 0.0:
+            replies_per_second = str(int(round(positive / duration_value)))
+            ethernet_reply_bps = str(int(round(rx_bytes * 8 / duration_value)))
+            duration_seconds = f"{duration_value:.4f}"
+        if tx_packets > 0:
+            reply_percent = f"{positive * 100.0 / tx_packets:.6f}"
+        if rx_packets > 0:
+            avg_frame = rx_bytes / rx_packets
+            dns_reply_size = f"{max(0.0, avg_frame - 42.0):.0f}"
+else:
+    replies = re.search(r"total replies:\s+\d+ \(([0-9,]+) pps\) \(([0-9.]+) %\)", text)
+    size = re.search(r"average DNS reply size:\s+([0-9.]+) B", text)
+    bps = re.search(r"average Ethernet reply rate:\s+([0-9]+) bps", text)
+    duration = re.search(r"duration:\s+([0-9.]+) s", text)
+    replies_per_second = replies.group(1).replace(",", "") if replies else ""
+    reply_percent = replies.group(2) if replies else ""
+    dns_reply_size = size.group(1) if size else ""
+    ethernet_reply_bps = bps.group(1) if bps else ""
+    duration_seconds = duration.group(1) if duration else ""
 
 def read(path):
     try:
@@ -1157,6 +1213,7 @@ print("\t".join([
     xdp_tx_wakeup_interval,
     workers,
     rate,
+    player_tool,
     kxdpgun_batch,
     kxdpgun_mode,
     udp_batch_size,
@@ -1174,11 +1231,11 @@ print("\t".join([
     server_wmem_max or "unknown",
     cpus or "unbound",
     server_prefix or "none",
-    replies.group(1).replace(",", "") if replies else "",
-    replies.group(2) if replies else "",
-    size.group(1) if size else "",
-    bps.group(1) if bps else "",
-    duration.group(1) if duration else "",
+    replies_per_second,
+    reply_percent,
+    dns_reply_size,
+    ethernet_reply_bps,
+    duration_seconds,
     str(dev_after["rx"] - dev_before["rx"]),
     str(dev_after["tx"] - dev_before["tx"]),
     delta(qdisc_before, qdisc_after, "dropped"),
@@ -1367,7 +1424,7 @@ run_player_kxdpgun() {
     player_run_dir=".oxidedns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     remote_run_dir="$player_workdir_abs/$player_run_dir"
 
-    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" <<'REMOTE'
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" <<'REMOTE'
 set -euo pipefail
 workdir="$1"
 run_dir="$2"
@@ -1379,11 +1436,82 @@ interface="$7"
 mode="$8"
 source_ip="$9"
 target_ip="${10}"
+player_tool="${11}"
+oxide_gun_bin="${12}"
+oxide_gun_xdp_redirect_object="${13}"
+oxide_gun_xdp_mode="${14}"
+oxide_gun_xdp_zerocopy="${15}"
+oxide_gun_xdp_batch_size="${16}"
+oxide_gun_xdp_rx_drain_passes="${17}"
+oxide_gun_xdp_tx_wakeup_interval="${18}"
+oxide_gun_xdp_umem_frame_count="${19}"
+oxide_gun_xdp_ring_size="${20}"
+oxide_gun_queue_count="${21}"
+oxide_gun_source_port="${22}"
+oxide_gun_source_port_range="${23}"
+oxide_gun_source_port_select="${24}"
+oxide_gun_source_mac="${25}"
+oxide_gun_target_mac="${26}"
 mkdir -p "$workdir/$run_dir"
 (
     cd "$workdir"
     set +e
-    sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i querydb "$target_ip"
+    case "$player_tool" in
+        kxdpgun)
+            sudo kxdpgun -t "$duration" -p "$port" -b "$batch" -Q "$rate" -I "$interface" -m "$mode" -l "$source_ip" -i querydb "$target_ip"
+            ;;
+        oxide-gun)
+            if [[ "$oxide_gun_bin" == "__default__" ]]; then
+                oxide_gun_bin="$workdir/xdp-template-slice/oxide-gun"
+            fi
+            if [[ "$oxide_gun_xdp_redirect_object" == "__default__" ]]; then
+                oxide_gun_xdp_redirect_object="$workdir/xdp-template-slice/oxide-gun-xdp.bpf.o"
+            fi
+            source_port_args=(--source-port "$oxide_gun_source_port")
+            if [[ "$oxide_gun_source_port_range" != "__auto__" ]]; then
+                source_port_args+=(
+                    --source-port-range "$oxide_gun_source_port_range"
+                    --source-port-select "$oxide_gun_source_port_select"
+                )
+            fi
+            sudo "$oxide_gun_bin" \
+                --backend xdp \
+                --interface "$interface" \
+                --tx-queue 0 \
+                --rx-queue 0 \
+                --queue-count "$oxide_gun_queue_count" \
+                --xdp-mode "$oxide_gun_xdp_mode" \
+                --xdp-zerocopy "$oxide_gun_xdp_zerocopy" \
+                --xdp-redirect-object "$oxide_gun_xdp_redirect_object" \
+                --xdp-reply-tracking count \
+                --xdp-batch-size "$oxide_gun_xdp_batch_size" \
+                --xdp-rx-drain-passes "$oxide_gun_xdp_rx_drain_passes" \
+                --xdp-tx-wakeup-interval "$oxide_gun_xdp_tx_wakeup_interval" \
+                --xdp-umem-frame-count "$oxide_gun_xdp_umem_frame_count" \
+                --xdp-tx-ring-size "$oxide_gun_xdp_ring_size" \
+                --xdp-rx-ring-size "$oxide_gun_xdp_ring_size" \
+                --xdp-fill-ring-size "$oxide_gun_xdp_ring_size" \
+                --xdp-completion-ring-size "$oxide_gun_xdp_ring_size" \
+                --target "$target_ip:$port" \
+                --source-ip "$source_ip" \
+                "${source_port_args[@]}" \
+                --source-mac "$oxide_gun_source_mac" \
+                --target-mac "$oxide_gun_target_mac" \
+                --query-list querydb \
+                --query-select sequential \
+                --max-packets 0 \
+                --duration-seconds "$duration" \
+                --target-qps "$rate" \
+                --recv-mode process \
+                --log-format json \
+                --flush-interval-ms 0 \
+                --response-timeout-ms 1000
+            ;;
+        *)
+            printf 'unsupported OXIDEDNS_PHYSICAL_PLAYER_TOOL: %s\n' "$player_tool" >&2
+            false
+            ;;
+    esac
     status="$?"
     printf '%s\n' "$status" >"$workdir/$run_dir/status"
     touch "$workdir/$run_dir/done"

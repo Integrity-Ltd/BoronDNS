@@ -867,6 +867,13 @@ fn run_bound_worker(
         };
         if sent == 0 {
             worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+            if !worker
+                .socket
+                .poll_write(PollTimeout::new(Some(Duration::from_millis(1))))
+                .context("failed to poll AF_XDP TX ring")?
+            {
+                thread::yield_now();
+            }
             continue;
         } else {
             account_sent_packets(sent, &mut send_lengths, &mut stats);

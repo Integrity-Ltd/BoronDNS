@@ -152,8 +152,10 @@ sudo kxdpgun -t 15 -p 5301 -b 10 -Q "$rate" -i querydb "$target_ip" \
 For an OxideDNS kxdpgun run on the dedicated hardware, use the same `querydb`,
 the OxideDNS service port, and the same `-t`, `-b`, `-Q`, source-address, and
 affinity settings as the Knot reference run. The generated `runbook.sh` local
-load-client path is useful for local and preflight evidence; physical
-Knot-comparison claims should use kxdpgun/NIC counters.
+load-client path is useful for local and preflight evidence. Physical promotion
+claims still use kxdpgun/NIC counters until the project-owned `oxide-gun`
+requester path can match kxdpgun's reply-retention behavior at the same offered
+rates.
 
 For repeatable OxideDNS socket-path sweeps on the two physical hosts, use the
 checked-in wrapper instead of ad-hoc SSH commands:
@@ -172,12 +174,12 @@ worker count, hot-path metric detail, and dedicated-worker idle strategy, starts
 Knot only long enough for OxideDNS to transfer the zone, then runs `kxdpgun`
 from the player host against the idle OxideDNS secondary. It writes one
 artifact directory under the staged directory's `evidence/` folder and emits a
-`summary.tsv` containing offered rate, kxdpgun batch/mode, OxideDNS UDP batch
-size, replies per second, reply percentage, average DNS reply size, Ethernet
-reply bit rate, effective server `txqueuelen`, effective per-queue server TX
-ring size, effective per-queue server TX qdisc, effective `fq` limit/flow
-limit, requested UDP socket pacing rate, effective server `net.core.rmem_max`
-and `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
+`summary.tsv` containing offered rate, player tool, kxdpgun batch/mode, OxideDNS
+UDP batch size, replies per second, reply percentage, average DNS reply size,
+Ethernet reply bit rate, effective server `txqueuelen`, effective per-queue
+server TX ring size, effective per-queue server TX qdisc, effective `fq`
+limit/flow limit, requested UDP socket pacing rate, effective server
+`net.core.rmem_max` and `net.core.wmem_max`, server RX/TX packet deltas, Linux UDP
 `InDatagrams`/`OutDatagrams`/`InErrors`/`RcvbufErrors`/`SndbufErrors` deltas,
 retained OxideDNS dedicated-worker mmsg counters when hot-path counters are
 enabled, including successful and empty nonblocking `recvmmsg` calls, root or
@@ -352,6 +354,17 @@ experiments:
   the harness detaches stale requester XDP programs, records the original and
   effective requester MTU in `host/player-link-tuning.txt`, and restores the
   original requester MTU during cleanup.
+- `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun|oxide-gun` selects the requester. The
+  default remains `kxdpgun` for promotion rows. `oxide-gun` runs the
+  project-owned AF_XDP requester with the staged `querydb` as `--query-list`,
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_BIN` or the default
+  `$player_workdir/xdp-template-slice/oxide-gun`, and
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT` or the default
+  `$player_workdir/xdp-template-slice/oxide-gun-xdp.bpf.o`. The dedicated-host
+  defaults use `OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT=63`, source MAC
+  `b8:59:9f:4b:73:2c`, target MAC `1c:34:da:60:67:00`, XDP copy mode, one
+  auto-assigned source port per queue starting at 53000, and summary parsing
+  from the JSON `summary` record.
 
 The first retained perf-guided UDP pass showed that the counters-off,
 CPU-pinned profile was dominated by standard UDP receive setup and disabled RRL
@@ -797,6 +810,23 @@ replies/s and OxideDNS AF_XDP at 1199624 replies/s with equal 99.998417% reply
 rate. Use `xdp.tx_wakeup_interval = 8` for the current AF_XDP comparison
 profile, but keep treating the margin as narrow until a broader rate/repeat
 sweep shows a larger saturation-knee lead.
+The physical wrapper can now run `oxide-gun` as the requester, but the first
+retained rows show it is not yet a replacement for kxdpgun in promotion claims.
+The initial explicit 53000-53062 source-port range disabled per-queue prebuilt
+packet templates and capped the requester at one 4096-descriptor TX-ring fill
+per queue: `physical-udp-knot-comparison-20260606T020951Z` reported only about
+58k replies/s at a requested 900k. Letting `oxide-gun` auto-assign one source
+port per queue re-enabled the intended template shape, but the sender still
+stalled after the first TX ring fill until `oxide-gun` learned to poll TX
+writability on zero-descriptor AF_XDP sends. After that fix,
+`physical-udp-knot-comparison-20260606T021325Z` transmitted about 2.6M packets
+but retained only 13.255288% replies against Knot XDP and 11.715187% against
+OxideDNS AF_XDP; a follow-up Knot-XDP row with requester
+`xdp.rx_drain_passes = 64` at
+`physical-udp-knot-comparison-20260606T021449Z` still retained only 12.183415%.
+Keep `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun` for Knot/OxideDNS promotion rows
+until `oxide-gun` process-mode receive can retain replies at kxdpgun-equivalent
+rates.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
