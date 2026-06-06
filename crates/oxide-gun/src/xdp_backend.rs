@@ -1,6 +1,5 @@
 #![allow(unsafe_code)]
 
-use std::collections::VecDeque;
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -21,7 +20,8 @@ use aya::{
 };
 use serde::Serialize;
 use time::OffsetDateTime;
-use xdp::slab::{HeapSlab, Slab};
+use xdp::Packet;
+use xdp::slab::Slab;
 use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 
 use super::{
@@ -121,6 +121,47 @@ struct XdpPacketTemplates {
     port_count: usize,
     query_count: usize,
     templates: Vec<XdpPacketTemplate>,
+}
+
+struct PacketSlab {
+    packets: Vec<Packet>,
+    capacity: usize,
+}
+
+impl PacketSlab {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            packets: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+}
+
+impl Slab for PacketSlab {
+    fn available(&self) -> usize {
+        self.capacity.saturating_sub(self.packets.len())
+    }
+
+    fn len(&self) -> usize {
+        self.packets.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.packets.is_empty()
+    }
+
+    fn push_front(&mut self, packet: Packet) -> Option<Packet> {
+        if self.packets.len() < self.capacity {
+            self.packets.push(packet);
+            None
+        } else {
+            Some(packet)
+        }
+    }
+
+    fn pop_back(&mut self) -> Option<Packet> {
+        self.packets.pop()
+    }
 }
 
 // SAFETY: the worker owns the AF_XDP socket, rings, UMEM, slabs, and packets as
@@ -717,11 +758,11 @@ fn run_bound_worker(
     let mut stats = Stats::default();
     let batch_size = worker.batch_size;
     let rx_drain_passes = config.xdp.rx_drain_passes;
-    let mut send_slab = HeapSlab::with_capacity(batch_size);
-    let mut send_lengths = VecDeque::with_capacity(batch_size);
+    let mut send_slab = PacketSlab::with_capacity(batch_size);
+    let mut send_lengths = Vec::with_capacity(batch_size);
     let process_responses = config.recv.mode == RecvMode::Process;
     let track_latency = process_responses && config.xdp.reply_tracking == XdpReplyTracking::Latency;
-    let mut recv_slab = HeapSlab::with_capacity(if process_responses { batch_size } else { 0 });
+    let mut recv_slab = PacketSlab::with_capacity(if process_responses { batch_size } else { 0 });
     let start = Instant::now();
     let deadline = config
         .run
@@ -797,7 +838,7 @@ fn run_bound_worker(
             if let Some(inflight) = inflight.as_mut() {
                 inflight.record(source.port, query_id, Instant::now());
             }
-            send_lengths.push_back(frame_len as u64);
+            send_lengths.push(frame_len as u64);
         }
 
         if send_slab.is_empty() {
@@ -904,7 +945,7 @@ fn drain_xdp_replies(
     rx_ring: Option<&mut xdp::RxRing>,
     fill_ring: &mut xdp::WakableFillRing,
     umem: &mut xdp::Umem,
-    recv_slab: &mut HeapSlab,
+    recv_slab: &mut PacketSlab,
     mut inflight: Option<&mut InflightTracker>,
     stats: &mut Stats,
     timeout: Duration,
@@ -1088,10 +1129,10 @@ fn write_query_id_into_dns_payload(packet: &mut Vec<u8>, template: &[u8], id: u1
     packet[..2].copy_from_slice(&id.to_be_bytes());
 }
 
-fn account_sent_packets(sent: usize, send_lengths: &mut VecDeque<u64>, stats: &mut Stats) {
+fn account_sent_packets(sent: usize, send_lengths: &mut Vec<u64>, stats: &mut Stats) {
     stats.tx_packets += sent as u64;
     for _ in 0..sent {
-        if let Some(len) = send_lengths.pop_front() {
+        if let Some(len) = send_lengths.pop() {
             stats.tx_bytes += len;
         }
     }
@@ -1179,7 +1220,7 @@ fn receive_available_xdp(
     rx_ring: Option<&mut xdp::RxRing>,
     fill_ring: &mut xdp::WakableFillRing,
     umem: &mut xdp::Umem,
-    recv_slab: &mut HeapSlab,
+    recv_slab: &mut PacketSlab,
     mut inflight: Option<&mut InflightTracker>,
     stats: &mut Stats,
 ) -> Result<usize> {
