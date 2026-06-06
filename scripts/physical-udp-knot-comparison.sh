@@ -30,6 +30,8 @@ oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COU
 oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
 oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
 oxide_gun_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
+oxide_gun_knot_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST:-$oxide_gun_queue_list}"
+oxide_gun_oxidedns_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_QUEUE_LIST:-$oxide_gun_queue_list}"
 oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
 oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
 oxide_gun_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
@@ -78,8 +80,8 @@ xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES:-1}"
 xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL:-8}"
 xdp_queue_id="${OXIDEDNS_PHYSICAL_XDP_QUEUE_ID:-0}"
 xdp_queue_ids="${OXIDEDNS_PHYSICAL_XDP_QUEUE_IDS:-}"
-xdp_ring_size="${OXIDEDNS_PHYSICAL_XDP_RING_SIZE:-4096}"
-xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-16384}"
+xdp_ring_size="${OXIDEDNS_PHYSICAL_XDP_RING_SIZE:-8192}"
+xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-32768}"
 xdp_batch_size="${OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE:-1024}"
 xdp_run_as_user="${OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER:-codex}"
 xdp_mtu="${OXIDEDNS_PHYSICAL_XDP_MTU:-}"
@@ -1633,6 +1635,7 @@ run_player_kxdpgun() {
     local port="$3"
     local rate="$4"
     local row_source_port_list="${5:-$oxide_gun_source_port_list}"
+    local row_queue_list="${6:-$oxide_gun_queue_list}"
     local local_log="$id.kxdpgun.tmp"
     local player_run_dir
     local remote_run_dir
@@ -1644,7 +1647,7 @@ run_player_kxdpgun() {
 
     capture_player_row_state "$run_abs" before
 
-    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_queue_list" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
+    ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$row_queue_list" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
 set -euo pipefail
 workdir="$1"
 run_dir="$2"
@@ -1795,7 +1798,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; the
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -1808,7 +1811,7 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -1852,7 +1855,7 @@ for udp_backend in $oxidedns_udp_backends; do
                             run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
                             run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration"
                             run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                            run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list"
+                            run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list" "$oxide_gun_oxidedns_queue_list"
                             run_server_socket_sample_finish "$run_abs" "$socket_sample"
                             run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
                             run_server_finish "$run_abs" "oxidedns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
@@ -1871,7 +1874,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -1884,7 +1887,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
-        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list"
+        run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done

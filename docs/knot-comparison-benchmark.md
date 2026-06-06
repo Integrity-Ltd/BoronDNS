@@ -335,8 +335,8 @@ experiments:
   `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID`; it is not a SO_REUSEPORT worker count.
 - XDP rows are controlled with `OXIDEDNS_PHYSICAL_XDP_MODE=drv`,
   `OXIDEDNS_PHYSICAL_XDP_ZERO_COPY=require`,
-  `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=4096`,
-  `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
+  `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=8192`,
+  `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=32768`,
   `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`,
   `OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES=1`,
   `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=8`, and optionally
@@ -397,8 +397,12 @@ experiments:
   on the row that contains `metrics-after.prom` and the oxide-gun
   `kxdpgun.log` JSON summary. The helper emits both `queue_list=...` and
   `source_port_list=...`; pass both to OxideGun when the selected requester
-  queues are sparse. The selected source-port list keeps one reply stream per
-  requester RX queue while also balancing requests across server AF_XDP workers.
+  queues are sparse. The physical wrapper accepts
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST=...` and
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_QUEUE_LIST=...` alongside the
+  target-specific source-port list variables. The selected source-port list
+  keeps one reply stream per requester RX queue while also balancing requests
+  across server AF_XDP workers.
   For Knot rows, where no OxideDNS server-worker metric exists, use
   `--requester-only` against a low-rate Knot-XDP calibration row to select one
   source port per requester RX queue for that target port. For a follow-up
@@ -1307,6 +1311,21 @@ replies/s at 100.000000%, and 60 queues in
 100.000000%. Treat source-port/RSS steering as exhausted for this forward
 zero-copy slice; the next improvement needs a server/requester packet-I/O
 change rather than MTU or multi-buffer work for these small DNS packets.
+
+Keeping the earlier 63-flow high-rate OxideDNS source list while moving the
+server AF_XDP capacity profile to ring size 8192 and UMEM frame count 32768
+restored forward-role headroom. The Oxide-only probe
+`physical-udp-knot-comparison-20260606T082354Z` reached 2404179 replies/s at
+100.000000%. The fair Knot-first comparison
+`physical-udp-knot-comparison-20260606T082449Z` measured Knot XDP at 2341327
+replies/s and 100.000000%, while OxideDNS AF_XDP measured 2400687 replies/s and
+100.000000%. The same profile is not yet order-robust:
+`physical-udp-knot-comparison-20260606T082612Z` measured OxideDNS-first at
+2393526 replies/s and 99.997862%, then Knot XDP at 2401280 replies/s and
+100.000000%. Promote 8192/32768 as the physical comparison default because it is
+the strongest current server capacity profile, but keep the forward gate open
+until the OxideDNS-first miss is eliminated or explained by a controlled
+attach-state cleanup.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
