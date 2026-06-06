@@ -1303,9 +1303,17 @@ OxideDNS AF_XDP at 2369246 replies/s and 99.999460%, while Knot XDP reached
 `physical-udp-knot-comparison-20260606T085831Z` measured OxideDNS AF_XDP at
 2368449 replies/s and 99.995138%, while Knot XDP reached 2370729 replies/s and
 100.000000%. Keep requester batch 64 as the least-bad zero-copy reverse setting
-for this profile, but do not treat it as a retained both-order reverse win. The
-next reverse step needs more margin or a server/requester service change, not
-another MTU or broad source-list recalibration pass.
+for the older requester binary, but do not treat that binary as a retained
+both-order reverse win. Rebuilding and deploying the current committed
+`oxide-gun` requester, while keeping the same source list and server profile,
+made the reverse zero-copy row gate-clean in both orders:
+`physical-udp-knot-comparison-20260606T090123Z` measured OxideDNS-first at
+2363658 replies/s and 100.000000%, while Knot XDP reached 2362726 replies/s and
+100.000000%; `physical-udp-knot-comparison-20260606T090249Z` measured Knot-first
+at 2363575 replies/s and 100.000000%, while OxideDNS AF_XDP reached
+2370320 replies/s and 100.000000%. Promote the current requester binary plus
+batch 64 as the reverse zero-copy comparison profile, but keep the margin caveat
+because both wins are narrow.
 
 Forward-role zero-copy steering checks on 2026-06-06 did not identify MTU as
 the active limiter. `physical-udp-knot-comparison-20260606T080632Z` used
