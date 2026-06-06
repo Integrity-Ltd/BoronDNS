@@ -1296,10 +1296,16 @@ which points to burst-induced server RX pressure. Repeating the same reverse
 Knot-first row with requester batch size 64 in
 `physical-udp-knot-comparison-20260606T073956Z` removed that loss signature:
 Knot XDP measured 2359830 replies/s at 99.990240%, while OxideDNS AF_XDP
-measured 2369759 replies/s at 100.000000%. Keep requester batch 64 for
-OxideGun zero-copy rows on this 25G profile; it is lower QPS than the best
-copy-mode comparison, but it proves the project-owned requester can drive a
-zero-copy reverse-role row through the reply-percentage gate.
+measured 2369759 replies/s at 100.000000%. The same reverse profile is not
+OxideDNS-first clean: `physical-udp-knot-comparison-20260606T085700Z` measured
+OxideDNS AF_XDP at 2369246 replies/s and 99.999460%, while Knot XDP reached
+2364411 replies/s and 100.000000%; repeating it in
+`physical-udp-knot-comparison-20260606T085831Z` measured OxideDNS AF_XDP at
+2368449 replies/s and 99.995138%, while Knot XDP reached 2370729 replies/s and
+100.000000%. Keep requester batch 64 as the least-bad zero-copy reverse setting
+for this profile, but do not treat it as a retained both-order reverse win. The
+next reverse step needs more margin or a server/requester service change, not
+another MTU or broad source-list recalibration pass.
 
 Forward-role zero-copy steering checks on 2026-06-06 did not identify MTU as
 the active limiter. `physical-udp-knot-comparison-20260606T080632Z` used
