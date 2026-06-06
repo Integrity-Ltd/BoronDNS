@@ -1538,6 +1538,18 @@ with batch 640 measured 2329985 replies/s, and
 at 100.000000%. Treat the next plausible gain as response ownership/copy
 avoidance or DNS name/layout work; do not keep cycling allocator preloads or
 nearby batch values without new profile evidence.
+A bounded reusable-response-buffer prototype was also tested and rejected. The
+prototype added a direct ZoneImage answer path that wrote into caller-owned
+buffers and recycled per-worker UDP response buffers after each send batch, but
+kept the existing fallback composer for other response shapes. It passed local
+core/server tests and built an AF_XDP release candidate, but the physical
+same-profile comparison did not improve the source-built Knot gate:
+`physical-udp-knot-comparison-20260606T213040Z` measured OxideDNS AF_XDP at
+2365876 replies/s and source-built Knot XDP at 2393271 replies/s, both
+100.000000%; `physical-udp-knot-comparison-20260606T213130Z` measured
+source-built Knot XDP at 2403218 replies/s and OxideDNS AF_XDP at 2399560
+replies/s, again both 100.000000%. Do not reintroduce that partial buffer-pool
+shape without a stronger direct-to-frame or broader composer redesign.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
