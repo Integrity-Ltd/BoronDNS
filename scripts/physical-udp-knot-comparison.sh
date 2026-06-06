@@ -226,7 +226,7 @@ else
     server_prefix_arg="__none__"
 fi
 
-ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\toxide_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
+ssh_control "$server_ssh" "mkdir -p '$out_abs' && printf 'target\\tserver_udp_backend\\txdp_mode\\txdp_zero_copy\\txdp_rx_drain_passes\\txdp_tx_wakeup_interval\\tworkers\\trate\\tplayer_tool\\toxide_gun_response_timeout_ms\\tkxdpgun_batch\\tkxdpgun_mode\\tudp_batch_size\\thot_path_detail\\tidle_strategy\\tsocket_receive_buffer_bytes\\tsocket_send_buffer_bytes\\tsocket_max_pacing_rate_bytes_per_second\\tserver_txqueuelen\\tserver_tx_ring\\tserver_tx_qdisc\\tserver_tx_fq_limit\\tserver_tx_fq_flow_limit\\tserver_rmem_max\\tserver_wmem_max\\tworker_cpus\\tserver_prefix\\treplies_per_second\\treply_percent\\tdns_reply_size\\tethernet_reply_bps\\tduration_seconds\\tplayer_rx_packets_delta\\tplayer_tx_packets_delta\\tplayer_softnet_dropped_delta\\tplayer_softnet_time_squeeze_delta\\tplayer_rx_packets_phy_delta\\tplayer_tx_packets_phy_delta\\tplayer_rx_discards_phy_delta\\tplayer_tx_discards_phy_delta\\tplayer_rx_xsk_xdp_redirect_delta\\tplayer_tx_xsk_xmit_delta\\tplayer_tx_xsk_wakeup_delta\\tserver_rx_packets_delta\\tserver_tx_packets_delta\\tserver_qdisc_dropped_delta\\tserver_qdisc_requeues_delta\\tserver_udp_in_datagrams_delta\\tserver_udp_out_datagrams_delta\\tserver_udp_in_errors_delta\\tserver_udp_rcvbuf_errors_delta\\tserver_udp_sndbuf_errors_delta\\tserver_udp_mmsg_send_syscalls\\tserver_udp_mmsg_sent_datagrams\\tserver_udp_mmsg_send_partial_syscalls\\tserver_udp_mmsg_send_wouldblock_retries\\tserver_udp_mmsg_receive_syscalls\\tserver_udp_mmsg_receive_wouldblock_syscalls\\tserver_udp_mmsg_received_datagrams\\tserver_af_xdp_rx_recv_calls\\tserver_af_xdp_rx_empty_recv_calls\\tserver_af_xdp_rx_received_packets\\tserver_af_xdp_rx_parse_errors\\tserver_af_xdp_tx_send_calls\\tserver_af_xdp_tx_queued_packets\\tserver_af_xdp_tx_empty_send_calls\\tserver_af_xdp_tx_wakeups\\tserver_af_xdp_tx_poll_write_calls\\tserver_af_xdp_tx_poll_write_ready\\tserver_af_xdp_completion_dequeues\\tserver_af_xdp_completed_packets\\tserver_af_xdp_worker_active\\tserver_af_xdp_worker_received_min\\tserver_af_xdp_worker_received_max\\tserver_af_xdp_worker_sent_min\\tserver_af_xdp_worker_sent_max\\tsoftnet_dropped_delta\\tsoftnet_time_squeeze_delta\\tserver_qdisc_flows_plimit_delta\\n' > '$out_abs/summary.tsv'"
 
 declare -A run_id_counts=()
 run_id=""
@@ -1280,6 +1280,22 @@ def parse_qdisc(path):
         root["flows_plimit"] = child_flows_plimit
     return root
 
+def parse_ethtool(path):
+    values = {}
+    for raw in read(path).splitlines():
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        key = key.strip()
+        fields = value.strip().split()
+        if not key or not fields:
+            continue
+        try:
+            values[key] = int(fields[0])
+        except ValueError:
+            continue
+    return values
+
 def parse_prom_metrics(path):
     values = {}
     for raw in read(path).splitlines():
@@ -1317,12 +1333,18 @@ def delta(before, after, key):
 
 dev_before = parse_dev_packets(f"{run_abs}/server-proc-net-dev-before.txt", interface)
 dev_after = parse_dev_packets(f"{run_abs}/server-proc-net-dev-after.txt", interface)
+player_dev_before = parse_dev_packets(f"{run_abs}/player-proc-net-dev-before.txt", interface)
+player_dev_after = parse_dev_packets(f"{run_abs}/player-proc-net-dev-after.txt", interface)
 udp_before = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-before.txt")
 udp_after = parse_udp_snmp(f"{run_abs}/server-proc-net-snmp-after.txt")
 soft_before = parse_softnet(f"{run_abs}/server-proc-net-softnet-before.txt")
 soft_after = parse_softnet(f"{run_abs}/server-proc-net-softnet-after.txt")
+player_soft_before = parse_softnet(f"{run_abs}/player-proc-net-softnet-before.txt")
+player_soft_after = parse_softnet(f"{run_abs}/player-proc-net-softnet-after.txt")
 qdisc_before = parse_qdisc(f"{run_abs}/server-tc-qdisc-before.txt")
 qdisc_after = parse_qdisc(f"{run_abs}/server-tc-qdisc-after.txt")
+player_ethtool_before = parse_ethtool(f"{run_abs}/player-ethtool-stats-before.txt")
+player_ethtool_after = parse_ethtool(f"{run_abs}/player-ethtool-stats-after.txt")
 prom = parse_prom_metrics(f"{run_abs}/metrics-after.prom")
 af_xdp_worker_active, af_xdp_worker_received_min, af_xdp_worker_received_max = (
     prom_series_summary(prom, "oxidedns_af_xdp_worker_received_packets_total")
@@ -1364,6 +1386,17 @@ print("\t".join([
     dns_reply_size,
     ethernet_reply_bps,
     duration_seconds,
+    str(player_dev_after["rx"] - player_dev_before["rx"]),
+    str(player_dev_after["tx"] - player_dev_before["tx"]),
+    delta(player_soft_before, player_soft_after, "dropped"),
+    delta(player_soft_before, player_soft_after, "time_squeeze"),
+    delta(player_ethtool_before, player_ethtool_after, "rx_packets_phy"),
+    delta(player_ethtool_before, player_ethtool_after, "tx_packets_phy"),
+    delta(player_ethtool_before, player_ethtool_after, "rx_discards_phy"),
+    delta(player_ethtool_before, player_ethtool_after, "tx_discards_phy"),
+    delta(player_ethtool_before, player_ethtool_after, "rx_xsk_xdp_redirect"),
+    delta(player_ethtool_before, player_ethtool_after, "tx_xsk_xmit"),
+    delta(player_ethtool_before, player_ethtool_after, "tx_xsk_wakeup"),
     str(dev_after["rx"] - dev_before["rx"]),
     str(dev_after["tx"] - dev_before["tx"]),
     delta(qdisc_before, qdisc_after, "dropped"),
@@ -1488,6 +1521,18 @@ fi
 REMOTE
 }
 
+capture_player_row_state() {
+    local run_abs="$1"
+    local suffix="$2"
+
+    ssh_control "$player_ssh" "cat /proc/net/dev" \
+        | ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-dev-$suffix.txt'" || true
+    ssh_control "$player_ssh" "cat /proc/net/softnet_stat" \
+        | ssh_control "$server_ssh" "cat > '$run_abs/player-proc-net-softnet-$suffix.txt'" || true
+    ssh_control "$player_ssh" "ethtool -S '$interface' 2>&1 || true" \
+        | ssh_control "$server_ssh" "cat > '$run_abs/player-ethtool-stats-$suffix.txt'" || true
+}
+
 run_server_socket_sample_start() {
     local run_abs="$1"
     local enabled="$2"
@@ -1569,6 +1614,8 @@ run_player_kxdpgun() {
 
     player_run_dir=".oxidedns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     remote_run_dir="$player_workdir_abs/$player_run_dir"
+
+    capture_player_row_state "$run_abs" before
 
     ssh_control "$player_ssh" bash -s -- "$player_workdir_abs" "$player_run_dir" "$duration" "$port" "$batch" "$rate" "$interface" "$kxdpgun_mode" "$source_ip" "$target_ip" "$player_tool" "$oxide_gun_bin" "$oxide_gun_xdp_redirect_object" "$oxide_gun_xdp_mode" "$oxide_gun_xdp_zerocopy" "$oxide_gun_xdp_batch_size" "$oxide_gun_xdp_rx_drain_passes" "$oxide_gun_xdp_tx_wakeup_interval" "$oxide_gun_xdp_pace_wait_fraction" "$oxide_gun_xdp_umem_frame_count" "$oxide_gun_xdp_ring_size" "$oxide_gun_queue_count" "$oxide_gun_source_port" "$oxide_gun_source_port_range" "$row_source_port_list" "$oxide_gun_source_port_select" "$oxide_gun_source_mac" "$oxide_gun_target_mac" "$oxide_gun_response_timeout_ms" <<'REMOTE'
 set -euo pipefail
@@ -1697,6 +1744,7 @@ REMOTE
         fi
     fi
     ssh_control "$server_ssh" "cat > '$run_abs/kxdpgun.log'" <"$local_log" || true
+    capture_player_row_state "$run_abs" after
     ssh_control "$player_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$player_ssh" "rm -rf '$remote_run_dir'" >/dev/null 2>&1 || true
     rm -f "$local_log"

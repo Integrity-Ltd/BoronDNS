@@ -66,6 +66,8 @@ struct XdpOutputRecord<'a> {
     requested_qps: Option<u64>,
     tx_packets_total: u64,
     tx_bytes_total: u64,
+    xdp_tx_completed_packets_total: u64,
+    xdp_tx_outstanding_packets_total: u64,
     rx_packets_total: u64,
     rx_bytes_total: u64,
     rx_dns_responses_total: u64,
@@ -104,6 +106,8 @@ struct XdpQueueOutputRecord {
     source_port: u16,
     requested_qps: Option<u64>,
     tx_packets_total: u64,
+    xdp_tx_completed_packets_total: u64,
+    xdp_tx_outstanding_packets_total: u64,
     rx_packets_total: u64,
     rx_dns_responses_total: u64,
     rx_dns_responses_minus_tx_packets: i64,
@@ -662,6 +666,7 @@ fn worker_config(
 fn merge_stats(total: &mut Stats, stats: Stats) {
     total.tx_packets += stats.tx_packets;
     total.tx_bytes += stats.tx_bytes;
+    total.xdp_tx_completed_packets += stats.xdp_tx_completed_packets;
     total.rx_packets += stats.rx_packets;
     total.rx_bytes += stats.rx_bytes;
     total.rx_dns_responses += stats.rx_dns_responses;
@@ -695,6 +700,11 @@ impl XdpQueueOutputRecord {
             source_port: outcome.source_port,
             requested_qps: outcome.requested_qps,
             tx_packets_total: outcome.stats.tx_packets,
+            xdp_tx_completed_packets_total: outcome.stats.xdp_tx_completed_packets,
+            xdp_tx_outstanding_packets_total: outcome
+                .stats
+                .tx_packets
+                .saturating_sub(outcome.stats.xdp_tx_completed_packets),
             rx_packets_total: outcome.stats.rx_packets,
             rx_dns_responses_total: outcome.stats.rx_dns_responses,
             rx_dns_responses_minus_tx_packets: signed_delta(
@@ -938,7 +948,12 @@ fn run_bound_worker(
             // to the TX ring while `umem` and `socket` remain alive, or immediately
             // freed back to the same UMEM on error.
             let Some(mut packet) = (unsafe { worker.umem.alloc() }) else {
-                worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+                dequeue_xdp_completions(
+                    &mut worker.completion_ring,
+                    &mut worker.umem,
+                    batch_size,
+                    &mut stats,
+                );
                 break;
             };
             let frame_len = match packet_templates
@@ -979,7 +994,12 @@ fn run_bound_worker(
         }
 
         if send_slab.is_empty() {
-            worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+            dequeue_xdp_completions(
+                &mut worker.completion_ring,
+                &mut worker.umem,
+                batch_size,
+                &mut stats,
+            );
             continue;
         }
 
@@ -993,7 +1013,12 @@ fn run_bound_worker(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
                 account_sent_packets(queued, &mut send_lengths, &mut stats);
-                worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+                dequeue_xdp_completions(
+                    &mut worker.completion_ring,
+                    &mut worker.umem,
+                    batch_size,
+                    &mut stats,
+                );
                 pace_after_sent(
                     per_packet_delay,
                     queued,
@@ -1013,7 +1038,12 @@ fn run_bound_worker(
             Err(error) => return Err(error).context("failed to enqueue AF_XDP packet"),
         };
         if sent == 0 {
-            worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+            dequeue_xdp_completions(
+                &mut worker.completion_ring,
+                &mut worker.umem,
+                batch_size,
+                &mut stats,
+            );
             if !worker
                 .socket
                 .poll_write(PollTimeout::new(Some(Duration::from_millis(1))))
@@ -1025,7 +1055,12 @@ fn run_bound_worker(
         } else {
             account_sent_packets(sent, &mut send_lengths, &mut stats);
         }
-        worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+        dequeue_xdp_completions(
+            &mut worker.completion_ring,
+            &mut worker.umem,
+            batch_size,
+            &mut stats,
+        );
 
         if process_responses {
             for _ in 0..rx_drain_passes {
@@ -1345,6 +1380,17 @@ fn account_sent_packets(sent: usize, send_lengths: &mut Vec<u64>, stats: &mut St
     }
 }
 
+fn dequeue_xdp_completions(
+    completion_ring: &mut xdp::CompletionRing,
+    umem: &mut xdp::Umem,
+    batch_size: usize,
+    stats: &mut Stats,
+) -> usize {
+    let completed = completion_ring.dequeue(umem, batch_size);
+    stats.xdp_tx_completed_packets += completed as u64;
+    completed
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pace_after_sent(
     per_packet_delay: Option<Duration>,
@@ -1625,6 +1671,10 @@ fn emit_xdp_record<'a>(
         requested_qps: config.rate.target_qps,
         tx_packets_total: stats.tx_packets,
         tx_bytes_total: stats.tx_bytes,
+        xdp_tx_completed_packets_total: stats.xdp_tx_completed_packets,
+        xdp_tx_outstanding_packets_total: stats
+            .tx_packets
+            .saturating_sub(stats.xdp_tx_completed_packets),
         rx_packets_total: stats.rx_packets,
         rx_bytes_total: stats.rx_bytes,
         rx_dns_responses_total: stats.rx_dns_responses,

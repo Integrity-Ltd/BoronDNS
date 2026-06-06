@@ -579,6 +579,7 @@ struct OutputRecord<'a> {
 struct Stats {
     tx_packets: u64,
     tx_bytes: u64,
+    xdp_tx_completed_packets: u64,
     rx_packets: u64,
     rx_bytes: u64,
     rx_dns_responses: u64,

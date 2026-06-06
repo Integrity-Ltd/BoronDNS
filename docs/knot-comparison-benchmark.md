@@ -1150,6 +1150,29 @@ and 99.161520%, but still did not clear the retained Knot-XDP row. Reweighting
 again from `061301Z` did not promote a win:
 `physical-udp-knot-comparison-20260606T061429Z` measured 1963786 replies/s and
 99.082266%.
+Requester-side packet counters now make the forward 2.5M loss mode concrete.
+The physical wrapper retains per-row requester `/proc/net/dev`,
+`/proc/net/softnet_stat`, and `ethtool -S` before/after snapshots, and the
+summary includes requester packet, PHY, softnet, and selected XSK deltas.
+With the first weighted list repeated in
+`physical-udp-knot-comparison-20260606T062221Z`, OxideDNS AF_XDP measured
+1974391 replies/s at 99.080636%; the requester reported 10017792 AF_XDP TX
+packets, but its NIC `tx_packets_phy` delta was only 9925696 and the server
+reported 9925692 AF_XDP packets received and queued for TX. The 92096
+requester-TX-minus-physical gap matched the 92100 unanswered queries, while
+requester/server PHY counters showed zero discards and no oversize packets.
+That rules out MTU, fragmentation, and server receive loss for this row; the
+lost denominator is before or inside the requester AF_XDP TX path.
+`oxide-gun` now also reports AF_XDP TX completion counters. Repeating the same
+row with the completion-instrumented requester in
+`physical-udp-knot-comparison-20260606T062634Z` measured 1956164 replies/s at
+99.205756%; the requester reported 9912320 submitted TX packets, 9577445 TX
+completions dequeued by summary time, 334875 outstanding completions, and
+9833596 requester PHY TX packets. Completion dequeue lag is therefore larger
+than the unanswered gap and should be treated as a frame-reclamation pressure
+signal, not as a direct physical-TX counter. Continue forward 2.5M work in
+oxide-gun's AF_XDP TX service/pacing path before spending time on additional
+MTU tuning.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
