@@ -83,16 +83,20 @@ The current crate already has:
 - `--self-test`, `--probe`, TOML config, and `--print-config`.
 - Single-query, query-list, and generated-template DNS query pools.
 - EDNS0, DO bit support, RD support, and common QTYPE parsing.
-- Fixed, random IPv4 CIDR, round-robin list, and sequential IPv4 source strategies in the XDP packet path.
+- Fixed, round-robin list, and sequential source strategies for IPv4 and IPv6 in the XDP packet path.
+- Random IPv4 CIDR source selection.
 - Source port ranges with sequential or random selection.
-- Batched AF_XDP sends with configurable `xdp.batch_size` and direct packet-buffer frame construction.
+- Single-queue, contiguous multi-queue, and explicit sparse-queue AF_XDP sends with configurable `xdp.batch_size` and direct packet-buffer frame construction.
 - Optional Aya-loaded Rust eBPF XDP_DROP object for reply suppression in drop mode.
+- Process-mode XDP reply redirect for IPv4 and direct IPv6 UDP packets.
 - JSON and human summary output with explicit drop implementation status.
 - Basic response classification.
 - Basic latency percentile output for processed responses.
 - Existing unsafe boundary registration in `docs/unsafe-boundaries.tsv`.
 
-The current crate does not yet have multi-queue operation, IPv6 source-pool parity, ARP-assisted target MAC discovery, embedded eBPF object builds, or retained lab evidence for high-rate claims.
+The current crate does not yet have random IPv6 prefix selection, IPv6 parity
+for kernel XDP_DROP, ARP-assisted target MAC discovery, embedded eBPF object
+builds, or enough retained evidence to claim general line-rate performance.
 
 ### 2.2 Target Product
 
@@ -373,14 +377,18 @@ The MVP is the smallest version that is genuinely useful for OxideDNS RRL work:
 
 - Single-query mode retained.
 - Query list file and generated query template support.
-- Fixed, random CIDR, round-robin, and sequential source IP strategies for IPv4.
+- Fixed, round-robin, and sequential source IP strategies for IPv4 and IPv6.
+- Random CIDR source IP strategy for IPv4.
 - Source port range strategy.
 - Deterministic seed behaviour for query/source selection.
-- XDP backend capable of putting chosen IPv4 source addresses and ports on the wire.
+- XDP backend capable of putting chosen IPv4 and IPv6 source addresses and ports on the wire.
 - Portable UDP backend remains CI-safe and documents its source-address limits.
 - Process receive mode with response classification and basic latency percentiles.
 - JSON summary with effective config and counters.
 - Clear output distinction between userspace receive suppression and kernel XDP_DROP.
 - Unsafe boundary docs, `// SAFETY:` comments, Miri for pure modules, and ASan for unsafe packet-buffer tests where applicable.
 
-Kernel XDP_DROP, IPv6 source strategy parity, ramp/step profiles, multi-queue scaling, ARP-assisted target MAC discovery, and line-rate performance are important but may land after the first MVP if the MVP already supports reproducible source-varied XDP RRL tests.
+Kernel XDP_DROP IPv6 parity, random IPv6 prefix selection, ramp/step profiles,
+ARP-assisted target MAC discovery, and general line-rate performance are
+important but may land after the first MVP if the MVP already supports
+reproducible source-varied XDP RRL tests.
