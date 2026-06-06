@@ -380,9 +380,11 @@ experiments:
   detects the requester interface RX queue count so forward and reversed host
   roles do not reuse the wrong 63-queue assumption. The default source MAC is
   `b8:59:9f:4b:73:2c`, target MAC is `1c:34:da:60:67:00`, XDP copy mode is
-  used, one source port is auto-assigned per queue starting at 53000, and
-  summary parsing comes from the JSON `summary` record. The effective requester
-  queue count is retained in `host/player-link-tuning.txt`.
+  used, `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE=64` is used to avoid
+  zero-copy requester bursts when copy mode is overridden, one source port is
+  auto-assigned per queue starting at 53000, and summary parsing comes from the
+  JSON `summary` record. The effective requester queue count is retained in
+  `host/player-link-tuning.txt`.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST=port,port,...` passes an
   explicit per-worker source-port list to `oxide-gun`; use it after queue
   calibration when contiguous source ports do not hash back to their owning
@@ -1268,6 +1270,23 @@ actual `064300Z` calibrated port list and the full-batch refill binary,
 `physical-udp-knot-comparison-20260606T071525Z`, measured 2015954 replies/s at
 100.000000%, so this receive-path slice does not invalidate the existing
 forward-role proof.
+
+The requester zero-copy follow-up confirmed that burst shape, not MTU, explains
+the next reverse-role failure mode. With both hosts forced to temporary MTU
+1500, `OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY=force`, and the previous
+requester batch size 1024, `physical-udp-knot-comparison-20260606T073704Z`
+measured Knot XDP at 2447952 replies/s and 99.813565%, but OxideDNS AF_XDP fell
+to 1946130 replies/s and 79.431881%. The OxideDNS row still completed all
+requester TX descriptors, but the server only received 9851056 AF_XDP packets
+and the NIC reported 2299123 `rx_xsk_xdp_drop` deltas plus link pause frames,
+which points to burst-induced server RX pressure. Repeating the same reverse
+Knot-first row with requester batch size 64 in
+`physical-udp-knot-comparison-20260606T073956Z` removed that loss signature:
+Knot XDP measured 2359830 replies/s at 99.990240%, while OxideDNS AF_XDP
+measured 2369759 replies/s at 100.000000%. Keep requester batch 64 for
+OxideGun zero-copy rows on this 25G profile; it is lower QPS than the best
+copy-mode comparison, but it proves the project-owned requester can drive a
+zero-copy reverse-role row through the reply-percentage gate.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

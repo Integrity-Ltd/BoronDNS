@@ -57,6 +57,11 @@ conservative CI defaults. `--xdp-tx-wakeup-interval 1` preserves the default
 behavior of explicitly waking TX after each successful batch; larger values
 reduce `sendto()` wakeups, and `0` disables explicit TX wakeups for lab
 experiments.
+On the dedicated 25G reverse-role comparison, forcing requester zero-copy with a
+1024 packet batch created burst loss at the server AF_XDP RX path. The retained
+passing zero-copy row used `--xdp-batch-size 64`, so prefer smaller batches
+before treating MTU or multi-buffer support as the active issue for small DNS
+packets.
 
 The AF_XDP implementation binds one or more contiguous queue pairs in one
 process. `rx_queue` and `tx_queue` must match and act as the first queue;
