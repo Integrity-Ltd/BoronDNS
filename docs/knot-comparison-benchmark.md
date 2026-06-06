@@ -1023,6 +1023,19 @@ cleared an Oxide-only row at 100.000000%, but the fair Knot-first row
 `physical-udp-knot-comparison-20260606T051259Z` measured OxideDNS at
 99.974414% versus Knot XDP at 99.997892%. Keep `xdp.tx_wakeup_interval` as a
 tuning axis, but do not treat wakeup cadence alone as the remaining fix.
+A follow-up experiment made AF_XDP fill-ring wakeup cadence configurable and
+reported fill enqueue/wakeup counters, but the change was not kept because it
+did not move the reverse-role gate in the right direction. With the same
+48-port reverse list and server `xdp.tx_wakeup_interval = 8`,
+`physical-udp-knot-comparison-20260606T052125Z` disabled explicit fill wakeups
+and measured 2455605 replies/s at 99.983648%.
+`physical-udp-knot-comparison-20260606T052209Z` used a fill wakeup interval of
+16 and regressed to 2454457 replies/s at 99.885465%, including 2068 AF_XDP
+parse errors. Repeating the current fill-wakeup behavior with the extra fill
+counters in `physical-udp-knot-comparison-20260606T052254Z` measured 2454423
+replies/s at 99.929599%. Treat fill-wakeup suppression and extra fill counters
+as negative evidence for the saturation profile unless a later XDP socket API
+can use kernel need-wakeup state instead of blind wakeup cadence.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
