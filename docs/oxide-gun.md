@@ -97,7 +97,11 @@ but RX counters can remain zero because no kernel-side XSK redirect is installed
 
 Source-address strategies require the XDP backend. Portable UDP uses the OS
 socket source address and is intended for CI, local sanity checks, and ordinary
-DNS response classification.
+DNS response classification. `--source-cidr` remains an IPv4 random-CIDR
+strategy. `--source-range-start` plus `--source-range-count` supports sequential
+IPv4 and IPv6 source ranges, and `--source-list` accepts explicit IPv4 or IPv6
+addresses as long as every selected source address uses the same IP family as
+`--target`.
 
 Example source-varied XDP run:
 
@@ -168,7 +172,9 @@ compatibility copy named `oxide-gun-drop.bpf.o`. The drop loader configures the
 source scope, then reads the per-CPU `DROPPED_PACKETS` counter for summary
 output. Source list/range runs still match the DNS target and source port range,
 but leave destination-IP matching wildcarded because those source sets are not
-represented as a compact CIDR in the one-entry MVP map.
+represented as a compact CIDR in the one-entry MVP map. Kernel drop mode is
+currently IPv4-scoped; use process-mode reply redirects for IPv6 receive
+accounting.
 
 For a privileged local smoke test without a physical XDP NIC, build the debug
 binary with the `xdp` feature and run the veth/netns smoke through `pkexec`:

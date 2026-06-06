@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::thread;
@@ -738,8 +738,20 @@ struct SourceEndpoint {
 enum SourceIpSelector {
     Fixed(IpAddr),
     RoundRobin(Vec<IpAddr>),
-    RandomIpv4Cidr { network: u32, host_mask: u32 },
-    SequentialIpv4 { start: u32, count: u64, stride: u64 },
+    RandomIpv4Cidr {
+        network: u32,
+        host_mask: u32,
+    },
+    SequentialIpv4 {
+        start: u32,
+        count: u64,
+        stride: u64,
+    },
+    SequentialIpv6 {
+        start: u128,
+        count: u64,
+        stride: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -800,24 +812,34 @@ impl SourceSelector {
                 format!("round_robin:{}addrs", config.list.len()),
             )
         } else if config.range_start.is_some() || config.range_count.is_some() {
-            let Some(IpAddr::V4(start)) = config.range_start else {
-                bail!("source.range_start must be an IPv4 address for MVP sequential ranges");
-            };
+            let start = config
+                .range_start
+                .ok_or_else(|| anyhow!("source.range_start is required with source.range_count"))?;
             let count = config
                 .range_count
                 .ok_or_else(|| anyhow!("source.range_count is required with source.range_start"))?;
             if count == 0 {
                 bail!("source.range_count must be non-zero");
-            }
+            };
             let stride = config.range_stride.max(1);
-            (
-                SourceIpSelector::SequentialIpv4 {
-                    start: u32::from(start),
-                    count,
-                    stride,
-                },
-                format!("sequential:{start}/count={count}/stride={stride}"),
-            )
+            match start {
+                IpAddr::V4(start) => (
+                    SourceIpSelector::SequentialIpv4 {
+                        start: u32::from(start),
+                        count,
+                        stride,
+                    },
+                    format!("sequential:{start}/count={count}/stride={stride}"),
+                ),
+                IpAddr::V6(start) => (
+                    SourceIpSelector::SequentialIpv6 {
+                        start: u128::from(start),
+                        count,
+                        stride,
+                    },
+                    format!("sequential:{start}/count={count}/stride={stride}"),
+                ),
+            }
         } else {
             (
                 SourceIpSelector::Fixed(config.ip),
@@ -898,6 +920,13 @@ impl SourceSelector {
             } => IpAddr::V4(Ipv4Addr::from(
                 start.wrapping_add(((counter % *count).saturating_mul(*stride)) as u32),
             )),
+            SourceIpSelector::SequentialIpv6 {
+                start,
+                count,
+                stride,
+            } => IpAddr::V6(Ipv6Addr::from(start.wrapping_add(
+                u128::from(counter % *count).saturating_mul(u128::from(*stride)),
+            ))),
         }
     }
 
@@ -1197,8 +1226,8 @@ fn validate_source_config(config: &SourceConfig) -> Result<()> {
         parse_ipv4_cidr(cidr)?;
     }
     if config.range_start.is_some() || config.range_count.is_some() {
-        if !matches!(config.range_start, Some(IpAddr::V4(_))) {
-            bail!("source.range_start must be IPv4 for MVP sequential ranges");
+        if config.range_start.is_none() {
+            bail!("source.range_start is required with source.range_count");
         }
         if config.range_count.unwrap_or(0) == 0 {
             bail!("source.range_count must be non-zero with source.range_start");
@@ -1298,15 +1327,11 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
         }
     }
     let target = config.target.address.unwrap_or(DEFAULT_TARGET);
-    if config.source.ip.is_ipv4() != target.ip().is_ipv4() {
-        bail!("backend xdp requires source.ip and target.address to use the same IP family");
+    if effective_source_is_ipv4(&config.source) != target.ip().is_ipv4() {
+        bail!("backend xdp requires source strategy and target.address to use the same IP family");
     }
-    if target.ip().is_ipv6()
-        && (config.source.cidr.is_some()
-            || config.source.range_start.is_some()
-            || config.source.range_count.is_some())
-    {
-        bail!("MVP source CIDR and range strategies are IPv4-only");
+    if target.ip().is_ipv6() && config.source.cidr.is_some() {
+        bail!("source.cidr is IPv4-only; use source.range_start or source.list for IPv6");
     }
     if config
         .source
@@ -1317,6 +1342,19 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
         bail!("all source.list entries must use the same IP family as target.address");
     }
     Ok(())
+}
+
+fn effective_source_is_ipv4(config: &SourceConfig) -> bool {
+    if config.cidr.is_some() {
+        return true;
+    }
+    if let Some(source) = config.list.first() {
+        return source.is_ipv4();
+    }
+    if let Some(source) = config.range_start {
+        return source.is_ipv4();
+    }
+    config.ip.is_ipv4()
 }
 
 fn run_self_test(mut config: FileConfig) -> Result<()> {
@@ -2060,6 +2098,50 @@ mod tests {
     }
 
     #[test]
+    fn source_selector_generates_ipv6_sequential_range_and_ports() {
+        let config = SourceConfig {
+            range_start: Some(IpAddr::V6(
+                "2001:db8::10".parse().expect("valid IPv6 range start"),
+            )),
+            range_count: Some(3),
+            range_stride: 2,
+            port_range: Some("53000-53001".to_owned()),
+            port_select: PortSelect::Sequential,
+            ..SourceConfig::default()
+        };
+        let mut selector = SourceSelector::new(&config, 7).expect("source selector builds");
+
+        let first = selector.next();
+        let second = selector.next();
+        let third = selector.next();
+        let fourth = selector.next();
+
+        assert_eq!(
+            first.ip,
+            IpAddr::V6("2001:db8::10".parse::<Ipv6Addr>().expect("valid IPv6"))
+        );
+        assert_eq!(
+            second.ip,
+            IpAddr::V6("2001:db8::12".parse::<Ipv6Addr>().expect("valid IPv6"))
+        );
+        assert_eq!(
+            third.ip,
+            IpAddr::V6("2001:db8::14".parse::<Ipv6Addr>().expect("valid IPv6"))
+        );
+        assert_eq!(
+            fourth.ip,
+            IpAddr::V6("2001:db8::10".parse::<Ipv6Addr>().expect("valid IPv6"))
+        );
+        assert_eq!(first.port, 53000);
+        assert_eq!(second.port, 53001);
+        assert_eq!(third.port, 53000);
+        assert_eq!(
+            selector.ip_description(),
+            "sequential:2001:db8::10/count=3/stride=2"
+        );
+    }
+
+    #[test]
     fn source_selector_accepts_explicit_port_list() {
         let config = SourceConfig {
             port_list: vec![53111, 53007, 53222],
@@ -2080,5 +2162,25 @@ mod tests {
         let mut config = FileConfig::default();
         config.source.cidr = Some("198.18.0.0/24".to_owned());
         assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn xdp_validation_accepts_ipv6_source_range_with_ipv6_target() {
+        let mut config = FileConfig::default();
+        config.backend.kind = Backend::Xdp;
+        config.interface.nic = Some("veth0".to_owned());
+        config.interface.queue_count = 1;
+        config.source.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 1]));
+        config.target.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 2]));
+        config.target.address = Some(SocketAddr::new(
+            IpAddr::V6("2001:db8::53".parse().expect("valid IPv6 target")),
+            53,
+        ));
+        config.source.range_start = Some(IpAddr::V6(
+            "2001:db8::100".parse().expect("valid IPv6 source"),
+        ));
+        config.source.range_count = Some(4);
+
+        validate_config(&config).expect("IPv6 XDP source range is valid");
     }
 }
