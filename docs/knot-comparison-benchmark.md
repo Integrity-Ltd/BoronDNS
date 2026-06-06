@@ -329,6 +329,7 @@ experiments:
   `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID=0`, `OXIDEDNS_PHYSICAL_XDP_RING_SIZE=4096`,
   `OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT=16384`,
   `OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE=1024`,
+  `OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES=1`,
   `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=1`, and optionally
   `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
   server checkout. AF_XDP rows are started through `sudo` and set
@@ -343,8 +344,8 @@ experiments:
   it can read and write the staged benchmark artifacts after the privileged XDP
   attach.
   The summary rows retain `server_udp_backend`, `xdp_mode`, `xdp_zero_copy`,
-  and `xdp_tx_wakeup_interval` so standard, Knot-XDP, and OxideDNS-AF_XDP rows
-  cannot be confused.
+  `xdp_rx_drain_passes`, and `xdp_tx_wakeup_interval` so standard, Knot-XDP,
+  and OxideDNS-AF_XDP rows cannot be confused.
 - The requester-side XDP mode is controlled with
   `OXIDEDNS_PHYSICAL_KXDPGUN_MODE=generic|copy|auto`. Use
   `OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` when trying `auto` on a jumbo-MTU NIC;
@@ -766,6 +767,16 @@ apples-to-apples Knot lead. OxideDNS interval 8 with counter-free objects at
 `oxidegun-xdp-nocounters-serverwakeup8-630k-20260606T013549Z` measured 572831.
 Keep the counter-free redirect objects because they remove unused packet work,
 but treat the remaining deficit as server AF_XDP queue/packet-I/O behavior.
+Server AF_XDP receive-drain passes are also a retained tuning axis with a
+conservative default of 1. The 630k counter-free requester rows did not improve
+when the server attempted extra nonblocking AF_XDP RX drains before dispatching
+each DNS batch: `oxidegun-xdp-rxdrain2-nocounters-630k-20260606T014722Z`
+measured 574681 positive replies and
+`oxidegun-xdp-rxdrain4-nocounters-630k-20260606T014806Z` measured 567271,
+both below the interval-1 counter-free control at 579837 and below the current
+Knot XDP counter-free row at 607583. Keep `xdp.rx_drain_passes = 1` for the
+current profile unless a later queue ownership or worker placement change makes
+larger receive drains useful.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
@@ -838,9 +849,10 @@ On the player host:
 For XDP promotion claims, include both `OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP=true`
 and `OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS="af_xdp"` in the retained run, and
 record whether OxideDNS `zero_copy=require` succeeds or fails on the selected
-NIC/queue, plus the server `xdp.tx_wakeup_interval` used for each row. If
-zero-copy has to be relaxed to `auto` or disabled, the row is engineering
-evidence only and should not be described as the final Knot-XDP comparison.
+NIC/queue, plus the server `xdp.rx_drain_passes` and
+`xdp.tx_wakeup_interval` used for each row. If zero-copy has to be relaxed to
+`auto` or disabled, the row is engineering evidence only and should not be
+described as the final Knot-XDP comparison.
 
 The meaningful result is the saturation knee: the highest offered rate where
 response percentage, drops/errors, p99/p999 latency, and byte throughput remain

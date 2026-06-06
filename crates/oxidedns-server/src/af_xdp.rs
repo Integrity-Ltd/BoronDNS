@@ -226,6 +226,7 @@ pub(crate) struct AfXdpPacketIo {
     umem: xdp::Umem,
     local_addr: SocketAddr,
     batch_size: usize,
+    rx_drain_passes: usize,
     tx_wakeup_interval: usize,
     tx_send_passes: usize,
     fill_ring_size: usize,
@@ -484,6 +485,7 @@ impl AfXdpPacketIo {
                 umem,
                 local_addr,
                 batch_size: prepared.batch_size,
+                rx_drain_passes: config.rx_drain_passes,
                 tx_wakeup_interval: config.tx_wakeup_interval,
                 tx_send_passes: 0,
                 fill_ring_size,
@@ -562,18 +564,32 @@ impl PacketIo for AfXdpPacketIo {
         self.replenish_fill_ring()?;
         self.active_inbound = 0;
         self.frames.clear();
+        let mut receive_passes = 0usize;
 
         loop {
             while !self
                 .socket
-                .poll_read(PollTimeout::new(Some(Duration::from_millis(10))))?
+                .poll_read(PollTimeout::new(Some(if self.active_inbound == 0 {
+                    Duration::from_millis(10)
+                } else {
+                    Duration::ZERO
+                })))?
             {
+                if self.active_inbound > 0 {
+                    return Ok(&self.inbound[..self.active_inbound]);
+                }
                 tokio::task::yield_now().await;
             }
             // SAFETY: packets returned by the RX ring are kept in `self.frames`
             // only until `send_batch` or the next `recv_batch`, both of which
             // either transmit them or return them to the same UMEM.
             let received = unsafe { self.rx_ring.recv(&self.umem, &mut self.recv_slab) };
+            if received == 0 && self.active_inbound > 0 {
+                return Ok(&self.inbound[..self.active_inbound]);
+            }
+            if received > 0 {
+                receive_passes = receive_passes.wrapping_add(1);
+            }
             for _ in 0..received {
                 let Some(packet) = self.recv_slab.pop_back() else {
                     break;
@@ -588,7 +604,7 @@ impl PacketIo for AfXdpPacketIo {
                     Err(_) => self.umem.free_packet(packet),
                 }
             }
-            if self.active_inbound > 0 {
+            if self.active_inbound > 0 && receive_passes >= self.rx_drain_passes {
                 return Ok(&self.inbound[..self.active_inbound]);
             }
             self.replenish_fill_ring()?;
