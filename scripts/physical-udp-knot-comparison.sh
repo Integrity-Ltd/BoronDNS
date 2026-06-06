@@ -76,6 +76,7 @@ xdp_zero_copy="${OXIDEDNS_PHYSICAL_XDP_ZERO_COPY:-require}"
 xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES:-1}"
 xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL:-8}"
 xdp_queue_id="${OXIDEDNS_PHYSICAL_XDP_QUEUE_ID:-0}"
+xdp_queue_ids="${OXIDEDNS_PHYSICAL_XDP_QUEUE_IDS:-}"
 xdp_ring_size="${OXIDEDNS_PHYSICAL_XDP_RING_SIZE:-4096}"
 xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-16384}"
 xdp_batch_size="${OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE:-1024}"
@@ -807,8 +808,9 @@ run_server_start() {
     local cpus_arg="${cpus:-__none__}"
     local udp_batch_size_arg="${udp_batch_size:-staged}"
     local xdp_redirect_object_arg="${xdp_redirect_object:-__default__}"
+    local xdp_queue_ids_arg="${xdp_queue_ids:-__none__}"
 
-    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$server_root_abs" "$stage_abs" "$run_abs" "$udp_backend" "$workers" "$hot_path" "$idle_strategy" "$knot_target_ip" "$knot_target_port" "$socket_receive_buffer_arg" "$socket_send_buffer_arg" "$socket_max_pacing_rate_arg" "$cpus_arg" "$selected_server_bin" "$selected_server_prefix" "$server_interface" "$udp_batch_size_arg" "$xdp_redirect_object_arg" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids_arg" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_run_as_user" <<'REMOTE'
 set -euo pipefail
 server_root="$1"
 stage_abs="$2"
@@ -833,9 +835,10 @@ xdp_zero_copy="${20}"
 xdp_rx_drain_passes="${21}"
 xdp_tx_wakeup_interval="${22}"
 xdp_queue_id="${23}"
-xdp_ring_size="${24}"
-xdp_umem_frame_count="${25}"
-xdp_run_as_user="${26}"
+xdp_queue_ids="${24}"
+xdp_ring_size="${25}"
+xdp_umem_frame_count="${26}"
+xdp_run_as_user="${27}"
 xdp_batch_size="$udp_batch_size"
 if [[ "$socket_receive_buffer" == "__none__" ]]; then
     socket_receive_buffer=""
@@ -858,6 +861,9 @@ if [[ "$xdp_redirect_object" == "__default__" ]]; then
     xdp_redirect_object="$server_root/crates/oxidedns-server-ebpf/target/bpfel-unknown-none/release/oxidedns-xdp-redirect.bpf.o"
 elif [[ "$xdp_redirect_object" != /* ]]; then
     xdp_redirect_object="$server_root/$xdp_redirect_object"
+fi
+if [[ "$xdp_queue_ids" == "__none__" ]]; then
+    xdp_queue_ids=""
 fi
 server_prefix=""
 if [[ "$server_prefix_b64" != "__none__" ]]; then
@@ -899,11 +905,11 @@ else:
 open(path, "w", encoding="utf-8").write(text)
 PY
 if [[ "$udp_backend" == "af_xdp" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" "$xdp_run_as_user" "$workers" <<'PY'
+    python3 - "$run_abs/oxidedns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" "$xdp_run_as_user" "$workers" <<'PY'
 import re
 import sys
 
-path, interface, redirect_object, xdp_mode, zero_copy, rx_drain_passes, tx_wakeup_interval, queue_id, ring_size, umem_frame_count, xdp_batch_size, run_as_user, workers = sys.argv[1:14]
+path, interface, redirect_object, xdp_mode, zero_copy, rx_drain_passes, tx_wakeup_interval, queue_id, queue_ids, ring_size, umem_frame_count, xdp_batch_size, run_as_user, workers = sys.argv[1:15]
 text = open(path, encoding="utf-8").read()
 
 def set_key(section, key, value):
@@ -922,6 +928,15 @@ def set_key(section, key, value):
     else:
         text = text.rstrip() + f"\n\n{header}\n{line}\n"
 
+def remove_key(section, key):
+    global text
+    pattern = rf"(?ms)^(\[{re.escape(section)}\]\n)(.*?)(?=^\[|\Z)"
+    match = re.search(pattern, text)
+    if not match:
+        return
+    body = re.sub(rf"^{re.escape(key)}\s*=.*\n?", "", match.group(2), flags=re.M)
+    text = text[:match.start(2)] + body + text[match.end(2):]
+
 set_key("limits", "udp_backend", '"af_xdp"')
 set_key("limits", "udp_runtime", '"tokio"')
 set_key("limits", "udp_reuseport_workers", workers)
@@ -934,7 +949,13 @@ set_key("xdp", "mode", f'"{xdp_mode}"')
 set_key("xdp", "zero_copy", f'"{zero_copy}"')
 set_key("xdp", "rx_drain_passes", rx_drain_passes)
 set_key("xdp", "tx_wakeup_interval", tx_wakeup_interval)
-set_key("xdp", "queue_id", queue_id)
+if queue_ids:
+    parsed_queue_ids = [int(part) for part in queue_ids.split(",") if part]
+    remove_key("xdp", "queue_id")
+    set_key("xdp", "queue_ids", "[" + ", ".join(str(queue_id) for queue_id in parsed_queue_ids) + "]")
+else:
+    remove_key("xdp", "queue_ids")
+    set_key("xdp", "queue_id", queue_id)
 set_key("xdp", "umem_frame_count", umem_frame_count)
 for key in ("rx_ring_size", "tx_ring_size", "fill_ring_size", "completion_ring_size"):
     set_key("xdp", key, ring_size)

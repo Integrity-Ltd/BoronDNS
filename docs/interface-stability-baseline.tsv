@@ -16,6 +16,7 @@ configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns
 configuration	[limits].udp_reuseport_workers	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional standard UDP SO_REUSEPORT worker count; default is one worker.
 configuration	[limits].udp_runtime	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional standard UDP runtime selection; tokio is the default and dedicated is an experimental per-worker OS-thread packet loop.
 configuration	[limits].udp_worker_cpu_affinity	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional Linux CPU id list for dedicated standard UDP workers; length must match udp_reuseport_workers.
+configuration	[xdp].queue_ids	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional sparse AF_XDP queue id list; unset preserves the contiguous range starting at xdp.queue_id.
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/oxidedns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
 configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.

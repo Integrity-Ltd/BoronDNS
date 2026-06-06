@@ -341,7 +341,9 @@ experiments:
   `OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES=1`,
   `OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL=8`, and optionally
   `OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT` when the object is not under the
-  server checkout. AF_XDP rows are started through `sudo` and set
+  server checkout. Set `OXIDEDNS_PHYSICAL_XDP_QUEUE_IDS=0,1,...` to bind a
+  sparse AF_XDP queue set instead of the contiguous range starting at
+  `OXIDEDNS_PHYSICAL_XDP_QUEUE_ID`. AF_XDP rows are started through `sudo` and set
   `process.run_as_user` to `OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER=codex` by default
   so the process does not continue serving as root. Use
   `OXIDEDNS_PHYSICAL_XDP_MTU=1500` when the benchmark NIC is configured with a
@@ -1241,7 +1243,14 @@ the newly selected 48-port list regressed slightly at high rate
 (`physical-udp-knot-comparison-20260606T070416Z`, 2454957 replies/s at
 100.000000%). A reverse 48-worker server probe was invalid for this port list
 because packets targeted queues above 47 and reply percentage fell to
-87.494803%. Interval 32 also regressed
+87.494803%. The harness now supports explicit sparse server queue ids through
+`OXIDEDNS_PHYSICAL_XDP_QUEUE_IDS`, but binding only the 48 calibrated active
+queues was also not a QPS win: sorted sparse queue order measured
+2454072 replies/s at 100.000000% in
+`physical-udp-knot-comparison-20260606T072347Z`, while source-port order
+measured 2455770 replies/s at 100.000000% in
+`physical-udp-knot-comparison-20260606T072440Z`. Keep the contiguous 63-queue
+profile for the current reverse comparison. Interval 32 also regressed
 (`physical-udp-knot-comparison-20260606T070506Z`, 2453259 replies/s at
 99.969691%).
 

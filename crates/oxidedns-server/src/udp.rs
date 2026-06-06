@@ -134,8 +134,9 @@ fn bind_af_xdp_udp_listeners(
 ) -> Result<Vec<BoundUdpListener>, RuntimeError> {
     let worker_count = worker_count.max(1);
     af_xdp::AfXdpPacketIo::bind_queues(socket, xdp, worker_count)
-        .map(|listeners| {
-            listeners
+        .map(|packet_ios| {
+            let worker_count = packet_ios.len();
+            packet_ios
                 .into_iter()
                 .enumerate()
                 .map(|(worker_id, packet_io)| BoundUdpListener::AfXdp {

@@ -365,49 +365,29 @@ impl AfXdpPacketIo {
         let nic = xdp::nic::NicIndex::lookup_by_name(&ifname)?
             .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "xdp.interface was not found"))?;
         let caps = nic.query_capabilities()?;
-        if prepared.queue_id >= caps.queue_count {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "xdp.queue_id {} is outside interface queue count {}",
-                    prepared.queue_id, caps.queue_count
-                ),
-            ));
-        }
         if config.zero_copy == XdpZeroCopyMode::Require && !caps.zero_copy.is_available() {
             return Err(io::Error::new(
                 ErrorKind::Unsupported,
                 "xdp.zero_copy = \"require\" but interface does not report zero-copy support",
             ));
         }
-        let queue_count = queue_count.max(1);
-        let queue_count_u32 = u32::try_from(queue_count).map_err(|_| {
-            io::Error::new(
-                ErrorKind::InvalidInput,
-                "AF_XDP worker count is too large for queue indexing",
-            )
-        })?;
-        let last_queue_id = prepared
-            .queue_id
-            .checked_add(queue_count_u32.saturating_sub(1))
-            .ok_or_else(|| {
-                io::Error::new(ErrorKind::InvalidInput, "AF_XDP queue range overflows u32")
-            })?;
-        if last_queue_id >= caps.queue_count {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "AF_XDP queue range {}..={} is outside interface queue count {}",
-                    prepared.queue_id, last_queue_id, caps.queue_count
-                ),
-            ));
+        let queue_ids = xdp_queue_ids(config, prepared.queue_id, queue_count)?;
+        for queue_id in &queue_ids {
+            if *queue_id >= caps.queue_count {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "AF_XDP queue id {} is outside interface queue count {}",
+                        queue_id, caps.queue_count
+                    ),
+                ));
+            }
         }
 
         let udp_socket = Arc::new(udp_socket);
-        let mut adapters = Vec::with_capacity(queue_count);
-        let mut xsk_entries = Vec::with_capacity(queue_count);
-        for offset in 0..queue_count_u32 {
-            let queue_id = prepared.queue_id + offset;
+        let mut adapters = Vec::with_capacity(queue_ids.len());
+        let mut xsk_entries = Vec::with_capacity(queue_ids.len());
+        for queue_id in queue_ids {
             let (adapter, socket_fd) =
                 Self::bind_queue(udp_socket.clone(), local_addr, config, nic, queue_id)?;
             adapters.push(adapter);
@@ -736,6 +716,30 @@ impl PacketIo for AfXdpPacketIo {
         self.flush_pending_stats(metrics);
         Ok(())
     }
+}
+
+fn xdp_queue_ids(
+    config: &XdpConfig,
+    start_queue_id: u32,
+    queue_count: usize,
+) -> io::Result<Vec<u32>> {
+    if !config.queue_ids.is_empty() {
+        return Ok(config.queue_ids.clone());
+    }
+
+    let queue_count = queue_count.max(1);
+    let queue_count_u32 = u32::try_from(queue_count).map_err(|_| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "AF_XDP worker count is too large for queue indexing",
+        )
+    })?;
+    let last_queue_id = start_queue_id
+        .checked_add(queue_count_u32.saturating_sub(1))
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidInput, "AF_XDP queue range overflows u32")
+        })?;
+    Ok((start_queue_id..=last_queue_id).collect())
 }
 
 fn xdp_config_error(error: xdp::error::Error) -> io::Error {
@@ -1246,6 +1250,32 @@ mod tests {
         assert_eq!(interface, "eth0");
         assert_eq!(queue_id, 3);
         assert_eq!(batch_size, 1024);
+    }
+
+    #[test]
+    fn expands_contiguous_xdp_queue_ids_from_worker_count() {
+        let config = XdpConfig {
+            queue_id: 3,
+            ..XdpConfig::default()
+        };
+
+        assert_eq!(
+            xdp_queue_ids(&config, config.queue_id, 4).expect("queue ids"),
+            vec![3, 4, 5, 6]
+        );
+    }
+
+    #[test]
+    fn uses_explicit_xdp_queue_ids() {
+        let config = XdpConfig {
+            queue_ids: vec![3, 17, 41],
+            ..XdpConfig::default()
+        };
+
+        assert_eq!(
+            xdp_queue_ids(&config, config.queue_id, 63).expect("queue ids"),
+            vec![3, 17, 41]
+        );
     }
 
     #[test]

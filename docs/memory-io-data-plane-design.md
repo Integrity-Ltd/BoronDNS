@@ -721,9 +721,10 @@ generic-mode tests are useful only for smoke and fault coverage.
 The first server-side AF_XDP scaffold keeps that boundary explicit. The
 configuration model now has `limits.udp_backend = "std" | "af_xdp"`,
 `limits.udp_runtime = "tokio" | "dedicated"` for the standard backend, and an
-optional `[xdp]` section for interface, queue, UMEM frame count, RX/TX/fill/
-completion ring sizes, batch size, RX drain passes, TX wakeup interval,
-zero-copy policy, XDP attach mode, and the project-built redirect object.
+optional `[xdp]` section for interface, contiguous queue start or explicit
+sparse queue ids, UMEM frame count, RX/TX/fill/completion ring sizes, batch
+size, RX drain passes, TX wakeup interval, zero-copy policy, XDP attach mode,
+and the project-built redirect object.
 Selecting `af_xdp` requires `xdp.interface` and `xdp.redirect_object`, and ring
 sizes are validated as non-zero powers of two before runtime setup reaches the
 lower-level AF_XDP crate. The default backend remains `std`, and AF_XDP keeps

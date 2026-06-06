@@ -1115,8 +1115,8 @@ layout can be phased out.
 - [ ] Decide whether io_uring is worth implementing.
 - [x] Add server AF_XDP scaffolding behind the UDP backend boundary:
   configuration accepts `limits.udp_backend = "std" | "af_xdp"` plus an
-  optional `[xdp]` interface/queue/UMEM/ring/batch/RX-drain/TX-wakeup/
-  zero-copy/mode/redirect-object section, and selecting `af_xdp` requires
+  optional `[xdp]` interface/queue/explicit-queue-list/UMEM/ring/batch/
+  RX-drain/TX-wakeup/zero-copy/mode/redirect-object section, and selecting `af_xdp` requires
   `xdp.interface` and `xdp.redirect_object`. The standard UDP listener now runs
   through a mutable
   private `PacketIo` batch interface. With the feature enabled, the server

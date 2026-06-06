@@ -1874,6 +1874,8 @@ pub struct XdpConfig {
     pub mode: XdpMode,
     #[serde(default)]
     pub queue_id: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue_ids: Vec<u32>,
     #[serde(default = "default_xdp_umem_frame_count")]
     pub umem_frame_count: u32,
     #[serde(default = "default_xdp_rx_ring_size")]
@@ -1901,6 +1903,7 @@ impl Default for XdpConfig {
             redirect_object: None,
             mode: XdpMode::default(),
             queue_id: 0,
+            queue_ids: Vec::new(),
             umem_frame_count: default_xdp_umem_frame_count(),
             rx_ring_size: default_xdp_rx_ring_size(),
             tx_ring_size: default_xdp_tx_ring_size(),
@@ -1982,6 +1985,20 @@ impl XdpConfig {
             return Err(ConfigError::Invalid(
                 "xdp.tx_wakeup_interval must be at least 1".to_owned(),
             ));
+        }
+        if !self.queue_ids.is_empty() {
+            if self.queue_id != 0 {
+                return Err(ConfigError::Invalid(
+                    "xdp.queue_id must not be set when xdp.queue_ids is configured".to_owned(),
+                ));
+            }
+            let mut queue_ids = self.queue_ids.clone();
+            queue_ids.sort_unstable();
+            if queue_ids.windows(2).any(|window| window[0] == window[1]) {
+                return Err(ConfigError::Invalid(
+                    "xdp.queue_ids must not contain duplicate queue ids".to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -5200,6 +5217,69 @@ mod tests {
         assert_eq!(config.xdp.rx_drain_passes, 4);
         assert_eq!(config.xdp.tx_wakeup_interval, 4);
         assert_eq!(config.xdp.zero_copy, XdpZeroCopyMode::Require);
+    }
+
+    #[test]
+    fn parses_explicit_xdp_queue_ids() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                interface = "eth0"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+                queue_ids = [3, 17, 41]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("explicit XDP queue ids are valid configuration");
+
+        assert_eq!(config.xdp.queue_ids, vec![3, 17, 41]);
+    }
+
+    #[test]
+    fn rejects_duplicate_xdp_queue_ids() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                queue_ids = [3, 17, 3]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("duplicate XDP queue ids should be rejected");
+
+        assert!(error.to_string().contains("xdp.queue_ids"));
+    }
+
+    #[test]
+    fn rejects_xdp_queue_id_with_explicit_queue_ids() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [xdp]
+                queue_id = 2
+                queue_ids = [3, 17]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("xdp.queue_id is ambiguous with xdp.queue_ids");
+
+        assert!(error.to_string().contains("xdp.queue_id"));
     }
 
     #[test]
