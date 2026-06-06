@@ -334,8 +334,8 @@ experiments:
 - `OXIDEDNS_PHYSICAL_PERF_RECORD=true` captures `perf.data` and retained
   `perf-report-*.txt` files beside the run logs on the server host.
   `OXIDEDNS_PHYSICAL_PERF_SCOPE=process|system` controls whether `perf record`
-  attaches to the OxideDNS process PID or records system-wide on the server for
-  that row. Use `system` when process-PID sampling misses worker threads.
+  attaches to the row's server process PID or records system-wide on the server
+  for that row. Use `system` when process-PID sampling misses worker threads.
   `OXIDEDNS_PHYSICAL_PERF_EVENT=cpu-clock` selects software CPU-clock sampling;
   the default leaves perf's event selection unchanged.
   `OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT=30s` bounds each retained
@@ -1566,23 +1566,33 @@ extra eligibility/probe/copy work adds.
 A retained AF_XDP fixed-response diagnostic can be enabled with
 `OXIDEDNS_BENCH_AF_XDP_FIXED_RESPONSE=1`. It is not production DNS behavior: it
 bypasses request parsing, ZoneImage lookup, RRL, cookies, TSIG, and response
-composition, then patches the incoming DNS ID into a fixed two-record positive
-answer before the normal AF_XDP UDP/IP header rewrite. Use it only to bound
-packet-I/O and frame-lifecycle cost on benchmark hosts. On the current
-source-built Knot profile it did not expose a higher server ceiling:
-`physical-udp-knot-comparison-20260606T231502Z` measured fixed-response
-OxideDNS AF_XDP at 2341024 replies/s and 99.999453% while source-built Knot XDP
-reached 2399650 replies/s and 100.000000%;
-`physical-udp-knot-comparison-20260606T231549Z` measured source-built Knot XDP
-at 2400739 replies/s and fixed-response OxideDNS AF_XDP at 2402187 replies/s,
-both 100.000000%; `physical-udp-knot-comparison-20260606T231646Z` measured
-fixed-response OxideDNS AF_XDP at 2348979 replies/s and 99.993464% while
-source-built Knot XDP reached 2399686 replies/s and 100.000000%; and
-`physical-udp-knot-comparison-20260606T231744Z` measured source-built Knot XDP
-at 2397606 replies/s and fixed-response OxideDNS AF_XDP at 2403520 replies/s,
+composition, then patches the incoming DNS ID into a fixed one-record positive
+answer plus a minimal OPT record before the normal AF_XDP UDP/IP header
+rewrite. Use it only to bound packet-I/O and frame-lifecycle cost on benchmark
+hosts. After correcting the template to match the source-built profile's
+65-byte DNS response size, it still did not expose a higher server ceiling:
+`physical-udp-knot-comparison-20260606T233413Z` measured fixed-response
+OxideDNS AF_XDP at 2330077 replies/s and 99.996705% while source-built Knot XDP
+reached 2400926 replies/s and 100.000000%;
+`physical-udp-knot-comparison-20260606T233500Z` measured source-built Knot XDP
+at 2366292 replies/s and fixed-response OxideDNS AF_XDP at 2390161 replies/s,
 both 100.000000%. Treat this as evidence that the present hardware/profile is
-bounded mostly by AF_XDP userspace transport orchestration, not ZoneImage
-composition, while preserving the diagnostic for a future larger host pair.
+bounded mostly by AF_XDP userspace transport orchestration and requester/server
+queue interaction, not ZoneImage composition, while preserving the diagnostic
+for a future larger host pair. A system-wide CPU-clock perf comparison in
+`physical-udp-knot-comparison-20260606T233726Z` successfully captured both Knot
+XDP and OxideDNS AF_XDP rows; process-PID perf in
+`physical-udp-knot-comparison-20260606T234106Z` produced no samples for either
+server process on this host, so prefer `OXIDEDNS_PHYSICAL_PERF_SCOPE=system`
+for this profile. A symbolized profiling OxideDNS row at
+`physical-udp-knot-comparison-20260606T233949Z` still showed
+`DomainName::parse_with_ascii_lowercase`, `udp::handle_udp_datagram`, malloc/
+free, ZoneImage child lookup, `af_xdp::write_udp_ipv4_response`, and
+`af_xdp::parse_udp_ip_frame`; the source-built Knot system row exposed
+`knot_xdp_recv`, `knot_xdp_send`, `knot_xdp_reply_alloc`, and its DNS lookup/
+packet assembly symbols. Knot's source XDP handler uses an explicit
+prepare/receive/reply-allocate/receive-finish/send/send-finish batch lifecycle;
+use that as the next packet-I/O design comparison point.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

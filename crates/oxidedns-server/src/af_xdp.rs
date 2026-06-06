@@ -38,17 +38,17 @@ const IPV4_MIN_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 const UDP_HEADER_LEN: usize = 8;
 const IP_PROTOCOL_UDP: u8 = 17;
-const BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE: [u8; 66] = [
+const BENCHMARK_FIXED_DNS_RESPONSE_TEMPLATE: [u8; 65] = [
     0x00, 0x00, // ID, patched from the query.
     0x84, 0x00, // QR + AA, NOERROR.
     0x00, 0x01, // QDCOUNT.
-    0x00, 0x02, // ANCOUNT.
+    0x00, 0x01, // ANCOUNT.
     0x00, 0x00, // NSCOUNT.
-    0x00, 0x00, // ARCOUNT.
-    0x03, b'w', b'w', b'w', 0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x04, b't', b'e', b's',
-    b't', 0x00, 0x00, 0x01, 0x00, 0x01, // www.example.test. A IN.
-    0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 192, 0, 2, 10, 0xc0,
-    0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 192, 0, 2, 11,
+    0x00, 0x01, // ARCOUNT.
+    0x0a, b'h', b'o', b's', b't', b'0', b'0', b'0', b'0', b'0', b'0', 0x04, b'p', b'e', b'r', b'f',
+    0x04, b't', b'e', b's', b't', 0x00, 0x00, 0x01, 0x00, 0x01, // host000000.perf.test. A IN.
+    0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x04, 192, 0, 0, 0, 0x00,
+    0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1501,7 +1501,7 @@ mod tests {
         assert_eq!(packet.len(), frame_len);
         let payload = &packet[ETHERNET_HEADER_LEN + IPV4_MIN_HEADER_LEN + UDP_HEADER_LEN..];
         assert_eq!(&payload[..2], &[0x12, 0x34]);
-        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x02]);
+        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x01]);
         assert_eq!(
             ipv4_checksum(&packet[ETHERNET_HEADER_LEN..ETHERNET_HEADER_LEN + 20]),
             0
@@ -1528,7 +1528,7 @@ mod tests {
         assert_eq!(packet.len(), frame_len);
         let payload = &packet[ETHERNET_HEADER_LEN + IPV6_HEADER_LEN + UDP_HEADER_LEN..];
         assert_eq!(&payload[..2], &[0xab, 0xcd]);
-        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x02]);
+        assert_eq!(&payload[2..8], &[0x84, 0x00, 0x00, 0x01, 0x00, 0x01]);
         assert_eq!(
             udp_ipv6_checksum(
                 &packet,

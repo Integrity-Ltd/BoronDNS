@@ -1623,25 +1623,27 @@ run_server_perf_start() {
     local seconds="$4"
     local scope="$5"
     local event="$6"
+    local pid_file="${7:-oxidedns.pid}"
 
     if [[ "$record" != true ]]; then
         return 0
     fi
 
-    ssh_control "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" "$scope" "$event" <<'REMOTE'
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$frequency" "$seconds" "$scope" "$event" "$pid_file" <<'REMOTE'
 set -euo pipefail
 run_abs="$1"
 frequency="$2"
 seconds="$3"
 scope="$4"
 event="$5"
+pid_file="$6"
 perf_args=(record -F "$frequency" -g -o "$run_abs/perf.data")
 if [[ "$event" != "__default__" ]]; then
     perf_args+=(-e "$event")
 fi
 case "$scope" in
 process)
-    pid="$(cat "$run_abs/oxidedns.pid")"
+    pid="$(cat "$run_abs/$pid_file")"
     perf_args+=(-p "$pid")
     ;;
 system)
@@ -1943,7 +1945,9 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot" == true ]]; the
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -1956,7 +1960,9 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -2019,7 +2025,9 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]];
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "std"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
@@ -2032,7 +2040,9 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true
         printf 'running %s\n' "$run_id"
         cleanup_server_row_state
         run_knot_reference_start "$run_abs" "$interface" "xdp"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "knot.pid"
         run_player_kxdpgun "$run_abs" "$run_id" "$knot_port" "$rate" "$oxide_gun_knot_source_port_list" "$oxide_gun_knot_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
     done
