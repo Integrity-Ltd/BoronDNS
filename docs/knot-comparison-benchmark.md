@@ -1128,7 +1128,13 @@ measured 1944505 replies/s at 98.810773%. Extending final reply drain to
 1960352 replies/s at 98.841880%, and server ring size 8192 with UMEM frame
 count 32768 in `physical-udp-knot-comparison-20260606T060449Z` measured
 1931262 replies/s at 98.401731%, so the forward 2.5M miss is not just late
-drain timeout or a simple server ring-capacity issue.
+drain timeout or a simple server ring-capacity issue. An elapsed-aware variant
+that subtracted worker packet-build/TX/RX time from the paced wait but kept a
+minimum RX-drain fraction was also negative and was not kept:
+`physical-udp-knot-comparison-20260606T060944Z` with a 0.5 minimum drain
+fraction measured 1951746 replies/s at 94.338649%, and
+`physical-udp-knot-comparison-20260606T061009Z` with a 0.25 minimum drain
+fraction measured 1872723 replies/s at 90.398396%.
 The next forward-rate work should keep the relative paced-wait requester shape
 and instead reduce per-queue AF_XDP service cost or improve requester TX/RX
 co-scheduling without starving reply drain.
