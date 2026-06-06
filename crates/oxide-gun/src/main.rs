@@ -123,6 +123,9 @@ struct Cli {
     /// UDP source port range, for example 53000-53100.
     #[arg(long)]
     source_port_range: Option<String>,
+    /// Comma-separated UDP source ports, useful for steering fixed XDP workers.
+    #[arg(long, value_delimiter = ',')]
+    source_port_list: Vec<u16>,
     /// UDP source port selection strategy for --source-port-range.
     #[arg(long, value_enum)]
     source_port_select: Option<PortSelect>,
@@ -323,6 +326,8 @@ struct SourceConfig {
     #[serde(default)]
     port_range: Option<String>,
     #[serde(default)]
+    port_list: Vec<u16>,
+    #[serde(default)]
     port_select: PortSelect,
 }
 
@@ -338,6 +343,7 @@ impl Default for SourceConfig {
             range_count: None,
             range_stride: default_source_range_stride(),
             port_range: None,
+            port_list: Vec::new(),
             port_select: PortSelect::default(),
         }
     }
@@ -730,6 +736,7 @@ enum SourceIpSelector {
 struct PortSelector {
     first: u16,
     count: u16,
+    ports: Vec<u16>,
     select: PortSelect,
 }
 
@@ -752,6 +759,7 @@ impl SourceSelector {
             port: PortSelector {
                 first: 0,
                 count: 1,
+                ports: Vec::new(),
                 select: PortSelect::Sequential,
             },
             rng: XorShift64::new(1),
@@ -806,19 +814,29 @@ impl SourceSelector {
             )
         };
 
-        let (first_port, last_port) = if let Some(port_range) = &config.port_range {
-            parse_port_range(port_range)?
+        let (first_port, port_count, ports, port_description) = if !config.port_list.is_empty() {
+            validate_source_port_list(&config.port_list)?;
+            let first = config.port_list[0];
+            let description = format!("{:?}:{}ports", config.port_select, config.port_list.len())
+                .to_ascii_lowercase();
+            (
+                first,
+                u16::try_from(config.port_list.len())
+                    .map_err(|_| anyhow!("source.port_list has too many entries"))?,
+                config.port_list.clone(),
+                description,
+            )
+        } else if let Some(port_range) = &config.port_range {
+            let (first, last) = parse_port_range(port_range)?;
+            let count = last
+                .checked_sub(first)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| anyhow!("invalid source port range"))?;
+            let description =
+                format!("{:?}:{}-{}", config.port_select, first, last).to_ascii_lowercase();
+            (first, count, Vec::new(), description)
         } else {
-            (config.port, config.port)
-        };
-        let port_count = last_port
-            .checked_sub(first_port)
-            .and_then(|value| value.checked_add(1))
-            .ok_or_else(|| anyhow!("invalid source port range"))?;
-        let port_description = if config.port_range.is_some() {
-            format!("{:?}:{}-{}", config.port_select, first_port, last_port).to_ascii_lowercase()
-        } else {
-            format!("fixed:{first_port}")
+            (config.port, 1, Vec::new(), format!("fixed:{}", config.port))
         };
 
         Ok(Self {
@@ -826,6 +844,7 @@ impl SourceSelector {
             port: PortSelector {
                 first: first_port,
                 count: port_count,
+                ports,
                 select: config.port_select,
             },
             rng: XorShift64::new(seed ^ 0xa5a5_5a5a_0123_9876),
@@ -880,6 +899,9 @@ impl SourceSelector {
             PortSelect::Sequential => counter as u16 % self.port.count,
             PortSelect::Random => self.rng.next_bounded(u64::from(self.port.count)) as u16,
         };
+        if !self.port.ports.is_empty() {
+            return self.port.ports[usize::from(offset)];
+        }
         self.port.first + offset
     }
 }
@@ -1036,6 +1058,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(source_port_range) = &cli.source_port_range {
         config.source.port_range = Some(source_port_range.clone());
     }
+    if !cli.source_port_list.is_empty() {
+        config.source.port_list = cli.source_port_list.clone();
+    }
     if let Some(source_port_select) = cli.source_port_select {
         config.source.port_select = source_port_select;
     }
@@ -1111,7 +1136,8 @@ fn validate_config(config: &FileConfig) -> Result<()> {
             || !config.source.list.is_empty()
             || config.source.range_start.is_some()
             || config.source.range_count.is_some()
-            || config.source.port_range.is_some())
+            || config.source.port_range.is_some()
+            || !config.source.port_list.is_empty())
     {
         bail!("source IP/port strategies require --backend xdp; std-udp uses the OS socket source");
     }
@@ -1167,6 +1193,10 @@ fn validate_source_config(config: &SourceConfig) -> Result<()> {
     if let Some(range) = &config.port_range {
         parse_port_range(range)?;
     }
+    if config.port_range.is_some() && !config.port_list.is_empty() {
+        bail!("configure only one source port strategy: port_range or port_list");
+    }
+    validate_source_port_list(&config.port_list)?;
     Ok(())
 }
 
@@ -1199,7 +1229,15 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     if config.interface.queue_count > 1 && config.xdp.drop_object.is_some() {
         bail!("backend xdp multi-queue does not yet support xdp.drop_object reply drops");
     }
-    if config.interface.queue_count > 1 && config.source.port_range.is_none() {
+    if config.interface.queue_count > 1 && !config.source.port_list.is_empty() {
+        if config.source.port_list.len() < config.interface.queue_count as usize {
+            bail!("source.port_list must contain at least interface.queue_count entries");
+        }
+    }
+    if config.interface.queue_count > 1
+        && config.source.port_range.is_none()
+        && config.source.port_list.is_empty()
+    {
         if config.interface.queue_count > u32::from(u16::MAX) {
             bail!("interface.queue_count is too large for automatic source port assignment");
         }
@@ -1846,6 +1884,15 @@ fn parse_port_range(range: &str) -> Result<(u16, u16)> {
     Ok((first, last))
 }
 
+fn validate_source_port_list(ports: &[u16]) -> Result<()> {
+    for port in ports {
+        if *port == 0 {
+            bail!("source.port_list cannot include port 0");
+        }
+    }
+    Ok(())
+}
+
 fn classify_response(packet: &[u8], expected_id: u16) -> ResponseClass {
     if packet.len() < 12 {
         return ResponseClass::Unmatched;
@@ -1969,6 +2016,22 @@ mod tests {
         assert_eq!(first.port, 53000);
         assert_eq!(second.port, 53001);
         assert_eq!(selector.ip_description(), "random_cidr:198.18.7.0/30");
+    }
+
+    #[test]
+    fn source_selector_accepts_explicit_port_list() {
+        let config = SourceConfig {
+            port_list: vec![53111, 53007, 53222],
+            port_select: PortSelect::Sequential,
+            ..SourceConfig::default()
+        };
+        let mut selector = SourceSelector::new(&config, 7).expect("source selector builds");
+
+        assert_eq!(selector.next().port, 53111);
+        assert_eq!(selector.next().port, 53007);
+        assert_eq!(selector.next().port, 53222);
+        assert_eq!(selector.next().port, 53111);
+        assert_eq!(selector.port_description(), "sequential:3ports");
     }
 
     #[test]

@@ -376,6 +376,14 @@ experiments:
   used, one source port is auto-assigned per queue starting at 53000, and
   summary parsing comes from the JSON `summary` record. The effective requester
   queue count is retained in `host/player-link-tuning.txt`.
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST=port,port,...` passes an
+  explicit per-worker source-port list to `oxide-gun`; use it after queue
+  calibration when contiguous source ports do not hash back to their owning
+  AF_XDP RX queues. RSS includes the UDP destination port on the dedicated
+  hosts, so source-port lists should be calibrated per server target port:
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST=...` for Knot rows and
+  `OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_SOURCE_PORT_LIST=...` for OxideDNS
+  rows.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
   reply-drain timeout after the offered send window; raising it is useful when
   separating late requester RX drain from true packet loss.
@@ -910,6 +918,21 @@ measured 1183863 replies/s at 100.000000%, while OxideDNS AF_XDP measured
 1184869 replies/s at 100.000000%. Keep retaining kxdpgun rows for historical
 promotion continuity, but `OXIDEDNS_PHYSICAL_PLAYER_TOOL=oxide-gun` is now
 usable for project-owned requester comparisons.
+Reverse-role 25G testing showed that source-port steering is target-port
+specific and must also cover the server NIC queue count. The first fair
+per-target source-list comparison,
+`physical-udp-knot-comparison-20260606T034145Z`, calibrated Knot port 5301 and
+OxideDNS port 5300 separately, but bound OxideDNS AF_XDP to only 48 queues on a
+63-RX-queue server NIC; several requester queues received zero replies and the
+row retained only 77.083247%. Repeating with 63 AF_XDP server workers and
+`xdp.tx_wakeup_interval = 1` in
+`physical-udp-knot-comparison-20260606T034338Z` restored OxideDNS to 2454930
+replies/s at 99.942036%, but Knot XDP still measured 2456673 replies/s at
+99.998824%. Treat this as evidence that MTU was controlled, not causal: both
+hosts were run at temporary MTU 1500 for native XDP and restored to 9000 by the
+harness. The next XDP slice needs to reduce the remaining scattered AF_XDP
+reply misses before this reverse-role profile can be promoted as a Knot-XDP
+win.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort
