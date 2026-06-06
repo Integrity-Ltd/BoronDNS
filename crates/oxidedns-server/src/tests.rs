@@ -3929,6 +3929,8 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     });
     metrics.record_udp_worker_receive_batch(1, 17);
     metrics.record_udp_worker_send_batch(1, 16);
+    metrics.record_udp_worker_source_ports(1, [(53000, 10), (53001, 7)]);
+    metrics.record_udp_worker_source_ports(1, [(53000, 3)]);
 
     let body = metrics_body(
         &zones,
@@ -3948,6 +3950,12 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     assert!(body.contains("oxidedns_udp_mmsg_send_wouldblock_retries_total 2"));
     assert!(body.contains("oxidedns_udp_worker_received_datagrams_total{worker=\"1\"} 17"));
     assert!(body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"1\"} 16"));
+    assert!(body.contains(
+        "oxidedns_udp_worker_source_port_datagrams_total{worker=\"1\",source_port=\"53000\"} 13"
+    ));
+    assert!(body.contains(
+        "oxidedns_udp_worker_source_port_datagrams_total{worker=\"1\",source_port=\"53001\"} 7"
+    ));
     assert!(!body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"2\"}"));
 }
 
@@ -4040,6 +4048,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     });
     metrics.record_udp_worker_receive_batch(1, 17);
     metrics.record_udp_worker_send_batch(1, 16);
+    metrics.record_udp_worker_source_ports(1, [(53000, 17)]);
     metrics.record_zone_image_serve_hit();
     metrics.record_zone_image_serve_direct_hit();
     metrics.record_zone_image_serve_semantic_hit();
@@ -4075,6 +4084,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     ));
     assert!(!body.contains("oxidedns_udp_worker_received_datagrams_total{worker=\"1\"}"));
     assert!(!body.contains("oxidedns_udp_worker_sent_datagrams_total{worker=\"1\"}"));
+    assert!(!body.contains("oxidedns_udp_worker_source_port_datagrams_total{worker=\"1\""));
 }
 
 #[test]

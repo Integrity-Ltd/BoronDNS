@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::ErrorKind,
     net::{IpAddr, SocketAddr},
     sync::Arc,
@@ -241,6 +242,7 @@ where
         {
             let inbound = packet_io.recv_batch().await.map_err(RuntimeError::Udp)?;
             settings.metrics.record_udp_receive_batch(inbound.len());
+            record_udp_worker_source_ports(&settings.metrics, udp_worker_id, inbound);
             outbound.clear();
 
             for packet in inbound {
@@ -256,6 +258,22 @@ where
             .await
             .map_err(RuntimeError::Udp)?;
     }
+}
+
+fn record_udp_worker_source_ports(
+    metrics: &RuntimeMetrics,
+    worker_id: usize,
+    inbound: &[UdpInbound],
+) {
+    if inbound.is_empty() || !metrics.hot_path_counters_enabled() {
+        return;
+    }
+
+    let mut source_ports: HashMap<u16, u64> = HashMap::with_capacity(inbound.len().min(64));
+    for packet in inbound {
+        *source_ports.entry(packet.peer.port()).or_insert(0) += 1;
+    }
+    metrics.record_udp_worker_source_ports(worker_id, source_ports);
 }
 
 async fn serve_dedicated_std_udp_worker(

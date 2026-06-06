@@ -1218,6 +1218,25 @@ fn append_udp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMetri
              oxidedns_udp_worker_sent_datagrams_total{{worker=\"{worker_id}\"}} {sent_datagrams}\n",
         ));
     }
+
+    body.push_str(
+        "# HELP oxidedns_udp_worker_source_port_datagrams_total UDP datagrams received per worker and UDP source port for packet-I/O calibration.\n\
+         # TYPE oxidedns_udp_worker_source_port_datagrams_total counter\n",
+    );
+    let mut source_ports = metrics
+        .inner
+        .udp_worker_source_ports
+        .lock()
+        .expect("runtime metrics UDP worker source port lock poisoned")
+        .iter()
+        .map(|(&(worker_id, source_port), &datagrams)| (worker_id, source_port, datagrams))
+        .collect::<Vec<_>>();
+    source_ports.sort_unstable();
+    for (worker_id, source_port, datagrams) in source_ports {
+        body.push_str(&format!(
+            "oxidedns_udp_worker_source_port_datagrams_total{{worker=\"{worker_id}\",source_port=\"{source_port}\"}} {datagrams}\n"
+        ));
+    }
 }
 
 fn append_query_rcode_metrics(body: &mut String, metrics: &RuntimeMetrics) {
@@ -2306,6 +2325,7 @@ pub(crate) struct RuntimeMetrics {
 
 pub(crate) const DEFAULT_COOKIE_PREFIX_METRIC_LIMIT: usize = 100_000;
 const UDP_WORKER_METRIC_SLOTS: usize = 128;
+const UDP_WORKER_SOURCE_PORT_METRIC_LIMIT: usize = 8192;
 #[cfg(test)]
 pub(crate) const DEFAULT_LATENCY_HISTOGRAM_BUCKETS: [f64; 9] = [
     0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1,
@@ -2344,6 +2364,7 @@ struct RuntimeMetricsInner {
     udp_worker_received_datagrams: Vec<AtomicU64>,
     udp_worker_send_batches: Vec<AtomicU64>,
     udp_worker_sent_datagrams: Vec<AtomicU64>,
+    udp_worker_source_ports: Mutex<HashMap<(usize, u16), u64>>,
     pub(crate) axfr_started: AtomicU64,
     pub(crate) axfr_succeeded: AtomicU64,
     pub(crate) axfr_failed: AtomicU64,
@@ -2917,6 +2938,32 @@ impl RuntimeMetrics {
         }
         if let Some(counter) = self.inner.udp_worker_sent_datagrams.get(worker_id) {
             counter.fetch_add(datagrams as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_udp_worker_source_ports<I>(&self, worker_id: usize, source_ports: I)
+    where
+        I: IntoIterator<Item = (u16, u64)>,
+    {
+        if !self.hot_path_counters_enabled() || worker_id >= UDP_WORKER_METRIC_SLOTS {
+            return;
+        }
+
+        let mut counters = self
+            .inner
+            .udp_worker_source_ports
+            .lock()
+            .expect("runtime metrics UDP worker source port lock poisoned");
+        for (source_port, datagrams) in source_ports {
+            if datagrams == 0 {
+                continue;
+            }
+            let key = (worker_id, source_port);
+            if let Some(counter) = counters.get_mut(&key) {
+                *counter = counter.saturating_add(datagrams);
+            } else if counters.len() < UDP_WORKER_SOURCE_PORT_METRIC_LIMIT {
+                counters.insert(key, datagrams);
+            }
         }
     }
 

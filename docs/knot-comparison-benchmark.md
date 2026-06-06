@@ -937,8 +937,30 @@ win. After retaining AF_XDP packet-I/O counters under `hot_path_detail = "off"`,
 unanswered queries matching the NIC `rx_out_of_buffer` delta: OxideDNS received
 12332263 AF_XDP packets and queued 12332263 AF_XDP TX packets, so the immediate
 loss is before userspace receives the request, not in server response TX.
+The next calibration pass also made MTU a hard setup check:
+`physical-udp-knot-comparison-20260606T041346Z` failed AF_XDP bind with
+`EINVAL` when zero-copy was attempted on the jumbo-MTU server link. Re-running
+with `OXIDEDNS_PHYSICAL_XDP_MTU=1500` and
+`OXIDEDNS_PHYSICAL_KXDPGUN_MTU=1500` in
+`physical-udp-knot-comparison-20260606T041857Z` succeeded at 495049 replies/s
+and 100.000000% for a low-rate calibration row, produced 512
+`oxidedns_udp_worker_source_port_datagrams_total` entries, and mapped the
+previous 48-port OxideDNS reverse list onto only 27 server RX workers with as
+many as three ports on one worker. A matched replacement list that used 48
+distinct server RX workers did not improve saturation:
+`physical-udp-knot-comparison-20260606T042049Z` measured Knot XDP at 2456814
+replies/s and 99.999400%, while OxideDNS AF_XDP measured 2454059 replies/s and
+99.898743%; the row still showed request-side AF_XDP loss before userspace, so
+future tuning should use the source-port map to avoid saturated or poorly
+serviced queues rather than merely maximizing distinct server workers.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
+Reduced mode also exposes
+`oxidedns_udp_worker_source_port_datagrams_total{worker,source_port}`, which is
+intended for low-rate AF_XDP source-port/RSS calibration: combine it with
+oxide-gun reply queue counts to select ports that both return to the intended
+requester queue and distribute requests across server RX queues. Do not use that
+profile for final saturation rows.
 Use `"off"` only for saturation profiling where per-query counters would distort
 the transport result; post-run benchmark logs and kernel packet counters remain
 available, and AF_XDP packet-I/O counters are still retained for transport
