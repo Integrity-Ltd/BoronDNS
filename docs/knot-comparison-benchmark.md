@@ -393,7 +393,9 @@ experiments:
   on the row that contains `metrics-after.prom` and the oxide-gun
   `kxdpgun.log` JSON summary. The helper selects a source-port list that keeps
   one reply stream per requester RX queue while also balancing requests across
-  server AF_XDP workers.
+  server AF_XDP workers. For Knot rows, where no OxideDNS server-worker metric
+  exists, use `--requester-only` against a low-rate Knot-XDP calibration row to
+  select one source port per requester RX queue for that target port.
   `OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS=1000` controls the final
   reply-drain timeout after the offered send window; raising it is useful when
   separating late requester RX drain from true packet loss.
@@ -1069,6 +1071,47 @@ MTU remains a hard setup requirement, not the current receive-path explanation:
 jumbo MTU failed zero-copy bind in the earlier `041346Z` row, while all of the
 successful native-XDP rows above forced MTU 1500 during traffic and restored
 MTU 9000 during cleanup.
+Forward-role calibration uses the same per-target discipline but has a
+different queue-count shape: `oxidedns-1` has 48 server RX queues and
+`oxidegun-1` has 63 requester RX queues. The OxideDNS reduced calibration row
+`physical-udp-knot-comparison-20260606T053738Z` measured 495954 replies/s at
+100.000000% and produced a 63-port list with 63 active requester queues,
+48 active server AF_XDP workers, and at most two source ports on any server
+worker:
+`53079,53159,53262,53600,53099,53376,53726,53248,53105,53432,53288,53225,53360,53073,53408,53588,53399,53603,53628,53244,53445,53401,53685,53409,53040,53167,53353,53533,53122,53653,53642,53058,53170,53032,53130,53345,53046,53044,53349,53140,53336,53421,53505,53548,53001,53410,53644,53116,53351,53295,53368,53017,53270,53626,53061,53087,53711,53388,53165,53300,53530,53254,53544`.
+The Knot-XDP requester-only calibration row
+`physical-udp-knot-comparison-20260606T053906Z` measured 496257 replies/s at
+100.000000% and selected 63 requester queues for Knot port 5301:
+`53007,53089,53029,53011,53136,53075,53015,53003,53143,53076,53008,53004,53157,53094,53026,53054,53024,53081,53021,53052,53010,53078,53141,53006,53013,53073,53138,53001,53031,53091,53152,53051,53016,53084,53151,53005,53009,53077,53142,53055,53019,53087,53148,53048,53028,53088,53155,53002,53014,53074,53035,53000,53139,53072,53012,53050,53145,53082,53022,53053,53158,53093,53025`.
+With those lists at requested 1.2M, the forward role cleared the reply-percent
+gate and narrowly beat Knot XDP in both run orders:
+`physical-udp-knot-comparison-20260606T054454Z` measured Knot XDP at
+1186767 replies/s and 100.000000%, while OxideDNS AF_XDP measured
+1186917 replies/s and 100.000000%; `physical-udp-knot-comparison-20260606T054612Z`
+measured OxideDNS AF_XDP at 1187820 replies/s and 100.000000%, while Knot XDP
+measured 1186803 replies/s and 100.000000%.
+The forward ceiling is still lower than the reverse-role 2.5M proof point.
+At requested 1.8M in `physical-udp-knot-comparison-20260606T055210Z`, both rows
+kept 100.000000%, but Knot XDP retained 1770170 replies/s while OxideDNS AF_XDP
+retained 1768573 replies/s. Server TX wakeup probes at the same rate were
+close but not promoted: interval 1 reached 1769056 replies/s, interval 4
+reached 1767983, and interval 16 reached 1769979. At requested 2.5M in
+`physical-udp-knot-comparison-20260606T054110Z`, Knot XDP measured
+2002643 replies/s at 99.344390%, while OxideDNS AF_XDP measured
+1915610 replies/s at 98.907538%; the requester only transmitted about
+2.02M qps to Knot and about 1.94M qps to OxideDNS, so the high-rate row is also
+limited by oxide-gun AF_XDP requester service, not only by server DNS work.
+Two negative counterprobes should not be repeated as fixes: a 48-port list with
+requester `queue_count=48` gave perfect 48-worker server balance but only
+76.973998% replies in `physical-udp-knot-comparison-20260606T054357Z`, and an
+absolute-deadline requester pacer overran requester RX. The latter sent enough
+traffic for OxideDNS to queue 12200233 AF_XDP replies in
+`physical-udp-knot-comparison-20260606T054928Z`, but both Knot and OxideDNS
+fell to about 60% replies; increasing requester RX drain to 64 in
+`physical-udp-knot-comparison-20260606T055048Z` still only reached 63.255592%.
+The next forward-rate work should keep the relative paced-wait requester shape
+and instead reduce per-queue AF_XDP service cost or improve requester TX/RX
+co-scheduling without starving reply drain.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

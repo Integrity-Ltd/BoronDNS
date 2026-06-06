@@ -73,6 +73,39 @@ def summarize(
     ]
 
 
+def summarize_requester_only(
+    label: str,
+    ports: list[int],
+    requester_by_port: dict[int, int],
+) -> list[str]:
+    requester_counts = collections.Counter(requester_by_port[port] for port in ports)
+    requester_max = max(requester_counts.values(), default=0)
+    return [
+        (
+            f"{label}: ports={len(ports)} "
+            f"requester_active={len(requester_counts)} requester_max={requester_max}"
+        ),
+        f"{label}_requester_top={requester_counts.most_common(12)}",
+    ]
+
+
+def select_requester_only_ports(
+    requester_by_port: dict[int, int],
+    port_count: int,
+) -> list[int]:
+    by_requester: dict[int, list[int]] = collections.defaultdict(list)
+    for port, queue in requester_by_port.items():
+        by_requester[queue].append(port)
+    if port_count > len(by_requester):
+        raise ValueError(
+            f"requested {port_count} ports but only {len(by_requester)} requester queues have candidates"
+        )
+    selected: list[int] = []
+    for queue in sorted(by_requester)[:port_count]:
+        selected.append(min(by_requester[queue]))
+    return selected
+
+
 def select_ports(
     server_by_port: dict[int, int],
     requester_by_port: dict[int, int],
@@ -155,12 +188,43 @@ def main() -> int:
     parser.add_argument("artifact", type=pathlib.Path, help="Calibration row artifact directory")
     parser.add_argument("--port-count", type=int, default=None)
     parser.add_argument("--existing-list", default="")
+    parser.add_argument(
+        "--requester-only",
+        action="store_true",
+        help="Select one port per requester RX queue without server worker metrics",
+    )
     args = parser.parse_args()
 
     metrics_path = args.artifact / "metrics-after.prom"
     log_path = args.artifact / "kxdpgun.log"
-    server_by_port = parse_server_workers(metrics_path)
     requester_by_port, queue_count = parse_requester_queues(log_path)
+    if args.requester_only:
+        candidate_ports = sorted(requester_by_port)
+        if not candidate_ports:
+            raise ValueError("no requester calibration ports were present")
+        port_count = args.port_count or queue_count
+        selected = select_requester_only_ports(requester_by_port, port_count)
+        print(
+            f"candidates={len(candidate_ports)} range={candidate_ports[0]}-{candidate_ports[-1]} "
+            f"requester_queues={queue_count}"
+        )
+        existing = parse_port_list(args.existing_list)
+        if existing:
+            for line in summarize_requester_only("existing", existing, requester_by_port):
+                print(line)
+        for line in summarize_requester_only("selected", selected, requester_by_port):
+            print(line)
+        print("source_port_list=" + ",".join(str(port) for port in selected))
+        print(
+            "mapping="
+            + ",".join(
+                f"rq{requester_by_port[port]}:{port}"
+                for port in sorted(selected, key=lambda port: requester_by_port[port])
+            )
+        )
+        return 0
+
+    server_by_port = parse_server_workers(metrics_path)
     candidate_ports = sorted(set(server_by_port) & set(requester_by_port))
     if not candidate_ports:
         raise ValueError("no ports were present in both server and requester calibration data")
