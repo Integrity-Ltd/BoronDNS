@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::os::fd::RawFd;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use aya::{
     Ebpf, Pod,
-    maps::{Array, PerCpuArray},
+    maps::{Array, PerCpuArray, XskMap},
     programs::{Xdp, XdpFlags},
 };
 use serde::Serialize;
@@ -90,6 +91,22 @@ struct XdpRunOutcome {
     stats: Stats,
 }
 
+struct BoundXdpWorker {
+    socket: xdp::socket::XdpSocket,
+    socket_fd: RawFd,
+    umem: xdp::Umem,
+    tx_ring: xdp::WakableTxRing,
+    rx_ring: Option<xdp::RxRing>,
+    fill_ring: xdp::WakableFillRing,
+    completion_ring: xdp::CompletionRing,
+    batch_size: usize,
+}
+
+// SAFETY: the worker owns the AF_XDP socket, rings, UMEM, slabs, and packets as
+// one unit. Packets are never shared concurrently; moving the worker to a
+// thread transfers ownership of the UMEM and all ring handles together.
+unsafe impl Send for BoundXdpWorker {}
+
 #[derive(Debug)]
 struct SharedInflight {
     shards: Vec<Mutex<HashMap<u32, Instant>>>,
@@ -166,6 +183,18 @@ struct DropConfig {
 // padding-sensitive references or invalid bit patterns.
 unsafe impl Pod for DropConfig {}
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct ReplyRedirectConfig {
+    udp_source_port_be: u16,
+    udp_dest_port_start_be: u16,
+    udp_dest_port_end_be: u16,
+}
+
+// SAFETY: ReplyRedirectConfig is repr(C), Copy, contains only integer fields,
+// and has no references or invalid bit patterns.
+unsafe impl Pod for ReplyRedirectConfig {}
+
 struct KernelDropGuard {
     bpf: Ebpf,
 }
@@ -229,6 +258,79 @@ impl KernelDropGuard {
     }
 }
 
+struct ReplyRedirectGuard {
+    _bpf: Ebpf,
+}
+
+impl ReplyRedirectGuard {
+    fn attach(
+        object: &Path,
+        interface: &str,
+        mode: XdpMode,
+        udp_source_port: u16,
+        udp_dest_port_start: u16,
+        udp_dest_port_end: u16,
+        xsk_entries: &[(u32, RawFd)],
+    ) -> Result<Self> {
+        let mut bpf = Ebpf::load_file(object).with_context(|| {
+            format!(
+                "failed to load XDP reply redirect object {}",
+                object.display()
+            )
+        })?;
+        {
+            let map = bpf.map_mut("REPLY_REDIRECT_CONFIG").ok_or_else(|| {
+                anyhow!("REPLY_REDIRECT_CONFIG map missing from XDP reply redirect object")
+            })?;
+            let mut config = Array::<_, ReplyRedirectConfig>::try_from(map)
+                .context("failed to open REPLY_REDIRECT_CONFIG map")?;
+            config
+                .set(
+                    0,
+                    ReplyRedirectConfig {
+                        udp_source_port_be: udp_source_port.to_be(),
+                        udp_dest_port_start_be: udp_dest_port_start.to_be(),
+                        udp_dest_port_end_be: udp_dest_port_end.to_be(),
+                    },
+                    0,
+                )
+                .context("failed to configure XDP reply redirect selector")?;
+        }
+        {
+            let map = bpf.map_mut("OXIDE_GUN_XSKS").ok_or_else(|| {
+                anyhow!("OXIDE_GUN_XSKS map missing from XDP reply redirect object")
+            })?;
+            let mut xsk_map = XskMap::try_from(map).context("failed to open OXIDE_GUN_XSKS map")?;
+            for (queue_id, socket_fd) in xsk_entries {
+                xsk_map
+                    .set(*queue_id, *socket_fd, 0)
+                    .with_context(|| format!("failed to register XSK fd for queue {queue_id}"))?;
+            }
+        }
+        {
+            let program: &mut Xdp = bpf
+                .program_mut("oxide_gun_reply_redirect")
+                .ok_or_else(|| {
+                    anyhow!(
+                        "oxide_gun_reply_redirect program missing from XDP reply redirect object"
+                    )
+                })?
+                .try_into()
+                .context("oxide_gun_reply_redirect is not an XDP program")?;
+            program
+                .load()
+                .context("failed to load XDP reply redirect program")?;
+            program
+                .attach(interface, xdp_flags(mode))
+                .with_context(|| {
+                    format!("failed to attach XDP reply redirect program to {interface}")
+                })?;
+        }
+
+        Ok(Self { _bpf: bpf })
+    }
+}
+
 pub(super) fn run(config: &FileConfig) -> Result<()> {
     if config.interface.queue_count > 1 {
         return run_multi_queue(config);
@@ -258,15 +360,26 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     let shared_inflight =
         (config.recv.mode == RecvMode::Process).then(|| Arc::new(SharedInflight::new()));
     let start = Instant::now();
-    let mut handles = Vec::with_capacity(queue_count as usize);
+    let mut workers = Vec::with_capacity(queue_count as usize);
+    let mut xsk_entries = Vec::with_capacity(queue_count as usize);
 
     for worker_index in 0..queue_count {
         let worker_config = worker_config(&aggregate_config, worker_index, queue_count)?;
+        let worker = bind_xdp_worker(&worker_config)?;
+        xsk_entries.push((worker_config.interface.rx_queue, worker.socket_fd));
+        workers.push((worker_config, worker));
+    }
+
+    let _reply_redirect =
+        attach_reply_redirect(&aggregate_config, interface, target, &xsk_entries)?;
+    let mut handles = Vec::with_capacity(queue_count as usize);
+
+    for (worker_config, worker) in workers {
         let inflight = shared_inflight
             .as_ref()
             .map(|shared| InflightTracker::Shared(Arc::clone(shared)));
         handles.push(thread::spawn(move || {
-            run_single(worker_config, inflight, false)
+            run_bound_worker(worker_config, worker, inflight, false)
         }));
     }
 
@@ -366,43 +479,24 @@ fn run_single(
         .nic
         .as_deref()
         .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
-    let source_mac = config
-        .source
-        .mac
-        .ok_or_else(|| anyhow!("backend xdp requires source.mac"))?;
-    let target_mac = config
-        .target
-        .mac
-        .ok_or_else(|| anyhow!("backend xdp requires target.mac"))?;
-    let query_pool = query_pool(&config)?;
-    let encoded_queries = encoded_query_pool(&query_pool)?;
-    let mut source_selector = SourceSelector::new(&config.source, config.run.seed)?;
+    let worker = bind_xdp_worker(&config)?;
+    let xsk_entries = [(config.interface.rx_queue, worker.socket_fd)];
+    let _reply_redirect = attach_reply_redirect(&config, interface, target, &xsk_entries)?;
+    run_bound_worker(config, worker, shared_inflight, emit_records)
+}
+
+fn bind_xdp_worker(config: &FileConfig) -> Result<BoundXdpWorker> {
+    let interface = config
+        .interface
+        .nic
+        .as_deref()
+        .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
     let ifname = CString::new(interface).context("interface name contains NUL byte")?;
     let nic = xdp::nic::NicIndex::lookup_by_name(&ifname)?
         .ok_or_else(|| anyhow!("network interface {interface:?} does not exist"))?;
     let caps = nic
         .query_capabilities()
         .with_context(|| format!("failed to query XDP capabilities for {interface}"))?;
-    let kernel_drop = if config.recv.mode == RecvMode::Drop {
-        match config.xdp.drop_object.as_deref() {
-            Some(path) => {
-                let (port_start, port_end) = source_port_bounds(&config)?;
-                let drop_scope = drop_scope(&config, target)?;
-                Some(KernelDropGuard::attach(
-                    path,
-                    interface,
-                    config.xdp.mode,
-                    drop_scope,
-                    port_start,
-                    port_end,
-                )?)
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
-
     let umem_cfg = xdp::umem::UmemCfgBuilder {
         frame_count: config.xdp.umem_frame_count,
         tx_checksum: false,
@@ -441,10 +535,11 @@ fn run_single(
                 config.interface.tx_queue
             )
         })?;
+    let socket_fd = socket.raw_fd();
 
     if config.recv.mode == RecvMode::Process {
         // SAFETY: all RX frame addresses come from `umem`, and both the UMEM
-        // mapping and AF_XDP socket outlive the fill/RX rings in this function.
+        // mapping and AF_XDP socket outlive the fill/RX rings in this worker.
         unsafe {
             rings
                 .fill_ring
@@ -453,17 +548,99 @@ fn run_single(
         }
     }
 
-    let mut tx_ring = rings
+    let tx_ring = rings
         .tx_ring
         .take()
         .ok_or_else(|| anyhow!("AF_XDP TX ring was not configured"))?;
-    let mut rx_ring = rings.rx_ring.take();
-    let mut stats = Stats::default();
+    let rx_ring = rings.rx_ring.take();
     let batch_size = config
         .xdp
         .batch_size
         .min(config.xdp.tx_ring_size as usize)
         .max(1);
+
+    Ok(BoundXdpWorker {
+        socket,
+        socket_fd,
+        umem,
+        tx_ring,
+        rx_ring,
+        fill_ring: rings.fill_ring,
+        completion_ring: rings.completion_ring,
+        batch_size,
+    })
+}
+
+fn attach_reply_redirect(
+    config: &FileConfig,
+    interface: &str,
+    target: SocketAddr,
+    xsk_entries: &[(u32, RawFd)],
+) -> Result<Option<ReplyRedirectGuard>> {
+    if config.recv.mode != RecvMode::Process {
+        return Ok(None);
+    }
+    let Some(object) = config.xdp.redirect_object.as_deref() else {
+        return Ok(None);
+    };
+    let (port_start, port_end) = source_port_bounds(config)?;
+    ReplyRedirectGuard::attach(
+        object,
+        interface,
+        config.xdp.mode,
+        target.port(),
+        port_start,
+        port_end,
+        xsk_entries,
+    )
+    .map(Some)
+}
+
+fn run_bound_worker(
+    config: FileConfig,
+    mut worker: BoundXdpWorker,
+    shared_inflight: Option<InflightTracker>,
+    emit_records: bool,
+) -> Result<XdpRunOutcome> {
+    let target = config.target.address.unwrap_or(DEFAULT_TARGET);
+    let interface = config
+        .interface
+        .nic
+        .as_deref()
+        .ok_or_else(|| anyhow!("backend xdp requires interface.nic"))?;
+    let source_mac = config
+        .source
+        .mac
+        .ok_or_else(|| anyhow!("backend xdp requires source.mac"))?;
+    let target_mac = config
+        .target
+        .mac
+        .ok_or_else(|| anyhow!("backend xdp requires target.mac"))?;
+    let query_pool = query_pool(&config)?;
+    let encoded_queries = encoded_query_pool(&query_pool)?;
+    let mut source_selector = SourceSelector::new(&config.source, config.run.seed)?;
+    let kernel_drop = if config.recv.mode == RecvMode::Drop {
+        match config.xdp.drop_object.as_deref() {
+            Some(path) => {
+                let (port_start, port_end) = source_port_bounds(&config)?;
+                let drop_scope = drop_scope(&config, target)?;
+                Some(KernelDropGuard::attach(
+                    path,
+                    interface,
+                    config.xdp.mode,
+                    drop_scope,
+                    port_start,
+                    port_end,
+                )?)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let mut stats = Stats::default();
+    let batch_size = worker.batch_size;
     let mut send_slab = HeapSlab::with_capacity(batch_size);
     let mut send_lengths = VecDeque::with_capacity(batch_size);
     let track_responses = config.recv.mode == RecvMode::Process;
@@ -504,8 +681,8 @@ fn run_single(
             // SAFETY: returned packet stays within this function, is either handed
             // to the TX ring while `umem` and `socket` remain alive, or immediately
             // freed back to the same UMEM on error.
-            let Some(mut packet) = (unsafe { umem.alloc() }) else {
-                rings.completion_ring.dequeue(&mut umem, batch_size);
+            let Some(mut packet) = (unsafe { worker.umem.alloc() }) else {
+                worker.completion_ring.dequeue(&mut worker.umem, batch_size);
                 break;
             };
             let frame_len = match write_ethernet_udp_dns_packet_with_query_id(
@@ -521,12 +698,12 @@ fn run_single(
             ) {
                 Ok(frame_len) => frame_len,
                 Err(error) => {
-                    umem.free_packet(packet);
+                    worker.umem.free_packet(packet);
                     return Err(error).context("failed to write AF_XDP packet frame");
                 }
             };
             if packet.len() != frame_len {
-                umem.free_packet(packet);
+                worker.umem.free_packet(packet);
                 bail!("internal AF_XDP packet length mismatch");
             }
             if send_slab.push_front(packet).is_some() {
@@ -539,38 +716,38 @@ fn run_single(
         }
 
         if send_slab.is_empty() {
-            rings.completion_ring.dequeue(&mut umem, batch_size);
+            worker.completion_ring.dequeue(&mut worker.umem, batch_size);
             continue;
         }
 
         // SAFETY: every packet in `send_slab` was allocated from `umem`, and
         // `umem` outlives the socket and TX ring for the entire send loop.
         let queued_before = send_slab.len();
-        let sent = match unsafe { tx_ring.send(&mut send_slab, true) } {
+        let sent = match unsafe { worker.tx_ring.send(&mut send_slab, true) } {
             Ok(sent) => sent,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
                 account_sent_packets(queued, &mut send_lengths, &mut stats);
                 sleep_for_sent(per_packet_delay, queued);
-                rings.completion_ring.dequeue(&mut umem, batch_size);
+                worker.completion_ring.dequeue(&mut worker.umem, batch_size);
                 continue;
             }
             Err(error) => return Err(error).context("failed to enqueue AF_XDP packet"),
         };
         if sent == 0 {
-            rings.completion_ring.dequeue(&mut umem, batch_size);
+            worker.completion_ring.dequeue(&mut worker.umem, batch_size);
             continue;
         } else {
             account_sent_packets(sent, &mut send_lengths, &mut stats);
         }
-        rings.completion_ring.dequeue(&mut umem, batch_size);
+        worker.completion_ring.dequeue(&mut worker.umem, batch_size);
 
         if let Some(inflight) = inflight.as_mut() {
             receive_available_xdp(
-                &socket,
-                rx_ring.as_mut(),
-                &mut rings.fill_ring,
-                &mut umem,
+                &worker.socket,
+                worker.rx_ring.as_mut(),
+                &mut worker.fill_ring,
+                &mut worker.umem,
                 &mut recv_slab,
                 inflight,
                 &mut stats,
@@ -599,6 +776,19 @@ fn run_single(
         sleep_for_sent(per_packet_delay, sent);
     }
 
+    if let Some(inflight) = inflight.as_mut() {
+        drain_xdp_replies(
+            &worker.socket,
+            worker.rx_ring.as_mut(),
+            &mut worker.fill_ring,
+            &mut worker.umem,
+            &mut recv_slab,
+            inflight,
+            &mut stats,
+            Duration::from_millis(config.recv.response_timeout_ms),
+        )?;
+        stats.queries_unanswered = stats.tx_packets.saturating_sub(stats.rx_dns_responses);
+    }
     refresh_kernel_drop_count(&mut stats, kernel_drop.as_ref())?;
     if emit_records {
         emit_xdp_record(
@@ -614,6 +804,39 @@ fn run_single(
         )?;
     }
     Ok(XdpRunOutcome { stats })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drain_xdp_replies(
+    socket: &xdp::socket::XdpSocket,
+    rx_ring: Option<&mut xdp::RxRing>,
+    fill_ring: &mut xdp::WakableFillRing,
+    umem: &mut xdp::Umem,
+    recv_slab: &mut HeapSlab,
+    inflight: &mut InflightTracker,
+    stats: &mut Stats,
+    timeout: Duration,
+) -> Result<()> {
+    let Some(rx_ring) = rx_ring else {
+        return Ok(());
+    };
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let before = stats.rx_packets;
+        receive_available_xdp(
+            socket,
+            Some(&mut *rx_ring),
+            fill_ring,
+            umem,
+            recv_slab,
+            inflight,
+            stats,
+        )?;
+        if stats.rx_packets == before {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    Ok(())
 }
 
 fn source_port_bounds(config: &FileConfig) -> Result<(u16, u16)> {

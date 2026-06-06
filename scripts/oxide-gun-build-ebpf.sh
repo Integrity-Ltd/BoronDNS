@@ -19,7 +19,8 @@ CARGO_TARGET_BPFEL_UNKNOWN_NONE_LINKER="$linker" rustup run nightly cargo build 
 
 target_dir="$repo_root/crates/oxide-gun-ebpf/target/bpfel-unknown-none/release"
 artifact="$target_dir/liboxide_gun_ebpf.so"
-object="$target_dir/oxide-gun-drop.bpf.o"
+object="$target_dir/oxide-gun-xdp.bpf.o"
+drop_compat_object="$target_dir/oxide-gun-drop.bpf.o"
 
 if [[ ! -f "$artifact" ]]; then
     echo "expected eBPF artifact was not produced: $artifact" >&2
@@ -27,4 +28,5 @@ if [[ ! -f "$artifact" ]]; then
 fi
 
 cp -f "$artifact" "$object"
+cp -f "$artifact" "$drop_compat_object"
 printf '%s\n' "$object"

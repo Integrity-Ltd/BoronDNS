@@ -28,6 +28,7 @@ sudo target/release/oxide-gun \
   --tx-queue 0 \
   --rx-queue 0 \
   --queue-count 1 \
+  --xdp-redirect-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-xdp.bpf.o \
   --source-ip 198.18.0.1 \
   --source-port 53000 \
   --source-mac 02:00:00:00:00:01 \
@@ -67,12 +68,12 @@ so a duration-capped run can overshoot by up to the configured XDP batch size.
 Hardware-lab validation should compare OxideGun TX/RX counters with NIC counters
 and packet capture on the DUT-side link.
 
-Current process-mode AF_XDP receive still requires an XDP program that redirects
-matching DNS replies into the bound XSK map. Without that requester-side redirect
-program, the TX path can generate packets but RX counters can remain zero even
-when RX rings are configured. The next XDP slice is to add the OxideGun reply
-redirect object and loader path so `--recv-mode process` can produce the same
-reply-percentage gate as `kxdpgun`.
+Process-mode AF_XDP receive uses `--xdp-redirect-object` to attach an XDP
+program that redirects matching DNS replies into the bound XSK map. The selector
+matches UDP replies from the configured target port to the configured source
+port or `--source-port-range`, then redirects by hardware RX queue into the
+corresponding AF_XDP socket. Without that object, TX can still generate packets
+but RX counters can remain zero because no kernel-side XSK redirect is installed.
 
 Source-address strategies require the XDP backend. Portable UDP uses the OS
 socket source address and is intended for CI, local sanity checks, and ordinary
@@ -89,6 +90,7 @@ sudo target/release/oxide-gun \
   --rx-queue 0 \
   --queue-count 8 \
   --xdp-zerocopy auto \
+  --xdp-redirect-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-xdp.bpf.o \
   --source-ip 198.18.0.1 \
   --source-cidr 198.18.10.0/24 \
   --source-port-range 53000-53999 \
@@ -123,7 +125,7 @@ sudo target/release/oxide-gun \
   --rx-queue 0 \
   --queue-count 1 \
   --xdp-zerocopy auto \
-  --xdp-drop-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-drop.bpf.o \
+  --xdp-drop-object crates/oxide-gun-ebpf/target/bpfel-unknown-none/release/oxide-gun-xdp.bpf.o \
   --source-ip 198.18.0.1 \
   --source-cidr 198.18.10.0/24 \
   --source-port-range 53000-53999 \
@@ -139,12 +141,13 @@ sudo target/release/oxide-gun \
 
 The eBPF build requires nightly Rust, the `bpfel-unknown-none` target available
 from rustc, and `bpf-linker` on `PATH`. Install the linker with
-`cargo install bpf-linker`. The loader configures the `DROP_CONFIG` map with the
-source port range, IPv4 DNS target, and fixed/CIDR source scope, then reads the
-per-CPU `DROPPED_PACKETS` counter for summary output. Source list/range runs
-still match the DNS target and source port range, but leave destination-IP
-matching wildcarded because those source sets are not represented as a compact
-CIDR in the one-entry MVP map.
+`cargo install bpf-linker`. The build script emits `oxide-gun-xdp.bpf.o` and a
+compatibility copy named `oxide-gun-drop.bpf.o`. The drop loader configures the
+`DROP_CONFIG` map with the source port range, IPv4 DNS target, and fixed/CIDR
+source scope, then reads the per-CPU `DROPPED_PACKETS` counter for summary
+output. Source list/range runs still match the DNS target and source port range,
+but leave destination-IP matching wildcarded because those source sets are not
+represented as a compact CIDR in the one-entry MVP map.
 
 For a privileged local smoke test without a physical XDP NIC, build the debug
 binary with the `xdp` feature and run the veth/netns smoke through `pkexec`:
@@ -270,7 +273,9 @@ before making any saturation claim; `saturation_claim_allowed` must be `true`.
 Kernel XDP_DROP requires an explicit `--xdp-drop-object`; without it,
 `--recv-mode drop` remains userspace receive suppression and
 `drop_implementation` is `userspace_suppression`. With a loaded drop object it
-is `kernel_xdp_drop`. IPv4 source strategies are the MVP path; IPv6 packet
-construction works for fixed source addresses, but IPv6 source-pool parity is
-still future work. Multi-queue scaling and ARP-based target MAC discovery are
-also post-MVP items in `docs/oxide-gun-mvp-plan.md`.
+is `kernel_xdp_drop`. AF_XDP process-mode RX requires an explicit
+`--xdp-redirect-object`; otherwise packets are not redirected from the kernel
+into OxideGun's XSKs. IPv4 source strategies are the MVP path; IPv6 packet
+construction and reply redirects work for fixed source addresses, but IPv6
+source-pool parity is still future work. ARP-based target MAC discovery is also
+post-MVP work in `docs/oxide-gun-mvp-plan.md`.

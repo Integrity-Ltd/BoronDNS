@@ -5,7 +5,7 @@
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{Array, PerCpuArray},
+    maps::{Array, PerCpuArray, XskMap},
     programs::XdpContext,
 };
 use core::{mem, ptr};
@@ -20,11 +20,31 @@ pub struct DropConfig {
     pub source_mask_be: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ReplyRedirectConfig {
+    pub udp_source_port_be: u16,
+    pub udp_dest_port_start_be: u16,
+    pub udp_dest_port_end_be: u16,
+}
+
 #[map]
 static DROP_CONFIG: Array<DropConfig> = Array::with_max_entries(1, 0);
 
 #[map]
 static DROPPED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
+
+#[map]
+static REPLY_REDIRECT_CONFIG: Array<ReplyRedirectConfig> = Array::with_max_entries(1, 0);
+
+#[map]
+static OXIDE_GUN_XSKS: XskMap = XskMap::with_max_entries(128, 0);
+
+#[map]
+static REPLY_REDIRECTED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
+
+#[map]
+static REPLY_PASSED_PACKETS: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -51,11 +71,65 @@ struct Ipv4Hdr {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct Ipv6Hdr {
+    version_tc_flow: u32,
+    payload_len: u16,
+    next_header: u8,
+    hop_limit: u8,
+    src: [u8; 16],
+    dst: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct UdpHdr {
     source: u16,
     dest: u16,
     len: u16,
     check: u16,
+}
+
+#[xdp]
+pub fn oxide_gun_reply_redirect(ctx: XdpContext) -> u32 {
+    match try_oxide_gun_reply_redirect(&ctx) {
+        Ok(action) => action,
+        Err(()) => {
+            increment_counter(&REPLY_PASSED_PACKETS);
+            xdp_action::XDP_PASS
+        }
+    }
+}
+
+fn try_oxide_gun_reply_redirect(ctx: &XdpContext) -> Result<u32, ()> {
+    let udp_offset = udp_offset(ctx)?;
+    let udp = read_at::<UdpHdr>(ctx, udp_offset)?;
+    let Some(config) = REPLY_REDIRECT_CONFIG.get(0) else {
+        increment_counter(&REPLY_PASSED_PACKETS);
+        return Ok(xdp_action::XDP_PASS);
+    };
+    if config.udp_source_port_be != 0 && udp.source != config.udp_source_port_be {
+        increment_counter(&REPLY_PASSED_PACKETS);
+        return Ok(xdp_action::XDP_PASS);
+    }
+    if !port_in_range(
+        udp.dest,
+        config.udp_dest_port_start_be,
+        config.udp_dest_port_end_be,
+    ) {
+        increment_counter(&REPLY_PASSED_PACKETS);
+        return Ok(xdp_action::XDP_PASS);
+    }
+
+    let queue_id = rx_queue_index(&ctx);
+    let action = OXIDE_GUN_XSKS
+        .redirect(queue_id, xdp_action::XDP_PASS as u64)
+        .unwrap_or(xdp_action::XDP_PASS);
+    if action == xdp_action::XDP_REDIRECT {
+        increment_counter(&REPLY_REDIRECTED_PACKETS);
+    } else {
+        increment_counter(&REPLY_PASSED_PACKETS);
+    }
+    Ok(action)
 }
 
 #[xdp]
@@ -67,12 +141,12 @@ pub fn oxide_gun_drop(ctx: XdpContext) -> u32 {
 }
 
 fn try_oxide_gun_drop(ctx: &XdpContext) -> Result<u32, ()> {
+    let ip_offset = mem::size_of::<EthHdr>();
     let eth = read_at::<EthHdr>(ctx, 0)?;
     if u16::from_be(eth.eth_proto) != 0x0800 {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    let ip_offset = mem::size_of::<EthHdr>();
     let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
     if ip.protocol != 17 {
         return Ok(xdp_action::XDP_PASS);
@@ -105,6 +179,49 @@ fn try_oxide_gun_drop(ctx: &XdpContext) -> Result<u32, ()> {
     }
 }
 
+fn udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
+    let eth = read_at::<EthHdr>(ctx, 0)?;
+    match u16::from_be(eth.eth_proto) {
+        0x0800 => ipv4_udp_offset(ctx),
+        0x86dd => ipv6_udp_offset(ctx),
+        _ => Err(()),
+    }
+}
+
+fn ipv4_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
+    let ip_offset = mem::size_of::<EthHdr>();
+    let ip = read_at::<Ipv4Hdr>(ctx, ip_offset)?;
+    if ip.protocol != 17 {
+        return Err(());
+    }
+
+    let ihl = usize::from(ip.version_ihl & 0x0f) * 4;
+    if ihl < mem::size_of::<Ipv4Hdr>() {
+        return Err(());
+    }
+    if (u16::from_be(ip.frag_off) & 0x3fff) != 0 {
+        return Err(());
+    }
+
+    Ok(ip_offset + ihl)
+}
+
+fn ipv6_udp_offset(ctx: &XdpContext) -> Result<usize, ()> {
+    let ip_offset = mem::size_of::<EthHdr>();
+    let ip = read_at::<Ipv6Hdr>(ctx, ip_offset)?;
+    if u32::from_be(ip.version_tc_flow) >> 28 != 6 {
+        return Err(());
+    }
+    if ip.next_header != 17 {
+        return Err(());
+    }
+    if u16::from_be(ip.payload_len) < mem::size_of::<UdpHdr>() as u16 {
+        return Err(());
+    }
+
+    Ok(ip_offset + mem::size_of::<Ipv6Hdr>())
+}
+
 fn read_at<T: Copy>(ctx: &XdpContext, offset: usize) -> Result<T, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
@@ -126,7 +243,17 @@ fn port_in_range(port_be: u16, start_be: u16, end_be: u16) -> bool {
 }
 
 fn increment_drop_counter() {
-    let Some(counter) = DROPPED_PACKETS.get_ptr_mut(0) else {
+    increment_counter(&DROPPED_PACKETS);
+}
+
+fn rx_queue_index(ctx: &XdpContext) -> u32 {
+    // SAFETY: `ctx.ctx` is the kernel-provided xdp_md pointer for this program
+    // invocation and remains valid for the duration of the call.
+    unsafe { (*ctx.ctx).rx_queue_index }
+}
+
+fn increment_counter(counter: &PerCpuArray<u64>) {
+    let Some(counter) = counter.get_ptr_mut(0) else {
         return;
     };
     // SAFETY: the pointer comes from a valid per-CPU Array map entry for the

@@ -82,6 +82,8 @@ fn print_config_accepts_cli_overrides() {
             "9",
             "--queue-count",
             "4",
+            "--xdp-redirect-object",
+            "/tmp/oxide-gun-xdp.bpf.o",
         ])
         .output()
         .expect("oxide-gun print-config runs");
@@ -101,4 +103,5 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("mode = \"drop\""));
     assert!(stdout.contains("max_packets = 9"));
     assert!(stdout.contains("queue_count = 4"));
+    assert!(stdout.contains("redirect_object = \"/tmp/oxide-gun-xdp.bpf.o\""));
 }

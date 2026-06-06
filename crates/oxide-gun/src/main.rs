@@ -69,6 +69,9 @@ struct Cli {
     /// Compiled Aya eBPF object for kernel reply drop mode.
     #[arg(long)]
     xdp_drop_object: Option<PathBuf>,
+    /// Compiled Aya eBPF object for process-mode AF_XDP reply redirects.
+    #[arg(long)]
+    xdp_redirect_object: Option<PathBuf>,
     /// Source IP address placed into generated XDP packets.
     #[arg(long)]
     source_ip: Option<IpAddr>,
@@ -408,6 +411,7 @@ struct XdpConfig {
     mode: XdpMode,
     zerocopy: XdpZeroCopyMode,
     drop_object: Option<PathBuf>,
+    redirect_object: Option<PathBuf>,
     batch_size: usize,
     umem_frame_count: u32,
     tx_ring_size: u32,
@@ -422,6 +426,7 @@ impl Default for XdpConfig {
             mode: XdpMode::Drv,
             zerocopy: XdpZeroCopyMode::Auto,
             drop_object: None,
+            redirect_object: None,
             batch_size: 64,
             umem_frame_count: 8192,
             tx_ring_size: 4096,
@@ -936,6 +941,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     }
     if let Some(xdp_drop_object) = &cli.xdp_drop_object {
         config.xdp.drop_object = Some(xdp_drop_object.clone());
+    }
+    if let Some(xdp_redirect_object) = &cli.xdp_redirect_object {
+        config.xdp.redirect_object = Some(xdp_redirect_object.clone());
     }
     if let Some(source_ip) = cli.source_ip {
         config.source.ip = source_ip;
