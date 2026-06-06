@@ -152,10 +152,10 @@ sudo kxdpgun -t 15 -p 5301 -b 10 -Q "$rate" -i querydb "$target_ip" \
 For an OxideDNS kxdpgun run on the dedicated hardware, use the same `querydb`,
 the OxideDNS service port, and the same `-t`, `-b`, `-Q`, source-address, and
 affinity settings as the Knot reference run. The generated `runbook.sh` local
-load-client path is useful for local and preflight evidence. Physical promotion
-claims still use kxdpgun/NIC counters until the project-owned `oxide-gun`
-requester path can match kxdpgun's reply-retention behavior at the same offered
-rates.
+load-client path is useful for local and preflight evidence. The physical
+wrapper can also run the project-owned `oxide-gun` requester for AF_XDP
+diagnostic and promotion-adjacent rows; keep kxdpgun rows in retained promotion
+sweeps until repeated `oxide-gun` runs cover the same rate range and host roles.
 
 For repeatable OxideDNS socket-path sweeps on the two physical hosts, use the
 checked-in wrapper instead of ad-hoc SSH commands:
@@ -810,23 +810,27 @@ replies/s and OxideDNS AF_XDP at 1199624 replies/s with equal 99.998417% reply
 rate. Use `xdp.tx_wakeup_interval = 8` for the current AF_XDP comparison
 profile, but keep treating the margin as narrow until a broader rate/repeat
 sweep shows a larger saturation-knee lead.
-The physical wrapper can now run `oxide-gun` as the requester, but the first
-retained rows show it is not yet a replacement for kxdpgun in promotion claims.
-The initial explicit 53000-53062 source-port range disabled per-queue prebuilt
-packet templates and capped the requester at one 4096-descriptor TX-ring fill
-per queue: `physical-udp-knot-comparison-20260606T020951Z` reported only about
-58k replies/s at a requested 900k. Letting `oxide-gun` auto-assign one source
-port per queue re-enabled the intended template shape, but the sender still
-stalled after the first TX ring fill until `oxide-gun` learned to poll TX
-writability on zero-descriptor AF_XDP sends. After that fix,
-`physical-udp-knot-comparison-20260606T021325Z` transmitted about 2.6M packets
-but retained only 13.255288% replies against Knot XDP and 11.715187% against
-OxideDNS AF_XDP; a follow-up Knot-XDP row with requester
-`xdp.rx_drain_passes = 64` at
-`physical-udp-knot-comparison-20260606T021449Z` still retained only 12.183415%.
-Keep `OXIDEDNS_PHYSICAL_PLAYER_TOOL=kxdpgun` for Knot/OxideDNS promotion rows
-until `oxide-gun` process-mode receive can retain replies at kxdpgun-equivalent
-rates.
+The physical wrapper can now run `oxide-gun` as the requester. The first
+retained rows exposed two requester bugs before it became useful: an explicit
+53000-53062 source-port range disabled per-queue prebuilt packet templates and
+capped the requester at one 4096-descriptor TX-ring fill per queue, and then the
+requester needed to poll TX writability on zero-descriptor AF_XDP sends. Even
+after that, reply retention stayed poor because each queue slept through the
+whole paced batch window without draining RX; `physical-udp-knot-comparison-
+20260606T021325Z` retained only 13.255288% replies against Knot XDP, and
+`physical-udp-knot-comparison-20260606T021449Z` retained only 12.183415% against
+Knot with requester `xdp.rx_drain_passes = 64`. Draining requester RX during
+paced waits fixed the loss gate, and `oxide-gun` now emits
+`send_duration_seconds` so the harness reports rates over the offered send
+window rather than the final drain timeout. In
+`physical-udp-knot-comparison-20260606T022205Z` at requested 900k, Knot XDP
+measured 891911 replies/s at 100.000000% and OxideDNS AF_XDP measured 891732
+replies/s at 99.999114%. In
+`physical-udp-knot-comparison-20260606T022319Z` at requested 1.2M, Knot XDP
+measured 1183863 replies/s at 100.000000%, while OxideDNS AF_XDP measured
+1184869 replies/s at 100.000000%. Keep retaining kxdpgun rows for historical
+promotion continuity, but `OXIDEDNS_PHYSICAL_PLAYER_TOOL=oxide-gun` is now
+usable for project-owned requester comparisons.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Use `"off"` only for saturation profiling where per-query counters would distort

@@ -80,6 +80,8 @@ struct XdpOutputRecord<'a> {
     rx_kernel_dropped_total: u64,
     errors_total: u64,
     duration_seconds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    send_duration_seconds: Option<f64>,
     tx_qps: f64,
     rx_qps: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +97,7 @@ struct XdpOutputRecord<'a> {
 #[derive(Debug)]
 struct XdpRunOutcome {
     stats: Stats,
+    send_duration: Duration,
 }
 
 struct BoundXdpWorker {
@@ -490,10 +493,12 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     }
 
     let mut aggregate = Stats::default();
+    let mut send_duration = Duration::ZERO;
     for handle in handles {
         let outcome = handle
             .join()
             .map_err(|_| anyhow!("XDP queue worker panicked"))??;
+        send_duration = send_duration.max(outcome.send_duration);
         merge_stats(&mut aggregate, outcome.stats);
     }
     aggregate.queries_unanswered = aggregate
@@ -509,6 +514,7 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         &source_selector,
         &aggregate,
         start,
+        Some(send_duration),
         true,
     )
 }
@@ -859,8 +865,19 @@ fn run_bound_worker(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
                 account_sent_packets(queued, &mut send_lengths, &mut stats);
-                sleep_for_sent(per_packet_delay, queued);
                 worker.completion_ring.dequeue(&mut worker.umem, batch_size);
+                pace_after_sent(
+                    per_packet_delay,
+                    queued,
+                    &worker.socket,
+                    worker.rx_ring.as_mut(),
+                    &mut worker.fill_ring,
+                    &mut worker.umem,
+                    &mut recv_slab,
+                    inflight.as_mut(),
+                    &mut stats,
+                    process_responses,
+                )?;
                 continue;
             }
             Err(error) => return Err(error).context("failed to enqueue AF_XDP packet"),
@@ -911,13 +928,27 @@ fn run_bound_worker(
                 &source_selector,
                 &stats,
                 start,
+                None,
                 false,
             )?;
             last_flush = Instant::now();
         }
 
-        sleep_for_sent(per_packet_delay, sent);
+        pace_after_sent(
+            per_packet_delay,
+            sent,
+            &worker.socket,
+            worker.rx_ring.as_mut(),
+            &mut worker.fill_ring,
+            &mut worker.umem,
+            &mut recv_slab,
+            inflight.as_mut(),
+            &mut stats,
+            process_responses,
+        )?;
     }
+
+    let send_duration = start.elapsed();
 
     if process_responses {
         drain_xdp_replies(
@@ -945,10 +976,14 @@ fn run_bound_worker(
             &source_selector,
             &stats,
             start,
+            Some(send_duration),
             true,
         )?;
     }
-    Ok(XdpRunOutcome { stats })
+    Ok(XdpRunOutcome {
+        stats,
+        send_duration,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1150,13 +1185,55 @@ fn account_sent_packets(sent: usize, send_lengths: &mut Vec<u64>, stats: &mut St
     }
 }
 
-fn sleep_for_sent(per_packet_delay: Option<Duration>, sent: usize) {
+#[allow(clippy::too_many_arguments)]
+fn pace_after_sent(
+    per_packet_delay: Option<Duration>,
+    sent: usize,
+    socket: &xdp::socket::XdpSocket,
+    rx_ring: Option<&mut xdp::RxRing>,
+    fill_ring: &mut xdp::WakableFillRing,
+    umem: &mut xdp::Umem,
+    recv_slab: &mut PacketSlab,
+    mut inflight: Option<&mut InflightTracker>,
+    stats: &mut Stats,
+    process_responses: bool,
+) -> Result<()> {
     if sent == 0 {
-        return;
+        return Ok(());
     }
-    if let Some(delay) = per_packet_delay {
-        std::thread::sleep(delay.mul_f64(sent as f64));
+    let Some(delay) = per_packet_delay else {
+        return Ok(());
+    };
+    let wait = delay.mul_f64(sent as f64);
+    if !process_responses {
+        std::thread::sleep(wait);
+        return Ok(());
     }
+    let Some(rx_ring) = rx_ring else {
+        std::thread::sleep(wait);
+        return Ok(());
+    };
+
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        let received = receive_available_xdp(
+            socket,
+            Some(&mut *rx_ring),
+            fill_ring,
+            umem,
+            recv_slab,
+            inflight.as_mut().map(|tracker| &mut **tracker),
+            stats,
+        )?;
+        if received == 0 {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_micros(250)));
+        }
+    }
+    Ok(())
 }
 
 fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
@@ -1340,9 +1417,11 @@ fn emit_xdp_record(
     source_selector: &SourceSelector,
     stats: &Stats,
     start: Instant,
+    send_duration: Option<Duration>,
     summary: bool,
 ) -> Result<()> {
     let elapsed = start.elapsed().as_secs_f64().max(0.000_001);
+    let send_elapsed = send_duration.map(|duration| duration.as_secs_f64().max(0.000_001));
     let (latency_p50_us, latency_p99_us, latency_p999_us) = stats.latency.percentiles();
     let record = XdpOutputRecord {
         record_type: if summary { "summary" } else { "interval" },
@@ -1391,8 +1470,9 @@ fn emit_xdp_record(
         rx_kernel_dropped_total: stats.rx_kernel_dropped,
         errors_total: stats.errors,
         duration_seconds: elapsed,
-        tx_qps: stats.tx_packets as f64 / elapsed,
-        rx_qps: stats.rx_packets as f64 / elapsed,
+        send_duration_seconds: send_elapsed,
+        tx_qps: stats.tx_packets as f64 / send_elapsed.unwrap_or(elapsed),
+        rx_qps: stats.rx_packets as f64 / send_elapsed.unwrap_or(elapsed),
         latency_p50_us,
         latency_p99_us,
         latency_p999_us,

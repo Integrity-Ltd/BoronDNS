@@ -1077,7 +1077,11 @@ if player_tool == "oxide-gun":
         if record.get("summary") or record.get("record_type") == "summary":
             summary = record
     if summary is not None:
-        duration_value = float(summary.get("duration_seconds") or 0.0)
+        duration_value = float(
+            summary.get("send_duration_seconds")
+            or summary.get("duration_seconds")
+            or 0.0
+        )
         tx_packets = int(summary.get("tx_packets_total") or 0)
         rx_packets = int(summary.get("rx_packets_total") or 0)
         rx_bytes = int(summary.get("rx_bytes_total") or 0)
