@@ -1506,6 +1506,17 @@ returned 100.000000% replies with no requester/server PHY discards or softnet
 drops. Promote the source-built comparison profile to server batch 512,
 `xdp.tx_wakeup_interval = 8`, and requester final drain timeout 2000 ms; keep
 the symbolized perf evidence as the next code-path map if the margin regresses.
+The requester final-drain loop now waits for AF_XDP RX readiness instead of
+blindly sleeping after an empty drain pass. This is a measurement-quality fix,
+not a promoted server-throughput change: with the response timeout reduced back
+to 1000 ms, the candidate still returned 100.000000% replies in both run orders
+in `physical-udp-knot-comparison-20260606T203907Z`,
+`physical-udp-knot-comparison-20260606T203953Z`,
+`physical-udp-knot-comparison-20260606T204220Z`, and
+`physical-udp-knot-comparison-20260606T204306Z`, but throughput remained within
+the same noisy source-built Knot comparison band. Keep the source-built
+promotion wrapper at 2000 ms unless shorter-drain rows are explicitly being
+tested.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

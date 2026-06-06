@@ -1217,7 +1217,14 @@ fn drain_xdp_replies(
             stats,
         )?;
         if received == 0 || stats.rx_packets == before {
-            std::thread::sleep(Duration::from_millis(1));
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let wait = (deadline - now).min(Duration::from_millis(1));
+            let _ = socket
+                .poll_read(PollTimeout::new(Some(wait)))
+                .context("failed to poll AF_XDP RX ring during final drain")?;
         }
     }
     Ok(())
