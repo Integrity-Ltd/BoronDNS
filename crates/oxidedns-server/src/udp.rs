@@ -237,11 +237,17 @@ where
     let local_addr = packet_io.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
     let mut outbound = Vec::with_capacity(settings.udp_batch_size.max(1));
+    let is_af_xdp = packet_io.is_af_xdp();
 
     loop {
         {
             let inbound = packet_io.recv_batch().await.map_err(RuntimeError::Udp)?;
             settings.metrics.record_udp_receive_batch(inbound.len());
+            if is_af_xdp {
+                settings
+                    .metrics
+                    .record_af_xdp_worker_receive_batch(udp_worker_id, inbound.len());
+            }
             record_udp_worker_source_ports(&settings.metrics, udp_worker_id, inbound);
             outbound.clear();
 
@@ -253,10 +259,16 @@ where
                 }
             }
         };
+        let outbound_len = outbound.len();
         packet_io
             .send_batch(&outbound, &settings.metrics)
             .await
             .map_err(RuntimeError::Udp)?;
+        if is_af_xdp && outbound_len > 0 {
+            settings
+                .metrics
+                .record_af_xdp_worker_send_batch(udp_worker_id, outbound_len);
+        }
     }
 }
 
@@ -503,6 +515,10 @@ fn idle_dedicated_udp_worker(idle_spins: &mut usize, strategy: UdpIdleStrategy) 
 
 pub(crate) trait PacketIo {
     fn local_addr(&self) -> std::io::Result<SocketAddr>;
+
+    fn is_af_xdp(&self) -> bool {
+        false
+    }
 
     async fn recv_batch(&mut self) -> std::io::Result<&[UdpInbound]>;
 

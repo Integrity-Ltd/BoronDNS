@@ -567,6 +567,10 @@ impl PacketIo for AfXdpPacketIo {
         Ok(self.local_addr)
     }
 
+    fn is_af_xdp(&self) -> bool {
+        true
+    }
+
     async fn recv_batch(&mut self) -> io::Result<&[UdpInbound]> {
         self.release_unsent_frames();
         self.drain_completions();

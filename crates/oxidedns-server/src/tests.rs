@@ -3982,6 +3982,8 @@ fn af_xdp_packet_io_metrics_are_reported() {
         completion_dequeues: 9,
         completed_packets: 88,
     });
+    metrics.record_af_xdp_worker_receive_batch(2, 19);
+    metrics.record_af_xdp_worker_send_batch(2, 18);
 
     let body = metrics_body(
         &zones,
@@ -4004,6 +4006,9 @@ fn af_xdp_packet_io_metrics_are_reported() {
     assert!(body.contains("oxidedns_af_xdp_tx_poll_write_ready_total 1"));
     assert!(body.contains("oxidedns_af_xdp_completion_dequeues_total 9"));
     assert!(body.contains("oxidedns_af_xdp_completed_packets_total 88"));
+    assert!(body.contains("oxidedns_af_xdp_worker_received_packets_total{worker=\"2\"} 19"));
+    assert!(body.contains("oxidedns_af_xdp_worker_sent_packets_total{worker=\"2\"} 18"));
+    assert!(!body.contains("oxidedns_af_xdp_worker_sent_packets_total{worker=\"3\"}"));
 }
 
 #[test]
@@ -4046,6 +4051,8 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
         completion_dequeues: 9,
         completed_packets: 88,
     });
+    metrics.record_af_xdp_worker_receive_batch(2, 19);
+    metrics.record_af_xdp_worker_send_batch(2, 18);
     metrics.record_udp_worker_receive_batch(1, 17);
     metrics.record_udp_worker_send_batch(1, 16);
     metrics.record_udp_worker_source_ports(1, [(53000, 17)]);
@@ -4075,6 +4082,8 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     assert!(body.contains("oxidedns_af_xdp_rx_recv_calls_total 11"));
     assert!(body.contains("oxidedns_af_xdp_tx_send_calls_total 7"));
     assert!(body.contains("oxidedns_af_xdp_completed_packets_total 88"));
+    assert!(body.contains("oxidedns_af_xdp_worker_received_packets_total{worker=\"2\"} 19"));
+    assert!(body.contains("oxidedns_af_xdp_worker_sent_packets_total{worker=\"2\"} 18"));
     assert!(body.contains("oxidedns_zone_image_serve_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_direct_hits_total 0"));
     assert!(body.contains("oxidedns_zone_image_serve_semantic_hits_total 0"));

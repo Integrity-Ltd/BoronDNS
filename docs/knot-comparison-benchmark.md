@@ -990,6 +990,21 @@ baseline 4096 rings, while `physical-udp-knot-comparison-20260606T044913Z`
 measured 99.991437% with ring size 8192 and UMEM frame count 32768. That
 suggests the missing work is not just exposing already completed TX frames to
 the fill ring a few calls earlier.
+AF_XDP per-worker transport counters are now retained even when
+`hot_path_detail = "off"` so saturation runs can keep queue-distribution
+evidence without enabling the higher-cost UDP hot-path counters. The physical
+summary adds active-worker and min/max packet columns for
+`oxidedns_af_xdp_worker_received_packets_total` and
+`oxidedns_af_xdp_worker_sent_packets_total`. The reverse-role diagnostic row
+`physical-udp-knot-comparison-20260606T045650Z` measured OxideDNS AF_XDP at
+2455876 replies/s and 99.960788%; the server received and queued 12328220
+AF_XDP packets, but only 27 of 63 server workers were active. Active workers
+ranged from 256000 to 772096 received packets, with matching sent-packet
+counts. That keeps MTU lower on the suspect list for this row because the run
+used temporary native-XDP MTU 1500 and the server worker received/sent totals
+matched; the next useful receive-path work should instead target queue service,
+fill lifecycle, or source-port lists that avoid overloading the hot AF_XDP
+workers without repeating the distinct-worker regression.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes

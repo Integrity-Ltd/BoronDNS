@@ -993,6 +993,7 @@ pub(crate) fn metrics_body(
     append_udp_packet_io_metrics(&mut body, snapshot);
     append_udp_mmsg_metrics(&mut body, metrics);
     append_af_xdp_packet_io_metrics(&mut body, metrics);
+    append_af_xdp_worker_packet_io_metrics(&mut body, metrics);
     append_udp_worker_packet_io_metrics(&mut body, metrics);
     append_query_rcode_metrics(&mut body, metrics);
     append_query_latency_metrics(&mut body, metrics);
@@ -1183,6 +1184,38 @@ fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) 
             .af_xdp_completed_packets
             .load(Ordering::Relaxed),
     ));
+}
+
+fn append_af_xdp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) {
+    body.push_str(
+        "# HELP oxidedns_af_xdp_worker_receive_batches_total AF_XDP receive batches processed per worker slot.\n\
+         # TYPE oxidedns_af_xdp_worker_receive_batches_total counter\n\
+         # HELP oxidedns_af_xdp_worker_received_packets_total AF_XDP packets received per worker slot.\n\
+         # TYPE oxidedns_af_xdp_worker_received_packets_total counter\n\
+         # HELP oxidedns_af_xdp_worker_send_batches_total AF_XDP send batches emitted per worker slot.\n\
+         # TYPE oxidedns_af_xdp_worker_send_batches_total counter\n\
+         # HELP oxidedns_af_xdp_worker_sent_packets_total AF_XDP packets sent per worker slot.\n\
+         # TYPE oxidedns_af_xdp_worker_sent_packets_total counter\n",
+    );
+    for worker_id in 0..metrics.inner.af_xdp_worker_receive_batches.len() {
+        let receive_batches =
+            metrics.inner.af_xdp_worker_receive_batches[worker_id].load(Ordering::Relaxed);
+        let received_packets =
+            metrics.inner.af_xdp_worker_received_packets[worker_id].load(Ordering::Relaxed);
+        let send_batches =
+            metrics.inner.af_xdp_worker_send_batches[worker_id].load(Ordering::Relaxed);
+        let sent_packets =
+            metrics.inner.af_xdp_worker_sent_packets[worker_id].load(Ordering::Relaxed);
+        if receive_batches == 0 && received_packets == 0 && send_batches == 0 && sent_packets == 0 {
+            continue;
+        }
+        body.push_str(&format!(
+            "oxidedns_af_xdp_worker_receive_batches_total{{worker=\"{worker_id}\"}} {receive_batches}\n\
+             oxidedns_af_xdp_worker_received_packets_total{{worker=\"{worker_id}\"}} {received_packets}\n\
+             oxidedns_af_xdp_worker_send_batches_total{{worker=\"{worker_id}\"}} {send_batches}\n\
+             oxidedns_af_xdp_worker_sent_packets_total{{worker=\"{worker_id}\"}} {sent_packets}\n",
+        ));
+    }
 }
 
 fn append_udp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) {
@@ -2360,6 +2393,10 @@ struct RuntimeMetricsInner {
     af_xdp_tx_poll_write_ready: AtomicU64,
     af_xdp_completion_dequeues: AtomicU64,
     af_xdp_completed_packets: AtomicU64,
+    af_xdp_worker_receive_batches: Vec<AtomicU64>,
+    af_xdp_worker_received_packets: Vec<AtomicU64>,
+    af_xdp_worker_send_batches: Vec<AtomicU64>,
+    af_xdp_worker_sent_packets: Vec<AtomicU64>,
     udp_worker_receive_batches: Vec<AtomicU64>,
     udp_worker_received_datagrams: Vec<AtomicU64>,
     udp_worker_send_batches: Vec<AtomicU64>,
@@ -2744,6 +2781,10 @@ impl RuntimeMetrics {
                 udp_worker_received_datagrams: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
                 udp_worker_send_batches: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
                 udp_worker_sent_datagrams: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
+                af_xdp_worker_receive_batches: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
+                af_xdp_worker_received_packets: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
+                af_xdp_worker_send_batches: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
+                af_xdp_worker_sent_packets: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
                 ..RuntimeMetricsInner::default()
             }),
         }
@@ -2915,6 +2956,24 @@ impl RuntimeMetrics {
         self.inner
             .af_xdp_completed_packets
             .fetch_add(stats.completed_packets, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_af_xdp_worker_receive_batch(&self, worker_id: usize, packets: usize) {
+        if let Some(counter) = self.inner.af_xdp_worker_receive_batches.get(worker_id) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(counter) = self.inner.af_xdp_worker_received_packets.get(worker_id) {
+            counter.fetch_add(packets as u64, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_af_xdp_worker_send_batch(&self, worker_id: usize, packets: usize) {
+        if let Some(counter) = self.inner.af_xdp_worker_send_batches.get(worker_id) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(counter) = self.inner.af_xdp_worker_sent_packets.get(worker_id) {
+            counter.fetch_add(packets as u64, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn record_udp_worker_receive_batch(&self, worker_id: usize, datagrams: usize) {
