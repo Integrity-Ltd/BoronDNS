@@ -1593,6 +1593,47 @@ free, ZoneImage child lookup, `af_xdp::write_udp_ipv4_response`, and
 packet assembly symbols. Knot's source XDP handler uses an explicit
 prepare/receive/reply-allocate/receive-finish/send/send-finish batch lifecycle;
 use that as the next packet-I/O design comparison point.
+A separate-TX-frame prototype modeled that Knot ownership boundary and was
+rejected. The candidate allocated a fresh UMEM frame for each AF_XDP reply,
+copied the Ethernet/IP/UDP headers and DNS response into that TX frame, and
+returned the RX frame before enqueueing TX, while falling back to same-frame
+rewrite if the UMEM allocator was empty. It passed local AF_XDP server tests and
+built a release binary, but the source-built Knot profile regressed:
+`physical-udp-knot-comparison-20260607T003449Z` measured OxideDNS AF_XDP at
+2290109 replies/s and source-built Knot XDP at 2316556 replies/s, both
+100.000000%; `physical-udp-knot-comparison-20260607T003547Z` measured
+source-built Knot XDP at 2400258 replies/s and OxideDNS AF_XDP at 2349159
+replies/s, both 100.000000%. Treat separate TX frame allocation as negative
+unless a future design also removes the extra userspace header copy and
+allocation overhead.
+An AF_XDP borrowed-RX-payload prototype was also rejected as not a clear gain.
+That candidate kept the generic UDP path intact but routed bound AF_XDP
+listeners through an AF_XDP-specific loop that parsed DNS directly from retained
+UMEM payload bytes instead of copying the request payload into `UdpInbound`.
+It passed local AF_XDP server tests and built a release binary, but the physical
+rows stayed within noise or regressed: `physical-udp-knot-comparison-20260607T004311Z`
+measured OxideDNS AF_XDP at 2361280 replies/s and source-built Knot XDP at
+2389869 replies/s, both 100.000000%; `physical-udp-knot-comparison-20260607T004358Z`
+measured source-built Knot XDP at 2367170 replies/s and OxideDNS AF_XDP at
+2399427 replies/s, both 100.000000%. Do not reintroduce the raw borrowed-payload
+loop unless profiling shows the inbound payload copy has become a primary cost.
+Transport knob sweeps on the restored same-frame baseline did not produce a
+default-worthy improvement. With `xdp.rx_drain_passes = 1`,
+`xdp.tx_wakeup_interval = 1` measured 2400911 replies/s and 100.000000%;
+interval 4 measured 2401046 replies/s and 100.000000%; interval 8 regressed to
+2350451 replies/s and 100.000000%; and interval 16 measured 2398508 replies/s
+and 100.000000%. Holding interval 4 and increasing RX drain pushed QPS higher
+only by spending reply percentage: drain 1 measured 2402028 replies/s at
+99.996804%, drain 2 measured 2405111 replies/s at 99.999468%, drain 4 measured
+2401901 replies/s at 99.996804%, and drain 8 measured 2346102 replies/s at
+99.990184%. A full source-built Knot comparison for drain 2 / interval 4 also
+failed the primary gate: `physical-udp-knot-comparison-20260607T005018Z`
+measured OxideDNS AF_XDP at 2401846 replies/s and 99.997869% while Knot XDP
+held 2398198 replies/s and 100.000000%;
+`physical-udp-knot-comparison-20260607T005117Z` measured Knot XDP at 2374210
+replies/s and 100.000000% while OxideDNS AF_XDP reached 2398918 replies/s and
+99.998400%. Keep the promoted AF_XDP profile at the lossless settings unless a
+future host or requester pacing change removes this reply-percent tradeoff.
 
 Use `[metrics].hot_path_detail = "reduced"` for observability-preserving runs.
 Reduced mode also exposes
