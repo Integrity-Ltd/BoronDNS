@@ -37,6 +37,7 @@ use crate::{
     std_udp_mmsg, std_udp_socket,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum BoundUdpListener {
     Std {
         socket: UdpSocket,
@@ -52,6 +53,7 @@ pub(crate) enum BoundUdpListener {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn bind_udp_listeners(
     addr: SocketAddr,
     backend: UdpBackend,

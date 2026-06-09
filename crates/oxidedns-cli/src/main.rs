@@ -13,6 +13,8 @@ use oxidedns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
     TransferError,
 };
+#[cfg(test)]
+use rcgen as _;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tracing::{
     Event, Level, Subscriber,

@@ -92,16 +92,18 @@ use dns_cookie::{
     dns_cookie_settings,
 };
 pub use errors::{RuntimeError, TransferError};
-pub(crate) use health_metrics::{
-    AfXdpPacketIoStats, QueryLatencyCategory, QueryPipelineStage, ResponseCacheCandidateCategory,
-    ResponseCacheIneligibleReason, RuntimeMetricsSnapshot,
-};
+#[cfg(any(feature = "af-xdp", test))]
+pub(crate) use health_metrics::AfXdpPacketIoStats;
 #[cfg(test)]
 use health_metrics::{
     DEFAULT_COOKIE_PREFIX_METRIC_LIMIT, DEFAULT_LATENCY_HISTOGRAM_BUCKETS, QueryLatencyHistogram,
     metrics_body,
 };
 use health_metrics::{HealthEndpointState, MetricsRateLimiter, RuntimeMetrics, serve_health};
+pub(crate) use health_metrics::{
+    QueryLatencyCategory, QueryPipelineStage, ResponseCacheCandidateCategory,
+    ResponseCacheIneligibleReason, RuntimeMetricsSnapshot,
+};
 use observability::{ObservabilityAuth, TransferMaterial};
 use rate_limit::{
     IpPrefix, NotifyLogLimiter, RrlDecision, RrlLimiter, response_opt_record,
@@ -2419,12 +2421,12 @@ impl ControlPlaneTelemetryReporter {
             Ok(response) => warn!(
                 category = "transfer",
                 status = %response.status(),
-                "uDNS transfer telemetry report was rejected"
+                "control-plane transfer telemetry report was rejected"
             ),
             Err(error) => warn!(
                 category = "transfer",
                 %error,
-                "failed to send uDNS transfer telemetry report"
+                "failed to send control-plane transfer telemetry report"
             ),
         }
     }
@@ -2521,7 +2523,7 @@ impl ControlPlaneOperationClient {
             .map_err(|error| error.to_string())?;
         if !response.status().is_success() {
             return Err(format!(
-                "uDNS operation poll returned {}",
+                "control-plane operation poll returned {}",
                 response.status()
             ));
         }
@@ -2531,7 +2533,7 @@ impl ControlPlaneOperationClient {
             .map_err(|error| error.to_string())?;
         let operations = body
             .as_array()
-            .ok_or_else(|| "uDNS operation poll returned non-array JSON".to_owned())?
+            .ok_or_else(|| "control-plane operation poll returned non-array JSON".to_owned())?
             .iter()
             .map(parse_control_plane_operation)
             .collect::<Result<Vec<_>, _>>()?;
@@ -2571,13 +2573,13 @@ impl ControlPlaneOperationClient {
                 category = "control_plane",
                 operation_id,
                 status = %response.status(),
-                "uDNS operation completion was rejected"
+                "control-plane operation completion was rejected"
             ),
             Err(error) => warn!(
                 category = "control_plane",
                 operation_id,
                 %error,
-                "failed to complete uDNS operation"
+                "failed to complete control-plane operation"
             ),
         }
     }
@@ -2634,7 +2636,7 @@ async fn serve_control_plane_operations(
                 warn!(
                     category = "control_plane",
                     %error,
-                    "failed to poll uDNS operations"
+                    "failed to poll control-plane operations"
                 );
                 continue;
             }
@@ -2688,7 +2690,7 @@ fn execute_control_plane_operation(
             info!(
                 zone = %origin,
                 operation_id = operation.id,
-                "paused uDNS-controlled zone serving"
+                "paused control-plane managed zone serving"
             );
             Ok(())
         }

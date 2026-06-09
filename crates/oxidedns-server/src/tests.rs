@@ -59,16 +59,16 @@ use super::{
     execute_control_plane_operation, handle_tcp_connection, handle_tcp_connection_with_query_hook,
     jitter_interval, load_pem_certs, load_pem_private_key_from_file as load_pem_private_key,
     log_loading_warning, log_notify_log_summary, log_rrl_summary, metrics_body,
-    observe_query_metrics, poll_soa_from_primary, poll_soa_from_primary_with_tsig,
-    prepare_notify_packet, prepare_notify_packet_with_metrics, prepare_query_tsig_packet,
-    query_id_from_random_bytes, record_query_lookup_metrics, record_query_response_metric,
-    refresh_zone_metadata_from_primaries, required_file_descriptor_limit, response_category,
-    response_opt_record, response_question_end, response_rcode, rotate_transfer_targets,
-    rrl_truncated_response, runtime_config_warnings_at, serial_after, serve_health,
-    serve_refresh_requests, serve_scheduled_refreshes, serve_tcp, serve_udp, sign_tsig_response,
-    signal_notify_refresh, transfer_axfr_from_primary, transfer_ixfr_from_primary,
-    transfer_query_id, uniform_index_from_u64, validate_file_descriptor_limit_value,
-    validate_runtime_config, write_tcp_message,
+    observe_query_metrics, parse_control_plane_operation, poll_soa_from_primary,
+    poll_soa_from_primary_with_tsig, prepare_notify_packet, prepare_notify_packet_with_metrics,
+    prepare_query_tsig_packet, query_id_from_random_bytes, record_query_lookup_metrics,
+    record_query_response_metric, refresh_zone_metadata_from_primaries,
+    required_file_descriptor_limit, response_category, response_opt_record, response_question_end,
+    response_rcode, rotate_transfer_targets, rrl_truncated_response, runtime_config_warnings_at,
+    serial_after, serve_health, serve_refresh_requests, serve_scheduled_refreshes, serve_tcp,
+    serve_udp, sign_tsig_response, signal_notify_refresh, transfer_axfr_from_primary,
+    transfer_ixfr_from_primary, transfer_query_id, uniform_index_from_u64,
+    validate_file_descriptor_limit_value, validate_runtime_config, write_tcp_message,
 };
 
 #[test]
@@ -3241,7 +3241,7 @@ async fn control_plane_telemetry_posts_failure_payload_and_logs_rejection() {
         "transfer failed without detailed cause"
     );
     assert!(captured.contains_all(&[
-        "uDNS transfer telemetry report was rejected",
+        "control-plane transfer telemetry report was rejected",
         "category=\"transfer\"",
         "status=503 Service Unavailable",
     ]));
@@ -3333,6 +3333,133 @@ async fn control_plane_republish_feed_refreshes_catalog_zones() {
     let refresh = refresh_rx.recv().await.expect("catalog refresh request");
     assert_eq!(refresh.zone, catalog);
     assert_eq!(refresh.reason, RefreshReason::ControlPlane);
+}
+
+#[test]
+fn control_plane_operation_parser_accepts_all_supported_operations() {
+    for (kind, expected) in [
+        ("retry", ControlPlaneOperationKind::Retry),
+        ("pause", ControlPlaneOperationKind::Pause),
+        ("resume", ControlPlaneOperationKind::Resume),
+        ("republish_feed", ControlPlaneOperationKind::RepublishFeed),
+        ("rotate_tsig", ControlPlaneOperationKind::RotateTsig),
+    ] {
+        let parsed = parse_control_plane_operation(&serde_json::json!({
+            "id": 7,
+            "zone_name": "alpha.test.",
+            "operation": kind,
+        }))
+        .expect("operation parses");
+        assert_eq!(parsed.operation, expected);
+    }
+
+    let error = parse_control_plane_operation(&serde_json::json!({
+        "id": 8,
+        "zone_name": "alpha.test.",
+        "operation": "unsupported",
+    }))
+    .expect_err("unsupported operation is rejected");
+    assert!(error.contains("unsupported operation kind unsupported"));
+}
+
+#[tokio::test]
+async fn disabled_control_plane_operation_client_noops() {
+    let client = ControlPlaneOperationClient {
+        endpoint_url: None,
+        node_id: None,
+        bearer_token: None,
+        poll_interval: std::time::Duration::from_secs(1),
+        lease_seconds: 1,
+        timeout: std::time::Duration::from_secs(1),
+        client: reqwest::Client::new(),
+    };
+
+    assert!(!client.enabled());
+    assert_eq!(
+        ControlPlaneOperationCompletionStatus::Failed.as_str(),
+        "failed"
+    );
+    assert!(client.poll().await.expect("disabled poll").is_empty());
+    client
+        .complete(
+            99,
+            ControlPlaneOperationCompletionStatus::Failed,
+            Some("no-op"),
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn control_plane_retry_rotate_and_empty_feed_paths() {
+    let zones = ZoneStore::new();
+    let origin = DomainName::from_absolute_str("alpha.test.").unwrap();
+    zones.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
+    let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+
+    for (id, operation) in [
+        (10, ControlPlaneOperationKind::Retry),
+        (11, ControlPlaneOperationKind::RotateTsig),
+    ] {
+        execute_control_plane_operation(
+            &ControlPlaneOperation {
+                id,
+                zone_name: "alpha.test.".to_owned(),
+                operation,
+            },
+            &zones,
+            &refresh_tx,
+            &[],
+        )
+        .expect("operation queues refresh");
+        let refresh = refresh_rx.recv().await.expect("refresh request");
+        assert_eq!(refresh.zone, origin);
+        assert_eq!(refresh.reason, RefreshReason::ControlPlane);
+    }
+
+    execute_control_plane_operation(
+        &ControlPlaneOperation {
+            id: 12,
+            zone_name: "alpha.test.".to_owned(),
+            operation: ControlPlaneOperationKind::RepublishFeed,
+        },
+        &zones,
+        &refresh_tx,
+        &[],
+    )
+    .expect("empty feed operation is a no-op");
+    assert!(refresh_rx.try_recv().is_err());
+}
+
+#[test]
+fn control_plane_operation_rejects_invalid_and_unknown_zones() {
+    let zones = ZoneStore::new();
+    let (refresh_tx, _refresh_rx) = mpsc::channel(1);
+
+    let invalid = execute_control_plane_operation(
+        &ControlPlaneOperation {
+            id: 20,
+            zone_name: "not absolute".to_owned(),
+            operation: ControlPlaneOperationKind::Retry,
+        },
+        &zones,
+        &refresh_tx,
+        &[],
+    )
+    .expect_err("invalid zone name is rejected");
+    assert!(invalid.contains("operation zone_name not absolute is not absolute"));
+
+    let unknown = execute_control_plane_operation(
+        &ControlPlaneOperation {
+            id: 21,
+            zone_name: "missing.test.".to_owned(),
+            operation: ControlPlaneOperationKind::Retry,
+        },
+        &zones,
+        &refresh_tx,
+        &[],
+    )
+    .expect_err("unknown zone is rejected");
+    assert!(unknown.contains("zone missing.test. is not configured"));
 }
 
 #[test]

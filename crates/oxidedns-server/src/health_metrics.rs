@@ -2453,6 +2453,7 @@ struct RuntimeMetricsInner {
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
 pub(crate) struct AfXdpPacketIoStats {
     pub(crate) rx_recv_calls: u64,
     pub(crate) rx_empty_recv_calls: u64,
@@ -2919,6 +2920,7 @@ impl RuntimeMetrics {
         }
     }
 
+    #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
     pub(crate) fn record_af_xdp_packet_io_stats(&self, stats: AfXdpPacketIoStats) {
         self.inner
             .af_xdp_rx_recv_calls

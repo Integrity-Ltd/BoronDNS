@@ -1,5 +1,11 @@
 use std::process::Command;
 
+use anyhow as _;
+use clap as _;
+use serde as _;
+use time as _;
+use toml as _;
+
 fn oxide_gun() -> Command {
     Command::new(env!("CARGO_BIN_EXE_oxide-gun"))
 }

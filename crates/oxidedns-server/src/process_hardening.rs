@@ -4,7 +4,7 @@ use std::io;
 
 use oxidedns_core::config::ProcessConfig;
 
-pub fn disable_core_dumps_if_configured(config: &ProcessConfig) -> Result<bool, io::Error> {
+pub(crate) fn disable_core_dumps_if_configured(config: &ProcessConfig) -> Result<bool, io::Error> {
     if !config.disable_core_dumps {
         return Ok(false);
     }
@@ -12,7 +12,9 @@ pub fn disable_core_dumps_if_configured(config: &ProcessConfig) -> Result<bool, 
     Ok(true)
 }
 
-pub fn apply_no_new_privileges_if_configured(config: &ProcessConfig) -> Result<bool, io::Error> {
+pub(crate) fn apply_no_new_privileges_if_configured(
+    config: &ProcessConfig,
+) -> Result<bool, io::Error> {
     if !config.no_new_privileges {
         return Ok(false);
     }

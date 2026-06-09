@@ -3131,11 +3131,11 @@ if "Option<ZoneImageProvider" in dns_text:
     snapshot_isolation_failures.append("ZoneImage provider is still optional")
 if (
     "pub type ZoneImageProvider<'a> =\n"
-    "    &'a dyn for<'published> Fn(&'published PublishedZone) -> &'published ZoneImage;"
+    "    &'a dyn for<'published> Fn(&'published dyn PublishedZoneView) -> &'published ZoneImage;"
     not in dns_text
 ):
     snapshot_isolation_failures.append("ZoneImage provider does not borrow the published image")
-if "pub fn default_zone_image_provider(published: &PublishedZone) -> &ZoneImage" not in dns_text:
+if "pub fn default_zone_image_provider(published: &dyn PublishedZoneView) -> &ZoneImage" not in dns_text:
     snapshot_isolation_failures.append("missing borrowed default ZoneImage provider")
 if "published.active_zone_image_ref()" not in dns_text:
     snapshot_isolation_failures.append("default ZoneImage provider does not use borrowed image accessor")
@@ -3351,7 +3351,12 @@ find_best_text = (
 )
 if "&& !entry.hidden" not in find_best_text:
     zone_store_api_failures.append("ZoneDirectory suffix lookup does not own hidden-zone filtering")
-if "find_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase()," not in dns_text:
+if (
+    "find_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
+    not in dns_text
+    and "with_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase(),"
+    not in dns_text
+):
     zone_store_api_failures.append("query serving does not pass the parser-carried lowercase QNAME fact into zone suffix lookup")
 if "SmallVec::<[usize; 8]>::new()" not in zone_text:
     zone_store_api_failures.append("ZoneDirectory suffix lookup does not keep common prefix-length scratch inline")

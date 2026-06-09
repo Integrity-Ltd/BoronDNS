@@ -214,7 +214,7 @@ for runtime in "${runtimes[@]}"; do
                     udp_mmsg_received_datagrams="$(tsv_value "$results" udp_mmsg_received_datagrams)"
                     udp_mmsg_send_syscalls="$(tsv_value "$results" udp_mmsg_send_syscalls)"
                     udp_mmsg_sent_datagrams="$(tsv_value "$results" udp_mmsg_sent_datagrams)"
-                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                         "$runtime" \
                         "$workers" \
                         "$batch_size" \

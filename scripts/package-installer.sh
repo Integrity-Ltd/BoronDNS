@@ -33,7 +33,7 @@ fi
 
 (
     cd "$repo_root"
-    cargo build --locked --release --target "$target_triple" -p oxidedns-cli
+    cargo build --locked --release --target "$target_triple" -p oxidedns-cli --features af-xdp
     cargo build --locked --release --target "$target_triple" -p oxide-gun --features xdp
 )
 
@@ -76,6 +76,7 @@ sha256_file() {
     printf 'commit=%s\n' "$commit"
     printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'binary=bin/oxidedns\n'
+    printf 'binary_features=af-xdp\n'
     printf 'tool_binary=bin/oxide-gun\n'
     printf 'tool_binary_features=xdp\n'
     if sha256_file "$staging/bin/oxidedns" >/dev/null 2>&1; then

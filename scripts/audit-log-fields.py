@@ -20,6 +20,7 @@ CANONICAL_CATEGORIES = {
     "rrl",
     "cookie",
     "chaos",
+    "control_plane",
     "configuration_warning",
     "signal",
     "startup",

@@ -778,7 +778,7 @@ fn xdp_flags(mode: XdpMode) -> XdpFlags {
 }
 
 fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
-    interval != 0 && send_passes % interval == 0
+    interval != 0 && send_passes.is_multiple_of(interval)
 }
 
 pub(crate) fn parse_udp_ipv4_frame(frame: &[u8]) -> Result<UdpIpv4Frame, AfXdpFrameError> {

@@ -5,6 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use arc_swap as _;
+use base64 as _;
+use hmac as _;
 use oxidedns_core::{
     dns::{
         AnswerOptions, DatagramAction, DnsCookieContext, DomainName, ExtendedDnsErrorsMode,
@@ -21,7 +24,16 @@ use oxidedns_core::{
         ZoneImagePlanSectionSummary, ZoneImagePlanSummary,
     },
 };
+use serde as _;
 use sha1::{Digest, Sha1};
+use sha2 as _;
+use siphasher as _;
+use smallvec as _;
+use subtle as _;
+use thiserror as _;
+use toml as _;
+use tracing as _;
+use zeroize as _;
 
 fn main() {
     let config = BenchConfig::from_env_and_args();

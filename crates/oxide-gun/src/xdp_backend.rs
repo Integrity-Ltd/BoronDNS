@@ -644,12 +644,12 @@ fn worker_config(
     worker.interface.queue_list.clear();
     worker.log.flush_interval_ms = 0;
     worker.run.seed = config.run.seed.wrapping_add(u64::from(worker_index));
-    if let Some(target_qps) = config.rate.target_qps {
-        if target_qps > 0 {
-            let base = target_qps / u64::from(queue_count);
-            let remainder = target_qps % u64::from(queue_count);
-            worker.rate.target_qps = Some(base + u64::from(worker_index < remainder as u32));
-        }
+    if let Some(target_qps) = config.rate.target_qps
+        && target_qps > 0
+    {
+        let base = target_qps / u64::from(queue_count);
+        let remainder = target_qps % u64::from(queue_count);
+        worker.rate.target_qps = Some(base + u64::from(worker_index < remainder as u32));
     }
     if config.run.max_packets != 0 {
         let base = config.run.max_packets / u64::from(queue_count);
@@ -1212,7 +1212,7 @@ fn drain_xdp_replies(
             fill_ring,
             umem,
             recv_slab,
-            inflight.as_mut().map(|tracker| &mut **tracker),
+            inflight.as_deref_mut(),
             destination_ports,
             stats,
         )?;
@@ -1520,7 +1520,7 @@ fn pace_after_sent(
             fill_ring,
             umem,
             recv_slab,
-            inflight.as_mut().map(|tracker| &mut **tracker),
+            inflight.as_deref_mut(),
             destination_ports,
             stats,
         )?;
@@ -1536,7 +1536,7 @@ fn pace_after_sent(
 }
 
 fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
-    interval != 0 && send_passes % interval == 0
+    interval != 0 && send_passes.is_multiple_of(interval)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1607,6 +1607,7 @@ fn xdp_flags(mode: XdpMode) -> XdpFlags {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive_available_xdp(
     socket: &xdp::socket::XdpSocket,
     rx_ring: Option<&mut xdp::RxRing>,
@@ -1709,7 +1710,7 @@ fn receive_available_xdp(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_xdp_record<'a>(
+fn emit_xdp_record(
     config: &FileConfig,
     interface: &str,
     target: SocketAddr,
@@ -1719,7 +1720,7 @@ fn emit_xdp_record<'a>(
     stats: &Stats,
     start: Instant,
     send_duration: Option<Duration>,
-    queue_stats: Option<&'a [XdpQueueOutputRecord]>,
+    queue_stats: Option<&[XdpQueueOutputRecord]>,
     summary: bool,
 ) -> Result<()> {
     let elapsed = start.elapsed().as_secs_f64().max(0.000_001);

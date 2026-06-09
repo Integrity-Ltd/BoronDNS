@@ -3118,7 +3118,7 @@ The area code **LOG** is allocated.
 | `rcode` | string | Response code mnemonic (`NOERROR`, `NXDOMAIN`, etc.) |
 | `request_id` | string | Per-process unique request identifier |
 | `correlation_id` | string | Identifier propagated across multi-step operations (transfer sessions, refresh cycles) |
-| `category` | string | Coarse category for filtering (`query`, `transfer`, `notify`, `tsig`, `xot`, `rrl`, `cookie`, `configuration_warning`, `signal`, `startup`, `shutdown`) |
+| `category` | string | Coarse category for filtering (`query`, `transfer`, `notify`, `tsig`, `xot`, `rrl`, `cookie`, `chaos`, `control_plane`, `configuration_warning`, `signal`, `startup`, `shutdown`) |
 | `error` | string | Where present, a concise error description |
 | `duration_ms` | number | Where present, an operation's elapsed time in milliseconds |
 | `bytes` | integer | Where present, a byte count (transfer size, message size) |

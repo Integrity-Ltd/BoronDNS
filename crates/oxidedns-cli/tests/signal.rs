@@ -6,6 +6,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use anyhow as _;
+use clap as _;
+use getrandom as _;
+use oxidedns_core as _;
+use oxidedns_server as _;
+use rcgen as _;
+use time as _;
+use tokio as _;
+use tracing as _;
+use tracing_subscriber as _;
+
 #[test]
 fn serve_exits_successfully_on_sigterm() {
     serve_exits_successfully_on_signal("-TERM");

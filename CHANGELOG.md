@@ -6,6 +6,37 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+## 0.1.5 - 2026-06-09
+
+### Added
+
+- Added physical UDP/Knot comparison harnessing for detached multi-row sweeps,
+  Knot reference rows, host/NIC/qdisc evidence capture, and transmit-side loss
+  diagnostics.
+- Added OxideGun and server AF_XDP/XDP controls for multi-queue binding,
+  sparse queue steering, source-port weighting, reply redirects, requester
+  diagnostics, and packet-I/O counters.
+- Added observability API coverage and related operator/metrics documentation.
+
+### Changed
+
+- Tuned the standard UDP socket path with lower hot-path overhead, borrowed
+  zone access, optional timestamp skipping, pacing/qdisc/tuning support, and
+  expanded physical saturation profiles.
+- Promoted the current UDP and AF_XDP benchmark evidence into the Knot
+  comparison documentation, including rejected prototype notes where evidence
+  did not justify keeping an approach.
+- Bumped the workspace and eBPF support crates to version `0.1.5`.
+- Built release-packaged `oxidedns` binaries with the server `af-xdp` feature
+  enabled, matching the XDP-enabled `oxide-gun` release asset.
+
+### Notes
+
+- This release captures the current physical UDP comparison and AF_XDP
+  diagnostic work. Formal production acceptance still depends on repeatable
+  operations evidence, long-running fuzz/interop sweeps, signing, and external
+  operator acceptance.
+
 ## 0.1.4 - 2026-06-02
 
 ### Changed

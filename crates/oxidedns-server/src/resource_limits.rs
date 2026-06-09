@@ -2,16 +2,16 @@
 
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FilesystemStats {
-    pub total_bytes: u64,
-    pub free_bytes: u64,
-    pub available_bytes: u64,
-    pub files_total: u64,
-    pub files_free: u64,
+pub(crate) struct FilesystemStats {
+    pub(crate) total_bytes: u64,
+    pub(crate) free_bytes: u64,
+    pub(crate) available_bytes: u64,
+    pub(crate) files_total: u64,
+    pub(crate) files_free: u64,
 }
 
 #[cfg(unix)]
-pub fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
+pub(crate) fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -28,7 +28,7 @@ pub fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
 }
 
 #[cfg(unix)]
-pub fn filesystem_stats(path: &str) -> Result<FilesystemStats, std::io::Error> {
+pub(crate) fn filesystem_stats(path: &str) -> Result<FilesystemStats, std::io::Error> {
     let path = std::ffi::CString::new(path)
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -51,21 +51,21 @@ pub fn filesystem_stats(path: &str) -> Result<FilesystemStats, std::io::Error> {
 }
 
 #[cfg(not(unix))]
-pub fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
+pub(crate) fn current_file_descriptor_limit() -> Result<u64, std::io::Error> {
     Ok(u64::MAX)
 }
 
 #[cfg(not(unix))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FilesystemStats {
-    pub total_bytes: u64,
-    pub free_bytes: u64,
-    pub available_bytes: u64,
-    pub files_total: u64,
-    pub files_free: u64,
+pub(crate) struct FilesystemStats {
+    pub(crate) total_bytes: u64,
+    pub(crate) free_bytes: u64,
+    pub(crate) available_bytes: u64,
+    pub(crate) files_total: u64,
+    pub(crate) files_free: u64,
 }
 
 #[cfg(not(unix))]
-pub fn filesystem_stats(_path: &str) -> Result<FilesystemStats, std::io::Error> {
+pub(crate) fn filesystem_stats(_path: &str) -> Result<FilesystemStats, std::io::Error> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }

@@ -9,10 +9,10 @@ use oxidedns_core::ServerConfig;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserIdentity {
-    pub name: String,
-    pub uid: u32,
-    pub gid: u32,
+pub(crate) struct UserIdentity {
+    pub(crate) name: String,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
 }
 
 #[derive(Debug, Error)]
@@ -47,7 +47,7 @@ pub enum PrivilegeError {
     },
 }
 
-pub fn configured_run_as_user(
+pub(crate) fn configured_run_as_user(
     config: &ServerConfig,
 ) -> Result<Option<UserIdentity>, PrivilegeError> {
     let Some(user) = config.process.run_as_user.as_deref().map(str::trim) else {
@@ -74,7 +74,7 @@ pub fn configured_run_as_user(
     Ok(Some(identity))
 }
 
-pub fn drop_to_user(identity: &UserIdentity) -> Result<(), PrivilegeError> {
+pub(crate) fn drop_to_user(identity: &UserIdentity) -> Result<(), PrivilegeError> {
     let current_uid = current_effective_uid();
     if current_uid != 0 {
         if current_uid == identity.uid {
@@ -111,7 +111,7 @@ pub fn drop_to_user(identity: &UserIdentity) -> Result<(), PrivilegeError> {
     }
 }
 
-pub fn current_effective_uid() -> u32 {
+pub(crate) fn current_effective_uid() -> u32 {
     effective_uid()
 }
 

@@ -584,6 +584,7 @@ struct OutputRecord<'a> {
 struct Stats {
     tx_packets: u64,
     tx_bytes: u64,
+    #[cfg_attr(not(feature = "xdp"), allow(dead_code))]
     xdp_tx_completed_packets: u64,
     rx_packets: u64,
     rx_bytes: u64,
@@ -1284,10 +1285,11 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     if effective_queue_count > 1 && config.xdp.drop_object.is_some() {
         bail!("backend xdp multi-queue does not yet support xdp.drop_object reply drops");
     }
-    if effective_queue_count > 1 && !config.source.port_list.is_empty() {
-        if config.source.port_list.len() < effective_queue_count as usize {
-            bail!("source.port_list must contain at least one entry per effective XDP queue");
-        }
+    if effective_queue_count > 1
+        && !config.source.port_list.is_empty()
+        && config.source.port_list.len() < effective_queue_count as usize
+    {
+        bail!("source.port_list must contain at least one entry per effective XDP queue");
     }
     if effective_queue_count > 1
         && config.source.port_range.is_none()
