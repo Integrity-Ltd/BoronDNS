@@ -3318,26 +3318,38 @@ async fn refresh_zone_from_primaries_with_outcome(
                             TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                             plan.max_transfer_ingest_bytes,
                         )
-                        .with_transfer_source(transfer_source)
-                        .with_parse_options(plan.parse_options),
+                        .with_transfer_source(transfer_source),
                         context.ixfr_timeout,
                         context.tcp_connect_timeout,
                     )
                     .await
                     {
                         Ok(IxfrResponse::Updated(snapshot)) => {
-                            context.metrics.record_ixfr_succeeded();
                             let snapshot: Arc<ZoneSnapshot> = Arc::from(snapshot);
-                            let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone());
-                            let serial = metadata.serial;
-                            info!(
-                                zone = %plan.origin,
-                                %primary,
-                                ?serial,
-                                reason = %context.reason,
-                                "IXFR completed"
-                            );
-                            return RefreshZoneOutcome::updated(snapshot, metadata);
+                            match zones.insert_snapshot_arc_for_transfer(snapshot.clone()) {
+                                Ok(metadata) => {
+                                    context.metrics.record_ixfr_succeeded();
+                                    let serial = metadata.serial;
+                                    info!(
+                                        zone = %plan.origin,
+                                        %primary,
+                                        ?serial,
+                                        reason = %context.reason,
+                                        "IXFR completed"
+                                    );
+                                    return RefreshZoneOutcome::updated(snapshot, metadata);
+                                }
+                                Err(error) => {
+                                    context.metrics.record_ixfr_failed();
+                                    warn!(
+                                        zone = %plan.origin,
+                                        %primary,
+                                        %error,
+                                        reason = %context.reason,
+                                        "IXFR publication failed; falling back to AXFR"
+                                    );
+                                }
+                            }
                         }
                         Ok(IxfrResponse::Current) => {
                             context.metrics.record_ixfr_succeeded();
@@ -3402,8 +3414,7 @@ async fn refresh_zone_from_primaries_with_outcome(
             TransferSession::new(
                 TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 plan.max_transfer_ingest_bytes,
-            )
-            .with_parse_options(plan.parse_options),
+            ),
             transfer_source,
             context.axfr_timeout,
             context.tcp_connect_timeout,
@@ -3411,18 +3422,34 @@ async fn refresh_zone_from_primaries_with_outcome(
         .await
         {
             Ok(snapshot) => {
-                context.metrics.record_axfr_succeeded();
                 let snapshot = Arc::new(snapshot);
-                let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone());
-                let serial = metadata.serial;
-                info!(
-                    zone = %plan.origin,
-                    %primary,
-                    ?serial,
-                    reason = %context.reason,
-                    "AXFR completed"
-                );
-                return RefreshZoneOutcome::updated(snapshot, metadata);
+                match zones.insert_snapshot_arc_for_transfer(snapshot.clone()) {
+                    Ok(metadata) => {
+                        context.metrics.record_axfr_succeeded();
+                        let serial = metadata.serial;
+                        info!(
+                            zone = %plan.origin,
+                            %primary,
+                            ?serial,
+                            reason = %context.reason,
+                            "AXFR completed"
+                        );
+                        return RefreshZoneOutcome::updated(snapshot, metadata);
+                    }
+                    Err(error) => {
+                        last_failure_cause = Some(format!(
+                            "AXFR publication failed for primary {primary}: {error}"
+                        ));
+                        context.metrics.record_axfr_failed();
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            %error,
+                            reason = %context.reason,
+                            "AXFR publication failed"
+                        );
+                    }
+                }
             }
             Err(error) => {
                 last_failure_cause = Some(format!("AXFR failed for primary {primary}: {error}"));

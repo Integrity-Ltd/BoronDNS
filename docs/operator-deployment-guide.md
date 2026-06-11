@@ -198,7 +198,6 @@ and are included in `--dump-config` output:
 - `ODS_LOGGING_MAX_ENTRY_LENGTH_BYTES`
 - `ODS_TSIG_FUDGE_SECONDS`
 - `ODS_TRANSFER_REQUIRE_TSIG`
-- `ODS_TRANSFER_ACCEPT_OUT_OF_ZONE_GLUE`
 - `ODS_EDNS_EXTENDED_DNS_ERRORS`
 - `ODS_LIMITS_MAX_TRANSFER_INGEST_BYTES`
 - `ODS_LIMITS_ZSM_MAX_INTERVAL_SECS`
@@ -288,8 +287,6 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   fudge value.
 - `[transfer]`: process-wide transfer policy. `require_tsig = true` makes
   startup fail if a configured static zone lacks `tsig_key`.
-  `accept_out_of_zone_glue = true` is an off-by-default compatibility setting
-  for primaries that emit out-of-zone A/AAAA glue in transfer streams.
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, UDP packet I/O, and
   zone-state timing limits. `udp_batch_size` defaults to 1, preserving the
   ordinary one-datagram-at-a-time socket path; raise it only with retained

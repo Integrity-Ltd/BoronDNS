@@ -86,7 +86,7 @@ explicit team decision rather than implicit endorsement.
 | NSEC3 iteration count cap (RFC 9276 / BCP 236) | §4.13, ODS-FR-DNSSEC-014 | Add as defence against CPU amplification | **Resolved (v0.9): added; ODS-FR-DNSSEC-014, ODS-IF-CONF-015** |
 | DNAME synthesis name-length overflow (RFC 6672 §5.3.1) | §4.2, ODS-FR-QRY-014 / ODS-FR-QRY-025 | Specify YXDOMAIN response | **Resolved (v0.9): specified; ODS-FR-QRY-025** |
 | DNAME multiplicity at the same owner (RFC 6672 §2.4) | §4.6, ODS-FR-AXFR-026 | Reject at ingest | **Resolved (v0.9): specified; ODS-FR-AXFR-026** |
-| Out-of-zone glue tolerance (compatibility option) | §4.6, ODS-FR-AXFR-025; §6.2, ODS-IF-CONF-016 | Add optional, off-by-default tolerance | **Resolved (v0.9): added; ODS-FR-AXFR-025, ODS-IF-CONF-016** |
+| Out-of-zone glue tolerance (compatibility option) | §4.6, ODS-FR-AXFR-025; §6.2, ODS-IF-CONF-016 | Do not add tolerance without a published-zone representation and E2E tests | **Resolved (v0.9.1): removed candidate option; strict out-of-zone owner rejection remains, and ODS-FR-AXFR-025 now requires fail-closed publication validation** |
 | Environment-variable override re-validation gap | §6.2, ODS-IF-CONF-014 | Re-run validator after override | **Resolved (v0.9): specified; ODS-IF-CONF-014** |
 | XoT interoperability coverage against BIND 9 | §7.2, ODS-VER-003 | Add BIND 9 to XoT row of matrix | **Resolved (v0.9): added; ODS-VER-003** |
 | CHAOS class self-identification | §4.21, ODS-FR-CHAS-001..006; §6.2, ODS-IF-CONF-018 | Add conservative, opt-in CH/TXT `version.bind` and `id.server` profile | **Resolved (v0.9.1): specified as an opt-in CH/TXT profile by ODS-FR-CHAS-001..006 and ODS-IF-CONF-018; implementation evidence belongs in the verification ledger and interop scripts** |

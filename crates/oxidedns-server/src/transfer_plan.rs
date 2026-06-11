@@ -5,7 +5,7 @@ use std::{
 };
 
 use oxidedns_core::{
-    ServerConfig, axfr,
+    ServerConfig,
     catalog::{CatalogMemberTransfer, CatalogMemberTransport},
     config::{CatalogZoneConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
     dns::DomainName,
@@ -22,7 +22,6 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) tsig_key: Option<Arc<TsigKey>>,
     pub(crate) tsig_fudge_seconds: u16,
     pub(crate) max_transfer_ingest_bytes: u64,
-    pub(crate) parse_options: axfr::TransferParseOptions,
     pub(crate) transfer_sources: Vec<SocketAddr>,
 }
 
@@ -42,7 +41,6 @@ impl ZoneTransferPlan {
             tsig_key: self.tsig_key.clone(),
             tsig_fudge_seconds: self.tsig_fudge_seconds,
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
-            parse_options: self.parse_options,
             transfer_sources: self.transfer_sources.clone(),
         }
     }
@@ -84,9 +82,6 @@ impl TransferPlan {
                 &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
-                axfr::TransferParseOptions {
-                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
-                },
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -98,9 +93,6 @@ impl TransferPlan {
                 &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
-                axfr::TransferParseOptions {
-                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
-                },
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -110,9 +102,6 @@ impl TransferPlan {
                 &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
-                axfr::TransferParseOptions {
-                    accept_out_of_zone_glue: config.transfer.accept_out_of_zone_glue,
-                },
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
@@ -250,7 +239,6 @@ fn transfer_plan_from_zone_config(
     tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
-    parse_options: axfr::TransferParseOptions,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -275,7 +263,6 @@ fn transfer_plan_from_zone_config(
         tsig_key,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
-        parse_options,
         transfer_sources: transfer_sources.to_vec(),
     })
 }
@@ -285,7 +272,6 @@ fn transfer_plan_from_catalog_zone_config(
     tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
-    parse_options: axfr::TransferParseOptions,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -302,7 +288,6 @@ fn transfer_plan_from_catalog_zone_config(
         tsig_keys,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
-        parse_options,
         transfer_sources,
         primary_start_index,
     )
@@ -313,7 +298,6 @@ fn transfer_plan_from_catalog_member_config(
     tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
-    parse_options: axfr::TransferParseOptions,
     transfer_sources: &[SocketAddr],
     primary_start_index: &impl Fn(usize) -> Result<usize, getrandom::Error>,
 ) -> Result<ZoneTransferPlan, RuntimeError> {
@@ -330,7 +314,6 @@ fn transfer_plan_from_catalog_member_config(
         tsig_keys,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
-        parse_options,
         transfer_sources,
         primary_start_index,
     )

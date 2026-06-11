@@ -11,7 +11,7 @@ use crate::dns::{
     AnyResponseMode, DEFAULT_MAX_CNAME_CHAIN, DomainName, LookupResult, LookupTermination,
     RecordType,
 };
-use crate::zone_image::ZoneImage;
+use crate::zone_image::{ZoneImage, ZoneImageBuildError};
 
 // ODS-NFR-MAINT-004 principal functional requirement references for the
 // in-memory authoritative zone store:
@@ -1338,8 +1338,12 @@ impl ZoneStore {
     /// This is for transfer/catalog control paths that need to publish the
     /// snapshot and retain a handle for follow-up control work without cloning
     /// the full old layout.
-    pub fn insert_snapshot_arc_for_transfer(&self, snapshot: Arc<ZoneSnapshot>) -> ZoneMetadata {
-        self.replace_snapshot(snapshot, false).control_metadata()
+    pub fn insert_snapshot_arc_for_transfer(
+        &self,
+        snapshot: Arc<ZoneSnapshot>,
+    ) -> Result<ZoneMetadata, ZoneImageBuildError> {
+        self.try_replace_snapshot(snapshot, false)
+            .map(|entry| entry.control_metadata())
     }
 
     pub fn remove_zone(&self, origin: &DomainName) -> bool {
@@ -1526,6 +1530,15 @@ impl ZoneStore {
         snapshot: Arc<ZoneSnapshot>,
         force_hidden: bool,
     ) -> Arc<ZoneStoreEntry> {
+        self.try_replace_snapshot(snapshot, force_hidden)
+            .expect("active zone image compiles")
+    }
+
+    fn try_replace_snapshot(
+        &self,
+        snapshot: Arc<ZoneSnapshot>,
+        force_hidden: bool,
+    ) -> Result<Arc<ZoneStoreEntry>, ZoneImageBuildError> {
         let key = snapshot.origin.canonical_key();
         let _publish_guard = self
             .publish_lock
@@ -1534,10 +1547,10 @@ impl ZoneStore {
         let current = self.zones.load_full();
         let hidden = force_hidden || current.get(&key).is_some_and(|entry| entry.hidden);
         let mut next = current.as_ref().clone();
-        let entry = Arc::new(ZoneStoreEntry::new(key.clone(), snapshot, hidden));
+        let entry = Arc::new(ZoneStoreEntry::try_new(key.clone(), snapshot, hidden)?);
         next.insert(key.clone(), entry.clone());
         self.zones.store(Arc::new(next));
-        entry
+        Ok(entry)
     }
 
     fn set_hidden(&self, origin: &DomainName, hidden: bool) {
@@ -1792,18 +1805,20 @@ fn canonical_reverse_label_key_with_prefixes(
 }
 
 impl ZoneStoreEntry {
-    fn new(origin_key: String, snapshot: Arc<ZoneSnapshot>, hidden: bool) -> Self {
+    fn try_new(
+        origin_key: String,
+        snapshot: Arc<ZoneSnapshot>,
+        hidden: bool,
+    ) -> Result<Self, ZoneImageBuildError> {
         let image = if snapshot.state == ZoneState::Active {
-            Some(Arc::new(
-                ZoneImage::compile(&snapshot).expect("active zone image compiles"),
-            ))
+            Some(Arc::new(ZoneImage::compile(&snapshot)?))
         } else {
             None
         };
         let shape = (snapshot.state == ZoneState::Active).then(|| snapshot.shape_summary());
         let shape_histograms =
             (snapshot.state == ZoneState::Active).then(|| snapshot.shape_histogram_summary());
-        Self {
+        Ok(Self {
             origin: snapshot.origin.clone(),
             origin_label_count: snapshot.origin.label_count(),
             origin_key: Arc::from(origin_key),
@@ -1816,7 +1831,7 @@ impl ZoneStoreEntry {
             shape,
             shape_histograms,
             hidden,
-        }
+        })
     }
 
     fn metadata(&self) -> ZoneMetadata {
@@ -2129,6 +2144,57 @@ mod tests {
             .find(|candidate| candidate.bucket == bucket)
             .map(|candidate| candidate.count)
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn transfer_publication_rejects_uncompilable_snapshot_without_replacing_active_zone() {
+        let origin = DomainName::from_absolute_str("example.test.").unwrap();
+        let outside = DomainName::from_absolute_str("ns1.provider.test.").unwrap();
+        let store = ZoneStore::new();
+        store.insert_snapshot(ZoneSnapshot::active(
+            origin.clone(),
+            Some(1),
+            vec![Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata()],
+            )],
+        ));
+        let rejected = Arc::new(ZoneSnapshot::active(
+            origin.clone(),
+            Some(2),
+            vec![
+                Rrset::new(
+                    origin.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    outside,
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 53]],
+                ),
+            ],
+        ));
+
+        let error = store
+            .insert_snapshot_arc_for_transfer(rejected)
+            .expect_err("transfer publication rejects uncompilable snapshot");
+
+        assert!(matches!(error, ZoneImageBuildError::OutOfZoneOwner { .. }));
+        assert_eq!(
+            store
+                .exact_zone_control_metadata(&origin)
+                .expect("previous active zone remains published")
+                .serial,
+            Some(1)
+        );
     }
 
     #[test]

@@ -190,11 +190,6 @@ pub enum IxfrResponse {
     Current,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TransferParseOptions {
-    pub accept_out_of_zone_glue: bool,
-}
-
 pub fn build_axfr_query(qid: u16, zone_apex: &DomainName, qclass: u16) -> Vec<u8> {
     build_query(qid, zone_apex, RecordType::Axfr as u16, qclass)
 }
@@ -309,30 +304,7 @@ pub fn parse_axfr_response(
     qclass: u16,
     messages: &[Vec<u8>],
 ) -> Result<ZoneSnapshot, AxfrError> {
-    parse_axfr_response_with_options(
-        qid,
-        zone_apex,
-        qclass,
-        messages,
-        TransferParseOptions::default(),
-    )
-}
-
-pub fn parse_axfr_response_with_options(
-    qid: u16,
-    zone_apex: &DomainName,
-    qclass: u16,
-    messages: &[Vec<u8>],
-    options: TransferParseOptions,
-) -> Result<ZoneSnapshot, AxfrError> {
-    parse_axfr_response_with_question(
-        qid,
-        zone_apex,
-        qclass,
-        RecordType::Axfr as u16,
-        messages,
-        options,
-    )
+    parse_axfr_response_with_question(qid, zone_apex, qclass, RecordType::Axfr as u16, messages)
 }
 
 pub fn axfr_response_message_apex_soa_count(
@@ -385,7 +357,6 @@ fn parse_axfr_response_with_question(
     qclass: u16,
     qtype: u16,
     messages: &[Vec<u8>],
-    options: TransferParseOptions,
 ) -> Result<ZoneSnapshot, AxfrError> {
     if messages.is_empty() {
         return Err(AxfrError::EmptyResponse);
@@ -431,7 +402,7 @@ fn parse_axfr_response_with_question(
             let (record, consumed) = parse_record(message, offset)?;
             offset += consumed;
 
-            validate_record_scope(&record, zone_apex, qclass, options)?;
+            validate_record_scope(&record, zone_apex, qclass)?;
 
             if record.rr_type == RecordType::Soa as u16 {
                 match &initial_soa {
@@ -463,7 +434,7 @@ fn parse_axfr_response_with_question(
     if !complete {
         return Err(AxfrError::MissingTerminatingSoa);
     }
-    validate_zone_record_set(zone_apex, &zone_records, options)?;
+    validate_zone_record_set(zone_apex, &zone_records)?;
 
     Ok(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -515,24 +486,6 @@ pub fn parse_ixfr_response(
     current_zone: &ZoneSnapshot,
     messages: &[Vec<u8>],
 ) -> Result<IxfrResponse, IxfrError> {
-    parse_ixfr_response_with_options(
-        qid,
-        zone_apex,
-        qclass,
-        current_zone,
-        messages,
-        TransferParseOptions::default(),
-    )
-}
-
-pub fn parse_ixfr_response_with_options(
-    qid: u16,
-    zone_apex: &DomainName,
-    qclass: u16,
-    current_zone: &ZoneSnapshot,
-    messages: &[Vec<u8>],
-    options: TransferParseOptions,
-) -> Result<IxfrResponse, IxfrError> {
     let current_soa = current_zone
         .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
@@ -569,7 +522,7 @@ pub fn parse_ixfr_response_with_options(
             let (record, consumed) =
                 parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
             offset += consumed;
-            validate_record_scope(&record, zone_apex, qclass, options).map_err(ixfr_scope_error)?;
+            validate_record_scope(&record, zone_apex, qclass).map_err(ixfr_scope_error)?;
             answers.push(record);
         }
     }
@@ -592,20 +545,13 @@ pub fn parse_ixfr_response_with_options(
     }
 
     if answers[1].rr_type == RecordType::Soa as u16 {
-        return apply_ixfr_incremental(zone_apex, qclass, current_zone, &answers, options);
+        return apply_ixfr_incremental(zone_apex, qclass, current_zone, &answers);
     }
 
-    parse_axfr_response_with_question(
-        qid,
-        zone_apex,
-        qclass,
-        RecordType::Ixfr as u16,
-        messages,
-        options,
-    )
-    .map(Box::new)
-    .map(IxfrResponse::Updated)
-    .map_err(IxfrError::Axfr)
+    parse_axfr_response_with_question(qid, zone_apex, qclass, RecordType::Ixfr as u16, messages)
+        .map(Box::new)
+        .map(IxfrResponse::Updated)
+        .map_err(IxfrError::Axfr)
 }
 
 fn apply_ixfr_incremental(
@@ -613,7 +559,6 @@ fn apply_ixfr_incremental(
     qclass: u16,
     current_zone: &ZoneSnapshot,
     answers: &[ResourceRecord],
-    options: TransferParseOptions,
 ) -> Result<IxfrResponse, IxfrError> {
     let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
     let final_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
@@ -665,7 +610,7 @@ fn apply_ixfr_incremental(
     if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
         return Err(IxfrError::BrokenSoaChain);
     }
-    validate_zone_record_set(zone_apex, &records, options).map_err(IxfrError::Axfr)?;
+    validate_zone_record_set(zone_apex, &records).map_err(IxfrError::Axfr)?;
 
     Ok(IxfrResponse::Updated(Box::new(ZoneSnapshot::active(
         zone_apex.clone(),
@@ -962,7 +907,6 @@ fn validate_record_scope(
     record: &ResourceRecord,
     zone_apex: &DomainName,
     qclass: u16,
-    options: TransferParseOptions,
 ) -> Result<(), AxfrError> {
     if record.class != qclass {
         return Err(AxfrError::ClassMismatch);
@@ -975,24 +919,9 @@ fn validate_record_scope(
     }
     validate_known_rdata(record)?;
     if !record.owner.is_equal_or_subdomain_of(zone_apex) {
-        if options.accept_out_of_zone_glue && is_out_of_zone_address_record(record) {
-            warn!(
-                category = "transfer",
-                event = "out_of_zone_glue_accepted",
-                zone = %zone_apex,
-                owner = %record.owner,
-                rr_type = record.rr_type,
-                "accepted out-of-zone A/AAAA glue record during transfer"
-            );
-            return Ok(());
-        }
         return Err(AxfrError::OutOfZoneOwner);
     }
     Ok(())
-}
-
-fn is_out_of_zone_address_record(record: &ResourceRecord) -> bool {
-    record.rr_type == RecordType::A as u16 || record.rr_type == RecordType::Aaaa as u16
 }
 
 fn validate_soa_answer_scope(
@@ -1319,7 +1248,6 @@ fn skip_character_string(rdata: &[u8], offset: usize) -> Result<usize, AxfrError
 fn validate_zone_record_set(
     zone_apex: &DomainName,
     records: &[ResourceRecord],
-    _options: TransferParseOptions,
 ) -> Result<(), AxfrError> {
     validate_exact_apex_soa(zone_apex, records)?;
     validate_apex_ns(zone_apex, records)?;
@@ -1458,6 +1386,7 @@ impl From<DnsParseError> for AxfrError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::zone_image::ZoneImage;
     use crate::{
         dns::RecordType,
         zone::{SoaTimers, ZoneSnapshot, ZoneState},
@@ -3590,68 +3519,23 @@ mod tests {
     }
 
     #[test]
-    fn accepts_out_of_zone_a_and_aaaa_glue_when_enabled() {
+    fn accepted_axfr_snapshot_compiles_for_publication() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let a = record(
-            "ns1.provider.test.",
+            "www.example.test.",
             RecordType::A as u16,
             vec![192, 0, 2, 10],
         );
-        let aaaa = record(
-            "ns1.provider.test.",
-            RecordType::Aaaa as u16,
-            vec![0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-        );
 
-        let snapshot = parse_axfr_response_with_options(
+        let snapshot = parse_axfr_response(
             0x1234,
             &apex,
             1,
-            &[axfr_message(
-                0x1234,
-                vec![soa.clone(), apex_ns(), a, aaaa, soa],
-            )],
-            TransferParseOptions {
-                accept_out_of_zone_glue: true,
-            },
+            &[axfr_message(0x1234, vec![soa.clone(), apex_ns(), a, soa])],
         )
-        .expect("out-of-zone A/AAAA glue is accepted when configured");
+        .expect("accepted AXFR parses");
 
-        assert!(
-            !snapshot
-                .offline_oracle()
-                .lookup(
-                    &DomainName::from_absolute_str("ns1.provider.test.").unwrap(),
-                    RecordType::A as u16,
-                    1,
-                )
-                .answers
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn rejects_out_of_zone_non_address_record_even_when_glue_enabled() {
-        let apex = DomainName::from_absolute_str("example.test.").unwrap();
-        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
-        let txt = record(
-            "outside.test.",
-            RecordType::Txt as u16,
-            vec![3, b'b', b'a', b'd'],
-        );
-
-        let error = parse_axfr_response_with_options(
-            0x1234,
-            &apex,
-            1,
-            &[axfr_message(0x1234, vec![soa.clone(), txt, soa])],
-            TransferParseOptions {
-                accept_out_of_zone_glue: true,
-            },
-        )
-        .expect_err("only A/AAAA out-of-zone glue is accepted");
-
-        assert_eq!(error, AxfrError::OutOfZoneOwner);
+        ZoneImage::compile(&snapshot).expect("accepted AXFR snapshot compiles for publication");
     }
 }

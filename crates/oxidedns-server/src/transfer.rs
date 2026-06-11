@@ -698,13 +698,12 @@ async fn transfer_ixfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_ixfr_response_with_options(
+                return axfr::parse_ixfr_response(
                     qid,
                     zone_apex,
                     qclass,
                     current_zone,
                     &verified_messages,
-                    session.parse_options,
                 )
                 .map_err(TransferError::Ixfr);
             }
@@ -731,14 +730,7 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
         messages.push(message);
 
-        match axfr::parse_ixfr_response_with_options(
-            qid,
-            zone_apex,
-            qclass,
-            current_zone,
-            &messages,
-            session.parse_options,
-        ) {
+        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages) {
             Ok(_) => {
                 match maybe_verify_tcp_transfer_messages(
                     &messages,
@@ -746,13 +738,12 @@ async fn transfer_ixfr_from_primary_inner(
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
-                        return axfr::parse_ixfr_response_with_options(
+                        return axfr::parse_ixfr_response(
                             qid,
                             zone_apex,
                             qclass,
                             current_zone,
                             &verified_messages,
-                            session.parse_options,
                         )
                         .map_err(TransferError::Ixfr);
                     }
@@ -806,7 +797,6 @@ pub(crate) struct TransferSession<'a> {
     tsig: TransferTsig<'a>,
     max_ingest_bytes: u64,
     transfer_source: Option<SocketAddr>,
-    parse_options: axfr::TransferParseOptions,
 }
 
 impl<'a> TransferSession<'a> {
@@ -815,7 +805,6 @@ impl<'a> TransferSession<'a> {
             tsig,
             max_ingest_bytes,
             transfer_source: None,
-            parse_options: axfr::TransferParseOptions::default(),
         }
     }
 
@@ -825,11 +814,6 @@ impl<'a> TransferSession<'a> {
 
     pub(crate) fn with_transfer_source(mut self, transfer_source: Option<SocketAddr>) -> Self {
         self.transfer_source = transfer_source;
-        self
-    }
-
-    pub(crate) fn with_parse_options(mut self, parse_options: axfr::TransferParseOptions) -> Self {
-        self.parse_options = parse_options;
         self
     }
 }
@@ -961,14 +945,8 @@ async fn transfer_axfr_from_primary_inner(
                     session.tsig.key,
                     query.request_mac.as_deref(),
                 )?;
-                return axfr::parse_axfr_response_with_options(
-                    qid,
-                    zone_apex,
-                    qclass,
-                    &verified_messages,
-                    session.parse_options,
-                )
-                .map_err(TransferError::Axfr);
+                return axfr::parse_axfr_response(qid, zone_apex, qclass, &verified_messages)
+                    .map_err(TransferError::Axfr);
             }
             Err(source) => {
                 return Err(TransferError::Io {
@@ -1010,12 +988,11 @@ async fn transfer_axfr_from_primary_inner(
                     query.request_mac.as_deref(),
                 ) {
                     Ok(verified_messages) => {
-                        return axfr::parse_axfr_response_with_options(
+                        return axfr::parse_axfr_response(
                             qid,
                             zone_apex,
                             qclass,
                             &verified_messages,
-                            session.parse_options,
                         )
                         .map_err(TransferError::Axfr);
                     }

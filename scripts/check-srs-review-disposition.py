@@ -205,7 +205,8 @@ REVIEW_BASELINE_SCOPE = {
         ],
         "source_needles": [
             "pub fn build_axfr_query",
-            "parse_axfr_response_with_options",
+            "parse_axfr_response",
+            "insert_snapshot_arc_for_transfer",
             "ZoneRefreshRegistry",
             "NotifyAuthority",
             "maybe_sign_transfer_query",

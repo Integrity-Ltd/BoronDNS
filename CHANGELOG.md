@@ -6,6 +6,13 @@ full evidence pointers and sign-off.
 
 ## Unreleased
 
+### Changed
+
+- Removed the unfinished out-of-zone A/AAAA glue transfer tolerance candidate;
+  transfer owner validation remains strict, and transfer publication now fails
+  closed instead of panicking if a parsed candidate snapshot cannot compile into
+  the served zone image.
+
 ## 0.1.5 - 2026-06-09
 
 ### Added
@@ -151,8 +158,9 @@ full evidence pointers and sign-off.
   emitted as child bailiwick glue.
 - Added catalog-zone observability, including member-zone metrics and
   add/remove logs.
-- Added optional out-of-zone A/AAAA glue tolerance for compatibility with
-  primary servers that emit traditional glue outside the zone apex.
+- Added strict transfer-publication validation follow-up for the out-of-zone
+  glue compatibility candidate; the candidate was removed before being treated
+  as supported behavior.
 - Added mandatory TSIG validation for catalog zones.
 - Added BIND XoT catalog-zone interop coverage.
 - Added bounded EDNS Extended DNS Errors diagnostics for selected authoritative

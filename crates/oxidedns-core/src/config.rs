@@ -474,14 +474,6 @@ impl ServerConfig {
             });
         }
 
-        if self.transfer.accept_out_of_zone_glue {
-            warnings.push(ConfigWarning {
-                code: "out_of_zone_glue_tolerance_enabled",
-                parameter: "transfer.accept_out_of_zone_glue".to_owned(),
-                message: "out-of-zone A/AAAA glue tolerance is enabled; strict transfer-owner validation is relaxed for compatibility".to_owned(),
-            });
-        }
-
         if self.dnssec.nsec3_max_iterations > default_nsec3_max_iterations() {
             warnings.push(ConfigWarning {
                 code: "nsec3_iterations_large",
@@ -652,8 +644,6 @@ impl TsigConfig {
 pub struct TransferConfig {
     #[serde(default)]
     pub require_tsig: bool,
-    #[serde(default)]
-    pub accept_out_of_zone_glue: bool,
 }
 
 impl TransferConfig {
@@ -3788,7 +3778,6 @@ mod tests {
 
                 [transfer]
                 require_tsig = false
-                accept_out_of_zone_glue = true
 
                 [[zones]]
                 name = "example.test."
@@ -3798,13 +3787,32 @@ mod tests {
         .expect("valid config");
 
         assert!(!config.transfer.require_tsig);
-        assert!(config.transfer.accept_out_of_zone_glue);
         assert!(
             config
                 .configuration_warnings()
                 .iter()
-                .any(|warning| warning.code == "out_of_zone_glue_tolerance_enabled")
+                .any(|warning| warning.code == "zone_transfer_unauthenticated")
         );
+    }
+
+    #[test]
+    fn rejects_removed_out_of_zone_glue_transfer_setting() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [transfer]
+                accept_out_of_zone_glue = true
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("removed out-of-zone glue tolerance knob must be rejected");
+
+        assert!(error.to_string().contains("accept_out_of_zone_glue"));
     }
 
     #[test]

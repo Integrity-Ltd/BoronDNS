@@ -606,33 +606,6 @@ fn explicit_transfer_primaries_feed_notify_authority_and_transfer_plan() {
 }
 
 #[test]
-fn transfer_plan_carries_out_of_zone_glue_tolerance() {
-    let config = ServerConfig::from_toml_str(
-        r#"
-                [server]
-                listen_udp = ["127.0.0.1:5300"]
-                listen_tcp = []
-
-                [transfer]
-                accept_out_of_zone_glue = true
-
-                [[zones]]
-                name = "example.test."
-                primaries = ["192.0.2.53:53"]
-            "#,
-    )
-    .expect("valid config");
-    let zone = DomainName::from_absolute_str("example.test.").unwrap();
-
-    let plan = TransferPlan::from_config(&config)
-        .expect("transfer plan")
-        .get(&zone)
-        .expect("transfer plan");
-
-    assert!(plan.parse_options.accept_out_of_zone_glue);
-}
-
-#[test]
 fn tsig_secret_file_feeds_notify_authority_and_transfer_plan() {
     let secret_file = unique_test_path("oxidedns-server-tsig-secret", "key");
     std::fs::write(&secret_file, b"dG9wc2VjcmV0\n").expect("write TSIG secret file");
