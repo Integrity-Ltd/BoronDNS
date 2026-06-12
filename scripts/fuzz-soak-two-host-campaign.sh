@@ -393,7 +393,7 @@ collect_plan() {
         mkdir -p "$evidence_dir/remotes/$safe_host/journal"
         tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r row_host target _ remote_target_dir systemd_unit command_file; do
             [[ "$row_host" == "$host" ]] || continue
-            ssh -o BatchMode=yes "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
+            ssh -n -o BatchMode=yes "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
                 >"$evidence_dir/remotes/$safe_host/journal/$systemd_unit.log" 2>&1 || true
         done
     done
