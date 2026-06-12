@@ -248,6 +248,9 @@ Wants=network-online.target
 Type=simple
 User=codex
 WorkingDirectory=$remote_repo
+Environment=PATH=/home/codex/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=CARGO_HOME=/home/codex/.cargo
+Environment=RUSTUP_HOME=/home/codex/.rustup
 ExecStart=$remote_runner
 Restart=no
 StandardOutput=journal
