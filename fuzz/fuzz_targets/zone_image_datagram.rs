@@ -1,40 +1,34 @@
 #![no_main]
 
-use std::{
-    hint::black_box,
-    sync::{Arc, OnceLock},
-};
+use std::{hint::black_box, sync::OnceLock};
 
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image, AnswerOptions,
-        DatagramAction, DomainName, Header, RecordType, Transport, DEFAULT_MAX_UDP_PAYLOAD,
+        DatagramAction, DomainName, Header, RecordType, Transport, ZoneImageProvider,
+        DEFAULT_MAX_UDP_PAYLOAD, default_zone_image_provider,
     },
-    zone::{PublishedZone, Rrset, ZoneSnapshot, ZoneStore},
-    zone_image::ZoneImage,
+    zone::{Rrset, ZoneSnapshot, ZoneStore},
 };
 
 const QID: u16 = 0x5a11;
 const QCLASS_IN: u16 = 1;
 
 fuzz_target!(|data: &[u8]| {
-    let image = zone_image();
-    let provider = |_zone: &PublishedZone| Arc::clone(image);
-
-    exercise_packet(data, data, &provider);
+    exercise_packet(data, data, &default_zone_image_provider);
 
     let packet = shaped_query_packet(data);
     if let Ok(header) = Header::parse(&packet) {
         black_box(header.qdcount);
     }
-    exercise_packet(&packet, data, &provider);
+    exercise_packet(&packet, data, &default_zone_image_provider);
 });
 
 fn exercise_packet(
     packet: &[u8],
     data: &[u8],
-    provider: &dyn Fn(&PublishedZone) -> Arc<ZoneImage>,
+    provider: ZoneImageProvider<'_>,
 ) {
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
@@ -65,14 +59,6 @@ fn zones() -> &'static ZoneStore {
         let store = ZoneStore::new();
         store.insert_snapshot(zone_snapshot(apex));
         store
-    })
-}
-
-fn zone_image() -> &'static Arc<ZoneImage> {
-    static IMAGE: OnceLock<Arc<ZoneImage>> = OnceLock::new();
-    IMAGE.get_or_init(|| {
-        let apex = DomainName::from_absolute_str("zoneimage.test.").expect("static apex is valid");
-        Arc::new(ZoneImage::compile(&zone_snapshot(apex)).expect("static zone image compiles"))
     })
 }
 
