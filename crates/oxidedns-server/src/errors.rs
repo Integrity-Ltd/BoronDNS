@@ -121,6 +121,9 @@ pub enum TransferError {
     #[error("failed to sign transfer query with TSIG: {0}")]
     Tsig(#[from] TsigError),
 
+    #[error("configured TSIG key {key_name} is not loaded in the current secret snapshot")]
+    MissingTsigKey { key_name: String },
+
     #[error("XoT TLS configuration for primary {addr} is invalid: {message}")]
     XotConfig { addr: SocketAddr, message: String },
 

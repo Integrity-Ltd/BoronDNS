@@ -64,8 +64,9 @@ Outside this Engineering MVP catalog slice:
   default catalog profile follows RFC 9432 member-name semantics rather than
   silently rejecting IANA Special-Use names or wildcard labels.
 - Carrying plaintext TSIG secrets, XoT trust anchors, client certificates, or
-  client keys inside the catalog. TSIG secrets and TLS trust/client material
-  remain local static configuration.
+  client keys inside the catalog. Catalog data carries references only. TSIG
+  secrets and TLS trust/client material remain local startup configuration or
+  reloadable filesystem secret-store snapshots.
 
 ## Configuration
 
@@ -136,6 +137,19 @@ entries without `tsig_key`. XoT plus tight source-address allowlisting should
 be used where catalog confidentiality is also required; TSIG authenticates the
 transfer but does not encrypt the catalog contents.
 
+Catalog member transfers inherit `member_tsig_key` when set, otherwise
+`tsig_key`, and are therefore TSIG-authenticated by default. For legacy customer
+primary deployments that can only serve private-network AXFR without TSIG/XoT,
+operators may set
+`catalog_zones.member_transfer_policy.unsigned_axfr = "allow-legacy-private"`.
+That local policy disables the catalog-key fallback for member transfers when
+`member_tsig_key` is unset. OxideDNS rejects unsigned member AXFR plans whose
+primary address is not private, including catalog-advertised primary overrides.
+The policy does not relax the mandatory TSIG requirement for the catalog
+transfer itself. If a member advertises an explicit TSIG key name in the
+extension records, OxideDNS still treats that as an authenticated transfer
+reference and fails closed if the key material is unavailable.
+
 For ordinary static zones, `[transfer].require_tsig = true` enables fail-closed
 startup validation for missing `tsig_key` references. The unsupported
 illustrative name `zones.require_tsig` is intentionally not part of the schema;
@@ -144,9 +158,11 @@ the implemented schema keeps this as process-wide transfer policy under
 
 Configuration remains static for the catalog zone definitions themselves.
 Changing the set of configured catalogs, their catalog/member primaries, TSIG
-references, or the `serve_catalog_zone` policy requires a process restart. The
-member-zone set inside a catalog is dynamic and follows successful catalog
-transfers.
+reference fields, or the `serve_catalog_zone` policy requires a process restart.
+The member-zone set inside a catalog is dynamic and follows successful catalog
+transfers. When `[secret_store]` is configured, new or rotated TSIG keys and
+named XoT profiles can be loaded from the filesystem snapshot and then used by
+catalog member references without restarting OxideDNS.
 
 Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
 10,000 per `ODS-NFR-SEC-013`. If a catalog lists more member zones than the

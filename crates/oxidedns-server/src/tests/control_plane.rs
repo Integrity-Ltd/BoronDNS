@@ -93,12 +93,13 @@ async fn control_plane_operations_pause_resume_and_queue_refresh() {
     let origin = DomainName::from_absolute_str("alpha.test.").unwrap();
     zones.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
     let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+    let secrets = SecretManager::empty_for_test();
     let pause = ControlPlaneOperation {
         id: 1,
         zone_name: "alpha.test.".to_owned(),
         operation: ControlPlaneOperationKind::Pause,
     };
-    execute_control_plane_operation(&pause, &zones, &refresh_tx, &[])
+    execute_control_plane_operation(&pause, &zones, &refresh_tx, &[], &secrets)
         .expect("pause operation should apply");
     assert!(zones.is_hidden(&origin));
 
@@ -107,7 +108,7 @@ async fn control_plane_operations_pause_resume_and_queue_refresh() {
         zone_name: "alpha.test.".to_owned(),
         operation: ControlPlaneOperationKind::Resume,
     };
-    execute_control_plane_operation(&resume, &zones, &refresh_tx, &[])
+    execute_control_plane_operation(&resume, &zones, &refresh_tx, &[], &secrets)
         .expect("resume operation should apply");
     assert!(!zones.is_hidden(&origin));
     let refresh = refresh_rx.recv().await.expect("resume refresh request");
@@ -122,6 +123,7 @@ async fn control_plane_republish_feed_refreshes_catalog_zones() {
     let catalog = DomainName::from_absolute_str("catalog.test.").unwrap();
     zones.insert_loading_hidden(catalog.clone());
     let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+    let secrets = SecretManager::empty_for_test();
     let operation = ControlPlaneOperation {
         id: 3,
         zone_name: "alpha.test.".to_owned(),
@@ -133,6 +135,7 @@ async fn control_plane_republish_feed_refreshes_catalog_zones() {
         &zones,
         &refresh_tx,
         std::slice::from_ref(&catalog),
+        &secrets,
     )
     .expect("republish-feed operation should refresh catalog");
 
@@ -201,6 +204,7 @@ async fn control_plane_retry_rotate_and_empty_feed_paths() {
     let origin = DomainName::from_absolute_str("alpha.test.").unwrap();
     zones.insert_snapshot(ZoneSnapshot::active(origin.clone(), Some(1), Vec::new()));
     let (refresh_tx, mut refresh_rx) = mpsc::channel(4);
+    let secrets = SecretManager::empty_for_test();
 
     for (id, operation) in [
         (10, ControlPlaneOperationKind::Retry),
@@ -215,6 +219,7 @@ async fn control_plane_retry_rotate_and_empty_feed_paths() {
             &zones,
             &refresh_tx,
             &[],
+            &secrets,
         )
         .expect("operation queues refresh");
         let refresh = refresh_rx.recv().await.expect("refresh request");
@@ -231,6 +236,7 @@ async fn control_plane_retry_rotate_and_empty_feed_paths() {
         &zones,
         &refresh_tx,
         &[],
+        &secrets,
     )
     .expect("empty feed operation is a no-op");
     assert!(refresh_rx.try_recv().is_err());
@@ -240,6 +246,7 @@ async fn control_plane_retry_rotate_and_empty_feed_paths() {
 fn control_plane_operation_rejects_invalid_and_unknown_zones() {
     let zones = ZoneStore::new();
     let (refresh_tx, _refresh_rx) = mpsc::channel(1);
+    let secrets = SecretManager::empty_for_test();
 
     let invalid = execute_control_plane_operation(
         &ControlPlaneOperation {
@@ -250,6 +257,7 @@ fn control_plane_operation_rejects_invalid_and_unknown_zones() {
         &zones,
         &refresh_tx,
         &[],
+        &secrets,
     )
     .expect_err("invalid zone name is rejected");
     assert!(invalid.contains("operation zone_name not absolute is not absolute"));
@@ -263,8 +271,8 @@ fn control_plane_operation_rejects_invalid_and_unknown_zones() {
         &zones,
         &refresh_tx,
         &[],
+        &secrets,
     )
     .expect_err("unknown zone is rejected");
     assert!(unknown.contains("zone missing.test. is not configured"));
 }
-

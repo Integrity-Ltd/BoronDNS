@@ -585,7 +585,9 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
         if let Some(transfer_error) = cause.downcast_ref::<TransferError>() {
             return match transfer_error {
                 TransferError::ReadTlsFile { .. } => EX_IOERR,
-                TransferError::XotConfig { .. } => EX_CONFIG_INVALID,
+                TransferError::XotConfig { .. } | TransferError::MissingTsigKey { .. } => {
+                    EX_CONFIG_INVALID
+                }
                 TransferError::BindUdp { .. } | TransferError::BindTcp { .. } => EX_CANTCREAT,
                 TransferError::Io { .. } => EX_IOERR,
                 TransferError::ConnectTcp { .. }

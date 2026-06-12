@@ -7,9 +7,11 @@ use std::{
 use oxidedns_core::{
     ServerConfig,
     catalog::{CatalogMemberTransfer, CatalogMemberTransport},
-    config::{CatalogZoneConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig},
+    config::{
+        CatalogZoneConfig, TransferPrimaryConfig, TransferTransportConfig, ZoneConfig,
+        is_legacy_private_primary,
+    },
     dns::DomainName,
-    tsig::TsigKey,
 };
 
 use crate::RuntimeError;
@@ -19,7 +21,7 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) origin: DomainName,
     pub(crate) qclass: u16,
     pub(crate) primaries: Vec<TransferPrimaryConfig>,
-    pub(crate) tsig_key: Option<Arc<TsigKey>>,
+    pub(crate) tsig_key_name: Option<DomainName>,
     pub(crate) tsig_fudge_seconds: u16,
     pub(crate) max_transfer_ingest_bytes: u64,
     pub(crate) transfer_sources: Vec<SocketAddr>,
@@ -38,7 +40,7 @@ impl ZoneTransferPlan {
             origin,
             qclass: self.qclass,
             primaries: self.primaries.clone(),
-            tsig_key: self.tsig_key.clone(),
+            tsig_key_name: self.tsig_key_name.clone(),
             tsig_fudge_seconds: self.tsig_fudge_seconds,
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
             transfer_sources: self.transfer_sources.clone(),
@@ -50,7 +52,6 @@ impl ZoneTransferPlan {
 pub(crate) struct TransferPlan {
     zones_by_key: Arc<Mutex<HashMap<String, ZoneTransferPlan>>>,
     catalog_member_templates_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
-    tsig_keys_by_name: Arc<HashMap<String, Arc<TsigKey>>>,
 }
 
 impl TransferPlan {
@@ -62,24 +63,11 @@ impl TransferPlan {
         config: &ServerConfig,
         primary_start_index: impl Fn(usize) -> Result<usize, getrandom::Error>,
     ) -> Result<Self, RuntimeError> {
-        let tsig_keys = config
-            .tsig_keys
-            .iter()
-            .map(|key| {
-                let secret = key
-                    .secret_base64()
-                    .expect("configuration validation rejects invalid TSIG key secret sources");
-                let key = TsigKey::from_base64(&key.name, &key.algorithm, &secret)
-                    .expect("configuration validation rejects invalid TSIG keys");
-                (key.name.canonical_key(), Arc::new(key))
-            })
-            .collect::<HashMap<_, _>>();
         let mut zones_by_key = HashMap::new();
         let mut catalog_member_templates_by_key = HashMap::new();
         for zone in &config.zones {
             let plan = transfer_plan_from_zone_config(
                 zone,
-                &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
                 &config.interfaces.transfer,
@@ -90,7 +78,6 @@ impl TransferPlan {
         for catalog_zone in &config.catalog_zones {
             let plan = transfer_plan_from_catalog_zone_config(
                 catalog_zone,
-                &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
                 &config.interfaces.transfer,
@@ -99,7 +86,6 @@ impl TransferPlan {
             let catalog_key = plan.origin.canonical_key();
             let member_template = transfer_plan_from_catalog_member_config(
                 catalog_zone,
-                &tsig_keys,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
                 &config.interfaces.transfer,
@@ -112,7 +98,6 @@ impl TransferPlan {
         Ok(Self {
             zones_by_key: Arc::new(Mutex::new(zones_by_key)),
             catalog_member_templates_by_key: Arc::new(catalog_member_templates_by_key),
-            tsig_keys_by_name: Arc::new(tsig_keys),
         })
     }
 
@@ -204,11 +189,16 @@ impl TransferPlan {
         }
 
         if let Some(tsig_key_name) = &transfer_override.tsig_key_name {
-            plan.tsig_key = Some(
-                self.tsig_keys_by_name
-                    .get(&tsig_key_name.canonical_key())?
-                    .clone(),
-            );
+            plan.tsig_key_name = Some(tsig_key_name.clone());
+        }
+
+        if plan.tsig_key_name.is_none()
+            && plan.primaries.iter().any(|primary| {
+                primary.transport == TransferTransportConfig::Tcp
+                    && !is_legacy_private_primary(primary.addr.ip())
+            })
+        {
+            return None;
         }
 
         Some(plan)
@@ -236,7 +226,6 @@ impl TransferPlan {
 
 fn transfer_plan_from_zone_config(
     zone: &ZoneConfig,
-    tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
     transfer_sources: &[SocketAddr],
@@ -244,13 +233,10 @@ fn transfer_plan_from_zone_config(
 ) -> Result<ZoneTransferPlan, RuntimeError> {
     let origin = DomainName::from_absolute_str(&zone.name)
         .expect("configuration validation rejects invalid zone names");
-    let tsig_key = zone.tsig_key.as_ref().map(|name| {
+    let tsig_key_name = zone.tsig_key.as_ref().map(|name| {
         let name = DomainName::from_absolute_str(name)
             .expect("configuration validation rejects invalid TSIG key references");
-        tsig_keys
-            .get(&name.canonical_key())
-            .expect("configuration validation rejects unknown TSIG key references")
-            .clone()
+        name
     });
     let primaries = zone.transfer_targets();
     let primary_start =
@@ -260,7 +246,7 @@ fn transfer_plan_from_zone_config(
         origin,
         qclass: 1,
         primaries,
-        tsig_key,
+        tsig_key_name,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
         transfer_sources: transfer_sources.to_vec(),
@@ -269,7 +255,6 @@ fn transfer_plan_from_zone_config(
 
 fn transfer_plan_from_catalog_zone_config(
     zone: &CatalogZoneConfig,
-    tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
     transfer_sources: &[SocketAddr],
@@ -285,7 +270,6 @@ fn transfer_plan_from_catalog_zone_config(
     };
     transfer_plan_from_zone_config(
         &zone,
-        tsig_keys,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
         transfer_sources,
@@ -295,7 +279,6 @@ fn transfer_plan_from_catalog_zone_config(
 
 fn transfer_plan_from_catalog_member_config(
     zone: &CatalogZoneConfig,
-    tsig_keys: &HashMap<String, Arc<TsigKey>>,
     tsig_fudge_seconds: u16,
     max_transfer_ingest_bytes: u64,
     transfer_sources: &[SocketAddr],
@@ -311,7 +294,6 @@ fn transfer_plan_from_catalog_member_config(
     };
     transfer_plan_from_zone_config(
         &zone,
-        tsig_keys,
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
         transfer_sources,

@@ -507,8 +507,10 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
             ),
-            notify_authority: NotifyAuthority::from_config(&config),
+            notify_authority: NotifyAuthority::from_config_for_test(&config),
             refresh_tx: mpsc::channel(1).0.downgrade(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
         },
         IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
         metrics.clone(),
@@ -609,8 +611,10 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
                 std::time::Duration::ZERO,
                 std::time::Duration::ZERO,
             ),
-            notify_authority: NotifyAuthority::from_config(&config),
+            notify_authority: NotifyAuthority::from_config_for_test(&config),
             refresh_tx: mpsc::channel(1).0.downgrade(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
         },
         IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
         RuntimeMetrics::new(),
@@ -691,6 +695,7 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -750,7 +755,7 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
     let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let plan = transfer_plan.get(&apex).expect("zone transfer plan");
-    assert!(plan.tsig_key.is_some());
+    assert!(plan.tsig_key_name.is_some());
     assert_eq!(plan.tsig_fudge_seconds, 30);
     let zones = ZoneStore::new();
     let metrics = RuntimeMetrics::new();
@@ -763,6 +768,7 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -812,7 +818,7 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
     let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
     let apex = DomainName::from_absolute_str("example.test.").unwrap();
     let plan = transfer_plan.get(&apex).expect("zone transfer plan");
-    assert!(plan.tsig_key.is_some());
+    assert!(plan.tsig_key_name.is_some());
     assert_eq!(plan.primaries[0].transport, TransferTransportConfig::Xot);
     let zones = ZoneStore::new();
     zones.insert_loading(apex);
@@ -826,6 +832,7 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -858,6 +865,7 @@ fn xot_transfer_logs_tls_session_establishment_and_close() {
                     addr: primary,
                     transport: TransferTransportConfig::Xot,
                     server_name: Some("primary.example.test".to_owned()),
+                    xot_profile: None,
                     trust_anchors: vec![trust_anchor],
                     client_cert: None,
                     client_key: None,
@@ -954,6 +962,7 @@ async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(50),
             axfr_timeout: std::time::Duration::from_millis(50),
             tcp_connect_timeout: std::time::Duration::from_millis(50),
@@ -1012,6 +1021,7 @@ async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1069,6 +1079,7 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1131,6 +1142,7 @@ async fn refresh_xot_rejects_tls12_only_primary_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1189,6 +1201,7 @@ async fn refresh_xot_rejects_untrusted_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1246,6 +1259,7 @@ async fn refresh_xot_rejects_expired_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1306,6 +1320,7 @@ async fn refresh_xot_uses_configured_client_certificate() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -1361,6 +1376,7 @@ async fn refresh_xot_rejects_missing_client_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
             tcp_connect_timeout: std::time::Duration::from_millis(100),
@@ -1658,6 +1674,7 @@ async fn refresh_axfr_uses_xot_tls_transport() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -1728,6 +1745,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -1745,6 +1763,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
@@ -1961,4 +1980,3 @@ async fn runtime_initial_load_honors_transfer_concurrency_limit() {
         ZoneState::Active
     );
 }
-

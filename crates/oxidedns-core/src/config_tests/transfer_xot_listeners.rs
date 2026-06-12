@@ -370,6 +370,33 @@
     }
 
     #[test]
+    fn parses_xot_transfer_primary_with_secret_store_profile() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [secret_store]
+                path = "/etc/oxidedns/secrets.d/current"
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                xot_profile = "customer-xot"
+            "#,
+        )
+        .expect("xot_profile provides TLS material at runtime");
+
+        let target = &config.zones[0].transfer_primaries[0];
+        assert_eq!(target.xot_profile.as_deref(), Some("customer-xot"));
+        assert!(target.trust_anchors.is_empty());
+    }
+
+    #[test]
     fn rejects_xot_transfer_primary_with_unpaired_client_key_material() {
         let error = ServerConfig::from_toml_str(
             r#"

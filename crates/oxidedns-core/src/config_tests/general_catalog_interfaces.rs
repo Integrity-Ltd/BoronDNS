@@ -272,6 +272,105 @@
     }
 
     #[test]
+    fn default_catalog_member_transfer_policy_inherits_catalog_tsig() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "catalog-key."
+            "#,
+        )
+        .expect("valid default catalog member transfer policy");
+
+        let catalog = &config.catalog_zones[0];
+        assert_eq!(catalog.catalog_tsig_key_name(), Some("catalog-key."));
+        assert_eq!(catalog.member_tsig_key_name(), Some("catalog-key."));
+        assert_eq!(
+            catalog.member_transfer_policy.unsigned_axfr,
+            CatalogMemberUnsignedAxfrPolicy::Deny
+        );
+    }
+
+    #[test]
+    fn legacy_catalog_member_transfer_policy_allows_unsigned_member_axfr_only() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+
+                [catalog_zones.member_transfer_policy]
+                unsigned_axfr = "allow-legacy-private"
+            "#,
+        )
+        .expect("valid legacy unsigned member transfer policy");
+
+        let catalog = &config.catalog_zones[0];
+        assert_eq!(catalog.catalog_tsig_key_name(), Some("catalog-key."));
+        assert_eq!(catalog.member_tsig_key_name(), None);
+        assert!(catalog.member_transfer_allows_unsigned_axfr());
+        assert!(
+            config
+                .configuration_warnings()
+                .iter()
+                .any(|warning| warning.code == "catalog_member_unsigned_axfr_allowed")
+        );
+    }
+
+    #[test]
+    fn legacy_catalog_member_transfer_policy_rejects_public_unsigned_member_primary() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["203.0.113.53:53"]
+                catalog_tsig_key = "catalog-key."
+
+                [catalog_zones.member_transfer_policy]
+                unsigned_axfr = "allow-legacy-private"
+            "#,
+        )
+        .expect_err("legacy unsigned member AXFR is private-only");
+
+        assert!(
+            error
+                .to_string()
+                .contains("allows legacy unsigned member AXFR")
+        );
+    }
+
+    #[test]
     fn rejects_split_catalog_policy_with_missing_member_key() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -944,6 +1043,31 @@
     }
 
     #[test]
+    fn secret_store_allows_runtime_tsig_key_references() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [secret_store]
+                path = "/etc/oxidedns/secrets.d/current"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "runtime-key."
+            "#,
+        )
+        .expect("secret-store-backed TSIG reference is valid at config parse time");
+
+        assert_eq!(
+            config.secret_store.path.as_deref(),
+            Some(std::path::Path::new("/etc/oxidedns/secrets.d/current"))
+        );
+        assert_eq!(config.zones[0].tsig_key.as_deref(), Some("runtime-key."));
+    }
+
+    #[test]
     fn rejects_removed_out_of_zone_glue_transfer_setting() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -962,4 +1086,3 @@
 
         assert!(error.to_string().contains("accept_out_of_zone_glue"));
     }
-

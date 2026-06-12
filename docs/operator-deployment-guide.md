@@ -306,8 +306,21 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   transfer and process the catalog without answering DNS queries for the catalog
   zone itself. `max_member_zones` defaults to 10,000 and caps the number of
   catalog-derived member zones accepted from that catalog.
-- `[[tsig_keys]]`: static TSIG keys referenced by zones. Each key uses exactly
+- `catalog_zones.member_transfer_policy.unsigned_axfr`: local legacy policy for
+  catalog-derived member transfers. The default `deny` keeps member transfers
+  TSIG-authenticated by inheriting `member_tsig_key` or `tsig_key`.
+  `allow-legacy-private` disables that fallback when `member_tsig_key` is unset,
+  so members can AXFR from trusted private primaries that cannot yet serve
+  TSIG/XoT. OxideDNS rejects unsigned member AXFR to non-private primary
+  addresses. Catalog transfers themselves still require TSIG.
+- `[[tsig_keys]]`: startup TSIG keys referenced by zones. Each key uses exactly
   one of inline `secret` or filesystem `secret_file`.
+- `[secret_store]`: optional reloadable plaintext filesystem secret snapshot.
+  The configured `path` points at a directory containing `secrets.toml`.
+  Snapshot entries can provide TSIG keys and named XoT profiles so catalog
+  members can refer to key/profile names without raw secrets in DNS data.
+  On Unix, the manifest and TSIG `secret_file` inputs must not be
+  world-readable.
 - `[control_plane.telemetry]`: optional outbound callback to an external
   control plane for transfer success, skipped/current, and failure reports.
 - `[control_plane.operations]`: optional outbound polling of external durable
@@ -328,15 +341,17 @@ The mapping is intentionally small:
 - `pause`: hide the zone from public query serving while leaving it available to
   control-plane transfer/catalog logic.
 - `resume`: show the zone again and enqueue a refresh.
-- `republish_feed`: refresh configured RFC 9432 catalog zones so catalog-member
-  changes are reacquired from the primary.
-- `rotate_tsig`: enqueue a refresh for the named zone, exercising the node's
-  currently configured TSIG material.
+- `republish_feed`: reload the configured secret-store snapshot, then refresh
+  configured RFC 9432 catalog zones so catalog-member changes are reacquired
+  from the primary.
+- `rotate_tsig`: reload the configured secret-store snapshot, then enqueue a
+  refresh for the named zone, exercising the node's current TSIG material.
 
-Listener addresses, static primary definitions, local TSIG secrets, and TLS
-trust/client material remain static. Changes to those files still require a
-process restart; operation polling is for durable control commands, not a
-general runtime reconfiguration interface.
+Listener addresses, static primary definitions, transfer policy, and configured
+secret-store roots remain static. Updating TSIG keys or named XoT profiles
+inside the configured secret-store snapshot does not require a process restart
+when the reload succeeds. Operation polling is still not a general runtime
+reconfiguration interface.
 
 See [Catalog Zone support based on RFC 9432](catalog-zone-rfc9432.md)
 for the catalog-specific behavior, security boundary, and PowerDNS primary
@@ -671,14 +686,22 @@ skip as missing evidence for that environment, not as a successful interop run.
 
 TSIG:
 
-- Configure TSIG keys in `[[tsig_keys]]` and reference them from zones with
-  `tsig_key`.
+- Configure startup TSIG keys in `[[tsig_keys]]` or reloadable TSIG keys in the
+  `[secret_store]` snapshot, then reference them from zones/catalog members with
+  `tsig_key` names.
+- Catalog transfers are always TSIG-authenticated. Catalog member transfers are
+  TSIG-authenticated by default; unsigned member AXFR requires explicit
+  per-catalog `member_transfer_policy.unsigned_axfr = "allow-legacy-private"`
+  and is limited to private legacy primary addresses.
 - Supported configured algorithms include `hmac-sha1`, `hmac-sha256`,
   `hmac-sha384`, and `hmac-sha512`.
 - HMAC-MD5 TSIG is intentionally rejected.
 - TSIG secrets are base64 encoded. Configure exactly one of inline `secret` or
   `secret_file`; when using `secret_file`, the file must be readable by the
-  OxideDNS process and must not be world-readable.
+  OxideDNS process and must not be world-readable. Secret-store manifests may
+  also contain inline TSIG material and must not be world-readable on Unix.
+  Secret-store reload builds and validates a complete new snapshot before
+  replacing the live one; failed reloads retain the previous snapshot.
 - System time must be synchronized within the TSIG fudge window; this is the
   clock synchronisation requirement of `ODS-NFR-REL-007`, and signed
   transfers and NOTIFY messages can fail authentication.
@@ -689,12 +712,15 @@ XoT:
   for client queries and does not receive NOTIFY-over-TLS.
 - Use explicit `[[zones.transfer_primaries]]` entries with
   `transport = "xot"`.
-- XoT entries require `server_name` and at least one readable trust anchor.
+- XoT entries require `server_name` and either inline/file TLS material in the
+  transfer primary entry or an `xot_profile` name resolved from `[secret_store]`.
 - Optional mutual TLS uses `client_cert` with exactly one of `client_key` file
   path or inline `client_key_pem`. `--dump-config` preserves `client_key` paths
   and redacts inline `client_key_pem` material.
 - Runtime validation checks TLS file readability and parses trust anchors,
   client certificates, and client private keys before binding listeners.
+  Secret-store reload performs the same validation for named XoT profiles before
+  replacing the live snapshot.
 - TLS failures do not fall back to cleartext TCP for an XoT primary.
 - XoT logs record TLS session establishment, handshake failure, ALPN failure,
   and session close. Successful establishment includes peer IP, SNI, negotiated
@@ -872,7 +898,7 @@ current operator-relevant limitations are:
   for the current private-repository phase.
 - Health and metrics are plain HTTP and unauthenticated. They should not be
   exposed on untrusted networks.
-- There is no runtime configuration reload, no administrative API,
+- There is no general runtime configuration reload, no administrative API,
   no primary-mode service, no dynamic update, no client-query DoT, and no
   NOTIFY-over-TLS listener. Catalog-zone member discovery is supported through
   RFC 9432 transfers and remains observable through logs and metrics rather than

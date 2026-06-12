@@ -183,6 +183,8 @@ async fn observability_api_reports_catalog_membership() {
                     member_tsig_key: None,
                     serve_catalog_zone: false,
                     member_transfer_extensions: false,
+                    member_transfer_policy:
+                        oxidedns_core::config::CatalogMemberTransferPolicyConfig::default(),
                     max_member_zones: 10_000,
                 },
             },
@@ -1326,4 +1328,3 @@ async fn runtime_serves_queries_and_notify_on_configured_dns_interface() {
 
     server.abort();
 }
-

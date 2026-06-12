@@ -4660,9 +4660,11 @@ The retained `target/zone-image-bench/wire-record-fixed-fields.tsv` run carries
 prepared TYPE/CLASS/TTL bytes through `ZoneImageWireRecord`, so the generic
 packet encoder writes those bytes directly instead of rebuilding scalar
 network-order fields. Stored RRsets reuse the already-existing immutable RRset
-wire arena for those bytes, keeping `ImageRrset` at 44 bytes and preserving the
-hot-layout budget; synthesized records store their fixed bytes when they are
-pushed into the plan. The checker artifact
+wire arena for those bytes, preserving the then-current persistent
+`ImageRrset` layout; synthesized records store their fixed bytes when they are
+pushed into the plan. The later retained compiled-RRset fixed-field slice moves
+that metadata into `ImageRrset` and defines the current 48-byte layout. The
+checker artifact
 `target/zone-image-bench/wire-record-fixed-fields-check.tsv` passed with zero
 validation and packet mismatches, byte parity, mixed planning ratio `0.147`,
 mixed wire ratio `0.167`, mixed packet ratio `1.024`, hot packet ratio

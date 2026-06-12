@@ -1444,7 +1444,7 @@ async fn udp_tsig_authenticated_query_bypasses_rrl_and_signs_response() {
             dns_cookie_secrets: dns_cookie_secret_store_for_test(),
             dns_cookie: dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
             cookie_prefix_metrics: cookie_prefix_metrics_for_test(),
-            notify_authority: NotifyAuthority::from_config(&config),
+            notify_authority: NotifyAuthority::from_config_for_test(&config),
             notify_refresh: NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
             notify_refresh_tx: notify_refresh_tx(),
             notify_log_limiter: notify_log_limiter_for_test(),
@@ -1612,4 +1612,3 @@ async fn udp_invalid_dns_cookie_remains_rrl_subject() {
     assert_eq!(snapshot.dns_cookie_invalid_server, 2);
     assert_eq!(snapshot.dns_cookie_badcookie, 0);
 }
-

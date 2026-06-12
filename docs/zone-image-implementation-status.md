@@ -566,10 +566,11 @@ layout can be phased out.
   TYPE/CLASS/TTL bytes through `ZoneImageWireRecord`, so the generic packet
   encoder writes those bytes without rebuilding scalar network-order fields.
   Stored RRsets reuse the already-existing immutable RRset wire arena for those
-  bytes, keeping `ImageRrset` at 44 bytes and preserving the retained hot-layout
-  budget; generated records store their fixed bytes when synthesized. Focused
-  RDATA/fixed-field tests, filtered ZoneImage tests, invariant audit, and check
-  build passed. The checker passed at
+  bytes, preserving the then-current persistent `ImageRrset` layout; generated
+  records store their fixed bytes when synthesized. The later retained
+  compiled-RRset fixed-field slice moves that metadata into `ImageRrset` and
+  defines the current 48-byte layout. Focused RDATA/fixed-field tests, filtered
+  ZoneImage tests, invariant audit, and check build passed. The checker passed at
   `target/zone-image-bench/wire-record-fixed-fields-check.tsv` with zero
   validation/packet mismatches, byte parity, mixed planning ratio `0.147`,
   mixed wire ratio `0.167`, mixed packet ratio `1.024`, hot packet ratio

@@ -21,7 +21,7 @@ fn signed_notify_is_verified_stripped_and_response_signed() {
             "#,
     )
     .expect("valid config");
-    let authority = NotifyAuthority::from_config(&config);
+    let authority = NotifyAuthority::from_config_for_test(&config);
     let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
     let signed_notify = key
@@ -342,4 +342,3 @@ async fn drain_task_set_aborts_after_grace_period() {
     assert!(!drain_task_set(&mut tasks, std::time::Duration::from_millis(5), "test task").await);
     assert!(tasks.is_empty());
 }
-

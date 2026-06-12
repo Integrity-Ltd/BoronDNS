@@ -1049,15 +1049,18 @@ dependencies = [
  "oxidedns-core",
  "rcgen",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
+ "toml",
  "tracing",
  "x509-parser",
  "xdp",
+ "zeroize",
 ]
 
 [[package]]

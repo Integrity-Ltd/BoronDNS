@@ -1008,7 +1008,7 @@ fn tsig_notify_authority() -> (NotifyAuthority, TsigKey) {
     )
     .expect("valid config");
     (
-        NotifyAuthority::from_config(&config),
+        NotifyAuthority::from_config_for_test(&config),
         TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap(),
     )
 }

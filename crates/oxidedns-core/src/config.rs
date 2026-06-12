@@ -73,6 +73,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub transfer: TransferConfig,
     #[serde(default)]
+    pub secret_store: SecretStoreConfig,
+    #[serde(default)]
     pub limits: Limits,
     #[serde(default)]
     pub xdp: XdpConfig,
@@ -301,8 +303,10 @@ impl ServerConfig {
         self.rrl.validate()?;
         self.tsig.validate()?;
         self.transfer.validate()?;
+        self.secret_store.validate()?;
 
         let tsig_key_names = self.validate_tsig_keys()?;
+        let allow_runtime_tsig_keys = self.secret_store.enabled();
 
         for zone in &self.zones {
             zone.validate()?;
@@ -320,10 +324,12 @@ impl ServerConfig {
                     ))
                 })?;
                 if !tsig_key_names.contains(&key_name.canonical_key()) {
-                    return Err(ConfigError::Invalid(format!(
-                        "zone {} references unknown TSIG key {tsig_key}",
-                        zone.name
-                    )));
+                    if !allow_runtime_tsig_keys {
+                        return Err(ConfigError::Invalid(format!(
+                            "zone {} references unknown TSIG key {tsig_key}",
+                            zone.name
+                        )));
+                    }
                 }
             }
         }
@@ -343,10 +349,12 @@ impl ServerConfig {
                     ))
                 })?;
                 if !tsig_key_names.contains(&key_name.canonical_key()) {
-                    return Err(ConfigError::Invalid(format!(
-                        "catalog zone {} references unknown {field} {tsig_key}",
-                        catalog_zone.name
-                    )));
+                    if !allow_runtime_tsig_keys {
+                        return Err(ConfigError::Invalid(format!(
+                            "catalog zone {} references unknown {field} {tsig_key}",
+                            catalog_zone.name
+                        )));
+                    }
                 }
             }
         }
@@ -526,6 +534,18 @@ impl ServerConfig {
                     ),
                 });
             }
+            if catalog_zone.member_transfer_allows_unsigned_axfr()
+                && catalog_zone.member_tsig_key.is_none()
+            {
+                warnings.push(ConfigWarning {
+                    code: "catalog_member_unsigned_axfr_allowed",
+                    parameter: format!("catalog_zones.{}.member_transfer_policy.unsigned_axfr", catalog_zone.name),
+                    message: format!(
+                        "catalog zone {} allows legacy unsigned member AXFR when member_tsig_key is unset; catalog transfers remain TSIG-authenticated",
+                        catalog_zone.name
+                    ),
+                });
+            }
         }
 
         for key in &self.tsig_keys {
@@ -648,6 +668,30 @@ pub struct TransferConfig {
 
 impl TransferConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SecretStoreConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+}
+
+impl SecretStoreConfig {
+    pub fn enabled(&self) -> bool {
+        self.path.is_some()
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(path) = &self.path
+            && path.as_os_str().is_empty()
+        {
+            return Err(ConfigError::Invalid(
+                "secret_store.path must not be empty".to_owned(),
+            ));
+        }
         Ok(())
     }
 }
@@ -2125,6 +2169,8 @@ pub struct CatalogZoneConfig {
     pub serve_catalog_zone: bool,
     #[serde(default)]
     pub member_transfer_extensions: bool,
+    #[serde(default)]
+    pub member_transfer_policy: CatalogMemberTransferPolicyConfig,
     #[serde(default = "default_catalog_max_member_zones")]
     pub max_member_zones: usize,
 }
@@ -2205,7 +2251,17 @@ impl CatalogZoneConfig {
     }
 
     pub fn member_tsig_key_name(&self) -> Option<&str> {
-        self.member_tsig_key.as_deref().or(self.tsig_key.as_deref())
+        if let Some(member_tsig_key) = self.member_tsig_key.as_deref() {
+            return Some(member_tsig_key);
+        }
+        if self.member_transfer_policy.allows_unsigned_axfr() {
+            return None;
+        }
+        self.tsig_key.as_deref()
+    }
+
+    pub fn member_transfer_allows_unsigned_axfr(&self) -> bool {
+        self.member_transfer_policy.allows_unsigned_axfr()
     }
 
     fn tsig_key_references(&self) -> Vec<(&'static str, &str)> {
@@ -2220,6 +2276,10 @@ impl CatalogZoneConfig {
             references.push(("member_tsig_key", tsig_key));
         }
         references
+    }
+
+    pub fn tsig_key_references_for_runtime(&self) -> Vec<(&'static str, &str)> {
+        self.tsig_key_references()
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
@@ -2273,8 +2333,49 @@ impl CatalogZoneConfig {
                 self.name
             )));
         }
+        self.member_transfer_policy.validate(&self.name)?;
+        if self.member_transfer_allows_unsigned_axfr() && self.member_tsig_key_name().is_none() {
+            for primary in self.member_transfer_targets() {
+                if primary.transport == TransferTransportConfig::Tcp
+                    && !is_legacy_private_primary(primary.addr.ip())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "catalog zone {} allows legacy unsigned member AXFR, but member primary {} is not a private address",
+                        self.name, primary.addr
+                    )));
+                }
+            }
+        }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogMemberTransferPolicyConfig {
+    #[serde(default)]
+    pub unsigned_axfr: CatalogMemberUnsignedAxfrPolicy,
+}
+
+impl CatalogMemberTransferPolicyConfig {
+    pub fn allows_unsigned_axfr(self) -> bool {
+        matches!(
+            self.unsigned_axfr,
+            CatalogMemberUnsignedAxfrPolicy::AllowLegacyPrivate
+        )
+    }
+
+    fn validate(self, _catalog_name: &str) -> Result<(), ConfigError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CatalogMemberUnsignedAxfrPolicy {
+    #[default]
+    Deny,
+    AllowLegacyPrivate,
 }
 
 fn validate_catalog_transfer_group(
@@ -2294,6 +2395,13 @@ fn validate_catalog_transfer_group(
     Ok(())
 }
 
+pub fn is_legacy_private_primary(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(addr) => addr.is_private() || addr.is_loopback() || addr.is_link_local(),
+        IpAddr::V6(addr) => addr.is_unique_local() || addr.is_loopback(),
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransferPrimaryConfig {
@@ -2301,6 +2409,8 @@ pub struct TransferPrimaryConfig {
     #[serde(default)]
     pub transport: TransferTransportConfig,
     pub server_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xot_profile: Option<String>,
     #[serde(default)]
     pub trust_anchors: Vec<String>,
     pub client_cert: Option<String>,
@@ -2316,6 +2426,7 @@ impl fmt::Debug for TransferPrimaryConfig {
             .field("addr", &self.addr)
             .field("transport", &self.transport)
             .field("server_name", &self.server_name)
+            .field("xot_profile", &self.xot_profile)
             .field("trust_anchors", &self.trust_anchors)
             .field("client_cert", &self.client_cert)
             .field("client_key", &self.client_key)
@@ -2333,6 +2444,7 @@ impl TransferPrimaryConfig {
             addr,
             transport: TransferTransportConfig::Tcp,
             server_name: None,
+            xot_profile: None,
             trust_anchors: Vec::new(),
             client_cert: None,
             client_key: None,
@@ -2356,6 +2468,7 @@ impl TransferPrimaryConfig {
 
     fn validate_tcp(&self, zone_name: &str) -> Result<(), ConfigError> {
         if self.server_name.is_some()
+            || self.xot_profile.is_some()
             || !self.trust_anchors.is_empty()
             || self.client_cert.is_some()
             || self.client_key.is_some()
@@ -2382,6 +2495,26 @@ impl TransferPrimaryConfig {
                 self.addr
             ))
         })?;
+        if self.xot_profile.as_deref().is_some_and(str::is_empty) {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} has an empty xot_profile",
+                self.addr
+            )));
+        }
+        if self.xot_profile.is_some()
+            && (!self.trust_anchors.is_empty()
+                || self.client_cert.is_some()
+                || self.client_key.is_some()
+                || self.client_key_pem.is_some())
+        {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} must not mix xot_profile with XoT TLS material fields",
+                self.addr
+            )));
+        }
+        if self.xot_profile.is_some() {
+            return Ok(());
+        }
         if self.trust_anchors.is_empty() {
             return Err(ConfigError::Invalid(format!(
                 "zone {zone_name} XoT transfer primary {} requires at least one trust_anchors entry",

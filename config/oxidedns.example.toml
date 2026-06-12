@@ -231,6 +231,15 @@ zsm_loading_warning_threshold_secs = 3600
 #lease_seconds = 300
 #timeout_secs = 5
 
+#[secret_store]
+# Optional reloadable plaintext filesystem secret snapshot. OxideDNS reads
+# <path>/secrets.toml at startup and when a control-plane rotate_tsig or
+# republish_feed operation requests a reload. The snapshot may define
+# [[tsig_keys]] and [[xot_profiles]] entries; catalog data and zone config
+# reference those names only. On Unix, secrets.toml and TSIG secret_file inputs
+# must not be world-readable.
+#path = "/etc/oxidedns/secrets.d/current"
+
 [[zones]]
 # Zone apex in absolute DNS name form.
 name = "example.test."
@@ -255,6 +264,8 @@ notify_sources = ["192.0.2.53"]
 #transport = "xot"
 #server_name = "primary.example.test"
 #trust_anchors = ["/etc/oxidedns/xot-ca.pem"]
+# Or set xot_profile to resolve trust/client material from [secret_store].
+#xot_profile = "default-xot"
 #client_cert = "/etc/oxidedns/xot-client.pem"
 # Use exactly one of client_key or client_key_pem when client_cert is set.
 #client_key = "/etc/oxidedns/xot-client.key"
@@ -285,8 +296,16 @@ notify_sources = ["192.0.2.53"]
 # primaries.ext.<member>, _udns-xfr.<member>, and _udns-notify.<member> catalog
 # records. This carries addresses, ports, transport, server_name, TSIG key
 # names, and NOTIFY sources only; TSIG secrets and TLS trust material stay in
-# local static config.
+# static config or the reloadable secret store.
 #member_transfer_extensions = false
+# Local policy for catalog-derived member transfers. Default unsigned_axfr =
+# "deny" preserves member TSIG inheritance from member_tsig_key or tsig_key.
+# Set "allow-legacy-private" only for explicitly trusted private primary
+# addresses that cannot yet serve TSIG/XoT; OxideDNS rejects unsigned member
+# AXFR to non-private primary addresses, and catalog transfers themselves still
+# require TSIG.
+#[catalog_zones.member_transfer_policy]
+#unsigned_axfr = "deny"
 # Default: 10000. Cap catalog-derived member zones accepted from this catalog.
 #max_member_zones = 10000
 
@@ -297,3 +316,16 @@ notify_sources = ["192.0.2.53"]
 # server process and must not be world-readable.
 #secret = "c2VjcmV0LWtleQ=="
 #secret_file = "/etc/oxidedns/tsig-transfer-key.secret"
+
+# Example /etc/oxidedns/secrets.d/current/secrets.toml:
+#
+#[[tsig_keys]]
+#name = "customer-transfer-key."
+#algorithm = "hmac-sha256"
+#secret_file = "tsig/customer-transfer-key.secret"
+#
+#[[xot_profiles]]
+#name = "default-xot"
+#trust_anchors = ["xot/ca.pem"]
+#client_cert = "xot/client.pem"
+#client_key = "xot/client.key"

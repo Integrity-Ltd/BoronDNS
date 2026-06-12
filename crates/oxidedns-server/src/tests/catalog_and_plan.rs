@@ -38,7 +38,7 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
                 [[catalog_zones]]
                 name = "catalog.example."
                 catalog_primaries = ["192.0.2.53:53"]
-                member_primaries = ["198.51.100.53:53"]
+                member_primaries = ["10.0.0.53:53"]
                 notify_sources = ["198.51.100.54"]
                 catalog_tsig_key = "catalog-key."
                 member_tsig_key = "member-key."
@@ -77,7 +77,7 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
     );
-    let notify_authority = NotifyAuthority::from_config(&config);
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
     let (tx, mut rx) = mpsc::channel(1);
     let metadata = zone_metadata_for(&snapshot);
 
@@ -103,20 +103,19 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
             .iter()
             .map(|primary| primary.addr)
             .collect::<Vec<_>>(),
-        vec![SocketAddr::from((Ipv4Addr::new(198, 51, 100, 53), 53))]
+        vec![SocketAddr::from((Ipv4Addr::new(10, 0, 0, 53), 53))]
     );
     assert_eq!(
         member_plan
-            .tsig_key
+            .tsig_key_name
             .as_ref()
             .expect("member TSIG key")
-            .name
             .to_string(),
         "member-key."
     );
     assert!(notify_authority.is_authorized(&catalog_origin, 1, "192.0.2.53".parse().unwrap()));
     assert!(!notify_authority.is_authorized(&catalog_origin, 1, "198.51.100.53".parse().unwrap()));
-    assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.53".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&member_origin, 1, "10.0.0.53".parse().unwrap()));
     assert!(notify_authority.is_authorized(&member_origin, 1, "198.51.100.54".parse().unwrap()));
     assert!(!notify_authority.is_authorized(&member_origin, 1, "192.0.2.53".parse().unwrap()));
     assert_eq!(
@@ -135,6 +134,104 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let request = rx.recv().await.expect("member refresh request");
     assert_eq!(request.zone, member_origin);
     assert_eq!(request.reason, super::RefreshReason::Catalog);
+}
+
+#[test]
+fn legacy_catalog_member_transfer_policy_keeps_catalog_signed_but_members_unsigned() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+
+                [catalog_zones.member_transfer_policy]
+                unsigned_axfr = "allow-legacy-private"
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+
+    let catalog_plan = transfer_plan
+        .get(&catalog_origin)
+        .expect("catalog transfer plan");
+    assert_eq!(
+        catalog_plan
+            .tsig_key_name
+            .as_ref()
+            .expect("catalog TSIG key")
+            .to_string(),
+        "catalog-key."
+    );
+
+    let member_plan = transfer_plan
+        .catalog_member_plan(&catalog_origin, member_origin, None)
+        .expect("member transfer plan");
+    assert_eq!(
+        member_plan
+            .primaries
+            .iter()
+            .map(|primary| primary.addr)
+            .collect::<Vec<_>>(),
+        vec![SocketAddr::from((Ipv4Addr::new(10, 0, 0, 53), 53))]
+    );
+    assert!(member_plan.tsig_key_name.is_none());
+}
+
+#[test]
+fn legacy_catalog_member_transfer_policy_rejects_public_unsigned_catalog_override() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_transfer_extensions = true
+
+                [catalog_zones.member_transfer_policy]
+                unsigned_axfr = "allow-legacy-private"
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let transfer_override = oxidedns_core::catalog::CatalogMemberTransfer {
+        primaries: vec![oxidedns_core::catalog::CatalogMemberPrimary {
+            addr: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)),
+        }],
+        tsig_key_name: None,
+        xfr: None,
+        notify_sources: Vec::new(),
+    };
+
+    assert!(
+        transfer_plan
+            .catalog_member_plan(&catalog_origin, member_origin, Some(&transfer_override))
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -231,7 +328,7 @@ async fn catalog_snapshot_applies_opt_in_member_transfer_extension() {
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
     );
-    let notify_authority = NotifyAuthority::from_config(&config);
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
     let (tx, mut rx) = mpsc::channel(1);
     let metadata = zone_metadata_for(&snapshot);
 
@@ -260,10 +357,9 @@ async fn catalog_snapshot_applies_opt_in_member_transfer_extension() {
     );
     assert_eq!(
         member_plan
-            .tsig_key
+            .tsig_key_name
             .as_ref()
             .expect("override TSIG key")
-            .name
             .to_string(),
         "override-key."
     );
@@ -332,7 +428,7 @@ async fn catalog_snapshot_ignores_existing_catalog_zone_name_clash() {
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
     );
-    let notify_authority = NotifyAuthority::from_config(&config);
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
     let (tx, mut rx) = mpsc::channel(1);
     let metadata = zone_metadata_for(&snapshot);
 
@@ -419,7 +515,7 @@ async fn catalog_snapshot_enforces_member_zone_cap() {
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
     );
-    let notify_authority = NotifyAuthority::from_config(&config);
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
     let (tx, mut rx) = mpsc::channel(2);
     let metadata = zone_metadata_for(&snapshot);
 
@@ -485,7 +581,7 @@ fn notify_authority_allows_primaries_and_notify_sources() {
             "#,
     )
     .expect("valid config");
-    let authority = NotifyAuthority::from_config(&config);
+    let authority = NotifyAuthority::from_config_for_test(&config);
     let zone = DomainName::from_absolute_str("example.test.").unwrap();
 
     assert!(authority.is_authorized(&zone, 1, "192.0.2.53".parse().unwrap()));
@@ -516,7 +612,7 @@ fn explicit_transfer_primaries_feed_notify_authority_and_transfer_plan() {
     .expect("valid config");
     let zone = DomainName::from_absolute_str("example.test.").unwrap();
 
-    let authority = NotifyAuthority::from_config(&config);
+    let authority = NotifyAuthority::from_config_for_test(&config);
     assert!(authority.is_authorized(&zone, 1, "192.0.2.53".parse().unwrap()));
     assert!(authority.is_authorized(&zone, 1, "198.51.100.53".parse().unwrap()));
 
@@ -564,25 +660,15 @@ fn tsig_secret_file_feeds_notify_authority_and_transfer_plan() {
     let zone = DomainName::from_absolute_str("example.test.").unwrap();
     let key_name = DomainName::from_absolute_str("transfer-key.").unwrap();
 
-    let authority = NotifyAuthority::from_config(&config);
-    assert!(
-        authority
-            .tsig_keys_by_name
-            .contains_key(&key_name.canonical_key())
-    );
-    assert!(
-        authority
-            .tsig_keys_by_zone
-            .lock()
-            .expect("notify authority zone TSIG lock poisoned")
-            .contains_key(&zone.canonical_key())
-    );
+    let authority = NotifyAuthority::from_config_for_test(&config);
+    assert!(authority.tsig_key_by_name(&key_name).is_some());
+    assert!(authority.tsig_key_for_notify(&zone, 1).is_some());
 
     let plan = TransferPlan::from_config(&config)
         .expect("transfer plan")
         .get(&zone)
         .expect("zone transfer plan");
-    assert!(plan.tsig_key.is_some());
+    assert!(plan.tsig_key_name.is_some());
     let _ = std::fs::remove_file(secret_file);
 }
 
@@ -681,7 +767,7 @@ fn notify_authority_rejects_missing_required_tsig_with_badkey_response() {
             "#,
     )
     .expect("valid config");
-    let authority = NotifyAuthority::from_config(&config);
+    let authority = NotifyAuthority::from_config_for_test(&config);
     let packet = notify_packet(0x1234, "example.test.", RecordType::Soa as u16, 1);
 
     let prepared = prepare_notify_packet(&packet, &authority, "192.0.2.53".parse().unwrap());
@@ -718,7 +804,7 @@ fn ordinary_query_with_unknown_tsig_key_gets_badkey_response() {
             "#,
     )
     .expect("valid config");
-    let authority = NotifyAuthority::from_config(&config);
+    let authority = NotifyAuthority::from_config_for_test(&config);
     let unknown_key = TsigKey::from_base64("unknown-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
     let packet = query(b"\x03www\x07example\x04test\x00", RecordType::A as u16, 1);
     let signed = unknown_key
@@ -856,4 +942,3 @@ fn ordinary_query_outside_tsig_fudge_gets_badtime_response_with_server_time() {
     assert_eq!(tsig.error, TSIG_ERROR_BADTIME);
     assert_eq!(tsig.other_data.len(), 6);
 }
-

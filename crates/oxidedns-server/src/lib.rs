@@ -24,6 +24,7 @@ mod process_signals;
 mod rate_limit;
 mod resource_limits;
 mod runtime_status;
+mod secret_store;
 mod shutdown;
 mod std_udp_mmsg;
 mod std_udp_socket;
@@ -116,6 +117,7 @@ use rate_limit::{
     response_category, rrl_truncated_response,
 };
 use runtime_status::{RuntimeStatus, RuntimeStatusValue};
+use secret_store::SecretManager;
 use shutdown::{
     abort_task_set, drain_task_set, drain_tcp_connections, handle_runtime_task_result,
     wait_for_shutdown_signal,
@@ -225,6 +227,15 @@ impl Runtime {
         validate_file_descriptor_limit(&self.config)?;
         let run_as_user = privilege::configured_run_as_user(&self.config)?;
         tokio::pin!(shutdown_signal);
+        let secrets = SecretManager::from_config(&self.config)
+            .map_err(|error| RuntimeError::InvalidRuntimeConfig(error.to_string()))?;
+        let (tsig_key_count, xot_profile_count) = secrets.snapshot_counts();
+        info!(
+            category = "secret_store",
+            tsig_keys = tsig_key_count,
+            xot_profiles = xot_profile_count,
+            "loaded secret snapshot"
+        );
         let transfer_plan = TransferPlan::from_config(&self.config)?;
         let observability_auth = ObservabilityAuth::from_config(&self.config.observability)
             .map_err(|source| {
@@ -284,7 +295,7 @@ impl Runtime {
         let tcp_source_connections = Arc::new(Mutex::new(HashMap::new()));
         let shutdown_grace = Duration::from_secs(self.config.limits.graceful_shutdown_secs);
         let runtime_status = RuntimeStatus::new();
-        let notify_authority = NotifyAuthority::from_config(&self.config);
+        let notify_authority = NotifyAuthority::from_config(&self.config, secrets.clone());
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
         let notify_log_limiter = NotifyLogLimiter::new(Duration::from_secs(
@@ -378,6 +389,7 @@ impl Runtime {
                 refresh_registry: refresh_registry.clone(),
                 notify_authority: notify_authority.clone(),
                 refresh_tx: notify_refresh_tx.downgrade(),
+                secrets: secrets.clone(),
             },
             ixfr_cooldowns.clone(),
             metrics.clone(),
@@ -400,6 +412,7 @@ impl Runtime {
                 refresh_registry: refresh_registry.clone(),
                 notify_authority: notify_authority.clone(),
                 refresh_tx: notify_refresh_tx.downgrade(),
+                secrets: secrets.clone(),
             },
             ixfr_cooldowns.clone(),
             metrics.clone(),
@@ -435,6 +448,7 @@ impl Runtime {
                 self.zones.clone(),
                 notify_refresh_tx.clone(),
                 catalog_origins,
+                secrets.clone(),
             ));
         }
         for (listener, health_shutdown_rx) in bound_health_listeners {
@@ -656,8 +670,10 @@ impl Runtime {
                 manager: CatalogManager::from_config(&self.config),
                 transfer_plan: transfer_plan.clone(),
                 refresh_registry: refresh_registry.clone(),
-                notify_authority: NotifyAuthority::from_config(&self.config),
+                notify_authority: NotifyAuthority::from_config_for_test(&self.config),
                 refresh_tx: mpsc::channel(1).0.downgrade(),
+                secrets: SecretManager::from_config(&self.config)
+                    .expect("test configuration loads secret snapshot"),
             },
             ixfr_cooldowns.clone(),
             metrics.clone(),
@@ -733,6 +749,7 @@ struct CatalogRuntime {
     refresh_registry: ZoneRefreshRegistry,
     notify_authority: NotifyAuthority,
     refresh_tx: mpsc::WeakSender<RefreshRequest>,
+    secrets: SecretManager,
 }
 
 #[derive(Debug, Clone)]
@@ -1665,8 +1682,8 @@ fn dns_cookie_secret_store_from_config(
 #[derive(Debug, Clone)]
 struct NotifyAuthority {
     sources_by_zone: Arc<Mutex<HashMap<String, HashSet<IpAddr>>>>,
-    tsig_keys_by_name: Arc<HashMap<String, Arc<TsigKey>>>,
-    tsig_keys_by_zone: Arc<Mutex<HashMap<String, Arc<TsigKey>>>>,
+    secrets: SecretManager,
+    tsig_key_names_by_zone: Arc<Mutex<HashMap<String, DomainName>>>,
     tsig_fudge_seconds: u16,
 }
 
@@ -1674,29 +1691,17 @@ impl Default for NotifyAuthority {
     fn default() -> Self {
         Self {
             sources_by_zone: Arc::new(Mutex::new(HashMap::new())),
-            tsig_keys_by_name: Arc::new(HashMap::new()),
-            tsig_keys_by_zone: Arc::new(Mutex::new(HashMap::new())),
+            secrets: SecretManager::empty_for_test(),
+            tsig_key_names_by_zone: Arc::new(Mutex::new(HashMap::new())),
             tsig_fudge_seconds: DEFAULT_TSIG_FUDGE_SECS,
         }
     }
 }
 
 impl NotifyAuthority {
-    fn from_config(config: &ServerConfig) -> Self {
+    fn from_config(config: &ServerConfig, secrets: SecretManager) -> Self {
         let mut sources_by_zone = HashMap::new();
-        let tsig_keys = config
-            .tsig_keys
-            .iter()
-            .map(|key| {
-                let secret = key
-                    .secret_base64()
-                    .expect("configuration validation rejects invalid TSIG key secret sources");
-                let key = TsigKey::from_base64(&key.name, &key.algorithm, &secret)
-                    .expect("configuration validation rejects invalid TSIG keys");
-                (key.name.canonical_key(), Arc::new(key))
-            })
-            .collect::<HashMap<_, _>>();
-        let mut tsig_keys_by_zone = HashMap::new();
+        let mut tsig_key_names_by_zone = HashMap::new();
         for zone in &config.zones {
             let origin = DomainName::from_absolute_str(&zone.name)
                 .expect("configuration validation rejects invalid zone names");
@@ -1705,11 +1710,7 @@ impl NotifyAuthority {
             if let Some(tsig_key) = &zone.tsig_key {
                 let key_name = DomainName::from_absolute_str(tsig_key)
                     .expect("configuration validation rejects invalid TSIG key references");
-                let key = tsig_keys
-                    .get(&key_name.canonical_key())
-                    .expect("configuration validation rejects unknown TSIG key references")
-                    .clone();
-                tsig_keys_by_zone.insert(origin.canonical_key(), key);
+                tsig_key_names_by_zone.insert(origin.canonical_key(), key_name);
             }
         }
         for catalog_zone in &config.catalog_zones {
@@ -1720,20 +1721,23 @@ impl NotifyAuthority {
             if let Some(tsig_key) = catalog_zone.catalog_tsig_key_name() {
                 let key_name = DomainName::from_absolute_str(tsig_key)
                     .expect("configuration validation rejects invalid TSIG key references");
-                let key = tsig_keys
-                    .get(&key_name.canonical_key())
-                    .expect("configuration validation rejects unknown TSIG key references")
-                    .clone();
-                tsig_keys_by_zone.insert(origin.canonical_key(), key);
+                tsig_key_names_by_zone.insert(origin.canonical_key(), key_name);
             }
         }
 
         Self {
             sources_by_zone: Arc::new(Mutex::new(sources_by_zone)),
-            tsig_keys_by_name: Arc::new(tsig_keys),
-            tsig_keys_by_zone: Arc::new(Mutex::new(tsig_keys_by_zone)),
+            secrets,
+            tsig_key_names_by_zone: Arc::new(Mutex::new(tsig_key_names_by_zone)),
             tsig_fudge_seconds: config.tsig.fudge_seconds,
         }
+    }
+
+    #[cfg(test)]
+    fn from_config_for_test(config: &ServerConfig) -> Self {
+        let secrets =
+            SecretManager::from_config(config).expect("test configuration loads secret snapshot");
+        Self::from_config(config, secrets)
     }
 
     fn is_authorized(&self, qname: &DomainName, qclass: u16, source: IpAddr) -> bool {
@@ -1750,17 +1754,15 @@ impl NotifyAuthority {
         if qclass != 1 {
             return None;
         }
-        self.tsig_keys_by_zone
+        self.tsig_key_names_by_zone
             .lock()
             .expect("notify authority zone TSIG lock poisoned")
             .get(&qname.canonical_key())
-            .cloned()
+            .and_then(|key_name| self.secrets.tsig_key(key_name))
     }
 
     fn tsig_key_by_name(&self, key_name: &DomainName) -> Option<Arc<TsigKey>> {
-        self.tsig_keys_by_name
-            .get(&key_name.canonical_key())
-            .cloned()
+        self.secrets.tsig_key(key_name)
     }
 
     fn add_zone_from_catalog(
@@ -1783,13 +1785,11 @@ impl NotifyAuthority {
                     .member_tsig_key_name()
                     .and_then(|name| DomainName::from_absolute_str(name).ok())
             });
-        if let Some(key_name) = tsig_key_name
-            && let Some(key) = self.tsig_keys_by_name.get(&key_name.canonical_key())
-        {
-            self.tsig_keys_by_zone
+        if let Some(key_name) = tsig_key_name {
+            self.tsig_key_names_by_zone
                 .lock()
                 .expect("notify authority zone TSIG lock poisoned")
-                .insert(origin.canonical_key(), key.clone());
+                .insert(origin.canonical_key(), key_name);
         }
     }
 
@@ -1799,7 +1799,7 @@ impl NotifyAuthority {
             .lock()
             .expect("notify authority source lock poisoned")
             .remove(&key);
-        self.tsig_keys_by_zone
+        self.tsig_key_names_by_zone
             .lock()
             .expect("notify authority zone TSIG lock poisoned")
             .remove(&key);
@@ -2625,6 +2625,7 @@ async fn serve_control_plane_operations(
     zones: ZoneStore,
     refresh_tx: mpsc::Sender<RefreshRequest>,
     catalog_origins: Vec<DomainName>,
+    secrets: SecretManager,
 ) -> Result<(), RuntimeError> {
     let mut interval = tokio::time::interval(client.poll_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -2642,8 +2643,13 @@ async fn serve_control_plane_operations(
             }
         };
         for operation in operations {
-            match execute_control_plane_operation(&operation, &zones, &refresh_tx, &catalog_origins)
-            {
+            match execute_control_plane_operation(
+                &operation,
+                &zones,
+                &refresh_tx,
+                &catalog_origins,
+                &secrets,
+            ) {
                 Ok(()) => {
                     client
                         .complete(
@@ -2672,6 +2678,7 @@ fn execute_control_plane_operation(
     zones: &ZoneStore,
     refresh_tx: &mpsc::Sender<RefreshRequest>,
     catalog_origins: &[DomainName],
+    secrets: &SecretManager,
 ) -> Result<(), String> {
     let origin = DomainName::from_absolute_str(&operation.zone_name).map_err(|_| {
         format!(
@@ -2700,6 +2707,7 @@ fn execute_control_plane_operation(
             enqueue_control_plane_refresh(refresh_tx, origin, RefreshReason::ControlPlane)
         }
         ControlPlaneOperationKind::RepublishFeed => {
+            reload_secret_snapshot(secrets)?;
             if catalog_origins.is_empty() {
                 return Ok(());
             }
@@ -2714,9 +2722,20 @@ fn execute_control_plane_operation(
         }
         ControlPlaneOperationKind::RotateTsig => {
             require_known_control_zone(zones, &origin)?;
+            reload_secret_snapshot(secrets)?;
             enqueue_control_plane_refresh(refresh_tx, origin, RefreshReason::ControlPlane)
         }
     }
+}
+
+fn reload_secret_snapshot(secrets: &SecretManager) -> Result<(), String> {
+    secrets.reload().map_err(|error| error.to_string())?;
+    let (tsig_keys, xot_profiles) = secrets.snapshot_counts();
+    info!(
+        category = "secret_store",
+        tsig_keys, xot_profiles, "reloaded secret snapshot"
+    );
+    Ok(())
 }
 
 fn require_known_control_zone(zones: &ZoneStore, origin: &DomainName) -> Result<(), String> {
@@ -2810,6 +2829,7 @@ async fn serve_refresh_requests(
                         RefreshAttemptContext {
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
+                            secrets: catalog_runtime.secrets.clone(),
                             ixfr_timeout,
                             axfr_timeout,
                             tcp_connect_timeout,
@@ -2899,10 +2919,11 @@ struct InitialLoadSettings {
     telemetry: ControlPlaneTelemetryReporter,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RefreshAttemptContext<'a> {
     ixfr_cooldowns: &'a IxfrCooldownRegistry,
     metrics: &'a RuntimeMetrics,
+    secrets: SecretManager,
     ixfr_timeout: Duration,
     axfr_timeout: Duration,
     tcp_connect_timeout: Duration,
@@ -2995,6 +3016,7 @@ async fn run_initial_zone_loads(
                 RefreshAttemptContext {
                     ixfr_cooldowns: &ixfr_cooldowns,
                     metrics: &metrics,
+                    secrets: catalog_runtime.secrets.clone(),
                     ixfr_timeout,
                     axfr_timeout,
                     tcp_connect_timeout,
@@ -3137,6 +3159,45 @@ fn ixfr_error_disables_ixfr(error: &TransferError) -> bool {
     )
 }
 
+fn resolve_plan_tsig_key(
+    plan: &ZoneTransferPlan,
+    secrets: &SecretManager,
+) -> Result<Option<Arc<TsigKey>>, TransferError> {
+    let Some(key_name) = &plan.tsig_key_name else {
+        return Ok(None);
+    };
+    secrets
+        .tsig_key(key_name)
+        .map(Some)
+        .ok_or_else(|| TransferError::MissingTsigKey {
+            key_name: key_name.to_string(),
+        })
+}
+
+fn resolve_transfer_primary(
+    primary: &oxidedns_core::config::TransferPrimaryConfig,
+    secrets: &SecretManager,
+) -> Result<oxidedns_core::config::TransferPrimaryConfig, TransferError> {
+    let Some(profile_name) = primary.xot_profile.as_deref() else {
+        return Ok(primary.clone());
+    };
+    let profile = secrets
+        .xot_profile(profile_name)
+        .ok_or_else(|| TransferError::XotConfig {
+            addr: primary.addr,
+            message: format!(
+                "XoT profile {profile_name:?} is not loaded in the current secret snapshot"
+            ),
+        })?;
+    let mut resolved = primary.clone();
+    resolved.xot_profile = None;
+    resolved.trust_anchors = profile.trust_anchors;
+    resolved.client_cert = profile.client_cert;
+    resolved.client_key = profile.client_key;
+    resolved.client_key_pem = profile.client_key_pem;
+    Ok(resolved)
+}
+
 #[cfg(test)]
 async fn refresh_zone_metadata_from_primaries(
     zones: &ZoneStore,
@@ -3196,9 +3257,42 @@ async fn refresh_zone_from_primaries_with_outcome(
         }
     }
 
-    for primary_target in &plan.primaries {
+    for configured_primary in &plan.primaries {
+        let primary_target = match resolve_transfer_primary(configured_primary, &context.secrets) {
+            Ok(primary) => primary,
+            Err(error) => {
+                let primary = configured_primary.addr;
+                last_failure_cause = Some(format!(
+                    "XoT profile resolution failed for primary {primary}: {error}"
+                ));
+                warn!(
+                    zone = %plan.origin,
+                    %primary,
+                    %error,
+                    reason = %context.reason,
+                    "XoT profile resolution failed"
+                );
+                continue;
+            }
+        };
         let primary = primary_target.addr;
         let transfer_source = plan.transfer_source_for(primary);
+        let tsig_key = match resolve_plan_tsig_key(plan, &context.secrets) {
+            Ok(key) => key,
+            Err(error) => {
+                last_failure_cause = Some(format!(
+                    "transfer key resolution failed for primary {primary}: {error}"
+                ));
+                warn!(
+                    zone = %plan.origin,
+                    %primary,
+                    %error,
+                    reason = %context.reason,
+                    "transfer key resolution failed"
+                );
+                continue;
+            }
+        };
 
         if primary_target.transport == TransferTransportConfig::Tcp
             && primary_serial_hint.is_none()
@@ -3224,7 +3318,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                 &plan.origin,
                 plan.qclass,
                 qid,
-                TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 transfer_source,
                 context.axfr_timeout,
             )
@@ -3309,13 +3403,13 @@ async fn refresh_zone_from_primaries_with_outcome(
                         .expect("IXFR current snapshot metadata has a serial");
                     context.metrics.record_ixfr_started();
                     match transfer_ixfr_from_target_with_tsig(
-                        primary_target,
+                        &primary_target,
                         &plan.origin,
                         plan.qclass,
                         qid,
                         current.snapshot_for_transfer(),
                         TransferSession::new(
-                            TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                            TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                             plan.max_transfer_ingest_bytes,
                         )
                         .with_transfer_source(transfer_source),
@@ -3407,12 +3501,12 @@ async fn refresh_zone_from_primaries_with_outcome(
         };
         context.metrics.record_axfr_started();
         match transfer_axfr_from_target_with_tsig_and_source(
-            primary_target,
+            &primary_target,
             &plan.origin,
             plan.qclass,
             qid,
             TransferSession::new(
-                TransferTsig::new(plan.tsig_key.as_deref(), plan.tsig_fudge_seconds),
+                TransferTsig::new(tsig_key.as_deref(), plan.tsig_fudge_seconds),
                 plan.max_transfer_ingest_bytes,
             ),
             transfer_source,

@@ -12,6 +12,7 @@ axum.workspace = true
 flate2.workspace = true
 getrandom.workspace = true
 libc.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
@@ -19,7 +20,9 @@ subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
+toml.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 oxidedns-core = { path = "../oxidedns-core", version = "0.1.5" }
 xdp = { version = "0.7.3", optional = true }
 x509-parser.workspace = true
