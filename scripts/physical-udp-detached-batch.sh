@@ -111,14 +111,30 @@ set -e
 printf '%s\n' "$harness_status" >"$run_dir/exit-code"
 date -u +%Y-%m-%dT%H:%M:%SZ >"$run_dir/finished-at.txt"
 
-artifact_dir="$(awk -F= '$1 == "artifact_dir" { value = $2 } END { print value }' "$run_dir/harness.log")"
-if [[ -n "$artifact_dir" ]]; then
-	printf '%s\n' "$artifact_dir" >"$run_dir/remote-artifact-dir.txt"
-	ssh "${ssh_options[@]}" "$server_ssh" bash -s -- "$artifact_dir" >"$run_dir/summary.tsv" 2>"$run_dir/summary-fetch.err" <<'REMOTE' || true
+mapfile -t artifact_dirs < <(awk -F= '$1 == "artifact_dir" { print $2 }' "$run_dir/harness.log")
+if ((${#artifact_dirs[@]} > 0)); then
+	printf '%s\n' "${artifact_dirs[@]}" >"$run_dir/remote-artifact-dir.txt"
+	: >"$run_dir/summary.tsv"
+	: >"$run_dir/summary-fetch.err"
+	for artifact_index in "${!artifact_dirs[@]}"; do
+		artifact_dir="${artifact_dirs[$artifact_index]}"
+		tmp_summary="$run_dir/summary.$artifact_index.tsv"
+		ssh "${ssh_options[@]}" "$server_ssh" bash -s -- "$artifact_dir" >"$tmp_summary" 2>>"$run_dir/summary-fetch.err" <<'REMOTE' || true
 set -euo pipefail
 artifact_dir="$1"
 cat "$artifact_dir/summary.tsv"
 REMOTE
+		if [[ -s "$tmp_summary" ]]; then
+			if [[ ! -s "$run_dir/summary.tsv" ]]; then
+				cat "$tmp_summary" >>"$run_dir/summary.tsv"
+			else
+				tail -n +2 "$tmp_summary" >>"$run_dir/summary.tsv"
+			fi
+		fi
+	done
+	if [[ -s "$run_dir/summary.tsv" && -x "$repo_root/scripts/summarize-physical-loss-bands.py" ]]; then
+		"$repo_root/scripts/summarize-physical-loss-bands.py" "$run_dir/summary.tsv" >"$run_dir/loss-bands.tsv" 2>"$run_dir/loss-bands.err" || true
+	fi
 fi
 
 {
@@ -134,6 +150,7 @@ ip -o link show dev "$iface" || true
 tc qdisc show dev "$iface" || true
 pgrep -a oxidedns || true
 pgrep -a knotd || true
+pgrep -a nsd || true
 pgrep -a perf || true
 REMOTE
 } >"$run_dir/server-cleanup-check.txt" 2>&1 || true
@@ -255,6 +272,10 @@ status_run() {
     if [[ -s "$run_dir/summary.tsv" ]]; then
         printf 'summary_file=%s/summary.tsv\n' "$run_dir"
         cat "$run_dir/summary.tsv"
+    fi
+    if [[ -s "$run_dir/loss-bands.tsv" ]]; then
+        printf 'loss_bands_file=%s/loss-bands.tsv\n' "$run_dir"
+        cat "$run_dir/loss-bands.tsv"
     fi
 }
 

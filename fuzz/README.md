@@ -52,6 +52,7 @@ scripts/fuzz-campaign.sh --duration 60 dns_datagram tsig_message
 scripts/fuzz-campaign.sh --target transfer_stream --target notify_edns_datagram
 scripts/fuzz-campaign.sh --target zone_image_datagram
 scripts/fuzz-campaign.sh --toolchain nightly --target zone_image_datagram
+scripts/fuzz-campaign.sh --toolchain nightly --sanitizer address --target dns_datagram
 ```
 
 Check the planned commands without starting a fuzzing run:

@@ -52,6 +52,7 @@ scripts/capture-unsafe-dependency-evidence.sh
 scripts/capture-info-verbosity-handoff.sh
 scripts/capture-benchmark-handoff.sh
 scripts/capture-soak-handoff.sh
+scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400
 scripts/capture-release-handoff.sh
 scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh

@@ -100,6 +100,8 @@ and slowly diverging.
 - `oxide-gun-mvp-plan.md`: phased path from the current prototype toward a
   useful MVP aligned with the SRS.
 - `oxide-gun.md`: OxideGun load-generator and XDP lab notes (operational usage).
+- `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
+  and XDP evidence campaign runbook for the local physical hosts.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
   Engineering MVP boundary, and E2E test shape.
 

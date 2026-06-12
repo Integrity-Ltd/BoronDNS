@@ -32,11 +32,13 @@ oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
 oxide_gun_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
 oxide_gun_knot_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST:-$oxide_gun_queue_list}"
 oxide_gun_oxidedns_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_QUEUE_LIST:-$oxide_gun_queue_list}"
+oxide_gun_nsd_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_NSD_QUEUE_LIST:-$oxide_gun_knot_queue_list}"
 oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
 oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
 oxide_gun_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
 oxide_gun_knot_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
 oxide_gun_oxidedns_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
+oxide_gun_nsd_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_NSD_SOURCE_PORT_LIST:-$oxide_gun_knot_source_port_list}"
 oxide_gun_source_port_select="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
 oxide_gun_response_timeout_ms="${OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS:-1000}"
 oxide_gun_source_mac="${OXIDEDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
@@ -49,11 +51,22 @@ perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
 perf_report_children="${OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN:-true}"
 socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
 socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
+include_oxidedns="${OXIDEDNS_PHYSICAL_INCLUDE_OXIDEDNS:-true}"
 include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
 include_knot_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP:-false}"
+include_nsd="${OXIDEDNS_PHYSICAL_INCLUDE_NSD:-false}"
+include_nsd_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_NSD_XDP:-false}"
 comparison_run_order="${OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER:-knot-first}"
 oxidedns_udp_backends="${OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS:-std}"
 knot_bin="${OXIDEDNS_PHYSICAL_KNOT_BIN:-knotd}"
+nsd_bin="${OXIDEDNS_PHYSICAL_NSD_BIN:-/home/codex/nsd-xdp-master/sbin/nsd}"
+nsd_checkconf="${OXIDEDNS_PHYSICAL_NSD_CHECKCONF:-}"
+nsd_checkzone="${OXIDEDNS_PHYSICAL_NSD_CHECKZONE:-}"
+nsd_port="${OXIDEDNS_PHYSICAL_NSD_PORT:-5302}"
+nsd_xdp_port="${OXIDEDNS_PHYSICAL_NSD_XDP_PORT:-53}"
+nsd_xdp_program="${OXIDEDNS_PHYSICAL_NSD_XDP_PROGRAM:-__default__}"
+nsd_server_count="${OXIDEDNS_PHYSICAL_NSD_SERVER_COUNT:-48}"
+nsd_run_as_user="${OXIDEDNS_PHYSICAL_NSD_RUN_AS_USER:-codex}"
 workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
 rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
 hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
@@ -170,10 +183,11 @@ if [[ -d "$out_abs" ]]; then
 fi
 REMOTE
     fi
-    ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true; pkill -u codex -x nsd 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x oxidedns 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
-    ssh_control "$server_ssh" "for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null); do sudo kill \"\$pid\" 2>/dev/null || true; done; sleep 0.2; for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null); do sudo kill -9 \"\$pid\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "sudo pkill -x nsd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill \"\$pid\" 2>/dev/null || true; done; sleep 0.2; for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill -9 \"\$pid\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
         ssh_control "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
@@ -277,24 +291,28 @@ select_run_id() {
 }
 
 cleanup_server_row_state() {
-    ssh_control "$server_ssh" bash -s -- "$interface" "$oxidedns_port" "$knot_port" <<'REMOTE' >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" bash -s -- "$interface" "$oxidedns_port" "$knot_port" "$nsd_port" "$nsd_xdp_port" <<'REMOTE' >/dev/null 2>&1 || true
 set -euo pipefail
 server_interface="$1"
 oxidedns_port="$2"
 knot_port="$3"
+nsd_port="$4"
+nsd_xdp_port="$5"
 
 pkill -u codex -x oxidedns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
+pkill -u codex -x nsd 2>/dev/null || true
 sudo pkill -x oxidedns 2>/dev/null || true
 sudo pkill -x knotd 2>/dev/null || true
+sudo pkill -x nsd 2>/dev/null || true
 
 for _ in $(seq 1 80); do
-    if pgrep -x oxidedns >/dev/null 2>&1 || pgrep -x knotd >/dev/null 2>&1; then
+    if pgrep -x oxidedns >/dev/null 2>&1 || pgrep -x knotd >/dev/null 2>&1 || pgrep -x nsd >/dev/null 2>&1; then
         sleep 0.1
         continue
     fi
-    if ss -Hlnptu 2>/dev/null | awk -v oxi=":$oxidedns_port" -v knot=":$knot_port" '
-        $5 ~ oxi "$" || $5 ~ knot "$" { found = 1 }
+    if ss -Hlnptu 2>/dev/null | awk -v oxi=":$oxidedns_port" -v knot=":$knot_port" -v nsd=":$nsd_port" -v nsdxdp=":$nsd_xdp_port" '
+        $5 ~ oxi "$" || $5 ~ knot "$" || $5 ~ nsd "$" || $5 ~ nsdxdp "$" { found = 1 }
         END { exit found ? 0 : 1 }
     '; then
         sleep 0.1
@@ -303,7 +321,7 @@ for _ in $(seq 1 80); do
     break
 done
 
-for pid in $(pgrep -x oxidedns 2>/dev/null) $(pgrep -x knotd 2>/dev/null); do
+for pid in $(pgrep -x oxidedns 2>/dev/null) $(pgrep -x knotd 2>/dev/null) $(pgrep -x nsd 2>/dev/null); do
     sudo kill -9 "$pid" 2>/dev/null || true
 done
 sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
@@ -906,6 +924,157 @@ for pid in $(pgrep -x knotd 2>/dev/null); do
 done
 sleep 0.2
 for pid in $(pgrep -x knotd 2>/dev/null); do
+    sudo kill -9 "$pid" 2>/dev/null || true
+done
+sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
+sudo ip link set dev "$server_interface" xdpgeneric off 2>/dev/null || true
+REMOTE
+}
+
+run_nsd_reference_start() {
+    local run_abs="$1"
+    local server_interface="$2"
+    local nsd_backend="${3:-std}"
+
+    ssh_control "$server_ssh" bash -s -- "$stage_abs" "$run_abs" "$target_ip" "$nsd_port" "$nsd_xdp_port" "$server_interface" "$nsd_backend" "$nsd_bin" "${nsd_checkconf:-__default__}" "${nsd_checkzone:-__default__}" "$nsd_xdp_program" "$nsd_server_count" "$nsd_run_as_user" <<'REMOTE'
+set -euo pipefail
+stage_abs="$1"
+run_abs="$2"
+nsd_target_ip="$3"
+nsd_port="$4"
+nsd_xdp_port="$5"
+server_interface="$6"
+nsd_backend="$7"
+nsd_bin="$8"
+nsd_checkconf="$9"
+shift 9
+nsd_checkzone="$1"
+nsd_xdp_program="$2"
+nsd_server_count="$3"
+nsd_run_as_user="$4"
+
+mkdir -p "$run_abs"
+pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x knotd 2>/dev/null || true
+pkill -u codex -x nsd 2>/dev/null || true
+sudo pkill -x nsd 2>/dev/null || true
+sleep 0.2
+
+if [[ "$nsd_checkconf" == "__default__" ]]; then
+    nsd_checkconf="$(dirname "$nsd_bin")/nsd-checkconf"
+fi
+if [[ "$nsd_checkzone" == "__default__" ]]; then
+    nsd_checkzone="$(dirname "$nsd_bin")/nsd-checkzone"
+fi
+if [[ "$nsd_xdp_program" == "__default__" ]]; then
+    nsd_xdp_program="$(cd "$(dirname "$nsd_bin")/.." && pwd)/share/nsd/xdp-dns-redirect_kern.o"
+fi
+
+selected_port="$nsd_port"
+if [[ "$nsd_backend" == "xdp" ]]; then
+    selected_port="$nsd_xdp_port"
+fi
+
+cat >"$run_abs/nsd.conf" <<EOF
+server:
+    server-count: $nsd_server_count
+    ip-address: $nsd_target_ip@$selected_port
+    do-ip4: yes
+    do-ip6: no
+    database: "$run_abs/nsd.db"
+    pidfile: "$run_abs/nsd.pid"
+    logfile: "$run_abs/nsd.log"
+    zonesdir: "$run_abs"
+    username: "$nsd_run_as_user"
+    hide-version: yes
+    verbosity: 0
+    reuseport: yes
+EOF
+
+if [[ "$nsd_backend" == "xdp" ]]; then
+    cat >>"$run_abs/nsd.conf" <<EOF
+    xdp-interface: $server_interface
+    xdp-program-path: "$nsd_xdp_program"
+    xdp-program-load: yes
+    xdp-force-copy: no
+EOF
+fi
+
+cat >>"$run_abs/nsd.conf" <<EOF
+
+zone:
+    name: "perf.test."
+    zonefile: "$stage_abs/primary.zone"
+EOF
+
+"$nsd_bin" -v >"$run_abs/nsd-version.txt" 2>&1 || true
+"$nsd_checkzone" perf.test. "$stage_abs/primary.zone" >"$run_abs/nsd-checkzone.out" 2>&1
+"$nsd_checkconf" "$run_abs/nsd.conf" >"$run_abs/nsd-checkconf.out" 2>&1
+"$nsd_checkconf" -o reuseport "$run_abs/nsd.conf" >"$run_abs/nsd-reuseport.txt" 2>&1 || true
+
+ulimit -n 65536
+ulimit -l unlimited 2>/dev/null || true
+if [[ "$nsd_backend" == "xdp" || "$selected_port" == "53" ]]; then
+    sudo "$nsd_bin" -d -c "$run_abs/nsd.conf" >"$run_abs/nsd-stdout.log" 2>"$run_abs/nsd-stderr.log" &
+else
+    "$nsd_bin" -d -c "$run_abs/nsd.conf" >"$run_abs/nsd-stdout.log" 2>"$run_abs/nsd-stderr.log" &
+fi
+echo $! >"$run_abs/nsd.pid.actual"
+
+nsd_ready=false
+for _ in $(seq 1 160); do
+    if dig @"$nsd_target_ip" -p "$selected_port" perf.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
+        nsd_ready=true
+        break
+    fi
+    if ! kill -0 "$(cat "$run_abs/nsd.pid.actual")" 2>/dev/null; then
+        break
+    fi
+    sleep 0.25
+done
+if [[ "$nsd_ready" != true ]]; then
+    printf 'NSD reference did not become queryable on %s:%s\n' "$nsd_target_ip" "$selected_port" >&2
+    tail -200 "$run_abs/nsd-stderr.log" >&2 || true
+    tail -200 "$run_abs/nsd.log" >&2 || true
+    exit 1
+fi
+
+cp /proc/net/dev "$run_abs/server-proc-net-dev-before.txt"
+cp /proc/net/snmp "$run_abs/server-proc-net-snmp-before.txt"
+cp /proc/net/softnet_stat "$run_abs/server-proc-net-softnet-before.txt"
+ethtool -S "$server_interface" >"$run_abs/server-ethtool-stats-before.txt" 2>&1 || true
+tc -s qdisc show dev "$server_interface" >"$run_abs/server-tc-qdisc-before.txt" 2>&1 || true
+ip -details link show dev "$server_interface" >"$run_abs/server-ip-link-before-benchmark.txt" 2>&1 || true
+sudo bpftool net show dev "$server_interface" >"$run_abs/server-bpftool-net-before-benchmark.txt" 2>&1 || true
+REMOTE
+}
+
+run_nsd_reference_stop() {
+    local run_abs="$1"
+
+    ssh_control "$server_ssh" bash -s -- "$run_abs" "$interface" <<'REMOTE'
+set -euo pipefail
+run_abs="$1"
+server_interface="$2"
+if [[ -f "$run_abs/nsd.pid.actual" ]]; then
+    nsd_pid="$(cat "$run_abs/nsd.pid.actual")"
+    kill "$nsd_pid" 2>/dev/null || true
+    sudo kill "$nsd_pid" 2>/dev/null || true
+    for _ in $(seq 1 80); do
+        if ! ps -p "$nsd_pid" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.1
+    done
+    if ps -p "$nsd_pid" >/dev/null 2>&1; then
+        sudo kill -9 "$nsd_pid" 2>/dev/null || true
+    fi
+fi
+for pid in $(pgrep -x nsd 2>/dev/null); do
+    sudo kill "$pid" 2>/dev/null || true
+done
+sleep 0.2
+for pid in $(pgrep -x nsd 2>/dev/null); do
     sudo kill -9 "$pid" 2>/dev/null || true
 done
 sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
@@ -1968,55 +2137,87 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_knot_xdp" == true ]];
     done
 fi
 
-for udp_backend in $oxidedns_udp_backends; do
-    for workers in $workers_list; do
-        for rate in $rates_list; do
-            for udp_batch_size in $udp_batch_sizes; do
-                for hot_path in $hot_path_list; do
-                    for idle_strategy in $idle_strategy_list; do
-                        for socket_max_pacing_rate in $socket_max_pacing_rates_bytes_per_second; do
-                            pacing_run_suffix=""
-                            socket_max_pacing_rate_arg="$socket_max_pacing_rate"
-                            effective_workers="$workers"
-                            effective_idle_strategy="$idle_strategy"
-                            effective_udp_batch_size="$udp_batch_size"
-                            effective_worker_cpus="$worker_cpus"
-                            row_xdp_mode="n/a"
-                            row_xdp_zero_copy="n/a"
-                            row_xdp_rx_drain_passes="n/a"
-                            row_xdp_tx_wakeup_interval="n/a"
-                            if [[ "$socket_max_pacing_rate" == "__none__" ]]; then
-                                socket_max_pacing_rate_arg=""
-                            else
-                                pacing_run_suffix="-pace-${socket_max_pacing_rate}"
-                            fi
-                            if [[ "$udp_backend" == "af_xdp" ]]; then
-                                effective_idle_strategy="park"
-                                effective_udp_batch_size="$xdp_batch_size"
-                                effective_worker_cpus=""
-                                row_xdp_mode="$xdp_mode"
-                                row_xdp_zero_copy="$xdp_zero_copy"
-                                row_xdp_rx_drain_passes="$xdp_rx_drain_passes"
-                                row_xdp_tx_wakeup_interval="$xdp_tx_wakeup_interval"
-                            fi
-                            select_run_id "oxidedns-${udp_backend}-w${effective_workers}-q${rate}-batch-${effective_udp_batch_size}-metrics-${hot_path}-idle-${effective_idle_strategy}${pacing_run_suffix}"
-                            run_abs="$out_abs/$run_id"
-                            printf 'running %s\n' "$run_id"
-                            cleanup_server_row_state
-                            run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
-                            run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
-                            run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                            run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list" "$oxide_gun_oxidedns_queue_list"
-                            run_server_socket_sample_finish "$run_abs" "$socket_sample"
-                            run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
-                            run_server_finish "$run_abs" "oxidedns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
+if [[ "$comparison_run_order" == "knot-first" && "$include_nsd" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "nsd-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
+        run_nsd_reference_start "$run_abs" "$interface" "std"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+        run_server_finish "$run_abs" "nsd" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_nsd_reference_stop "$run_abs"
+    done
+fi
+
+if [[ "$comparison_run_order" == "knot-first" && "$include_nsd_xdp" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "nsd-xdp-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
+        run_nsd_reference_start "$run_abs" "$interface" "xdp"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+        run_server_finish "$run_abs" "nsd-xdp" "xdp" "native" "on" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_nsd_reference_stop "$run_abs"
+    done
+fi
+
+if [[ "$include_oxidedns" == true ]]; then
+    for udp_backend in $oxidedns_udp_backends; do
+        for workers in $workers_list; do
+            for rate in $rates_list; do
+                for udp_batch_size in $udp_batch_sizes; do
+                    for hot_path in $hot_path_list; do
+                        for idle_strategy in $idle_strategy_list; do
+                            for socket_max_pacing_rate in $socket_max_pacing_rates_bytes_per_second; do
+                                pacing_run_suffix=""
+                                socket_max_pacing_rate_arg="$socket_max_pacing_rate"
+                                effective_workers="$workers"
+                                effective_idle_strategy="$idle_strategy"
+                                effective_udp_batch_size="$udp_batch_size"
+                                effective_worker_cpus="$worker_cpus"
+                                row_xdp_mode="n/a"
+                                row_xdp_zero_copy="n/a"
+                                row_xdp_rx_drain_passes="n/a"
+                                row_xdp_tx_wakeup_interval="n/a"
+                                if [[ "$socket_max_pacing_rate" == "__none__" ]]; then
+                                    socket_max_pacing_rate_arg=""
+                                else
+                                    pacing_run_suffix="-pace-${socket_max_pacing_rate}"
+                                fi
+                                if [[ "$udp_backend" == "af_xdp" ]]; then
+                                    effective_idle_strategy="park"
+                                    effective_udp_batch_size="$xdp_batch_size"
+                                    effective_worker_cpus=""
+                                    row_xdp_mode="$xdp_mode"
+                                    row_xdp_zero_copy="$xdp_zero_copy"
+                                    row_xdp_rx_drain_passes="$xdp_rx_drain_passes"
+                                    row_xdp_tx_wakeup_interval="$xdp_tx_wakeup_interval"
+                                fi
+                                select_run_id "oxidedns-${udp_backend}-w${effective_workers}-q${rate}-batch-${effective_udp_batch_size}-metrics-${hot_path}-idle-${effective_idle_strategy}${pacing_run_suffix}"
+                                run_abs="$out_abs/$run_id"
+                                printf 'running %s\n' "$run_id"
+                                cleanup_server_row_state
+                                run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
+                                run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
+                                run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
+                                run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list" "$oxide_gun_oxidedns_queue_list"
+                                run_server_socket_sample_finish "$run_abs" "$socket_sample"
+                                run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+                                run_server_finish "$run_abs" "oxidedns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
+                            done
                         done
                     done
                 done
             done
         done
     done
-done
+fi
 
 if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]]; then
     for rate in $rates_list; do
@@ -2045,6 +2246,36 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true
         run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
         run_server_finish "$run_abs" "knot-xdp" "xdp" "native" "$knot_xdp_zero_copy" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
         run_knot_reference_stop "$run_abs"
+    done
+fi
+
+if [[ "$comparison_run_order" == "oxidedns-first" && "$include_nsd" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "nsd-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
+        run_nsd_reference_start "$run_abs" "$interface" "std"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+        run_server_finish "$run_abs" "nsd" "std" "n/a" "n/a" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_nsd_reference_stop "$run_abs"
+    done
+fi
+
+if [[ "$comparison_run_order" == "oxidedns-first" && "$include_nsd_xdp" == true ]]; then
+    for rate in $rates_list; do
+        select_run_id "nsd-xdp-q${rate}"
+        run_abs="$out_abs/$run_id"
+        printf 'running %s\n' "$run_id"
+        cleanup_server_row_state
+        run_nsd_reference_start "$run_abs" "$interface" "xdp"
+        run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event" "nsd.pid.actual"
+        run_player_kxdpgun "$run_abs" "$run_id" "$nsd_xdp_port" "$rate" "$oxide_gun_nsd_source_port_list" "$oxide_gun_nsd_queue_list"
+        run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
+        run_server_finish "$run_abs" "nsd-xdp" "xdp" "native" "on" "n/a" "n/a" "n/a" "$rate" "$batch" "$kxdpgun_mode" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" "unbound" "__none__" "$interface"
+        run_nsd_reference_stop "$run_abs"
     done
 fi
 

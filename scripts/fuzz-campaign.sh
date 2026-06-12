@@ -13,6 +13,7 @@ Options:
   --duration SECONDS     Per-target fuzz duration (default: 10)
   --evidence-dir DIR     Output directory (default: target/fuzz-evidence/<timestamp>)
   --toolchain TOOLCHAIN  Run cargo through rustup with this toolchain
+  --sanitizer NAME       Pass a cargo-fuzz sanitizer mode, for example address or thread
   --dry-run              Write config and print commands without running cargo fuzz
   --list-targets         Print known targets and exit
   -h, --help             Show this help
@@ -20,6 +21,7 @@ Options:
 Environment:
   CARGO                  Cargo executable to use (default: cargo)
   CARGO_TOOLCHAIN        Optional rustup toolchain, for example nightly
+  CARGO_FUZZ_SANITIZER   Optional cargo-fuzz sanitizer mode
 EOF
 }
 
@@ -39,6 +41,7 @@ list_targets=0
 all_targets=0
 cargo_bin="${CARGO:-cargo}"
 cargo_toolchain="${CARGO_TOOLCHAIN:-}"
+sanitizer="${CARGO_FUZZ_SANITIZER:-}"
 selected_targets=()
 known_targets=()
 
@@ -140,6 +143,7 @@ write_config() {
         printf 'dry_run=%s\n' "$dry_run"
         printf 'cargo=%s\n' "$cargo_bin"
         printf 'cargo_toolchain=%s\n' "${cargo_toolchain:-default}"
+        printf 'sanitizer=%s\n' "${sanitizer:-cargo-fuzz-default}"
         printf 'targets=%s\n' "${selected_targets[*]}"
     } >"$config_file"
 }
@@ -169,6 +173,11 @@ parse_args() {
         --toolchain)
             (($# >= 2)) || die "--toolchain requires a value"
             cargo_toolchain="$2"
+            shift 2
+            ;;
+        --sanitizer)
+            (($# >= 2)) || die "--sanitizer requires a value"
+            sanitizer="$2"
             shift 2
             ;;
         --dry-run)
@@ -231,19 +240,22 @@ run_target() {
     mkdir -p "$artifact_dir"
     if [[ -n "$cargo_toolchain" ]]; then
         cmd=(
-            rustup run "$cargo_toolchain" "$cargo_bin" fuzz run "$target"
-            --
-            "-max_total_time=$duration"
-            "-artifact_prefix=$artifact_dir/"
+            rustup run "$cargo_toolchain" "$cargo_bin" fuzz run
         )
     else
         cmd=(
-            "$cargo_bin" fuzz run "$target"
-            --
-            "-max_total_time=$duration"
-            "-artifact_prefix=$artifact_dir/"
+            "$cargo_bin" fuzz run
         )
     fi
+    if [[ -n "$sanitizer" ]]; then
+        cmd+=(--sanitizer "$sanitizer")
+    fi
+    cmd+=(
+        "$target"
+        --
+        "-max_total_time=$duration"
+        "-artifact_prefix=$artifact_dir/"
+    )
 
     {
         printf 'target=%s\n' "$target"
