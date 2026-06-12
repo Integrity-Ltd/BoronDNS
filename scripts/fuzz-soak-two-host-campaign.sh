@@ -383,13 +383,14 @@ collect_plan() {
     local host safe_host target remote_target_dir systemd_unit command_file
     for host in "${hosts[@]}"; do
         safe_host="${host//[^A-Za-z0-9_.-]/_}"
-        mkdir -p "$evidence_dir/remotes/$safe_host/journal"
+        mkdir -p "$evidence_dir/remotes/$safe_host"
         printf 'collecting host=%s remote=%s\n' "$host" "$remote_evidence"
         if command -v rsync >/dev/null 2>&1; then
             rsync -a --delete "$host:$(shell_quote "$remote_evidence")/" "$evidence_dir/remotes/$safe_host/"
         else
             scp -r "$host:$remote_evidence/." "$evidence_dir/remotes/$safe_host/"
         fi
+        mkdir -p "$evidence_dir/remotes/$safe_host/journal"
         tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r row_host target _ remote_target_dir systemd_unit command_file; do
             [[ "$row_host" == "$host" ]] || continue
             ssh -o BatchMode=yes "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
