@@ -326,6 +326,7 @@ EOF
 load_plan() {
     [[ -n "$evidence_dir" ]] || die "--evidence-dir is required for $command"
     [[ -r "$evidence_dir/campaign.env" ]] || die "missing campaign env: $evidence_dir/campaign.env"
+    unset hosts targets
     # shellcheck source=/dev/null
     source "$evidence_dir/campaign.env"
     local host_list="${hosts[*]}"
