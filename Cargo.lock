@@ -989,7 +989,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxide-gun"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "aya",
@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "oxidedns-cli"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "oxidedns-core"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "oxidedns-server"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "axum",
  "aya",

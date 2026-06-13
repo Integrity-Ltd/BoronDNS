@@ -23,7 +23,7 @@ tokio-rustls.workspace = true
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
-oxidedns-core = { path = "../oxidedns-core", version = "0.1.5" }
+oxidedns-core = { path = "../oxidedns-core", version = "0.2.0" }
 xdp = { version = "0.7.3", optional = true }
 x509-parser.workspace = true
 
