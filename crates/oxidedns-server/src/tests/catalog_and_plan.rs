@@ -433,9 +433,10 @@ async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
         std::time::Duration::ZERO,
     );
     let notify_authority = NotifyAuthority::from_config_for_test(&config);
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
+    let queued_origin = DomainName::from_absolute_str("queued.example.").unwrap();
     tx.try_send(RefreshRequest {
-        zone: DomainName::from_absolute_str("queued.example.").unwrap(),
+        zone: queued_origin.clone(),
         requested_serial: None,
         reason: RefreshReason::Catalog,
     })
@@ -445,8 +446,8 @@ async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
     let refresh_tx_a = tx.downgrade();
     let refresh_tx_b = tx.downgrade();
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        let ((), ()) = tokio::join!(
+    let apply_both = async {
+        tokio::join!(
             catalog_manager.apply_snapshot(
                 snapshot_a.catalog_zone_view(),
                 &metadata_a,
@@ -466,12 +467,45 @@ async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
                 &refresh_tx_b,
             )
         );
+    };
+    let drain_after_both_reconcile = async {
+        for member in [&member_a, &member_b] {
+            for _ in 0..100 {
+                if zones.contains_exact_zone_for_control(member) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(
+                zones.contains_exact_zone_for_control(member),
+                "catalog reconcile should publish {member} before refresh queue space is available"
+            );
+        }
+
+        let mut queued_zones = Vec::new();
+        for _ in 0..3 {
+            queued_zones.push(
+                rx.recv()
+                    .await
+                    .expect("queued refresh request")
+                    .zone
+                    .canonical_key(),
+            );
+        }
+        queued_zones
+    };
+
+    let ((), queued_zones) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(apply_both, drain_after_both_reconcile)
     })
     .await
-    .expect("full refresh queue must not block catalog reconciliation");
+    .expect("full refresh queue must not block catalog reconciliation or drop member refreshes");
 
     assert!(zones.contains_exact_zone_for_control(&member_a));
     assert!(zones.contains_exact_zone_for_control(&member_b));
+    assert!(queued_zones.contains(&queued_origin.canonical_key()));
+    assert!(queued_zones.contains(&member_a.canonical_key()));
+    assert!(queued_zones.contains(&member_b.canonical_key()));
 }
 
 #[tokio::test]

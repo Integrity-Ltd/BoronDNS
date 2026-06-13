@@ -841,11 +841,12 @@ impl CatalogManager {
         notify_authority: &NotifyAuthority,
         refresh_tx: &mpsc::WeakSender<RefreshRequest>,
     ) {
-        let _reconcile_guard = self.reconcile_lock.lock().await;
+        let reconcile_guard = self.reconcile_lock.lock().await;
         debug_assert_eq!(&metadata.origin, catalog_view.origin());
         let Some(catalog) = self.catalogs_by_key.get(metadata.origin_key.as_ref()) else {
             return;
         };
+        let catalog_origin = catalog.origin.clone();
 
         if catalog.config.serve_catalog_zone {
             zones.show_zone(&catalog.origin);
@@ -923,6 +924,7 @@ impl CatalogManager {
             return;
         }
 
+        let mut pending_catalog_refreshes = Vec::<DomainName>::new();
         let mut added = new_member_keys
             .difference(&old_member_keys)
             .cloned()
@@ -972,49 +974,7 @@ impl CatalogManager {
                 zones.insert_loading(member_origin.clone());
                 refresh_registry.record_loading_start(&member_origin);
             }
-            let Some(refresh_tx) = refresh_tx.upgrade() else {
-                warn!(
-                    category = "transfer",
-                    event = "catalog_member_refresh_queue_closed",
-                    catalog_zone = %catalog.origin,
-                    zone = %member_origin,
-                    "catalog member refresh queue closed"
-                );
-                continue;
-            };
-            match refresh_tx.try_send(RefreshRequest {
-                zone: member_origin.clone(),
-                requested_serial: None,
-                reason: RefreshReason::Catalog,
-            }) {
-                Ok(()) => {
-                    info!(
-                        category = "transfer",
-                        event = "catalog_member_added",
-                        catalog_zone = %catalog.origin,
-                        zone = %member_origin,
-                        "added catalog-managed member zone"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    warn!(
-                        category = "transfer",
-                        event = "catalog_member_refresh_queue_full",
-                        catalog_zone = %catalog.origin,
-                        zone = %member_origin,
-                        "catalog member refresh queue full; refresh request dropped"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    warn!(
-                        category = "transfer",
-                        event = "catalog_member_refresh_queue_closed",
-                        catalog_zone = %catalog.origin,
-                        zone = %member_origin,
-                        "catalog member refresh queue closed"
-                    );
-                }
-            }
+            pending_catalog_refreshes.push(member_origin);
         }
 
         let mut retained = new_member_keys
@@ -1108,6 +1068,47 @@ impl CatalogManager {
                     .map(|(key, member)| (key, member.zone))
                     .collect(),
             );
+
+        drop(reconcile_guard);
+        let Some(refresh_tx) = refresh_tx.upgrade() else {
+            for member_origin in pending_catalog_refreshes {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_refresh_queue_closed",
+                    catalog_zone = %catalog_origin,
+                    zone = %member_origin,
+                    "catalog member refresh queue closed"
+                );
+            }
+            return;
+        };
+        for member_origin in pending_catalog_refreshes {
+            if refresh_tx
+                .send(RefreshRequest {
+                    zone: member_origin.clone(),
+                    requested_serial: None,
+                    reason: RefreshReason::Catalog,
+                })
+                .await
+                .is_err()
+            {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_refresh_queue_closed",
+                    catalog_zone = %catalog_origin,
+                    zone = %member_origin,
+                    "catalog member refresh queue closed"
+                );
+                continue;
+            }
+            info!(
+                category = "transfer",
+                event = "catalog_member_added",
+                catalog_zone = %catalog_origin,
+                zone = %member_origin,
+                "added catalog-managed member zone"
+            );
+        }
     }
 }
 

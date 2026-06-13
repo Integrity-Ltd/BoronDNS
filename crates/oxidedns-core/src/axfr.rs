@@ -674,7 +674,8 @@ fn validate_current_soa(
     zone_apex: &DomainName,
     qclass: u16,
 ) -> Result<(), IxfrError> {
-    if record.owner != *zone_apex
+    let zone_apex = zone_apex.to_ascii_lowercased();
+    if record.owner.to_ascii_lowercased() != zone_apex
         || record.rr_type != RecordType::Soa as u16
         || record.class != qclass
     {
@@ -689,7 +690,9 @@ fn validate_current_soa_view(
     zone_apex: &DomainName,
     qclass: u16,
 ) -> Result<(), IxfrError> {
-    if record.owner != zone_apex || record.class != qclass {
+    if record.owner.to_ascii_lowercased() != zone_apex.to_ascii_lowercased()
+        || record.class != qclass
+    {
         return Err(IxfrError::InvalidCurrentSoa);
     }
     soa_serial(record.rdata).map_err(|_| IxfrError::InvalidCurrentSoa)?;
@@ -1699,6 +1702,17 @@ mod tests {
     }
 
     #[test]
+    fn builds_ixfr_query_from_borrowed_soa_view_with_mixed_case_configured_apex() {
+        let apex = DomainName::from_absolute_str("EXAMPLE.TEST.").unwrap();
+        let soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let snapshot = ZoneSnapshot::active(apex.clone(), Some(1), rrsets_from_records(vec![soa]));
+        let soa_view = snapshot.soa_record_view(1).expect("SOA view");
+
+        build_ixfr_query_from_soa_view(0x1234, &apex, 1, soa_view)
+            .expect("IXFR query for mixed-case configured apex");
+    }
+
+    #[test]
     fn rejects_ixfr_query_without_current_apex_soa() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let a = record(
@@ -2208,6 +2222,28 @@ mod tests {
             &[ixfr_message(0x1234, vec![mixed_case_soa])],
         )
         .expect("mode 3 current with mixed-case apex SOA");
+
+        assert_eq!(response, IxfrResponse::Current);
+    }
+
+    #[test]
+    fn parses_ixfr_mode3_current_response_with_mixed_case_configured_apex() {
+        let apex = DomainName::from_absolute_str("EXAMPLE.TEST.").unwrap();
+        let current_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            rrsets_from_records(vec![current_soa]),
+        );
+        let lower_response_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(0x1234, vec![lower_response_soa])],
+        )
+        .expect("mode 3 current with mixed-case configured apex");
 
         assert_eq!(response, IxfrResponse::Current);
     }
