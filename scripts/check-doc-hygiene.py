@@ -113,7 +113,7 @@ SCRIPT_BANNED_PHRASES = [
 
 REQUIRED_TEXT_BY_PATH = {
     "README.md": [
-        "The implemented Engineering MVP is wider than a minimal static-zone secondary",
+        "The current release-candidate scope is wider than a minimal static-zone secondary",
         "Retained feature slices stay in scope exactly as bounded in",
         "IXFR with AXFR fallback, outbound XoT transfers",
         "passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones",
@@ -125,7 +125,7 @@ REQUIRED_TEXT_BY_PATH = {
         "Non-normative quality candidate",
         "Formal release evidence target",
         "Rows marked",
-        "not an Engineering MVP blocker unless promoted to a requirement",
+        "not a release blocker unless promoted to a requirement",
         "documentation ownership map",
     ],
     "docs/catalog-zone-rfc9432.md": [
@@ -136,8 +136,8 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/README.md": [
         "## Document Ownership Rules",
         "What is required behavior?",
-        "What is the local Engineering MVP boundary?",
-        "What is still open?",
+        "What is the current release-candidate boundary?",
+        "What is still open for SRS acceptance?",
         "What evidence exists by requirement family?",
         "What requirement ranges map to evidence?",
         "How are RFC traceability rules maintained?",
@@ -181,7 +181,7 @@ REQUIRED_TEXT_BY_PATH = {
     "docs/implementation-plan.md": [
         "This plan deliberately stays at feature-slice granularity.",
         "it is not the canonical inventory of every evidence script",
-        "At plan level, Engineering MVP scope is the deployable secondary-authoritative",
+        "At plan level, release-candidate scope is the deployable",
         "exact retained feature slices, source ownership, representative evidence",
         "put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`",
         "put evidence state by requirement family in `docs/verification-ledger.md`",
@@ -200,8 +200,8 @@ REQUIRED_TEXT_BY_PATH = {
         "implemented-feature scope, review disposition, gap register, and this boundary",
     ],
     "docs/implemented-feature-scope.md": [
-        "The external review's suggested minimal MVP cut is treated as a floor for code",
-        "not a replacement for the current Engineering MVP",
+        "The external review's suggested minimal static-zone cut is treated as a floor for code",
+        "not a replacement for the current release candidate",
         "If code removes one of these slices, update this document",
         "nearby behavior that is not claimed by the slice",
     ],

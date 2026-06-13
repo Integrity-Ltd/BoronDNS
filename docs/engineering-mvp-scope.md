@@ -1,7 +1,7 @@
-# Engineering MVP Scope
+# Release Candidate Scope
 
-The Engineering MVP is the current local target for OxideDNS. It is not the SRS
-`ODS-VER-008` release-acceptance gate.
+This document defines the current release-candidate scope for OxideDNS. It is
+not the SRS `ODS-VER-008` release-acceptance gate.
 
 ## In Scope
 
@@ -15,9 +15,9 @@ The Engineering MVP is the current local target for OxideDNS. It is not the SRS
 - Documentation that records current implementation evidence and the remaining
   release-acceptance gaps without claiming final SRS acceptance.
 - Implemented post-Alpha protocol slices listed in
-  `docs/implemented-feature-scope.md`. These are not removed from Engineering
-  MVP scope merely because they exceed a minimal static-zone secondary-server
-  trim.
+  `docs/implemented-feature-scope.md`. These are not removed from
+  release-candidate scope merely because they exceed a minimal static-zone
+  secondary-server trim.
 
 The retained post-Alpha slices are code-backed scope, not planning notes.
 `scripts/check-srs-review-disposition.py` verifies those slices against current
@@ -26,10 +26,11 @@ paths, and SRS owner identifiers. If a retained slice is removed from code, the
 implemented-feature scope, review disposition, gap register, and this boundary
 must change in the same patch.
 
-## Out Of Scope
+## Release Closeout
 
-The Engineering MVP must not require completed long-running evidence. The
-following are later SRS acceptance or release/operations activities:
+The bounded local preflight must not claim completed long-running evidence
+unless release artifacts exist. The following are release closeout or formal
+SRS acceptance activities tracked in `docs/mvp-gap-register.md`:
 
 - 24-hour fuzz campaigns per parser target.
 - 30-day soak execution.
@@ -39,18 +40,19 @@ following are later SRS acceptance or release/operations activities:
 - Independent reproducible-build comparison.
 - Signed release artifact production.
 
-Setup scripts, schemas, runbooks, and handoff directories for those later
-activities may exist in this repository for later release/operations use. They
-are not Engineering MVP deliverables and are not Engineering MVP evidence.
+Setup scripts, schemas, runbooks, and handoff directories for those activities
+may exist in this repository for release/operations use. They are not
+release-candidate evidence until the generated artifacts are retained and cited
+by the gap register, release notes, or verification ledger.
 
 ## Check Profile
 
-`scripts/check.sh` is the local Engineering MVP quality gate. It may validate
+`scripts/check.sh` is the local release-candidate quality gate. It may validate
 script syntax and dry-run campaign wiring, but it must not execute the
 long-running activities or generate long-running handoff evidence listed above.
 
-`scripts/engineering-mvp-evidence.sh` is the bounded local evidence snapshot for
-the Engineering MVP profile. By default it runs only the narrow local evidence
-commands listed in `docs/evidence-command-catalog.md`, applies a per-command
-timeout, and records broader release/operations commands as deferred rather
-than executing them.
+`scripts/engineering-mvp-evidence.sh` is the legacy-named bounded local
+evidence snapshot for the release-candidate preflight profile. By default it
+runs only the narrow local evidence commands listed in
+`docs/evidence-command-catalog.md`, applies a per-command timeout, and records
+broader release/operations commands as deferred rather than executing them.

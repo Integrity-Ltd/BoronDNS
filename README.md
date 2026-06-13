@@ -38,15 +38,17 @@ are not implied unless that document names them.
 
 ## Project Status
 
-OxideDNS targets an **Engineering MVP**: a working, testable secondary server with
-clear operating boundaries. It is not yet a final SRS release-acceptance build —
-the remaining formal release-acceptance evidence queue is tracked separately in
-the [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md).
-That register currently has no open Engineering MVP implementation decisions;
-its active rows are release-evidence, formal acceptance, or project-decision
-overlays. The implemented Engineering MVP is wider than a minimal static-zone
-secondary. Retained feature slices stay in
-scope exactly as bounded in [Implemented feature scope](docs/implemented-feature-scope.md):
+OxideDNS is now tracked as a **release-candidate secondary server**, not as a
+minimal local milestone. It is not yet a final formal SRS acceptance build: the
+remaining closeout work is tracked in the
+[SRS acceptance gap register](docs/mvp-gap-register.md). That register separates
+implemented behavior and retained evidence from the release artifacts,
+operator sign-off, and formal decisions still needed before an `ODS-VER-008`
+acceptance claim.
+
+The current release-candidate scope is wider than a minimal static-zone
+secondary. Retained feature slices stay in scope exactly as bounded in
+[Implemented feature scope](docs/implemented-feature-scope.md):
 IXFR with AXFR fallback, outbound XoT transfers, passive DNSSEC serving, RRL,
 DNS Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
 identification. Adjacent features are not implied unless that scope document
@@ -56,7 +58,7 @@ names them.
 
 - New checkout or deployment setup: [DevOps getting started](docs/devops-getting-started.md)
 - Detailed operations reference: [Operator deployment guide](docs/operator-deployment-guide.md)
-- Current implementation target: [Engineering MVP scope](docs/engineering-mvp-scope.md)
+- Current release scope: [Release-candidate scope](docs/engineering-mvp-scope.md)
 - Retained implemented feature slices: [Implemented feature scope](docs/implemented-feature-scope.md)
 - Verification status: [Verification ledger](docs/verification-ledger.md)
 - Full requirements: [OxideDNS Secondary SRS v0.9.1](docs/OxideDNS-Secondary-SRS-v0.9.1.md)
@@ -118,7 +120,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Implemented feature scope](docs/implemented-feature-scope.md)
-- [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md)
+- [SRS acceptance gap register](docs/mvp-gap-register.md)
 - [SRS review disposition](docs/srs-review-disposition.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)

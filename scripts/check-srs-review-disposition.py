@@ -72,8 +72,8 @@ REQUIRED_SCOPE_TRIM_BOUNDARY_TERMS = [
 
 REQUIRED_CODE_ALIGNMENT_BOUNDARIES = [
     "## Review Baseline Alignment",
-    "suggested minimal MVP cut is treated as a floor for code alignment",
-    "not a replacement for the current Engineering MVP",
+    "suggested minimal static-zone cut is treated as a floor for code alignment",
+    "not a replacement for the current release candidate",
     "Review baseline area",
     "Current code-aligned status",
     "Static TOML configuration with explicit zones, primaries, and optional TSIG",

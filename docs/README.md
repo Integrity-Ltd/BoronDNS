@@ -9,13 +9,13 @@ The current normative Software Requirements Specification is
 The documentation set intentionally separates three things:
 
 - **Normative requirements** in the current SRS.
-- **Current Engineering MVP scope** in the scope and readiness documents, with
+- **Current release-candidate scope** in the scope and readiness documents, with
   retained feature slices and remaining gaps in their own owner documents.
-- **Later release-acceptance evidence** such as long fuzz campaigns, reference
+- **Formal release-acceptance closeout** such as long fuzz campaigns, reference
   hardware benchmarks, soak execution, signed release evidence, and external
   operator acceptance.
 
-Implemented protocol families must not be removed from Engineering MVP scope
+Implemented protocol families must not be removed from release-candidate scope
 only because they exceed a minimal static-zone secondary-server cut. The exact
 retained slices, code owners, and nearby non-claims live in
 `docs/implemented-feature-scope.md`; remaining work for those features is
@@ -31,9 +31,9 @@ and slowly diverging.
 | Question | Owning document | Other documents should |
 | --- | --- | --- |
 | What is required behavior? | `OxideDNS-Secondary-SRS-v0.9.1.md` | Link to the requirement ID instead of restating normative wording. |
-| What is the local Engineering MVP boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred. |
-| Is the Engineering MVP ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
-| What is still open? | `mvp-gap-register.md` | Keep only short active gaps here; put detailed evidence in the ledger or Appendix A. |
+| What is the current release-candidate boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred from local preflight. |
+| Is the release candidate ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
+| What is still open for SRS acceptance? | `mvp-gap-register.md` | Keep only short active closeout gaps here; put detailed evidence in the ledger or Appendix A. |
 | What evidence exists by requirement family? | `verification-ledger.md` | Keep coarse status here; put per-requirement/range detail in Appendix A. |
 | What requirement ranges map to evidence? | `appendix-a-traceability-matrix.md` | Keep the detailed traceability rows here; do not duplicate them in the gap register. |
 | How are RFC traceability rules maintained? | `rfc-traceability-policy.md` | Keep RFC mapping conventions, status vocabulary, and out-of-scope clause handling here; keep current structured compliance rows in `rfc-compliance-assertions.md`. |
@@ -103,29 +103,29 @@ and slowly diverging.
 - `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
   and XDP evidence campaign runbook for the local physical hosts.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
-  Engineering MVP boundary, opt-in member-transfer extensions, and E2E test
+  release-candidate boundary, opt-in member-transfer extensions, and E2E test
   shape.
 
-## Engineering MVP and Evidence
+## Release Scope and Evidence
 
-- `engineering-mvp-scope.md`: local Engineering MVP boundary, including the
-  exclusion of completed long-running evidence from this milestone and the
-  implemented post-Alpha protocol slices that remain in scope.
+- `engineering-mvp-scope.md`: current release-candidate boundary, including the
+  separation of local preflight from release closeout and the implemented
+  post-Alpha protocol slices that remain in scope.
 - `implemented-feature-scope.md`: code-aligned retained slices, current source
   ownership, evidence ownership, and nearby non-claims for implemented
   post-Alpha features.
-- `engineering-mvp-readiness.md`: local Engineering MVP readiness review entry
+- `engineering-mvp-readiness.md`: release-candidate readiness review entry
   point and stop-condition checklist.
 - `implementation-plan.md`: milestone direction and ownership pointers, without
   duplicating the detailed feature inventory, current status, or
   release-acceptance checklist.
-- `mvp-gap-register.md`: short active queue of release blockers and evidence
-  gaps.
+- `mvp-gap-register.md`: short active queue of SRS acceptance blockers and
+  evidence gaps.
 - `evidence-command-catalog.md`: command inventory consumed by release evidence
   snapshot tooling.
 - `release-evidence-guide.md`: release snapshot options, handoff directories,
   and release/operations evidence runbook.
-- `verification-ledger.md`: lightweight Engineering MVP and SRS verification
+- `verification-ledger.md`: lightweight release-candidate and SRS verification
   evidence ledger.
 - `test-plan.md`: verification cadence, harness, and regression-policy plan.
 - `appendix-a-traceability-matrix.md`: working traceability matrix.

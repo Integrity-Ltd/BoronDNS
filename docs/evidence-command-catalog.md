@@ -1,8 +1,8 @@
 # Evidence Command Catalog
 
-This file lists command entry points used by the Engineering MVP and later SRS
-acceptance evidence flows. It is command inventory only; current evidence state
-and remaining gaps stay in `docs/mvp-gap-register.md`,
+This file lists command entry points used by the release-candidate preflight and
+later SRS acceptance evidence flows. It is command inventory only; current
+evidence state and remaining gaps stay in `docs/mvp-gap-register.md`,
 `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`.
 
 `scripts/release-evidence-snapshot.sh` copies all shell blocks below into its
@@ -10,7 +10,7 @@ snapshot manifest. When `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` is set, it executes
 only the commands in the broader SRS acceptance block, skipping recursive
 snapshot commands.
 
-## Engineering MVP Evidence Profile
+## Release-Candidate Preflight Profile
 
 ```sh
 scripts/engineering-mvp-evidence.sh
@@ -33,7 +33,7 @@ uses per-command timeouts, and writes broader release/operations commands to a
 deferred list instead of executing them. Transitive unsafe dependency
 enumeration through `scripts/capture-unsafe-dependency-evidence.sh` is kept in
 the broader SRS acceptance profile because it depends on `cargo-geiger` and is
-release-review evidence rather than a cheap Engineering MVP gate.
+release-review evidence rather than a cheap release-candidate gate.
 
 ## Broader SRS Acceptance Commands
 

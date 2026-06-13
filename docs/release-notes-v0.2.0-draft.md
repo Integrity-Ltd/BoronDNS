@@ -1,8 +1,8 @@
 # OxideDNS v0.2.0 Release Notes Draft
 
 Status: draft release material for the v0.2.0 preparation branch. This is not
-the final release-acceptance note and does not claim that the formal SRS MVP
-gate is complete.
+the final release-acceptance note and does not claim that the formal SRS
+`ODS-VER-008` gate is complete.
 
 ## Version Posture
 
@@ -22,8 +22,8 @@ gate is complete.
 
 ## Release Scope Summary
 
-The v0.2.0 preparation branch is intended to publish the cleaner Engineering MVP
-shape now present in source and docs:
+The v0.2.0 preparation branch is intended to publish the cleaner
+release-candidate shape now present in source and docs:
 
 - top-level `--config` and `OXIDEDNS_CONFIG` config-path handling across
   validation, dump, `check-config`, and `serve` modes;
@@ -52,7 +52,9 @@ shape now present in source and docs:
 - Dependency gate: `cargo deny` via the repository check script; the current
   duplicate `getrandom` warning remains informational while advisories, bans,
   licenses, and sources pass.
-- Fuzz/soak record: `docs/two-host-fuzz-soak-campaign.md`.
+- Benchmark record and runbook: `docs/dns-client-benchmark.md`.
+- Fuzz/soak record and first ASan-backed two-host 24-hour fuzz evidence:
+  `docs/two-host-fuzz-soak-campaign.md`.
 - Release evidence runbook: `docs/release-evidence-guide.md`.
 - Release security and signing policy: `SECURITY.md`.
 
@@ -68,6 +70,9 @@ shape now present in source and docs:
 - Fill the formal release-note template with the final commit, release date,
   evidence snapshot path, primary interop versions, signing details, and owner
   sign-off.
+- Decide which SRS acceptance closeout rows are in scope for the v0.2.0 claim.
+  Any row left open must be named as deferred or non-claimed in the final
+  release notes.
 - Run `scripts/release-evidence-snapshot.sh` for the release candidate and keep
   the generated evidence directory.
 - Verify release artifact checksums and either Sigstore/Cosign or detached

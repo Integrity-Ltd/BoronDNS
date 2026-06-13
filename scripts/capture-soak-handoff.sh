@@ -165,7 +165,7 @@ not claim unqualified ODS-NFR-REL-003 evidence.
 
 ## Requirement Mapping
 
-Use \`requirements-traceability.tsv\` as the Engineering MVP handoff map. The completed
+Use \`requirements-traceability.tsv\` as the release-candidate handoff map. The completed
 release evidence must attach this report and the filled TSV/summary artifacts to
 the release snapshot and publish their paths in the release notes.
 
@@ -183,7 +183,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the Engineering MVP setup artifact for later
+This directory is the release-candidate setup artifact for later
 release/operations execution of the long-duration soak. It does not claim that
 the 30-day soak has run. It provides the report template, sample TSV schemas,
 requirement traceability, environment values, and sign-off template needed for

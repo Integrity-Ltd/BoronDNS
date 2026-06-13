@@ -17,13 +17,13 @@ REQUIRED_FILES = [
 ]
 
 REQUIRED_PHRASES = [
-    "# Engineering MVP Readiness",
+    "# Release Candidate Readiness",
     "not full SRS `ODS-VER-008` release acceptance",
     "scripts/check.sh",
     "scripts/engineering-mvp-evidence.sh",
-    "bounded local evidence profile",
+    "bounded local preflight profile",
     "deferred-not-run.txt",
-    "Do not call the Engineering MVP ready",
+    "Do not call the release candidate ready",
     "docs/mvp-gap-register.md",
     "docs/evidence-command-catalog.md",
     "remaining SRS acceptance gaps",
@@ -50,7 +50,7 @@ def normalized(path: Path) -> str:
 
 
 def main() -> None:
-    require(DOC.is_file(), f"missing Engineering MVP readiness document: {DOC}")
+    require(DOC.is_file(), f"missing release-candidate readiness document: {DOC}")
     text = normalized(DOC)
 
     for path in REQUIRED_FILES:

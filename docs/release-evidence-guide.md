@@ -7,16 +7,17 @@ handoff directories used by later release/operations runs. It is separate from
 the Operator Deployment Guide so day-one deployment instructions stay focused on
 running OxideDNS.
 
-The Engineering MVP does not require completed long-running evidence. A
-generated handoff directory proves that the setup and artifact shape exist; it
-does not prove that the benchmark, soak, reproducible-build comparison,
-production-depth logging profile, release-signing review, or external operator
-acceptance has been completed.
+The release candidate does not claim completed long-running evidence unless the
+release artifacts exist. A generated handoff directory proves that the setup and
+artifact shape exist; it does not prove that the benchmark, soak,
+reproducible-build comparison, production-depth logging profile, release-signing
+review, or external operator acceptance has been completed.
 
 ## Snapshot Profiles
 
-`scripts/engineering-mvp-evidence.sh` writes the bounded Engineering MVP
-evidence profile under `target/evidence/engineering-mvp/<timestamp>/`. It runs
+`scripts/engineering-mvp-evidence.sh` writes the legacy-named bounded local
+preflight evidence profile under `target/evidence/engineering-mvp/<timestamp>/`.
+It runs
 security-policy, CLI, log, signal, health/metrics, malformed-query,
 portability, resource, coverage, interface-compatibility, unused-code, and
 functional-requirement-reference checks. It does not run transitive unsafe

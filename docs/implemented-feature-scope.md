@@ -1,14 +1,14 @@
 # Implemented Feature Scope
 
 This document is the code-aligned boundary for protocol families that exceed a
-minimal static-zone secondary DNS MVP but are already implemented and tested in
-OxideDNS. It exists to keep the Engineering MVP scope from drifting into either
-direction: it prevents removing working features merely because they were
-outside a smaller external-review trim, and it prevents nearby unimplemented
-features from being implied by broad feature names.
+minimal static-zone secondary baseline but are already implemented and tested in
+OxideDNS. It exists to keep the release-candidate scope from drifting into
+either direction: it prevents removing working features merely because they
+were outside a smaller external-review trim, and it prevents nearby
+unimplemented features from being implied by broad feature names.
 
 `docs/srs-review-disposition.md` owns the external-review rationale.
-`docs/engineering-mvp-scope.md` owns the local milestone boundary.
+`docs/engineering-mvp-scope.md` owns the release-candidate boundary.
 This file owns the retained implementation slices.
 
 ## Maintenance Rule
@@ -24,7 +24,8 @@ Each retained feature family below must name:
 `scripts/check-srs-review-disposition.py` checks this file against current
 source paths, evidence paths, implementation markers, and representative test
 markers. If code removes one of these slices, update this document, the review
-disposition, the Engineering MVP scope, and the gap register in the same patch.
+disposition, the release-candidate scope, and the gap register in the same
+patch.
 
 This document is intentionally code-owned. External review suggestions to trim
 scope are reconciled in `docs/srs-review-disposition.md`, but this file remains
@@ -33,9 +34,9 @@ claims, and what adjacent behavior it does not claim.
 
 ## Review Baseline Alignment
 
-The external review's suggested minimal MVP cut is treated as a floor for code
-alignment, not a replacement for the current Engineering MVP. The table below
-maps that baseline to current code and evidence so "trim the MVP" cannot be
+The external review's suggested minimal static-zone cut is treated as a floor for code
+alignment, not a replacement for the current release candidate. The table below
+maps that baseline to current code and evidence so "trim the product" cannot be
 read as removing behavior that already exists and is still in scope.
 
 | Review baseline area | Current code-aligned status | Current source ownership | Representative evidence ownership |
@@ -69,9 +70,9 @@ passive DNSSEC serving, and opt-in CHAOS diagnostics.
 
 ## Formal Acceptance Posture
 
-These slices are Engineering MVP scope because current code and tests own them.
-They are not complete formal SRS release-acceptance claims until the relevant
-rows in `docs/mvp-gap-register.md`, `docs/verification-ledger.md`, and
+These slices are release-candidate scope because current code and tests own
+them. They are not complete formal SRS release-acceptance claims until the
+relevant rows in `docs/mvp-gap-register.md`, `docs/verification-ledger.md`, and
 `docs/appendix-a-traceability-matrix.md` have retained release-grade evidence.
 
 ## Retained Support And Evidence Tooling

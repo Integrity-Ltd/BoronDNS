@@ -20,14 +20,13 @@ HANDOFF_SCRIPTS = [
 
 REQUIRED_SCOPE_PHRASES = [
     "not the SRS",
-    "must not require completed long-running evidence",
+    "must not claim completed long-running evidence unless release artifacts exist",
     "Implemented post-Alpha protocol slices listed in",
-    "not removed from Engineering MVP scope merely because they exceed a minimal static-zone secondary-server trim",
+    "not removed from release-candidate scope merely because they exceed a minimal static-zone secondary-server trim",
     "24-hour fuzz campaigns",
     "30-day soak execution",
     "Reference Hardware/Profile benchmark campaigns",
-    "not Engineering MVP deliverables",
-    "not Engineering MVP evidence",
+    "not release-candidate evidence until the generated artifacts are retained and cited",
 ]
 
 FORBIDDEN_CHECK_COMMANDS = [
@@ -106,38 +105,38 @@ def main() -> None:
 
     plan = normalized(PLAN)
     require(
-        "Engineering MVP must not require completed long-running evidence" in plan,
-        f"{PLAN}: missing Engineering MVP long-running evidence exclusion",
+        "release-candidate scope is the deployable secondary-authoritative" in plan,
+        f"{PLAN}: missing release-candidate scope statement",
     )
 
     gaps = normalized(GAPS)
     require(
-        "Long-running evidence is out of Engineering MVP scope" in gaps,
-        f"{GAPS}: missing long-running evidence scope statement",
+        "Acceptance Closeout Still Open" in gaps,
+        f"{GAPS}: missing SRS acceptance closeout table",
     )
 
     ledger = normalized(LEDGER)
     require(
-        "completed long-running evidence is not an Engineering MVP requirement" in ledger,
-        f"{LEDGER}: missing Engineering MVP long-running evidence note",
+        "completed long-running evidence is not automatically required by local preflight" in ledger,
+        f"{LEDGER}: missing release-candidate long-running evidence note",
     )
     require(
-        "block Engineering MVP when the missing evidence is explicitly deferred" in ledger,
-        f"{LEDGER}: missing Engineering MVP interpretation for Partial ledger rows",
+        "block a release candidate when the missing evidence is explicitly deferred" in ledger,
+        f"{LEDGER}: missing release-candidate interpretation for Partial ledger rows",
     )
 
     readiness = normalized(READINESS)
     require(
         "not full SRS `ODS-VER-008` release acceptance" in readiness,
-        f"{READINESS}: missing Engineering MVP readiness SRS-acceptance boundary",
+        f"{READINESS}: missing release-candidate readiness SRS-acceptance boundary",
     )
     require(
         "code-aligned source of truth for retained implemented slices" in readiness,
         f"{READINESS}: missing retained implemented slice readiness boundary",
     )
     require(
-        "Do not call the Engineering MVP ready" in readiness,
-        f"{READINESS}: missing Engineering MVP stop conditions",
+        "Do not call the release candidate ready" in readiness,
+        f"{READINESS}: missing release-candidate stop conditions",
     )
 
     for path in [CHECK, EVIDENCE]:
@@ -145,7 +144,7 @@ def main() -> None:
         for command in FORBIDDEN_CHECK_COMMANDS:
             require(
                 command not in script,
-                f"{path}: Engineering MVP profile must not run {command}",
+                f"{path}: release-candidate profile must not run {command}",
             )
     check = CHECK.read_text(encoding="utf-8")
     require(
@@ -156,11 +155,11 @@ def main() -> None:
     for command in REQUIRED_EVIDENCE_COMMANDS:
         require(
             command in evidence,
-            f"{EVIDENCE}: Engineering MVP evidence profile must include {command}",
+            f"{EVIDENCE}: release-candidate evidence profile must include {command}",
         )
     require(
         "timeout --preserve-status" in evidence,
-        f"{EVIDENCE}: Engineering MVP evidence commands must have a timeout guard",
+        f"{EVIDENCE}: release-candidate evidence commands must have a timeout guard",
     )
     require(
         "deferred-not-run.txt" in evidence,
@@ -175,13 +174,13 @@ def main() -> None:
         for line in run_lines:
             require(
                 command not in line,
-                f"{EVIDENCE}: Engineering MVP evidence profile must not run {command}",
+                f"{EVIDENCE}: release-candidate evidence profile must not run {command}",
             )
 
     release_guide = normalized(RELEASE_GUIDE)
     require(
         "does not run transitive unsafe dependency enumeration, fuzz build/campaign commands, invariant audits, real-primary interop scripts, or `scripts/perf-smoke.sh` in the default bounded profile" in release_guide,
-        f"{RELEASE_GUIDE}: must not claim the bounded Engineering MVP profile runs unsafe dependency enumeration, fuzz, invariant, interop, or perf-smoke commands",
+        f"{RELEASE_GUIDE}: must not claim the bounded release-candidate profile runs unsafe dependency enumeration, fuzz, invariant, interop, or perf-smoke commands",
     )
     for phrase in [
         "architectural, read-only-runtime, safe-Rust, spoofing, log-field, maintainability, XoT revocation, and passive-DNSSEC audit output",
@@ -201,7 +200,7 @@ def main() -> None:
     ]:
         require(
             stale_claim not in release_guide,
-            f"{RELEASE_GUIDE}: stale Engineering MVP evidence claim: {stale_claim}",
+            f"{RELEASE_GUIDE}: stale release-candidate evidence claim: {stale_claim}",
         )
 
     for path in HANDOFF_SCRIPTS:
@@ -209,11 +208,11 @@ def main() -> None:
         for phrase in FORBIDDEN_HANDOFF_PHRASES:
             require(
                 phrase not in script,
-                f"{path}: stale Engineering MVP handoff phrase: {phrase}",
+                f"{path}: stale release-candidate handoff phrase: {phrase}",
             )
         require(
-            "Engineering MVP setup artifact" in script,
-            f"{path}: generated handoff README must name Engineering MVP setup",
+            "release-candidate setup artifact" in script,
+            f"{path}: generated handoff README must name release-candidate setup",
         )
 
     print("engineering_mvp_scope_check=passed")

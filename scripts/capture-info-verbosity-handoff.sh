@@ -191,7 +191,7 @@ cat >"$evidence_dir/README.md" <<EOF
 
 Created UTC: $timestamp
 
-This directory is the Engineering MVP setup artifact for later
+This directory is the release-candidate setup artifact for later
 release/operations profiling of \`info\` verbosity under production-representative
 traffic. It does not claim that production-depth profiling has run. It provides
 the runbook, report template, sample TSV schemas, requirement traceability,
