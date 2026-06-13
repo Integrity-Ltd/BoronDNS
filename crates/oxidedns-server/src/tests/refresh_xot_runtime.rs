@@ -651,6 +651,96 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
 }
 
 #[tokio::test]
+async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "alpha.test."
+                primaries = ["192.0.2.53:53"]
+
+                [[zones]]
+                name = "beta.test."
+                primaries = ["192.0.2.54:53"]
+            "#,
+    )
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let transfer_limit = Arc::new(tokio::sync::Semaphore::new(1));
+    let held_permit = transfer_limit
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("hold only transfer permit");
+    let zones = ZoneStore::new();
+    for zone in ["alpha.test.", "beta.test."] {
+        let apex = DomainName::from_absolute_str(zone).unwrap();
+        zones.insert_snapshot(ZoneSnapshot::active(
+            apex.clone(),
+            Some(1),
+            vec![Rrset::new(
+                apex.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(1)],
+            )],
+        ));
+    }
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(RefreshRequest {
+        zone: DomainName::from_absolute_str("alpha.test.").unwrap(),
+        requested_serial: Some(2),
+        reason: super::RefreshReason::Notify,
+    })
+    .await
+    .unwrap();
+
+    let worker = tokio::spawn(serve_refresh_requests(
+        rx,
+        zones,
+        CatalogRuntime {
+            manager: CatalogManager::from_config(&config),
+            transfer_plan,
+            refresh_registry: ZoneRefreshRegistry::without_jitter(
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            ),
+            notify_authority: NotifyAuthority::from_config_for_test(&config),
+            refresh_tx: mpsc::channel(1).0.downgrade(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+        },
+        IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+        RuntimeMetrics::new(),
+        RefreshWorkerSettings {
+            axfr_timeout: std::time::Duration::from_millis(100),
+            ixfr_timeout: std::time::Duration::from_millis(100),
+            tcp_connect_timeout: std::time::Duration::from_millis(100),
+            transfer_limit,
+            telemetry: ControlPlaneTelemetryReporter::disabled(),
+        },
+    ));
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(RefreshRequest {
+        zone: DomainName::from_absolute_str("beta.test.").unwrap(),
+        requested_serial: Some(2),
+        reason: super::RefreshReason::Notify,
+    }))
+    .await
+    .expect("refresh worker should drain the bounded queue before transfer permits free")
+    .expect("second refresh request queued");
+
+    worker.abort();
+    let _ = worker.await;
+    drop(held_permit);
+}
+
+#[tokio::test]
 async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
     let (primary, peer_rx) = spawn_soa_primary_recording_peer(2).await;
     let config = ServerConfig::from_toml_str(&format!(

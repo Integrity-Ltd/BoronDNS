@@ -2846,36 +2846,37 @@ async fn serve_refresh_requests(
                     continue;
                 }
 
-                let transfer_permit = settings.transfer_limit
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("transfer semaphore is not closed");
                 let axfr_timeout = settings.axfr_timeout;
                 let ixfr_timeout = settings.ixfr_timeout;
                 let tcp_connect_timeout = settings.tcp_connect_timeout;
                 let telemetry = settings.telemetry.clone();
+                let transfer_limit = settings.transfer_limit.clone();
                 let zones = zones.clone();
                 let catalog_runtime = catalog_runtime.clone();
                 let ixfr_cooldowns = ixfr_cooldowns.clone();
                 let metrics = metrics.clone();
                 transfers.spawn(async move {
-                    let _transfer_permit = transfer_permit;
-                    let outcome = refresh_zone_from_primaries_with_outcome(
-                        &zones,
-                        &plan,
-                        request.requested_serial,
-                        RefreshAttemptContext {
-                            ixfr_cooldowns: &ixfr_cooldowns,
-                            metrics: &metrics,
-                            secrets: catalog_runtime.secrets.clone(),
-                            ixfr_timeout,
-                            axfr_timeout,
-                            tcp_connect_timeout,
-                            reason: request.reason.as_str(),
-                        },
-                    )
-                    .await;
+                    let outcome = {
+                        let _transfer_permit = transfer_limit
+                            .acquire_owned()
+                            .await
+                            .expect("transfer semaphore is not closed");
+                        refresh_zone_from_primaries_with_outcome(
+                            &zones,
+                            &plan,
+                            request.requested_serial,
+                            RefreshAttemptContext {
+                                ixfr_cooldowns: &ixfr_cooldowns,
+                                metrics: &metrics,
+                                secrets: catalog_runtime.secrets.clone(),
+                                ixfr_timeout,
+                                axfr_timeout,
+                                tcp_connect_timeout,
+                                reason: request.reason.as_str(),
+                            },
+                        )
+                        .await
+                    };
                     match outcome.success {
                         Some(success) => {
                             let (metadata, updated_snapshot) =
@@ -3039,30 +3040,30 @@ async fn run_initial_zone_loads(
         let ixfr_timeout = settings.ixfr_timeout;
         let tcp_connect_timeout = settings.tcp_connect_timeout;
         let telemetry = settings.telemetry.clone();
-        let transfer_permit = settings
-            .transfer_limit
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("transfer semaphore is not closed");
+        let transfer_limit = settings.transfer_limit.clone();
 
         transfers.spawn(async move {
-            let _transfer_permit = transfer_permit;
-            let outcome = refresh_zone_from_primaries_with_outcome(
-                &zones,
-                &plan,
-                None,
-                RefreshAttemptContext {
-                    ixfr_cooldowns: &ixfr_cooldowns,
-                    metrics: &metrics,
-                    secrets: catalog_runtime.secrets.clone(),
-                    ixfr_timeout,
-                    axfr_timeout,
-                    tcp_connect_timeout,
-                    reason: "initial",
-                },
-            )
-            .await;
+            let outcome = {
+                let _transfer_permit = transfer_limit
+                    .acquire_owned()
+                    .await
+                    .expect("transfer semaphore is not closed");
+                refresh_zone_from_primaries_with_outcome(
+                    &zones,
+                    &plan,
+                    None,
+                    RefreshAttemptContext {
+                        ixfr_cooldowns: &ixfr_cooldowns,
+                        metrics: &metrics,
+                        secrets: catalog_runtime.secrets.clone(),
+                        ixfr_timeout,
+                        axfr_timeout,
+                        tcp_connect_timeout,
+                        reason: "initial",
+                    },
+                )
+                .await
+            };
             match outcome.success {
                 Some(success) => {
                     let (metadata, updated_snapshot) = success.into_metadata_and_updated_snapshot();
