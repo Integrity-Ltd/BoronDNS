@@ -96,6 +96,7 @@ impl DnsCookieSecretStore {
                     );
                 }
                 Err(error) => {
+                    state.generated_at = Instant::now();
                     warn!(
                         category = "cookie",
                         %error,

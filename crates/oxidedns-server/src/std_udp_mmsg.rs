@@ -6,12 +6,14 @@ use std::{
 };
 
 #[cfg(not(target_os = "linux"))]
-use crate::send_std_udp_batch_fallback;
+use crate::send_std_udp_batch_fallback_with_successes;
+use crate::udp::{UdpIoErrorAction, classify_udp_send_error};
 use crate::{UdpInbound, UdpOutbound, UdpPacketTarget};
 
 const MAX_MMSG_BATCH: usize = 1024;
 const SEND_WOULDBLOCK_RETRIES: usize = 256;
 const SEND_WOULDBLOCK_SPINS: usize = 64;
+const SEND_RESOURCE_BACKOFF_RETRIES: usize = 3;
 
 pub(crate) struct StdUdpMmsg {
     capacity: usize,
@@ -66,17 +68,25 @@ impl StdUdpMmsg {
         socket: &UdpSocket,
         outbound: &[UdpOutbound],
     ) -> io::Result<usize> {
+        Ok(self.send_batch_with_successes(socket, outbound)?.len())
+    }
+
+    pub(crate) fn send_batch_with_successes(
+        &mut self,
+        socket: &UdpSocket,
+        outbound: &[UdpOutbound],
+    ) -> io::Result<Vec<usize>> {
         if outbound.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         #[cfg(target_os = "linux")]
         {
-            self.send_batch_linux(socket, outbound)
+            self.send_batch_linux_with_successes(socket, outbound)
         }
         #[cfg(not(target_os = "linux"))]
         {
             let _ = self;
-            send_std_udp_batch_fallback(socket, outbound)
+            send_std_udp_batch_fallback_with_successes(socket, outbound)
         }
     }
 
@@ -178,18 +188,20 @@ impl StdUdpMmsg {
     }
 
     #[cfg(target_os = "linux")]
-    fn send_batch_linux(
+    fn send_batch_linux_with_successes(
         &mut self,
         socket: &UdpSocket,
         outbound: &[UdpOutbound],
-    ) -> io::Result<usize> {
+    ) -> io::Result<Vec<usize>> {
         use std::os::fd::AsRawFd;
 
-        let mut sent = 0usize;
+        let mut cursor = 0usize;
+        let mut sent_indices = Vec::new();
         let mut blocked_retries = 0usize;
-        while sent < outbound.len() && blocked_retries < SEND_WOULDBLOCK_RETRIES {
-            let count = self.capacity.min(outbound.len() - sent);
-            self.prepare_send_messages(&outbound[sent..sent + count])?;
+        let mut resource_backoff_retries = 0usize;
+        while cursor < outbound.len() && blocked_retries < SEND_WOULDBLOCK_RETRIES {
+            let count = self.capacity.min(outbound.len() - cursor);
+            self.prepare_send_messages(&outbound[cursor..cursor + count])?;
             // SAFETY: `socket` is a live UDP socket; `messages[..count]` has
             // msghdr entries pointing to live response buffers and sockaddr
             // storage owned by `self` for the duration of the call.
@@ -207,25 +219,44 @@ impl StdUdpMmsg {
                 if (result as usize) < count {
                     self.stats.send_partial_syscalls += 1;
                 }
-                sent += result as usize;
+                sent_indices.extend(cursor..cursor + result as usize);
+                cursor += result as usize;
                 blocked_retries = 0;
+                resource_backoff_retries = 0;
                 continue;
             }
 
             let error = io::Error::last_os_error();
-            if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::Interrupted {
-                self.stats.send_wouldblock_retries += 1;
-                blocked_retries += 1;
-                if blocked_retries <= SEND_WOULDBLOCK_SPINS {
-                    std::hint::spin_loop();
-                } else {
-                    std::thread::yield_now();
+            match classify_udp_send_error(&error) {
+                UdpIoErrorAction::Continue
+                    if error.kind() == ErrorKind::WouldBlock
+                        || error.kind() == ErrorKind::Interrupted =>
+                {
+                    self.stats.send_wouldblock_retries += 1;
+                    blocked_retries += 1;
+                    if blocked_retries <= SEND_WOULDBLOCK_SPINS {
+                        std::hint::spin_loop();
+                    } else {
+                        std::thread::yield_now();
+                    }
                 }
-                continue;
+                UdpIoErrorAction::Continue => {
+                    cursor += 1;
+                    blocked_retries = 0;
+                    resource_backoff_retries = 0;
+                }
+                UdpIoErrorAction::Backoff(duration) => {
+                    self.stats.send_wouldblock_retries += 1;
+                    resource_backoff_retries += 1;
+                    if resource_backoff_retries > SEND_RESOURCE_BACKOFF_RETRIES {
+                        break;
+                    }
+                    std::thread::sleep(duration);
+                }
+                UdpIoErrorAction::Fatal => return Err(error),
             }
-            return Err(error);
         }
-        Ok(sent)
+        Ok(sent_indices)
     }
 
     #[cfg(target_os = "linux")]

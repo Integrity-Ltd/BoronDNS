@@ -41,6 +41,7 @@ use tracing::{
 };
 
 use super::observability::{ObservabilityAuth, TransferMaterial};
+use super::udp::{UdpIoErrorAction, classify_udp_recv_error, classify_udp_send_error};
 use super::{
     BoundUdpListener, CatalogManager, CatalogRuntime, CatalogRuntimeConfig, ControlPlaneOperation,
     ControlPlaneOperationClient, ControlPlaneOperationCompletionStatus, ControlPlaneOperationKind,

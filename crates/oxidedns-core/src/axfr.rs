@@ -317,6 +317,23 @@ pub fn axfr_response_message_apex_soa_count(
     message: &[u8],
     require_question: bool,
 ) -> Result<usize, AxfrError> {
+    axfr_response_message_probe(qid, zone_apex, qclass, message, require_question)
+        .map(|probe| probe.apex_soa_count)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AxfrMessageProbe {
+    pub apex_soa_count: usize,
+    pub saw_response_question: bool,
+}
+
+pub fn axfr_response_message_probe(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    message: &[u8],
+    require_question: bool,
+) -> Result<AxfrMessageProbe, AxfrError> {
     let header = Header::parse(message).map_err(|_| AxfrError::MalformedMessage)?;
     if header.id != qid {
         return Err(AxfrError::MismatchedQid);
@@ -351,7 +368,10 @@ pub fn axfr_response_message_apex_soa_count(
             apex_soa_count += 1;
         }
     }
-    Ok(apex_soa_count)
+    Ok(AxfrMessageProbe {
+        apex_soa_count,
+        saw_response_question: header.qdcount == 1,
+    })
 }
 
 fn parse_axfr_response_with_question(
@@ -564,6 +584,71 @@ pub fn parse_ixfr_response(
         .map(Box::new)
         .map(IxfrResponse::Updated)
         .map_err(IxfrError::Axfr)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IxfrMessageProbe {
+    pub answers: Vec<IxfrProbeAnswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IxfrProbeAnswer {
+    pub apex_soa_serial: Option<u32>,
+    pub apex_soa_rdata: Option<Vec<u8>>,
+}
+
+pub fn ixfr_response_message_probe(
+    qid: u16,
+    zone_apex: &DomainName,
+    qclass: u16,
+    message: &[u8],
+) -> Result<IxfrMessageProbe, IxfrError> {
+    let header = Header::parse(message).map_err(|_| IxfrError::MalformedMessage)?;
+    if header.id != qid {
+        return Err(IxfrError::MismatchedQid);
+    }
+    if !header.is_response() {
+        return Err(IxfrError::NotResponse);
+    }
+    if header.opcode_value() != 0 {
+        return Err(IxfrError::MismatchedOpcode);
+    }
+    let rcode = (header.flags & 0x000f) as u8;
+    if rcode != 0 {
+        return Err(IxfrError::ErrorRcode(rcode));
+    }
+
+    let mut offset = validate_ixfr_response_question(
+        message,
+        header.qdcount,
+        zone_apex,
+        RecordType::Ixfr as u16,
+        qclass,
+    )?;
+    let mut answers = Vec::with_capacity(header.ancount as usize);
+    let apex_key = zone_apex.canonical_key();
+    for _ in 0..header.ancount {
+        let (record, consumed) =
+            parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
+        offset += consumed;
+        validate_record_scope(&record, zone_apex, qclass).map_err(ixfr_scope_error)?;
+        let is_apex_soa =
+            record.rr_type == RecordType::Soa as u16 && record.owner.canonical_key() == apex_key;
+        let (apex_soa_serial, apex_soa_rdata) = if is_apex_soa {
+            (
+                Some(soa_serial(&record.rdata).map_err(|_| IxfrError::MalformedMessage)?),
+                Some(record.rdata.clone()),
+            )
+        } else {
+            (None, None)
+        };
+        answers.push(IxfrProbeAnswer {
+            apex_soa_serial,
+            apex_soa_rdata,
+        });
+    }
+
+    Ok(IxfrMessageProbe { answers })
 }
 
 fn apply_ixfr_incremental(
@@ -1308,35 +1393,39 @@ fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Resul
 }
 
 fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<(), AxfrError> {
-    let mut dname_rrsets = HashSet::<(DomainName, u16)>::new();
+    #[derive(Default)]
+    struct OwnerRecordKinds {
+        has_cname: bool,
+        has_dname: bool,
+        has_cname_incompatible_data: bool,
+    }
+
+    let mut owner_kinds = HashMap::<String, OwnerRecordKinds>::new();
+    let mut dname_rrsets = HashSet::<(String, u16)>::new();
     for record in records {
-        if record.rr_type != RecordType::Dname as u16 {
-            continue;
-        }
+        let owner_key = record.owner.canonical_key();
+        let kinds = owner_kinds.entry(owner_key.clone()).or_default();
 
-        let record_key = record.owner.to_ascii_lowercased();
-        let dname_key = (record_key.clone(), record.class);
-        if !dname_rrsets.insert(dname_key) {
-            return Err(AxfrError::MultipleDnameRecords);
+        if record.rr_type == RecordType::Dname as u16 {
+            if !dname_rrsets.insert((owner_key, record.class)) {
+                return Err(AxfrError::MultipleDnameRecords);
+            }
+            kinds.has_dname = true;
+        } else if record.rr_type == RecordType::Cname as u16 {
+            kinds.has_cname = true;
+        } else if !is_dnssec_cname_exception_type(record.rr_type) {
+            kinds.has_cname_incompatible_data = true;
         }
+    }
 
-        if records.iter().any(|other| {
-            other.owner.to_ascii_lowercased() == record_key
-                && other.rr_type == RecordType::Cname as u16
-        }) {
+    for kinds in owner_kinds.values() {
+        if kinds.has_dname && kinds.has_cname {
             return Err(AxfrError::DnameCoexistsWithCname);
         }
     }
 
-    for record in records {
-        let record_key = record.owner.to_ascii_lowercased();
-        if record.rr_type == RecordType::Cname as u16
-            && records.iter().any(|other| {
-                other.owner.to_ascii_lowercased() == record_key
-                    && other.rr_type != RecordType::Cname as u16
-                    && !is_dnssec_cname_exception_type(other.rr_type)
-            })
-        {
+    for kinds in owner_kinds.values() {
+        if kinds.has_cname && kinds.has_cname_incompatible_data {
             return Err(AxfrError::CnameCoexistsWithOtherData);
         }
     }
@@ -1849,6 +1938,23 @@ mod tests {
                 .expect("SOA count"),
             1
         );
+    }
+
+    #[test]
+    fn axfr_stream_probe_accepts_question_only_first_message() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let first = axfr_message(0x1234, Vec::new());
+        let first_probe = axfr_response_message_probe(0x1234, &apex, 1, &first, true)
+            .expect("question-only AXFR message");
+        assert!(first_probe.saw_response_question);
+        assert_eq!(first_probe.apex_soa_count, 0);
+
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let second = transfer_response_message_without_question(0x1234, vec![soa]);
+        let second_probe = axfr_response_message_probe(0x1234, &apex, 1, &second, false)
+            .expect("later AXFR message without repeated question");
+        assert!(!second_probe.saw_response_question);
+        assert_eq!(second_probe.apex_soa_count, 1);
     }
 
     #[test]

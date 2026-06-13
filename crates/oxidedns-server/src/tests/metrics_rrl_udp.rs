@@ -677,6 +677,30 @@ fn af_xdp_packet_io_metrics_are_reported() {
 }
 
 #[test]
+fn udp_io_errors_classify_transient_resource_destination_and_fatal_cases() {
+    assert_eq!(
+        classify_udp_send_error(&std::io::Error::from_raw_os_error(111)),
+        UdpIoErrorAction::Continue
+    );
+    assert!(matches!(
+        classify_udp_send_error(&std::io::Error::from_raw_os_error(105)),
+        UdpIoErrorAction::Backoff(_)
+    ));
+    assert_eq!(
+        classify_udp_send_error(&std::io::Error::from_raw_os_error(9)),
+        UdpIoErrorAction::Fatal
+    );
+    assert!(matches!(
+        classify_udp_recv_error(&std::io::Error::from_raw_os_error(12)),
+        UdpIoErrorAction::Backoff(_)
+    ));
+    assert_eq!(
+        classify_udp_recv_error(&std::io::Error::from_raw_os_error(22)),
+        UdpIoErrorAction::Fatal
+    );
+}
+
+#[test]
 fn hot_path_detail_off_suppresses_udp_packet_counters() {
     let zones = ZoneStore::new();
     let refresh_registry = ZoneRefreshRegistry::without_jitter(
@@ -880,7 +904,7 @@ fn rrl_allowlist_exempts_sources_from_accounting() {
 
 #[test]
 fn notify_log_limiter_suppresses_repeats_and_summarizes() {
-    let limiter = NotifyLogLimiter::new(std::time::Duration::from_secs(60));
+    let limiter = NotifyLogLimiter::new(std::time::Duration::from_secs(60), 100);
     let zone = DomainName::from_absolute_str("example.test.").unwrap();
     let source = "192.0.2.10".parse().unwrap();
     let captured = CapturedEvents::new();
@@ -929,6 +953,27 @@ fn notify_log_limiter_suppresses_repeats_and_summarizes() {
         "distinct_source_prefixes=1",
         "total_suppressed=2",
     ]));
+}
+
+#[test]
+fn notify_log_limiter_suppresses_new_keys_at_capacity() {
+    let limiter = NotifyLogLimiter::new(std::time::Duration::from_secs(60), 1);
+    let zone = DomainName::from_absolute_str("example.test.").unwrap();
+
+    limiter.log_unauthorized("192.0.2.10".parse().unwrap(), &zone);
+    limiter.log_unauthorized("198.51.100.10".parse().unwrap(), &zone);
+    limiter.log_tsig_failure("203.0.113.10".parse().unwrap(), &zone, &TsigError::MissingTsig);
+
+    let summary = limiter.take_summary();
+    assert_eq!(
+        summary,
+        NotifyLogSummary {
+            suppressed_unauthorized: 1,
+            suppressed_tsig_failures: 1,
+            distinct_source_prefixes: 1,
+            total_suppressed: 2,
+        }
+    );
 }
 
 #[test]

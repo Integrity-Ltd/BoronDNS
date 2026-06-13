@@ -76,9 +76,7 @@ pub fn parse_catalog_members(
     validate_catalog_version(&catalog_view)?;
 
     let catalog = catalog_view.origin();
-    let zones_owner = DomainName::from_absolute_str(&format!("zones.{catalog}"))
-        .expect("valid catalog origin builds valid zones owner");
-    let zones_owner_key = zones_owner.canonical_key();
+    let zones_owner_key = catalog_child_owner_key("zones", catalog);
     let mut ptr_records_by_owner = BTreeMap::<String, Vec<_>>::new();
     let extension_rrsets_by_member = extension_rrsets_by_member(catalog_view);
 
@@ -380,9 +378,7 @@ fn parse_semicolon_fields(text: &str) -> impl Iterator<Item = (&str, &str)> {
 
 fn validate_catalog_version(catalog_view: &CatalogZoneView<'_>) -> Result<(), CatalogError> {
     let catalog = catalog_view.origin();
-    let version_owner = DomainName::from_absolute_str(&format!("version.{catalog}"))
-        .expect("valid catalog origin builds valid version owner");
-    let version_owner_key = version_owner.canonical_key();
+    let version_owner_key = catalog_child_owner_key("version", catalog);
     let version_records = catalog_view.rrsets().find_map(|rrset| {
         (rrset.class == 1
             && rrset.rr_type == RecordType::Txt as u16
@@ -404,6 +400,15 @@ fn validate_catalog_version(catalog_view: &CatalogZoneView<'_>) -> Result<(), Ca
         Err(CatalogError::MissingOrUnsupportedVersion {
             catalog: catalog.clone(),
         })
+    }
+}
+
+fn catalog_child_owner_key(label: &str, catalog: &DomainName) -> String {
+    let catalog_key = catalog.canonical_key();
+    if catalog_key == "." {
+        format!("{label}.")
+    } else {
+        format!("{label}.{catalog_key}")
     }
 }
 
@@ -480,6 +485,41 @@ mod tests {
                     0,
                     vec![
                         DomainName::from_absolute_str("Alpha.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+    }
+
+    #[test]
+    fn parses_catalog_with_non_ascii_origin_without_display_roundtrip() {
+        let catalog_wire = catalog_origin_wire_with_long_escaped_label();
+        let catalog = domain_from_wire(&catalog_wire);
+        let snapshot = ZoneSnapshot::active(
+            catalog,
+            None,
+            vec![
+                Rrset::new(
+                    domain_from_wire(&child_wire("version", &catalog_wire)),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    domain_from_wire(&child_wire("a.zones", &catalog_wire)),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("alpha.example.")
                             .unwrap()
                             .to_wire(),
                     ],
@@ -794,5 +834,27 @@ mod tests {
         let mut rdata = vec![bytes.len() as u8];
         rdata.extend_from_slice(bytes);
         rdata
+    }
+
+    fn domain_from_wire(wire: &[u8]) -> DomainName {
+        DomainName::from_uncompressed_wire(wire).expect("valid test name wire")
+    }
+
+    fn catalog_origin_wire_with_long_escaped_label() -> Vec<u8> {
+        let mut wire = Vec::with_capacity(18);
+        wire.push(16);
+        wire.extend(std::iter::repeat_n(0x80, 16));
+        wire.push(0);
+        wire
+    }
+
+    fn child_wire(labels: &str, suffix_wire: &[u8]) -> Vec<u8> {
+        let mut wire = Vec::new();
+        for label in labels.split('.') {
+            wire.push(label.len() as u8);
+            wire.extend_from_slice(label.as_bytes());
+        }
+        wire.extend_from_slice(suffix_wire);
+        wire
     }
 }

@@ -1477,7 +1477,7 @@ fn udp_settings_for_test(metrics: RuntimeMetrics, rrl_config: RrlConfig) -> UdpS
 }
 
 fn notify_log_limiter_for_test() -> NotifyLogLimiter {
-    NotifyLogLimiter::new(std::time::Duration::from_secs(60))
+    NotifyLogLimiter::new(std::time::Duration::from_secs(60), 100_000)
 }
 
 async fn spawn_telemetry_endpoint(

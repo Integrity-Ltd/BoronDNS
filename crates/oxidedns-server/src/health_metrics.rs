@@ -1054,17 +1054,25 @@ fn append_udp_packet_io_metrics(body: &mut String, snapshot: RuntimeMetricsSnaps
          # HELP oxidedns_udp_send_batches_total UDP send batches emitted by the standard socket listener.\n\
          # TYPE oxidedns_udp_send_batches_total counter\n\
          # HELP oxidedns_udp_sent_datagrams_total UDP datagrams sent by the standard socket listener.\n\
-         # TYPE oxidedns_udp_sent_datagrams_total counter\n",
+         # TYPE oxidedns_udp_sent_datagrams_total counter\n\
+         # HELP oxidedns_udp_receive_errors_total Non-fatal UDP receive errors ignored by the listener.\n\
+         # TYPE oxidedns_udp_receive_errors_total counter\n\
+         # HELP oxidedns_udp_send_errors_total Non-fatal UDP send errors ignored by the listener.\n\
+         # TYPE oxidedns_udp_send_errors_total counter\n",
     );
     body.push_str(&format!(
         "oxidedns_udp_receive_batches_total {}\n\
          oxidedns_udp_received_datagrams_total {}\n\
          oxidedns_udp_send_batches_total {}\n\
-         oxidedns_udp_sent_datagrams_total {}\n",
+         oxidedns_udp_sent_datagrams_total {}\n\
+         oxidedns_udp_receive_errors_total {}\n\
+         oxidedns_udp_send_errors_total {}\n",
         snapshot.udp_receive_batches,
         snapshot.udp_received_datagrams,
         snapshot.udp_send_batches,
         snapshot.udp_sent_datagrams,
+        snapshot.udp_receive_errors,
+        snapshot.udp_send_errors,
     ));
 }
 
@@ -2395,6 +2403,8 @@ struct RuntimeMetricsInner {
     pub(crate) udp_received_datagrams: AtomicU64,
     pub(crate) udp_send_batches: AtomicU64,
     pub(crate) udp_sent_datagrams: AtomicU64,
+    pub(crate) udp_receive_errors: AtomicU64,
+    pub(crate) udp_send_errors: AtomicU64,
     udp_mmsg_receive_syscalls: AtomicU64,
     udp_mmsg_receive_wouldblock_syscalls: AtomicU64,
     udp_mmsg_receive_interrupted_syscalls: AtomicU64,
@@ -2501,6 +2511,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) udp_received_datagrams: u64,
     pub(crate) udp_send_batches: u64,
     pub(crate) udp_sent_datagrams: u64,
+    pub(crate) udp_receive_errors: u64,
+    pub(crate) udp_send_errors: u64,
     pub(crate) axfr_started: u64,
     pub(crate) axfr_succeeded: u64,
     pub(crate) axfr_failed: u64,
@@ -2899,6 +2911,16 @@ impl RuntimeMetrics {
         self.inner
             .udp_sent_datagrams
             .fetch_add(datagrams as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_udp_receive_error(&self) {
+        self.inner
+            .udp_receive_errors
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_udp_send_error(&self) {
+        self.inner.udp_send_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_udp_mmsg_stats(&self, stats: std_udp_mmsg::StdUdpMmsgStats) {
@@ -3452,6 +3474,8 @@ impl RuntimeMetrics {
             udp_received_datagrams: self.inner.udp_received_datagrams.load(Ordering::Relaxed),
             udp_send_batches: self.inner.udp_send_batches.load(Ordering::Relaxed),
             udp_sent_datagrams: self.inner.udp_sent_datagrams.load(Ordering::Relaxed),
+            udp_receive_errors: self.inner.udp_receive_errors.load(Ordering::Relaxed),
+            udp_send_errors: self.inner.udp_send_errors.load(Ordering::Relaxed),
             axfr_started: self.inner.axfr_started.load(Ordering::Relaxed),
             axfr_succeeded: self.inner.axfr_succeeded.load(Ordering::Relaxed),
             axfr_failed: self.inner.axfr_failed.load(Ordering::Relaxed),

@@ -951,6 +951,7 @@ impl ZoneSnapshotIndexes {
             delegation_rrsets: Vec::new(),
             dname_rrsets: Vec::new(),
         };
+        let origin_key = origin.canonical_key();
 
         for (key, rrset) in rrsets {
             indexes
@@ -960,7 +961,7 @@ impl ZoneSnapshotIndexes {
                 .or_insert_with(|| class_set(rrset.class));
             indexes.index_empty_non_terminals(origin, &rrset.owner, rrset.class, name_interner);
 
-            if rrset.rr_type == RecordType::Ns as u16 && rrset.owner != *origin {
+            if rrset.rr_type == RecordType::Ns as u16 && key.owner.as_ref() != origin_key {
                 indexes.delegation_rrsets.push(key.clone());
             } else if rrset.rr_type == RecordType::Dname as u16 {
                 indexes.dname_rrsets.push(key.clone());
@@ -2038,6 +2039,51 @@ mod tests {
                 minimum: 300,
             })
         );
+    }
+
+    #[test]
+    fn offline_oracle_does_not_treat_mixed_case_origin_ns_as_delegation() {
+        let origin = DomainName::from_absolute_str("Example.Test.").unwrap();
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let www = DomainName::from_absolute_str("www.example.test.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            origin,
+            Some(1),
+            vec![
+                Rrset::new(
+                    apex.clone(),
+                    RecordType::Soa as u16,
+                    1,
+                    300,
+                    vec![soa_rdata()],
+                ),
+                Rrset::new(
+                    apex,
+                    RecordType::Ns as u16,
+                    1,
+                    300,
+                    vec![
+                        DomainName::from_absolute_str("ns.example.test.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    www.clone(),
+                    RecordType::A as u16,
+                    1,
+                    300,
+                    vec![vec![192, 0, 2, 10]],
+                ),
+            ],
+        );
+
+        let lookup = snapshot
+            .offline_oracle()
+            .lookup(&www, RecordType::A as u16, 1);
+
+        assert_eq!(lookup.answers.len(), 1);
+        assert!(lookup.authorities.is_empty());
     }
 
     #[test]

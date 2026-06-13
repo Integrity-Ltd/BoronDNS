@@ -772,6 +772,7 @@ async fn transfer_ixfr_from_primary_inner(
         })?;
 
     let mut messages = Vec::new();
+    let mut completion_probe = IxfrCompletionProbe::new(current_zone.serial);
     let mut ingest = TransferIngestTracker::new("IXFR", primary.addr, session.max_ingest_bytes);
     loop {
         let mut length_prefix = [0u8; 2];
@@ -813,32 +814,32 @@ async fn transfer_ixfr_from_primary_inner(
                 }
             }
         })?;
+        let message_probe = axfr::ixfr_response_message_probe(qid, zone_apex, qclass, &message)
+            .map_err(TransferError::Ixfr)?;
+        let complete = completion_probe
+            .observe(message_probe)
+            .map_err(TransferError::Ixfr)?;
         messages.push(message);
 
-        match axfr::parse_ixfr_response(qid, zone_apex, qclass, current_zone, &messages) {
-            Ok(_) => {
-                match maybe_verify_tcp_transfer_messages(
-                    &messages,
-                    session.tsig.key,
-                    query.request_mac.as_deref(),
-                ) {
-                    Ok(verified_messages) => {
-                        return axfr::parse_ixfr_response(
-                            qid,
-                            zone_apex,
-                            qclass,
-                            current_zone,
-                            &verified_messages,
-                        )
-                        .map_err(TransferError::Ixfr);
-                    }
-                    Err(TransferError::Tsig(TsigError::MissingTerminalTsig)) => {}
-                    Err(error) => return Err(error),
+        if complete {
+            match maybe_verify_tcp_transfer_messages(
+                &messages,
+                session.tsig.key,
+                query.request_mac.as_deref(),
+            ) {
+                Ok(verified_messages) => {
+                    return axfr::parse_ixfr_response(
+                        qid,
+                        zone_apex,
+                        qclass,
+                        current_zone,
+                        &verified_messages,
+                    )
+                    .map_err(TransferError::Ixfr);
                 }
+                Err(TransferError::Tsig(TsigError::MissingTerminalTsig)) => {}
+                Err(error) => return Err(error),
             }
-            Err(axfr::IxfrError::IncompleteResponse)
-            | Err(axfr::IxfrError::Axfr(AxfrError::MissingTerminatingSoa)) => {}
-            Err(error) => return Err(TransferError::Ixfr(error)),
         }
     }
 }
@@ -859,6 +860,48 @@ fn outbound_udp_bind_addr(primary: SocketAddr, transfer_source: Option<SocketAdd
 struct TransferQuery {
     message: Vec<u8>,
     request_mac: Option<Vec<u8>>,
+}
+
+struct IxfrCompletionProbe {
+    current_serial: Option<u32>,
+    answer_count: usize,
+    first_soa_rdata: Option<Vec<u8>>,
+    complete: bool,
+}
+
+impl IxfrCompletionProbe {
+    fn new(current_serial: Option<u32>) -> Self {
+        Self {
+            current_serial,
+            answer_count: 0,
+            first_soa_rdata: None,
+            complete: false,
+        }
+    }
+
+    fn observe(&mut self, probe: axfr::IxfrMessageProbe) -> Result<bool, axfr::IxfrError> {
+        let mut complete = false;
+        for answer in probe.answers {
+            self.answer_count += 1;
+            if self.answer_count == 1 {
+                let Some(serial) = answer.apex_soa_serial else {
+                    return Err(axfr::IxfrError::MissingInitialSoa);
+                };
+                self.first_soa_rdata = answer.apex_soa_rdata;
+                complete = self.current_serial == Some(serial);
+                continue;
+            }
+
+            if answer.apex_soa_rdata.is_some()
+                && answer.apex_soa_rdata == self.first_soa_rdata
+                && self.answer_count > 2
+            {
+                complete = true;
+            }
+        }
+        self.complete |= complete;
+        Ok(self.complete)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1054,6 +1097,7 @@ async fn transfer_axfr_from_primary_inner(
 
     let mut messages = Vec::new();
     let mut saw_initial_soa = false;
+    let mut saw_response_question = false;
     let mut ingest = TransferIngestTracker::new("AXFR", primary.addr, session.max_ingest_bytes);
     loop {
         let mut length_prefix = [0u8; 2];
@@ -1089,16 +1133,17 @@ async fn transfer_axfr_from_primary_inner(
                 }
             }
         })?;
-        let apex_soa_count = axfr::axfr_response_message_apex_soa_count(
+        let probe = axfr::axfr_response_message_probe(
             qid,
             zone_apex,
             qclass,
             &message,
-            !saw_initial_soa,
+            !saw_response_question,
         )
         .map_err(TransferError::Axfr)?;
-        if apex_soa_count > 0 {
-            let complete = saw_initial_soa || apex_soa_count >= 2;
+        saw_response_question |= probe.saw_response_question;
+        if probe.apex_soa_count > 0 {
+            let complete = saw_initial_soa || probe.apex_soa_count >= 2;
             saw_initial_soa = true;
             if complete {
                 messages.push(message);
@@ -1134,4 +1179,36 @@ pub(crate) fn transfer_query_id() -> Result<u16, TransferError> {
 
 pub(crate) fn query_id_from_random_bytes(bytes: [u8; 2]) -> u16 {
     u16::from_be_bytes(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ixfr_probe_with_apex_soa(serial: u32, rdata: Vec<u8>) -> axfr::IxfrMessageProbe {
+        axfr::IxfrMessageProbe {
+            answers: vec![axfr::IxfrProbeAnswer {
+                apex_soa_serial: Some(serial),
+                apex_soa_rdata: Some(rdata),
+            }],
+        }
+    }
+
+    #[test]
+    fn ixfr_completion_probe_stays_complete_for_terminal_tsig_message() {
+        let mut probe = IxfrCompletionProbe::new(Some(7));
+        assert!(
+            probe
+                .observe(ixfr_probe_with_apex_soa(7, b"current-soa".to_vec()))
+                .expect("current IXFR response completes")
+        );
+
+        assert!(
+            probe
+                .observe(axfr::IxfrMessageProbe {
+                    answers: Vec::new(),
+                })
+                .expect("terminal TSIG-only message keeps completion state")
+        );
+    }
 }

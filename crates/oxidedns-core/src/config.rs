@@ -15,6 +15,9 @@ use crate::{
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigKey},
 };
 
+const MAX_LINUX_CPU_AFFINITY_INDEX: usize = 1024;
+const MAX_TOKIO_SEMAPHORE_PERMITS: usize = usize::MAX >> 3;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read configuration from {path}: {source}")]
@@ -247,10 +250,20 @@ impl ServerConfig {
                 "limits.notify_log_rate_window_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.notify_log_max_keys == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.notify_log_max_keys must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.max_concurrent_transfers == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_concurrent_transfers must be at least 1".to_owned(),
             ));
+        }
+        if self.limits.max_concurrent_transfers > MAX_TOKIO_SEMAPHORE_PERMITS {
+            return Err(ConfigError::Invalid(format!(
+                "limits.max_concurrent_transfers must not exceed {MAX_TOKIO_SEMAPHORE_PERMITS}"
+            )));
         }
         if self.limits.edns_padding_block_size == 1 {
             return Err(ConfigError::Invalid(
@@ -1763,6 +1776,8 @@ pub struct Limits {
     pub notify_dedup_secs: u64,
     #[serde(default = "default_notify_log_rate_window_secs")]
     pub notify_log_rate_window_secs: u64,
+    #[serde(default = "default_notify_log_max_keys")]
+    pub notify_log_max_keys: usize,
     #[serde(default = "default_max_concurrent_transfers")]
     pub max_concurrent_transfers: usize,
     #[serde(default = "default_zsm_min_interval_secs")]
@@ -1808,6 +1823,7 @@ impl Default for Limits {
             max_transfer_ingest_bytes: default_max_transfer_ingest_bytes(),
             notify_dedup_secs: default_notify_dedup_secs(),
             notify_log_rate_window_secs: default_notify_log_rate_window_secs(),
+            notify_log_max_keys: default_notify_log_max_keys(),
             max_concurrent_transfers: default_max_concurrent_transfers(),
             zsm_min_interval_secs: default_zsm_min_interval_secs(),
             zsm_max_interval_secs: default_zsm_max_interval_secs(),
@@ -1878,6 +1894,15 @@ impl Limits {
                     "limits.udp_worker_cpu_affinity length must match limits.udp_reuseport_workers"
                         .to_owned(),
                 ));
+            }
+            if let Some(cpu) = cpus
+                .iter()
+                .copied()
+                .find(|cpu| *cpu >= MAX_LINUX_CPU_AFFINITY_INDEX)
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "limits.udp_worker_cpu_affinity CPU index {cpu} must be below {MAX_LINUX_CPU_AFFINITY_INDEX}"
+                )));
             }
         }
         Ok(())
@@ -2968,6 +2993,10 @@ fn default_notify_dedup_secs() -> u64 {
 
 fn default_notify_log_rate_window_secs() -> u64 {
     60
+}
+
+fn default_notify_log_max_keys() -> usize {
+    100_000
 }
 
 fn default_max_concurrent_transfers() -> usize {

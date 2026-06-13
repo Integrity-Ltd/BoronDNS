@@ -449,9 +449,9 @@ pub(crate) struct NotifyLogLimiter {
 }
 
 impl NotifyLogLimiter {
-    pub(crate) fn new(window: Duration) -> Self {
+    pub(crate) fn new(window: Duration, max_keys: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(NotifyLogState::new(window))),
+            inner: Arc::new(Mutex::new(NotifyLogState::new(window, max_keys))),
         }
     }
 
@@ -520,6 +520,7 @@ impl NotifyLogLimiter {
 #[derive(Debug)]
 struct NotifyLogState {
     window: Duration,
+    max_keys: usize,
     keys: HashMap<NotifyLogKey, Instant>,
     suppressed_unauthorized: u64,
     suppressed_tsig_failures: u64,
@@ -527,9 +528,10 @@ struct NotifyLogState {
 }
 
 impl NotifyLogState {
-    fn new(window: Duration) -> Self {
+    fn new(window: Duration, max_keys: usize) -> Self {
         Self {
             window,
+            max_keys: max_keys.max(1),
             keys: HashMap::new(),
             suppressed_unauthorized: 0,
             suppressed_tsig_failures: 0,
@@ -551,11 +553,22 @@ impl NotifyLogState {
             zone,
             category,
         };
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.keys.entry(key) {
-            entry.insert(now);
-            return NotifyLogDecision::Emit;
+        let can_insert = self.keys.len() < self.max_keys;
+        match self.keys.entry(key) {
+            std::collections::hash_map::Entry::Occupied(_) => {}
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                if can_insert {
+                    entry.insert(now);
+                    return NotifyLogDecision::Emit;
+                }
+            }
         }
 
+        self.record_suppressed(category, prefix);
+        NotifyLogDecision::Suppress
+    }
+
+    fn record_suppressed(&mut self, category: NotifyLogCategory, prefix: IpPrefix) {
         match category {
             NotifyLogCategory::Unauthorized => {
                 self.suppressed_unauthorized = self.suppressed_unauthorized.saturating_add(1);
@@ -564,8 +577,9 @@ impl NotifyLogState {
                 self.suppressed_tsig_failures = self.suppressed_tsig_failures.saturating_add(1);
             }
         }
-        self.suppressed_prefixes.insert(prefix);
-        NotifyLogDecision::Suppress
+        if self.suppressed_prefixes.len() < self.max_keys {
+            self.suppressed_prefixes.insert(prefix);
+        }
     }
 
     fn expire_old_keys(&mut self, now: Instant) {

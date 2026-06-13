@@ -37,6 +37,24 @@ use crate::{
     std_udp_mmsg, std_udp_socket,
 };
 
+const ERRNO_EBADF: i32 = 9;
+const ERRNO_EPERM: i32 = 1;
+const ERRNO_EINVAL: i32 = 22;
+const ERRNO_EMSGSIZE: i32 = 90;
+const ERRNO_ENETUNREACH: i32 = 101;
+const ERRNO_ENOBUFS: i32 = 105;
+const ERRNO_ECONNREFUSED: i32 = 111;
+const ERRNO_EHOSTUNREACH: i32 = 113;
+const ERRNO_ENOMEM: i32 = 12;
+const UDP_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UdpIoErrorAction {
+    Continue,
+    Backoff(Duration),
+    Fatal,
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum BoundUdpListener {
     Std {
@@ -114,6 +132,32 @@ fn bind_std_udp_listeners(
         });
     }
     Ok(listeners)
+}
+
+pub(crate) fn classify_udp_send_error(error: &std::io::Error) -> UdpIoErrorAction {
+    match error.kind() {
+        ErrorKind::WouldBlock | ErrorKind::Interrupted => UdpIoErrorAction::Continue,
+        _ => match error.raw_os_error() {
+            Some(ERRNO_ENOBUFS | ERRNO_ENOMEM) => UdpIoErrorAction::Backoff(UDP_RESOURCE_BACKOFF),
+            Some(
+                ERRNO_ECONNREFUSED | ERRNO_EHOSTUNREACH | ERRNO_ENETUNREACH | ERRNO_EMSGSIZE
+                | ERRNO_EPERM,
+            ) => UdpIoErrorAction::Continue,
+            Some(ERRNO_EBADF | ERRNO_EINVAL) => UdpIoErrorAction::Fatal,
+            _ => UdpIoErrorAction::Fatal,
+        },
+    }
+}
+
+pub(crate) fn classify_udp_recv_error(error: &std::io::Error) -> UdpIoErrorAction {
+    match error.kind() {
+        ErrorKind::WouldBlock | ErrorKind::Interrupted => UdpIoErrorAction::Continue,
+        _ => match error.raw_os_error() {
+            Some(ERRNO_ENOBUFS | ERRNO_ENOMEM) => UdpIoErrorAction::Backoff(UDP_RESOURCE_BACKOFF),
+            Some(ERRNO_EBADF | ERRNO_EINVAL) => UdpIoErrorAction::Fatal,
+            _ => UdpIoErrorAction::Fatal,
+        },
+    }
 }
 
 #[cfg(not(feature = "af-xdp"))]
@@ -251,7 +295,28 @@ where
 
     loop {
         {
-            let inbound = packet_io.recv_batch().await.map_err(RuntimeError::Udp)?;
+            let inbound = match packet_io.recv_batch().await {
+                Ok(inbound) => inbound,
+                Err(error) => match classify_udp_recv_error(&error) {
+                    UdpIoErrorAction::Continue => {
+                        settings.metrics.record_udp_receive_error();
+                        debug!(%error, udp_worker_id, "transient UDP receive error ignored");
+                        continue;
+                    }
+                    UdpIoErrorAction::Backoff(duration) => {
+                        settings.metrics.record_udp_receive_error();
+                        warn!(
+                            %error,
+                            udp_worker_id,
+                            backoff_ms = duration.as_millis(),
+                            "UDP receive resource pressure; backing off"
+                        );
+                        tokio::time::sleep(duration).await;
+                        continue;
+                    }
+                    UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+                },
+            };
             settings.metrics.record_udp_receive_batch(inbound.len());
             if is_af_xdp {
                 settings
@@ -272,10 +337,25 @@ where
             }
         };
         let outbound_len = outbound.len();
-        packet_io
-            .send_batch(&outbound, &settings.metrics)
-            .await
-            .map_err(RuntimeError::Udp)?;
+        if let Err(error) = packet_io.send_batch(&outbound, &settings.metrics).await {
+            match classify_udp_send_error(&error) {
+                UdpIoErrorAction::Continue => {
+                    settings.metrics.record_udp_send_error();
+                    debug!(%error, udp_worker_id, "UDP send error ignored");
+                }
+                UdpIoErrorAction::Backoff(duration) => {
+                    settings.metrics.record_udp_send_error();
+                    warn!(
+                        %error,
+                        udp_worker_id,
+                        backoff_ms = duration.as_millis(),
+                        "UDP send resource pressure; backing off"
+                    );
+                    tokio::time::sleep(duration).await;
+                }
+                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+            }
+        }
         if is_af_xdp && outbound_len > 0 {
             settings
                 .metrics
@@ -403,7 +483,25 @@ fn run_dedicated_std_udp_worker(
                 idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
                 continue;
             }
-            Err(error) => return Err(RuntimeError::Udp(error)),
+            Err(error) => match classify_udp_recv_error(&error) {
+                UdpIoErrorAction::Continue => {
+                    settings.metrics.record_udp_receive_error();
+                    debug!(%error, worker_id, "transient UDP receive error ignored");
+                    continue;
+                }
+                UdpIoErrorAction::Backoff(duration) => {
+                    settings.metrics.record_udp_receive_error();
+                    warn!(
+                        %error,
+                        worker_id,
+                        backoff_ms = duration.as_millis(),
+                        "UDP receive resource pressure; backing off"
+                    );
+                    std::thread::sleep(duration);
+                    continue;
+                }
+                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+            },
         };
         idle_spins = 0;
         settings.metrics.record_udp_receive_batch(active);
@@ -446,9 +544,28 @@ fn send_std_udp_batch(
     }
 
     if !metrics.pipeline_timing_enabled() {
-        let sent = packet_io
-            .send_batch(socket, outbound)
-            .map_err(RuntimeError::Udp)?;
+        let sent = match packet_io.send_batch(socket, outbound) {
+            Ok(sent) => sent,
+            Err(error) => match classify_udp_send_error(&error) {
+                UdpIoErrorAction::Continue => {
+                    metrics.record_udp_send_error();
+                    debug!(%error, worker_id, "UDP send error ignored");
+                    0
+                }
+                UdpIoErrorAction::Backoff(duration) => {
+                    metrics.record_udp_send_error();
+                    warn!(
+                        %error,
+                        worker_id,
+                        backoff_ms = duration.as_millis(),
+                        "UDP send resource pressure; backing off"
+                    );
+                    std::thread::sleep(duration);
+                    0
+                }
+                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+            },
+        };
         metrics.record_udp_send_batch(sent);
         metrics.record_udp_worker_send_batch(worker_id, sent);
         return Ok(());
@@ -458,27 +575,48 @@ fn send_std_udp_batch(
         .iter()
         .map(|packet| packet.query_metrics.as_ref().map(|_| Instant::now()))
         .collect::<Vec<_>>();
-    let sent = packet_io
-        .send_batch(socket, outbound)
-        .map_err(RuntimeError::Udp)?;
+    let sent_indices = match packet_io.send_batch_with_successes(socket, outbound) {
+        Ok(sent_indices) => sent_indices,
+        Err(error) => match classify_udp_send_error(&error) {
+            UdpIoErrorAction::Continue => {
+                metrics.record_udp_send_error();
+                debug!(%error, worker_id, "UDP send error ignored");
+                Vec::new()
+            }
+            UdpIoErrorAction::Backoff(duration) => {
+                metrics.record_udp_send_error();
+                warn!(
+                    %error,
+                    worker_id,
+                    backoff_ms = duration.as_millis(),
+                    "UDP send resource pressure; backing off"
+                );
+                std::thread::sleep(duration);
+                Vec::new()
+            }
+            UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+        },
+    };
 
-    for (packet, started) in outbound.iter().zip(send_started).take(sent) {
+    for index in sent_indices.iter().copied() {
+        let packet = &outbound[index];
+        let started = send_started[index];
         if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
             record_query_send_metric(query_metrics, &packet.response, metrics, started.elapsed());
         }
     }
-    metrics.record_udp_send_batch(sent);
-    metrics.record_udp_worker_send_batch(worker_id, sent);
+    metrics.record_udp_send_batch(sent_indices.len());
+    metrics.record_udp_worker_send_batch(worker_id, sent_indices.len());
     Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-fn send_std_udp_batch_fallback(
+pub(crate) fn send_std_udp_batch_fallback_with_successes(
     socket: &std::net::UdpSocket,
     outbound: &[UdpOutbound],
-) -> std::io::Result<usize> {
-    let mut sent = 0usize;
-    for packet in outbound {
+) -> std::io::Result<Vec<usize>> {
+    let mut sent_indices = Vec::new();
+    for (index, packet) in outbound.iter().enumerate() {
         let peer = match packet.target {
             UdpPacketTarget::Socket(peer) => peer,
             #[cfg(feature = "af-xdp")]
@@ -496,18 +634,38 @@ fn send_std_udp_batch_fallback(
                     send_ok = true;
                     break;
                 }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    std::thread::yield_now();
-                }
-                Err(error) => return Err(error),
+                Err(error) => match classify_udp_send_error(&error) {
+                    UdpIoErrorAction::Continue => {
+                        if error.kind() == ErrorKind::WouldBlock
+                            || error.kind() == ErrorKind::Interrupted
+                        {
+                            std::thread::yield_now();
+                            continue;
+                        }
+                        break;
+                    }
+                    UdpIoErrorAction::Backoff(duration) => {
+                        std::thread::sleep(duration);
+                        break;
+                    }
+                    UdpIoErrorAction::Fatal => return Err(error),
+                },
             }
         }
         if !send_ok {
             continue;
         }
-        sent += 1;
+        sent_indices.push(index);
     }
-    Ok(sent)
+    Ok(sent_indices)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_std_udp_batch_fallback(
+    socket: &std::net::UdpSocket,
+    outbound: &[UdpOutbound],
+) -> std::io::Result<usize> {
+    Ok(send_std_udp_batch_fallback_with_successes(socket, outbound)?.len())
 }
 
 fn idle_dedicated_udp_worker(idle_spins: &mut usize, strategy: UdpIdleStrategy) {
@@ -604,7 +762,19 @@ impl PacketIo for StdUdpBatchIo {
                     active += 1;
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error),
+                Err(error) => match classify_udp_recv_error(&error) {
+                    UdpIoErrorAction::Continue => break,
+                    UdpIoErrorAction::Backoff(duration) => {
+                        warn!(
+                            %error,
+                            backoff_ms = duration.as_millis(),
+                            "UDP receive resource pressure while draining batch; backing off"
+                        );
+                        tokio::time::sleep(duration).await;
+                        break;
+                    }
+                    UdpIoErrorAction::Fatal => return Err(error),
+                },
             }
         }
 
@@ -644,15 +814,36 @@ impl PacketIo for StdUdpBatchIo {
                     "standard UDP backend cannot send AF_XDP benchmark fixed response",
                 ));
             }
-            self.socket.send_to(&packet.response, peer).await?;
-            sent += 1;
-            if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, send_started) {
-                record_query_send_metric(
-                    query_metrics,
-                    &packet.response,
-                    metrics,
-                    started.elapsed(),
-                );
+            match self.socket.send_to(&packet.response, peer).await {
+                Ok(_) => {
+                    sent += 1;
+                    if let (Some(query_metrics), Some(started)) =
+                        (&packet.query_metrics, send_started)
+                    {
+                        record_query_send_metric(
+                            query_metrics,
+                            &packet.response,
+                            metrics,
+                            started.elapsed(),
+                        );
+                    }
+                }
+                Err(error) => match classify_udp_send_error(&error) {
+                    UdpIoErrorAction::Continue => {
+                        metrics.record_udp_send_error();
+                        debug!(%error, "UDP send error ignored");
+                    }
+                    UdpIoErrorAction::Backoff(duration) => {
+                        metrics.record_udp_send_error();
+                        warn!(
+                            %error,
+                            backoff_ms = duration.as_millis(),
+                            "UDP send resource pressure; backing off"
+                        );
+                        tokio::time::sleep(duration).await;
+                    }
+                    UdpIoErrorAction::Fatal => return Err(error),
+                },
             }
         }
         metrics.record_udp_send_batch(sent);

@@ -688,7 +688,16 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
 
 fn active_queue_ids(config: &FileConfig) -> Vec<u32> {
     if !config.interface.queue_list.is_empty() {
-        return config.interface.queue_list.clone();
+        let mut queue_ids = config.interface.queue_list.clone();
+        if config.run.max_packets != 0 {
+            queue_ids.truncate(config.run.max_packets.min(queue_ids.len() as u64) as usize);
+        }
+        if let Some(target_qps) = config.rate.target_qps
+            && target_qps > 0
+        {
+            queue_ids.truncate(target_qps.min(queue_ids.len() as u64) as usize);
+        }
+        return queue_ids;
     }
     let mut queue_count = config.interface.queue_count;
     if config.run.max_packets != 0 {
@@ -2765,10 +2774,19 @@ mod tests {
         config.interface.rx_queue = 10;
         config.interface.queue_count = 8;
         config.interface.queue_list = vec![0, 17, 62];
-        config.run.max_packets = 1;
-        config.rate.target_qps = Some(1);
+        config.run.max_packets = 0;
 
         assert_eq!(active_queue_ids(&config), vec![0, 17, 62]);
+    }
+
+    #[test]
+    fn active_queue_ids_clamp_explicit_sparse_queue_list_to_finite_budget() {
+        let mut config = FileConfig::default();
+        config.interface.queue_list = vec![0, 17, 62];
+        config.run.max_packets = 1;
+        config.rate.target_qps = Some(3);
+
+        assert_eq!(active_queue_ids(&config), vec![0]);
     }
 
     #[test]

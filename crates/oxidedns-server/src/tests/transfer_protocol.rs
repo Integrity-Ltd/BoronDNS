@@ -572,6 +572,25 @@ fn dns_cookie_secret_store_rotates_only_after_configured_interval() {
 }
 
 #[test]
+fn dns_cookie_secret_store_backs_off_after_rotation_failure() {
+    let generated_at = std::time::Instant::now() - std::time::Duration::from_secs(61);
+    let rotating = DnsCookieSecretStore::new_at(
+        [1; 16],
+        None,
+        Some(std::time::Duration::from_secs(60)),
+        generated_at,
+    );
+
+    let retained = rotating.current_with_generator(|| Err(getrandom::Error::UNSUPPORTED));
+    let second = rotating.current_with_generator(|| -> Result<[u8; 16], getrandom::Error> {
+        panic!("failed rotation should back off until the next interval")
+    });
+
+    assert_eq!(*retained.current, [1; 16]);
+    assert_eq!(*second.current, [1; 16]);
+}
+
+#[test]
 fn dns_cookie_secret_store_uses_configured_shared_secrets() {
     let config = ServerConfig::from_toml_str(
         r#"

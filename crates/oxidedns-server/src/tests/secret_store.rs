@@ -122,6 +122,42 @@ fn failed_file_secret_store_reload_retains_previous_snapshot() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn file_secret_store_reload_rejects_missing_referenced_tsig_key() {
+    let root = unique_test_path("oxidedns-secret-store-missing-referenced-key", "dir");
+    write_secret_store_manifest(
+        &root,
+        r#"
+            [[tsig_keys]]
+            name = "dynamic-key."
+            algorithm = "hmac-sha256"
+            secret = "b25lLXNlY3JldA=="
+        "#,
+    );
+    let config = config_with_secret_store(&root);
+    let secrets = SecretManager::from_config(&config).expect("initial secret snapshot");
+    let key_name = DomainName::from_absolute_str("dynamic-key.").unwrap();
+    let before = secrets
+        .tsig_key(&key_name)
+        .expect("initial key")
+        .sign(b"probe")
+        .expect("sign with initial key");
+
+    write_secret_store_manifest(&root, "");
+    let error = secrets
+        .reload()
+        .expect_err("reload without referenced TSIG key must fail");
+    assert!(error.to_string().contains("references TSIG key dynamic-key."));
+    let after = secrets
+        .tsig_key(&key_name)
+        .expect("previous key retained after rejected reload")
+        .sign(b"probe")
+        .expect("sign with retained key");
+
+    assert_eq!(before, after);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[test]
 fn file_secret_store_rejects_world_readable_manifest() {

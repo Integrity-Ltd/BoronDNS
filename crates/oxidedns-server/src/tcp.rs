@@ -374,6 +374,7 @@ pub(crate) async fn handle_tcp_connection_with_query_hook(
         metrics.clone(),
     ));
     let mut query_tasks = JoinSet::new();
+    let mut read_error = None;
 
     while !response_tx.is_closed() {
         let permit =
@@ -394,9 +395,17 @@ pub(crate) async fn handle_tcp_connection_with_query_hook(
                 }
             };
 
-        let Some(packet) = read_tcp_message(&mut reader, idle_timeout, read_timeout).await? else {
-            drop(permit);
-            break;
+        let packet = match read_tcp_message(&mut reader, idle_timeout, read_timeout).await {
+            Ok(Some(packet)) => packet,
+            Ok(None) => {
+                drop(permit);
+                break;
+            }
+            Err(error) => {
+                drop(permit);
+                read_error = Some(error);
+                break;
+            }
         };
 
         query_tasks.spawn(handle_tcp_packet(
@@ -442,6 +451,10 @@ pub(crate) async fn handle_tcp_connection_with_query_hook(
     match writer_task.await {
         Ok(result) => result?,
         Err(error) => warn!(%peer_ip, %error, "TCP writer task failed"),
+    }
+
+    if let Some(error) = read_error {
+        return Err(error);
     }
 
     Ok(())

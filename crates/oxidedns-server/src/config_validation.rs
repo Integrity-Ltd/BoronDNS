@@ -66,6 +66,9 @@ pub(super) fn runtime_config_warnings_at(
         if primary.transport != TransferTransportConfig::Xot {
             continue;
         }
+        if primary.xot_profile.is_some() {
+            continue;
+        }
         warnings.extend(xot_trust_anchor_expiry_warnings(
             &zone_name,
             &primary,
@@ -145,6 +148,9 @@ fn current_unix_time_secs_i64() -> i64 {
 }
 
 fn validate_xot_transfer_target(primary: &TransferPrimaryConfig) -> Result<(), TransferError> {
+    if primary.xot_profile.is_some() {
+        return Ok(());
+    }
     let server_name = primary
         .server_name
         .as_deref()

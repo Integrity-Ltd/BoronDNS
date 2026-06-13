@@ -106,6 +106,96 @@ impl SecretSnapshot {
     fn xot_profile_count(&self) -> usize {
         self.xot_profiles_by_name.len()
     }
+
+    fn validate_configured_references(
+        &self,
+        references: &SecretReferenceSet,
+    ) -> Result<(), SecretStoreError> {
+        for reference in &references.tsig_keys {
+            let key_name = DomainName::from_absolute_str(&reference.key_name).map_err(|_| {
+                SecretStoreError::Invalid(format!(
+                    "{} {} references invalid TSIG key name {}",
+                    reference.field, reference.zone_name, reference.key_name
+                ))
+            })?;
+            if self.tsig_key(&key_name).is_none() {
+                return Err(SecretStoreError::Invalid(format!(
+                    "{} {} references TSIG key {}, but no static or secret-store snapshot key is loaded",
+                    reference.field, reference.zone_name, reference.key_name
+                )));
+            }
+        }
+        for reference in &references.xot_profiles {
+            if self.xot_profile(&reference.profile_name).is_none() {
+                return Err(SecretStoreError::Invalid(format!(
+                    "{} {} references XoT profile {}, but no secret-store snapshot profile is loaded",
+                    reference.scope, reference.zone_name, reference.profile_name
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct SecretReferenceSet {
+    tsig_keys: Vec<SecretTsigReference>,
+    xot_profiles: Vec<SecretXotReference>,
+}
+
+impl SecretReferenceSet {
+    fn from_config(config: &ServerConfig) -> Self {
+        let mut references = Self::default();
+        for zone in &config.zones {
+            if let Some(tsig_key) = &zone.tsig_key {
+                references.tsig_keys.push(SecretTsigReference {
+                    field: "zone".to_owned(),
+                    zone_name: zone.name.clone(),
+                    key_name: tsig_key.clone(),
+                });
+            }
+            for primary in zone.transfer_targets() {
+                references.add_xot_profile("zone", &zone.name, &primary);
+            }
+        }
+        for catalog in &config.catalog_zones {
+            for (field, tsig_key) in catalog.tsig_key_references_for_runtime() {
+                references.tsig_keys.push(SecretTsigReference {
+                    field: field.to_owned(),
+                    zone_name: catalog.name.clone(),
+                    key_name: tsig_key.to_owned(),
+                });
+            }
+            for primary in catalog.all_transfer_targets() {
+                references.add_xot_profile("catalog zone", &catalog.name, &primary);
+            }
+        }
+        references
+    }
+
+    fn add_xot_profile(&mut self, scope: &str, zone_name: &str, primary: &TransferPrimaryConfig) {
+        if let Some(profile_name) = primary.xot_profile.as_deref() {
+            self.xot_profiles.push(SecretXotReference {
+                scope: scope.to_owned(),
+                zone_name: zone_name.to_owned(),
+                profile_name: profile_name.to_owned(),
+            });
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SecretTsigReference {
+    field: String,
+    zone_name: String,
+    key_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct SecretXotReference {
+    scope: String,
+    zone_name: String,
+    profile_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +235,7 @@ pub(crate) struct SecretManager {
     static_snapshot: Arc<SecretSnapshot>,
     store: Option<Arc<dyn SecretStore>>,
     snapshot: Arc<RwLock<Arc<SecretSnapshot>>>,
+    configured_references: Arc<SecretReferenceSet>,
 }
 
 impl fmt::Debug for SecretManager {
@@ -166,11 +257,13 @@ impl SecretManager {
             static_snapshot: snapshot.clone(),
             store: None,
             snapshot: Arc::new(RwLock::new(snapshot)),
+            configured_references: Arc::new(SecretReferenceSet::default()),
         }
     }
 
     pub(crate) fn from_config(config: &ServerConfig) -> Result<Self, SecretStoreError> {
         let static_snapshot = Arc::new(SecretSnapshot::with_static_tsig_keys(config)?);
+        let configured_references = Arc::new(SecretReferenceSet::from_config(config));
         let store = config
             .secret_store
             .path
@@ -185,8 +278,14 @@ impl SecretManager {
             static_snapshot,
             store,
             snapshot: Arc::new(RwLock::new(initial)),
+            configured_references,
         };
-        manager.validate_configured_references(config)?;
+        {
+            let snapshot = manager.snapshot.read().map_err(|_| {
+                SecretStoreError::Invalid("secret snapshot lock poisoned".to_owned())
+            })?;
+            snapshot.validate_configured_references(&manager.configured_references)?;
+        }
         Ok(manager)
     }
 
@@ -196,6 +295,7 @@ impl SecretManager {
         };
         let runtime = store.load_snapshot()?;
         let merged = Arc::new(self.static_snapshot.merge_runtime(runtime)?);
+        merged.validate_configured_references(&self.configured_references)?;
         let mut current = self
             .snapshot
             .write()
@@ -223,65 +323,6 @@ impl SecretManager {
             .read()
             .map(|snapshot| (snapshot.tsig_key_count(), snapshot.xot_profile_count()))
             .unwrap_or((0, 0))
-    }
-
-    fn validate_configured_references(
-        &self,
-        config: &ServerConfig,
-    ) -> Result<(), SecretStoreError> {
-        for zone in &config.zones {
-            if let Some(tsig_key) = &zone.tsig_key {
-                self.validate_tsig_reference("zone", &zone.name, tsig_key)?;
-            }
-            for primary in zone.transfer_targets() {
-                self.validate_xot_profile_reference("zone", &zone.name, &primary)?;
-            }
-        }
-        for catalog in &config.catalog_zones {
-            for (field, tsig_key) in catalog.tsig_key_references_for_runtime() {
-                self.validate_tsig_reference(field, &catalog.name, tsig_key)?;
-            }
-            for primary in catalog.all_transfer_targets() {
-                self.validate_xot_profile_reference("catalog zone", &catalog.name, &primary)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_tsig_reference(
-        &self,
-        field: &str,
-        zone_name: &str,
-        key_name: &str,
-    ) -> Result<(), SecretStoreError> {
-        let key_name = DomainName::from_absolute_str(key_name).map_err(|_| {
-            SecretStoreError::Invalid(format!(
-                "{field} {zone_name} references invalid TSIG key name {key_name}"
-            ))
-        })?;
-        if self.tsig_key(&key_name).is_none() {
-            return Err(SecretStoreError::Invalid(format!(
-                "{field} {zone_name} references TSIG key {key_name}, but no static or secret-store snapshot key is loaded"
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_xot_profile_reference(
-        &self,
-        scope: &str,
-        zone_name: &str,
-        primary: &TransferPrimaryConfig,
-    ) -> Result<(), SecretStoreError> {
-        let Some(profile) = primary.xot_profile.as_deref() else {
-            return Ok(());
-        };
-        if self.xot_profile(profile).is_none() {
-            return Err(SecretStoreError::Invalid(format!(
-                "{scope} {zone_name} references XoT profile {profile}, but no secret-store snapshot profile is loaded"
-            )));
-        }
-        Ok(())
     }
 }
 

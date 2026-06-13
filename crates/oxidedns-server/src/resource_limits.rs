@@ -40,14 +40,22 @@ pub(crate) fn filesystem_stats(path: &str) -> Result<FilesystemStats, std::io::E
     }
     // SAFETY: `statvfs` returned success and initialized the out parameter.
     let stat = unsafe { stat.assume_init() };
-    let block_size = stat.f_frsize;
+    let block_size = statvfs_value_to_u64(stat.f_frsize);
     Ok(FilesystemStats {
-        total_bytes: stat.f_blocks.saturating_mul(block_size),
-        free_bytes: stat.f_bfree.saturating_mul(block_size),
-        available_bytes: stat.f_bavail.saturating_mul(block_size),
-        files_total: stat.f_files,
-        files_free: stat.f_ffree,
+        total_bytes: statvfs_value_to_u64(stat.f_blocks).saturating_mul(block_size),
+        free_bytes: statvfs_value_to_u64(stat.f_bfree).saturating_mul(block_size),
+        available_bytes: statvfs_value_to_u64(stat.f_bavail).saturating_mul(block_size),
+        files_total: statvfs_value_to_u64(stat.f_files),
+        files_free: statvfs_value_to_u64(stat.f_ffree),
     })
+}
+
+#[cfg(unix)]
+fn statvfs_value_to_u64<T>(value: T) -> u64
+where
+    T: TryInto<u64>,
+{
+    value.try_into().unwrap_or(u64::MAX)
 }
 
 #[cfg(not(unix))]

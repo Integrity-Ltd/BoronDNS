@@ -1565,6 +1565,32 @@ fn runtime_config_validation_accepts_inline_xot_client_key() {
 }
 
 #[test]
+fn runtime_config_validation_accepts_xot_profile_primary() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                xot_profile = "customer-xot"
+            "#,
+    )
+    .expect("schema-valid XoT profile config");
+
+    validate_runtime_config(&config).expect("profile-backed XoT primary validates before secrets");
+    let warnings = runtime_config_warnings_at(&config, 1_779_667_200)
+        .expect("profile-backed XoT warning scan skips inline certificate parsing");
+    assert!(warnings.is_empty());
+}
+
+#[test]
 fn runtime_config_validation_rejects_malformed_inline_xot_client_key_without_leaking_it() {
     let (trust_anchor, _key_path) =
         write_self_signed_xot_cert_files_for_name("primary.example.test");
@@ -1641,7 +1667,7 @@ fn file_descriptor_limit_formula_saturates_extreme_limits() {
 
                 [limits]
                 max_tcp_connections = 18446744073709551615
-                max_concurrent_transfers = 18446744073709551615
+                max_concurrent_transfers = 2305843009213693951
 
                 [[zones]]
                 name = "example.test."

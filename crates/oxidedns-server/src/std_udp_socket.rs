@@ -1,6 +1,9 @@
 #![allow(unsafe_code)]
 
-use std::{io, net::SocketAddr};
+use std::{
+    io::{self, ErrorKind},
+    net::SocketAddr,
+};
 
 use tokio::net::UdpSocket;
 
@@ -281,11 +284,18 @@ fn socket_addr_to_raw(addr: SocketAddr) -> (libc::sockaddr_storage, libc::sockle
 
 #[cfg(target_os = "linux")]
 fn pin_current_thread_to_cpu_impl(cpu: usize) -> io::Result<()> {
+    let max_cpu = 8 * std::mem::size_of::<libc::cpu_set_t>();
+    if cpu >= max_cpu {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("CPU affinity index {cpu} must be below {max_cpu}"),
+        ));
+    }
     // SAFETY: zeroed is valid for cpu_set_t before CPU_ZERO initializes the
     // implementation-specific bitset representation.
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-    // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` is a
-    // caller-provided CPU index validated by the kernel in sched_setaffinity.
+    // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` is
+    // bounded to the local cpu_set_t bit capacity before CPU_SET.
     unsafe {
         libc::CPU_ZERO(&mut set);
         libc::CPU_SET(cpu, &mut set);

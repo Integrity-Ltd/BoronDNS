@@ -95,6 +95,7 @@
         );
         assert_eq!(config.limits.notify_dedup_secs, 1);
         assert_eq!(config.limits.notify_log_rate_window_secs, 60);
+        assert_eq!(config.limits.notify_log_max_keys, 100_000);
         assert_eq!(config.limits.max_concurrent_transfers, 4);
         assert_eq!(config.limits.zsm_min_interval_secs, 60);
         assert_eq!(config.limits.zsm_max_interval_secs, 86_400);

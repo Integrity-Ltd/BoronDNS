@@ -303,9 +303,10 @@ impl Runtime {
         let notify_authority = NotifyAuthority::from_config(&self.config, secrets.clone());
         let notify_refresh =
             NotifyRefreshTracker::new(Duration::from_secs(self.config.limits.notify_dedup_secs));
-        let notify_log_limiter = NotifyLogLimiter::new(Duration::from_secs(
-            self.config.limits.notify_log_rate_window_secs,
-        ));
+        let notify_log_limiter = NotifyLogLimiter::new(
+            Duration::from_secs(self.config.limits.notify_log_rate_window_secs),
+            self.config.limits.notify_log_max_keys,
+        );
         let (notify_refresh_tx, notify_refresh_rx) = mpsc::channel(NOTIFY_REFRESH_QUEUE_CAPACITY);
         let rrl = RrlLimiter::from_config(&self.config.rrl, metrics.clone());
         let dns_cookie = dns_cookie_settings(&self.config.cookie);

@@ -223,6 +223,7 @@
                 [limits]
                 notify_dedup_secs = 3
                 notify_log_rate_window_secs = 12
+                notify_log_max_keys = 1234
 
                 [[zones]]
                 name = "example.test."
@@ -233,6 +234,7 @@
 
         assert_eq!(config.limits.notify_dedup_secs, 3);
         assert_eq!(config.limits.notify_log_rate_window_secs, 12);
+        assert_eq!(config.limits.notify_log_max_keys, 1234);
     }
 
     #[test]
@@ -240,6 +242,7 @@
         for (key, expected) in [
             ("notify_dedup_secs", "notify_dedup_secs"),
             ("notify_log_rate_window_secs", "notify_log_rate_window_secs"),
+            ("notify_log_max_keys", "notify_log_max_keys"),
         ] {
             let error = ServerConfig::from_toml_str(&format!(
                 r#"
@@ -469,6 +472,28 @@
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn rejects_transfer_concurrency_above_tokio_semaphore_limit() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_concurrent_transfers = 18446744073709551615
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("overlarge transfer concurrency would panic Semaphore::new");
+
+        assert!(error.to_string().contains("max_concurrent_transfers"));
+        assert!(error.to_string().contains("must not exceed"));
+    }
+
+    #[test]
     fn rejects_zero_transfer_ingest_size_cap() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -487,4 +512,3 @@
 
         assert!(error.to_string().contains("max_transfer_ingest_bytes"));
     }
-

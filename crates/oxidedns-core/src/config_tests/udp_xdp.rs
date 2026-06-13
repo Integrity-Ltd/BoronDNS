@@ -124,6 +124,28 @@
     }
 
     #[test]
+    fn rejects_udp_worker_cpu_affinity_index_outside_cpu_set() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                udp_reuseport_workers = 1
+                udp_worker_cpu_affinity = [9999]
+                udp_runtime = "dedicated"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect_err("out-of-range CPU affinity index must fail before CPU_SET");
+
+        assert!(error.to_string().contains("below 1024"));
+    }
+
+    #[test]
     fn rejects_udp_worker_cpu_affinity_without_dedicated_runtime() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -500,4 +522,3 @@
                 .contains("udp_socket_max_pacing_rate_bytes_per_second")
         );
     }
-
