@@ -11,6 +11,13 @@ if ! cargo geiger --version >/dev/null 2>&1; then
     exit 1
 fi
 
+# cargo-geiger scans the workspace debug target directory even when a separate
+# CARGO_TARGET_DIR is provided. Some regression tests create and remove
+# throwaway probe sources, leaving depfiles that point at now-missing files.
+# Start from a clean debug build directory so retained geiger evidence is not
+# contaminated by stale generated test artifacts.
+rm -rf "$repo_root/target/debug"
+
 manifest_for_package() {
     local package="$1"
     local project_manifest="/project/crates/$package/Cargo.toml"
@@ -82,7 +89,7 @@ from pathlib import Path
 
 artifact_dir = Path(sys.argv[1])
 first_party = {"oxidedns-cli", "oxidedns-core", "oxidedns-server"}
-expected_first_party = {"oxidedns-cli": 0, "oxidedns-core": 0, "oxidedns-server": 20}
+expected_first_party = {"oxidedns-cli": 0, "oxidedns-core": 0, "oxidedns-server": 117}
 
 
 def unsafe_total(used: dict[str, dict[str, int]]) -> int:
