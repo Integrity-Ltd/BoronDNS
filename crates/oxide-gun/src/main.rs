@@ -63,6 +63,9 @@ struct Cli {
     /// Comma-separated sparse XDP queue ids to bind instead of a contiguous queue range.
     #[arg(long, value_delimiter = ',')]
     queue_list: Vec<u32>,
+    /// Comma-separated CPU ids for XDP workers, in active queue order.
+    #[arg(long, value_delimiter = ',')]
+    xdp_worker_cpu_affinity: Vec<usize>,
     /// XDP bind mode.
     #[arg(long, value_enum)]
     xdp_mode: Option<XdpMode>,
@@ -78,6 +81,9 @@ struct Cli {
     /// XDP response accounting detail.
     #[arg(long, value_enum)]
     xdp_reply_tracking: Option<XdpReplyTracking>,
+    /// XDP per-destination-port accounting detail.
+    #[arg(long, value_enum)]
+    xdp_port_accounting: Option<XdpPortAccounting>,
     /// XDP TX/RX batch size.
     #[arg(long)]
     xdp_batch_size: Option<usize>,
@@ -90,6 +96,12 @@ struct Cli {
     /// Fraction of the per-batch XDP paced wait to keep after successful sends.
     #[arg(long)]
     xdp_pace_wait_fraction: Option<f64>,
+    /// XDP pacing strategy.
+    #[arg(long, value_enum)]
+    xdp_pacing: Option<XdpPacing>,
+    /// Microseconds to sleep when no XDP replies are ready during paced waits. 0 spin-polls.
+    #[arg(long)]
+    xdp_rx_idle_sleep_us: Option<u64>,
     /// AF_XDP UMEM frame count.
     #[arg(long)]
     xdp_umem_frame_count: Option<u32>,
@@ -235,6 +247,22 @@ enum XdpZeroCopyMode {
 enum XdpReplyTracking {
     Latency,
     Count,
+    PacketCount,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum XdpPortAccounting {
+    Count,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum XdpPacing {
+    Relative,
+    Compensated,
+    Deadline,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
@@ -461,15 +489,35 @@ struct XdpConfig {
     drop_object: Option<PathBuf>,
     redirect_object: Option<PathBuf>,
     reply_tracking: XdpReplyTracking,
+    #[serde(default = "default_xdp_port_accounting")]
+    port_accounting: XdpPortAccounting,
     batch_size: usize,
     rx_drain_passes: usize,
     tx_wakeup_interval: usize,
     pace_wait_fraction: f64,
+    #[serde(default = "default_xdp_pacing")]
+    pacing: XdpPacing,
+    #[serde(default = "default_xdp_rx_idle_sleep_us")]
+    rx_idle_sleep_us: u64,
+    #[serde(default)]
+    worker_cpu_affinity: Vec<usize>,
     umem_frame_count: u32,
     tx_ring_size: u32,
     rx_ring_size: u32,
     fill_ring_size: u32,
     completion_ring_size: u32,
+}
+
+fn default_xdp_port_accounting() -> XdpPortAccounting {
+    XdpPortAccounting::Count
+}
+
+fn default_xdp_rx_idle_sleep_us() -> u64 {
+    250
+}
+
+fn default_xdp_pacing() -> XdpPacing {
+    XdpPacing::Relative
 }
 
 impl Default for XdpConfig {
@@ -480,10 +528,14 @@ impl Default for XdpConfig {
             drop_object: None,
             redirect_object: None,
             reply_tracking: XdpReplyTracking::Latency,
+            port_accounting: XdpPortAccounting::Count,
             batch_size: 64,
             rx_drain_passes: 4,
             tx_wakeup_interval: 1,
             pace_wait_fraction: 1.0,
+            pacing: XdpPacing::Relative,
+            rx_idle_sleep_us: default_xdp_rx_idle_sleep_us(),
+            worker_cpu_affinity: Vec::new(),
             umem_frame_count: 8192,
             tx_ring_size: 4096,
             rx_ring_size: 4096,
@@ -1054,6 +1106,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(xdp_reply_tracking) = cli.xdp_reply_tracking {
         config.xdp.reply_tracking = xdp_reply_tracking;
     }
+    if let Some(xdp_port_accounting) = cli.xdp_port_accounting {
+        config.xdp.port_accounting = xdp_port_accounting;
+    }
     if let Some(xdp_batch_size) = cli.xdp_batch_size {
         config.xdp.batch_size = xdp_batch_size;
     }
@@ -1065,6 +1120,15 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     }
     if let Some(xdp_pace_wait_fraction) = cli.xdp_pace_wait_fraction {
         config.xdp.pace_wait_fraction = xdp_pace_wait_fraction;
+    }
+    if let Some(xdp_pacing) = cli.xdp_pacing {
+        config.xdp.pacing = xdp_pacing;
+    }
+    if let Some(xdp_rx_idle_sleep_us) = cli.xdp_rx_idle_sleep_us {
+        config.xdp.rx_idle_sleep_us = xdp_rx_idle_sleep_us;
+    }
+    if !cli.xdp_worker_cpu_affinity.is_empty() {
+        config.xdp.worker_cpu_affinity = cli.xdp_worker_cpu_affinity.clone();
     }
     if let Some(xdp_umem_frame_count) = cli.xdp_umem_frame_count {
         config.xdp.umem_frame_count = xdp_umem_frame_count;
@@ -1269,6 +1333,11 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     };
     if effective_queue_count == 0 {
         bail!("backend xdp requires interface.queue_count to be non-zero");
+    }
+    if !config.xdp.worker_cpu_affinity.is_empty()
+        && config.xdp.worker_cpu_affinity.len() != effective_queue_count as usize
+    {
+        bail!("xdp.worker_cpu_affinity length must match the active XDP queue count");
     }
     if config.interface.queue_list.is_empty() {
         config
@@ -1980,6 +2049,13 @@ fn classify_response(packet: &[u8], expected_id: u16) -> ResponseClass {
     }
     let id = u16::from_be_bytes([packet[0], packet[1]]);
     if id != expected_id {
+        return ResponseClass::Unmatched;
+    }
+    classify_response_payload(packet)
+}
+
+fn classify_response_payload(packet: &[u8]) -> ResponseClass {
+    if packet.len() < 12 {
         return ResponseClass::Unmatched;
     }
     let flags0 = packet[2];

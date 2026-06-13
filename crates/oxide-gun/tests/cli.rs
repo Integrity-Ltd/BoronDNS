@@ -90,10 +90,14 @@ fn print_config_accepts_cli_overrides() {
             "4",
             "--queue-list",
             "0,2,3,7",
+            "--xdp-worker-cpu-affinity",
+            "4,5,6,7",
             "--xdp-redirect-object",
             "/tmp/oxide-gun-xdp.bpf.o",
             "--xdp-reply-tracking",
-            "count",
+            "packet-count",
+            "--xdp-port-accounting",
+            "none",
             "--xdp-batch-size",
             "1024",
             "--xdp-rx-drain-passes",
@@ -102,6 +106,10 @@ fn print_config_accepts_cli_overrides() {
             "4",
             "--xdp-pace-wait-fraction",
             "0.75",
+            "--xdp-pacing",
+            "deadline",
+            "--xdp-rx-idle-sleep-us",
+            "0",
             "--xdp-umem-frame-count",
             "16384",
             "--xdp-tx-ring-size",
@@ -133,12 +141,17 @@ fn print_config_accepts_cli_overrides() {
     assert!(stdout.contains("queue_count = 4"));
     assert!(stdout.contains("queue_list = ["));
     assert!(stdout.contains("    7,"));
+    assert!(stdout.contains("worker_cpu_affinity = ["));
+    assert!(stdout.contains("    7,"));
     assert!(stdout.contains("redirect_object = \"/tmp/oxide-gun-xdp.bpf.o\""));
-    assert!(stdout.contains("reply_tracking = \"count\""));
+    assert!(stdout.contains("reply_tracking = \"packet_count\""));
+    assert!(stdout.contains("port_accounting = \"none\""));
     assert!(stdout.contains("batch_size = 1024"));
     assert!(stdout.contains("rx_drain_passes = 16"));
     assert!(stdout.contains("tx_wakeup_interval = 4"));
     assert!(stdout.contains("pace_wait_fraction = 0.75"));
+    assert!(stdout.contains("pacing = \"deadline\""));
+    assert!(stdout.contains("rx_idle_sleep_us = 0"));
     assert!(stdout.contains("umem_frame_count = 16384"));
     assert!(stdout.contains("tx_ring_size = 4096"));
     assert!(stdout.contains("rx_ring_size = 4096"));

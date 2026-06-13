@@ -26,9 +26,10 @@ use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 
 use super::{
     DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, PortSelect, QueryPool,
-    QueryTemplate, RecvMode, ResponseClass, SourceEndpoint, SourceSelector, Stats, XdpMode,
-    XdpReplyTracking, XdpZeroCopyMode, build_dns_query, classify_response, drop_implementation,
-    parse_ipv4_cidr, query_pool, response_id, serde_plain_drop_implementation,
+    QuerySelect, QueryTemplate, RecvMode, ResponseClass, SourceEndpoint, SourceSelector, Stats,
+    XdpMode, XdpPacing, XdpPortAccounting, XdpReplyTracking, XdpZeroCopyMode, build_dns_query,
+    classify_response, drop_implementation, parse_ipv4_cidr, query_pool, response_id,
+    serde_plain_drop_implementation,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -50,9 +51,13 @@ struct XdpOutputRecord<'a> {
     queue_count: u32,
     recv_mode: RecvMode,
     xdp_reply_tracking: XdpReplyTracking,
+    xdp_port_accounting: XdpPortAccounting,
     xdp_rx_drain_passes: usize,
     xdp_tx_wakeup_interval: usize,
     xdp_pace_wait_fraction: f64,
+    xdp_pacing: XdpPacing,
+    xdp_rx_idle_sleep_us: u64,
+    xdp_worker_cpu_affinity: &'a [usize],
     drop_implementation: DropImplementation,
     target: SocketAddr,
     source_ip: IpAddr,
@@ -161,7 +166,17 @@ impl DestinationPortCounters {
         }
     }
 
+    fn disabled() -> Self {
+        Self {
+            first_port: 0,
+            counts: Vec::new(),
+        }
+    }
+
     fn increment(&mut self, port: u16) {
+        if self.counts.is_empty() {
+            return;
+        }
         let Some(offset) = port.checked_sub(self.first_port).map(usize::from) else {
             return;
         };
@@ -238,6 +253,43 @@ impl Slab for PacketSlab {
 
     fn pop_back(&mut self) -> Option<Packet> {
         self.packets.pop()
+    }
+}
+
+struct TxByteAccountant {
+    uniform_frame_len: Option<u64>,
+    pending_lengths: Vec<u64>,
+}
+
+impl TxByteAccountant {
+    fn new(uniform_frame_len: Option<u64>, batch_size: usize) -> Self {
+        Self {
+            uniform_frame_len,
+            pending_lengths: if uniform_frame_len.is_some() {
+                Vec::new()
+            } else {
+                Vec::with_capacity(batch_size)
+            },
+        }
+    }
+
+    fn record_frame_len(&mut self, frame_len: u64) {
+        if self.uniform_frame_len.is_none() {
+            self.pending_lengths.push(frame_len);
+        }
+    }
+
+    fn account_sent(&mut self, sent: usize, stats: &mut Stats) {
+        stats.tx_packets += sent as u64;
+        if let Some(frame_len) = self.uniform_frame_len {
+            stats.tx_bytes += frame_len * sent as u64;
+        } else {
+            for _ in 0..sent {
+                if let Some(len) = self.pending_lengths.pop() {
+                    stats.tx_bytes += len;
+                }
+            }
+        }
     }
 }
 
@@ -521,15 +573,18 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     let queue_ids = active_queue_ids(config);
     let queue_count = u32::try_from(queue_ids.len())
         .map_err(|_| anyhow!("interface.queue_list has too many active entries"))?;
-    let auto_source_port_range =
-        config.source.port_range.is_none() && config.source.port_list.is_empty();
+    let pin_source_port_per_queue = pin_contiguous_source_port_per_queue(config, queue_count)?;
     let mut aggregate_config = config.clone();
     aggregate_config.interface.queue_count = queue_count;
     aggregate_config.interface.queue_list = queue_ids.clone();
-    if auto_source_port_range && queue_count > 1 {
-        let last_port = aggregate_config.source.port + (queue_count - 1) as u16;
-        aggregate_config.source.port_range =
-            Some(format!("{}-{last_port}", aggregate_config.source.port));
+    if pin_source_port_per_queue && queue_count > 1 && aggregate_config.source.port_list.is_empty()
+    {
+        let first_port = source_port_bounds(&aggregate_config)?.0;
+        let last_port = first_port
+            .checked_add((queue_count - 1) as u16)
+            .ok_or_else(|| anyhow!("source port plus queue count overflows u16"))?;
+        aggregate_config.source.port = first_port;
+        aggregate_config.source.port_range = Some(format!("{first_port}-{last_port}"));
         aggregate_config.source.port_select = PortSelect::Sequential;
     }
     let query_pool = query_pool(&aggregate_config)?;
@@ -546,7 +601,7 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
             worker_index,
             queue_id,
             queue_count,
-            auto_source_port_range,
+            pin_source_port_per_queue,
         )?;
         let worker = bind_xdp_worker(&worker_config)?;
         xsk_entries.push((worker_config.interface.rx_queue, worker.socket_fd));
@@ -566,11 +621,24 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
     };
     let mut handles = Vec::with_capacity(queue_count as usize);
 
-    for (worker_config, worker) in workers {
+    for (worker_index, (worker_config, worker)) in workers.into_iter().enumerate() {
         let inflight = shared_inflight
             .as_ref()
             .map(|shared| InflightTracker::Shared(Arc::clone(shared)));
+        let cpu_affinity = aggregate_config
+            .xdp
+            .worker_cpu_affinity
+            .get(worker_index)
+            .copied();
         handles.push(thread::spawn(move || {
+            if let Some(cpu) = cpu_affinity {
+                pin_current_thread_to_cpu(cpu).with_context(|| {
+                    format!(
+                        "failed to pin XDP queue worker {} to CPU {cpu}",
+                        worker_config.interface.rx_queue
+                    )
+                })?;
+            }
             run_bound_worker(
                 worker_config,
                 worker,
@@ -635,7 +703,7 @@ fn worker_config(
     worker_index: u32,
     queue_id: u32,
     queue_count: u32,
-    auto_source_port_range: bool,
+    pin_source_port_per_queue: bool,
 ) -> Result<FileConfig> {
     let mut worker = config.clone();
     worker.interface.tx_queue = queue_id;
@@ -656,14 +724,7 @@ fn worker_config(
         let remainder = config.run.max_packets % u64::from(queue_count);
         worker.run.max_packets = base + u64::from(worker_index < remainder as u32);
     }
-    if auto_source_port_range {
-        worker.source.port = config
-            .source
-            .port
-            .checked_add(worker_index as u16)
-            .ok_or_else(|| anyhow!("source.port plus queue worker index overflows u16"))?;
-        worker.source.port_range = None;
-    } else if !config.source.port_list.is_empty() {
+    if !config.source.port_list.is_empty() {
         worker.source.port = *config
             .source
             .port_list
@@ -673,8 +734,31 @@ fn worker_config(
             })?;
         worker.source.port_list.clear();
         worker.source.port_range = None;
+    } else if pin_source_port_per_queue {
+        let first_port = source_port_bounds(config)?.0;
+        worker.source.port = first_port
+            .checked_add(worker_index as u16)
+            .ok_or_else(|| anyhow!("source.port plus queue worker index overflows u16"))?;
+        worker.source.port_range = None;
+        worker.source.port_list.clear();
     }
     Ok(worker)
+}
+
+fn pin_contiguous_source_port_per_queue(config: &FileConfig, queue_count: u32) -> Result<bool> {
+    if !config.source.port_list.is_empty() {
+        return Ok(false);
+    }
+    let Some(range) = &config.source.port_range else {
+        return Ok(true);
+    };
+    if config.source.port_select != PortSelect::Sequential {
+        return Ok(false);
+    }
+    let (first, last) = source_port_bounds(config)
+        .with_context(|| format!("invalid source.port_range for queue pinning: {range}"))?;
+    let available = u32::from(last - first) + 1;
+    Ok(available >= queue_count)
 }
 
 fn merge_stats(total: &mut Stats, stats: Stats) {
@@ -914,16 +998,28 @@ fn run_bound_worker(
     let rx_drain_passes = config.xdp.rx_drain_passes;
     let tx_wakeup_interval = config.xdp.tx_wakeup_interval;
     let pace_wait_fraction = config.xdp.pace_wait_fraction;
+    let rx_idle_sleep = Duration::from_micros(config.xdp.rx_idle_sleep_us);
+    let mut next_send_deadline = Instant::now();
     let mut tx_send_passes = 0_usize;
     let mut send_slab = PacketSlab::with_capacity(batch_size);
-    let mut send_lengths = Vec::with_capacity(batch_size);
     let process_responses = config.recv.mode == RecvMode::Process;
     let track_latency = process_responses && config.xdp.reply_tracking == XdpReplyTracking::Latency;
+    let classify_replies = config.xdp.reply_tracking != XdpReplyTracking::PacketCount;
     let mut recv_slab = PacketSlab::with_capacity(if process_responses { batch_size } else { 0 });
     let (first_destination_port, last_destination_port) =
         destination_port_bounds.unwrap_or(source_port_bounds(&config)?);
-    let mut destination_ports =
-        DestinationPortCounters::new(first_destination_port, last_destination_port);
+    let mut destination_ports = match config.xdp.port_accounting {
+        XdpPortAccounting::Count => {
+            DestinationPortCounters::new(first_destination_port, last_destination_port)
+        }
+        XdpPortAccounting::None => DestinationPortCounters::disabled(),
+    };
+    let mut tx_bytes = TxByteAccountant::new(
+        packet_templates
+            .as_ref()
+            .and_then(XdpPacketTemplates::uniform_frame_len),
+        batch_size,
+    );
     let start = Instant::now();
     let deadline = config
         .run
@@ -941,6 +1037,9 @@ fn run_bound_worker(
     };
     let mut query_id = config.run.seed as u16;
     let mut query_rng = super::XorShift64::new(config.run.seed);
+    let mut fast_template_cursor = packet_templates
+        .as_ref()
+        .and_then(|templates| SequentialTemplateCursor::new(&config, &query_pool, templates));
     let uses_shared_inflight = shared_inflight.is_some();
     let mut inflight = track_latency.then(|| {
         shared_inflight.unwrap_or_else(|| InflightTracker::Local(vec![None; u16::MAX as usize + 1]))
@@ -951,13 +1050,27 @@ fn run_bound_worker(
             break;
         }
 
+        let send_pass_start = Instant::now();
         while send_slab.available() > 0 && stats.tx_packets + (send_slab.len() as u64) < max_packets
         {
             query_id = query_id.wrapping_add(1);
             let query_index = stats.tx_packets + send_slab.len() as u64;
-            let source = source_selector.next();
-            let selected_query_index = query_pool.select_index(&mut query_rng, query_index);
-            let query = &encoded_queries[selected_query_index];
+            let (source, selected_query_index, fast_template) =
+                if let Some(cursor) = fast_template_cursor.as_mut() {
+                    let (source_port, template) = cursor.next();
+                    (
+                        SourceEndpoint {
+                            ip: config.source.ip,
+                            port: source_port,
+                        },
+                        0,
+                        Some(template),
+                    )
+                } else {
+                    let source = source_selector.next();
+                    let selected_query_index = query_pool.select_index(&mut query_rng, query_index);
+                    (source, selected_query_index, None)
+                };
             // SAFETY: returned packet stays within this function, is either handed
             // to the TX ring while `umem` and `socket` remain alive, or immediately
             // freed back to the same UMEM on error.
@@ -970,22 +1083,27 @@ fn run_bound_worker(
                 );
                 break;
             };
-            let frame_len = match packet_templates
-                .as_ref()
-                .and_then(|templates| templates.get(source.port, selected_query_index))
-            {
-                Some(template) => template.write_packet(&mut packet, query_id),
-                None => write_ethernet_udp_dns_packet_with_query_id(
-                    &mut packet,
-                    target_mac,
-                    source_mac,
-                    source.ip,
-                    target.ip(),
-                    source.port,
-                    target.port(),
-                    query,
-                    query_id,
-                ),
+            let frame_len = if let Some(template) = fast_template {
+                template.write_packet(&mut packet, query_id)
+            } else {
+                let query = &encoded_queries[selected_query_index];
+                match packet_templates
+                    .as_ref()
+                    .and_then(|templates| templates.get(source.port, selected_query_index))
+                {
+                    Some(template) => template.write_packet(&mut packet, query_id),
+                    None => write_ethernet_udp_dns_packet_with_query_id(
+                        &mut packet,
+                        target_mac,
+                        source_mac,
+                        source.ip,
+                        target.ip(),
+                        source.port,
+                        target.port(),
+                        query,
+                        query_id,
+                    ),
+                }
             };
             let frame_len = match frame_len {
                 Ok(frame_len) => frame_len,
@@ -1004,7 +1122,7 @@ fn run_bound_worker(
             if let Some(inflight) = inflight.as_mut() {
                 inflight.record(source.port, query_id, Instant::now());
             }
-            send_lengths.push(frame_len as u64);
+            tx_bytes.record_frame_len(frame_len as u64);
         }
 
         if send_slab.is_empty() {
@@ -1026,7 +1144,7 @@ fn run_bound_worker(
             Ok(sent) => sent,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let queued = queued_before.saturating_sub(send_slab.len());
-                account_sent_packets(queued, &mut send_lengths, &mut stats);
+                tx_bytes.account_sent(queued, &mut stats);
                 dequeue_xdp_completions(
                     &mut worker.completion_ring,
                     &mut worker.umem,
@@ -1037,6 +1155,10 @@ fn run_bound_worker(
                     per_packet_delay,
                     queued,
                     pace_wait_fraction,
+                    config.xdp.pacing,
+                    &mut next_send_deadline,
+                    send_pass_start,
+                    rx_idle_sleep,
                     &worker.socket,
                     worker.rx_ring.as_mut(),
                     &mut worker.fill_ring,
@@ -1045,6 +1167,7 @@ fn run_bound_worker(
                     inflight.as_mut(),
                     &mut destination_ports,
                     &mut stats,
+                    classify_replies,
                     process_responses,
                 )?;
                 continue;
@@ -1067,7 +1190,7 @@ fn run_bound_worker(
             }
             continue;
         } else {
-            account_sent_packets(sent, &mut send_lengths, &mut stats);
+            tx_bytes.account_sent(sent, &mut stats);
         }
         dequeue_xdp_completions(
             &mut worker.completion_ring,
@@ -1087,6 +1210,7 @@ fn run_bound_worker(
                     inflight.as_mut(),
                     &mut destination_ports,
                     &mut stats,
+                    classify_replies,
                 )?;
                 if received == 0 {
                     break;
@@ -1119,6 +1243,10 @@ fn run_bound_worker(
             per_packet_delay,
             sent,
             pace_wait_fraction,
+            config.xdp.pacing,
+            &mut next_send_deadline,
+            send_pass_start,
+            rx_idle_sleep,
             &worker.socket,
             worker.rx_ring.as_mut(),
             &mut worker.fill_ring,
@@ -1127,6 +1255,7 @@ fn run_bound_worker(
             inflight.as_mut(),
             &mut destination_ports,
             &mut stats,
+            classify_replies,
             process_responses,
         )?;
     }
@@ -1152,6 +1281,7 @@ fn run_bound_worker(
             inflight.as_mut(),
             &mut destination_ports,
             &mut stats,
+            classify_replies,
             Duration::from_millis(config.recv.response_timeout_ms),
         )?;
         if !uses_shared_inflight {
@@ -1195,6 +1325,7 @@ fn drain_xdp_replies(
     mut inflight: Option<&mut InflightTracker>,
     destination_ports: &mut DestinationPortCounters,
     stats: &mut Stats,
+    classify_replies: bool,
     timeout: Duration,
 ) -> Result<()> {
     let Some(rx_ring) = rx_ring else {
@@ -1215,6 +1346,7 @@ fn drain_xdp_replies(
             inflight.as_deref_mut(),
             destination_ports,
             stats,
+            classify_replies,
         )?;
         if received == 0 || stats.rx_packets == before {
             let now = Instant::now();
@@ -1325,6 +1457,57 @@ impl XdpPacketTemplates {
         self.templates
             .get(port_offset * self.query_count + query_index)
     }
+
+    fn uniform_frame_len(&self) -> Option<u64> {
+        let first = self.templates.first()?.frame.len();
+        self.templates
+            .iter()
+            .all(|template| template.frame.len() == first)
+            .then_some(first as u64)
+    }
+}
+
+struct SequentialTemplateCursor<'a> {
+    templates: &'a XdpPacketTemplates,
+    port_offset: usize,
+}
+
+impl<'a> SequentialTemplateCursor<'a> {
+    fn new(
+        config: &FileConfig,
+        query_pool: &QueryPool,
+        templates: &'a XdpPacketTemplates,
+    ) -> Option<Self> {
+        if query_pool.select != QuerySelect::Sequential
+            || query_pool.len() != 1
+            || config.source.port_select != PortSelect::Sequential
+            || !config.source.port_list.is_empty()
+            || static_source_ip(config).is_none()
+        {
+            return None;
+        }
+        let (first_port, last_port) = source_port_bounds(config).ok()?;
+        if first_port != templates.first_port
+            || usize::from(last_port - first_port) + 1 != templates.port_count
+        {
+            return None;
+        }
+        Some(Self {
+            templates,
+            port_offset: 0,
+        })
+    }
+
+    fn next(&mut self) -> (u16, &'a XdpPacketTemplate) {
+        let port_offset = self.port_offset;
+        self.port_offset += 1;
+        if self.port_offset == self.templates.port_count {
+            self.port_offset = 0;
+        }
+        let source_port = self.templates.first_port + port_offset as u16;
+        let template = &self.templates.templates[port_offset * self.templates.query_count];
+        (source_port, template)
+    }
 }
 
 impl XdpPacketTemplate {
@@ -1401,15 +1584,6 @@ fn write_query_id_into_dns_payload(packet: &mut Vec<u8>, template: &[u8], id: u1
     packet[..2].copy_from_slice(&id.to_be_bytes());
 }
 
-fn account_sent_packets(sent: usize, send_lengths: &mut Vec<u64>, stats: &mut Stats) {
-    stats.tx_packets += sent as u64;
-    for _ in 0..sent {
-        if let Some(len) = send_lengths.pop() {
-            stats.tx_bytes += len;
-        }
-    }
-}
-
 fn dequeue_xdp_completions(
     completion_ring: &mut xdp::CompletionRing,
     umem: &mut xdp::Umem,
@@ -1483,6 +1657,10 @@ fn pace_after_sent(
     per_packet_delay: Option<Duration>,
     sent: usize,
     pace_wait_fraction: f64,
+    pacing: XdpPacing,
+    next_send_deadline: &mut Instant,
+    send_pass_start: Instant,
+    rx_idle_sleep: Duration,
     socket: &xdp::socket::XdpSocket,
     rx_ring: Option<&mut xdp::RxRing>,
     fill_ring: &mut xdp::WakableFillRing,
@@ -1491,6 +1669,7 @@ fn pace_after_sent(
     mut inflight: Option<&mut InflightTracker>,
     destination_ports: &mut DestinationPortCounters,
     stats: &mut Stats,
+    classify_replies: bool,
     process_responses: bool,
 ) -> Result<()> {
     if sent == 0 {
@@ -1503,6 +1682,21 @@ fn pace_after_sent(
     if wait.is_zero() {
         return Ok(());
     }
+    let wait = match pacing {
+        XdpPacing::Relative => wait,
+        XdpPacing::Compensated => match wait.checked_sub(send_pass_start.elapsed()) {
+            Some(wait) => wait,
+            None => return Ok(()),
+        },
+        XdpPacing::Deadline => {
+            *next_send_deadline += wait;
+            let now = Instant::now();
+            if *next_send_deadline <= now {
+                return Ok(());
+            }
+            *next_send_deadline - now
+        }
+    };
     if !process_responses {
         std::thread::sleep(wait);
         return Ok(());
@@ -1523,13 +1717,18 @@ fn pace_after_sent(
             inflight.as_deref_mut(),
             destination_ports,
             stats,
+            classify_replies,
         )?;
         if received == 0 {
             let now = Instant::now();
             if now >= deadline {
                 break;
             }
-            std::thread::sleep((deadline - now).min(Duration::from_micros(250)));
+            if rx_idle_sleep.is_zero() {
+                std::hint::spin_loop();
+            } else {
+                std::thread::sleep((deadline - now).min(rx_idle_sleep));
+            }
         }
     }
     Ok(())
@@ -1537,6 +1736,34 @@ fn pace_after_sent(
 
 fn should_wakeup_tx(interval: usize, send_passes: usize) -> bool {
     interval != 0 && send_passes.is_multiple_of(interval)
+}
+
+#[cfg(target_os = "linux")]
+fn pin_current_thread_to_cpu(cpu: usize) -> io::Result<()> {
+    // SAFETY: zeroed is valid for cpu_set_t before CPU_ZERO initializes the
+    // implementation-specific bitset representation.
+    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // SAFETY: the macros operate on a valid cpu_set_t pointer, and `cpu` is
+    // validated by the kernel in sched_setaffinity.
+    unsafe {
+        libc::CPU_ZERO(&mut set);
+        libc::CPU_SET(cpu, &mut set);
+    }
+    // SAFETY: the affinity set pointer is valid for the duration of the call.
+    let result = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pin_current_thread_to_cpu(_cpu: usize) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "XDP worker CPU affinity is only implemented on Linux",
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1617,16 +1844,12 @@ fn receive_available_xdp(
     mut inflight: Option<&mut InflightTracker>,
     destination_ports: &mut DestinationPortCounters,
     stats: &mut Stats,
+    classify_replies: bool,
 ) -> Result<usize> {
+    let _ = socket;
     let Some(rx_ring) = rx_ring else {
         return Ok(0);
     };
-    if !socket
-        .poll_read(PollTimeout::new(Some(Duration::from_millis(0))))
-        .context("failed to poll AF_XDP RX ring")?
-    {
-        return Ok(0);
-    }
     // SAFETY: received packet views are consumed and returned to the same UMEM
     // before this function returns; `umem` outlives the RX ring and socket.
     let received = unsafe { rx_ring.recv(umem, recv_slab) };
@@ -1638,15 +1861,25 @@ fn receive_available_xdp(
         stats.rx_bytes += packet.len() as u64;
         if let Some(received) = dns_payload_from_ethernet_frame(&packet) {
             destination_ports.increment(received.destination_port);
-            let Some(id) = response_id(received.payload) else {
-                stats.rx_dns_unmatched += 1;
+            if !classify_replies {
+                stats.rx_dns_responses += 1;
+                stats.positive += 1;
                 umem.free_packet(packet);
                 continue;
+            }
+            let (response_class, latency) = if let Some(tracker) = inflight.as_mut() {
+                let Some(id) = response_id(received.payload) else {
+                    stats.rx_dns_unmatched += 1;
+                    umem.free_packet(packet);
+                    continue;
+                };
+                (
+                    classify_response(received.payload, id),
+                    tracker.take(received.destination_port, id, Instant::now()),
+                )
+            } else {
+                (super::classify_response_payload(received.payload), None)
             };
-            let latency = inflight
-                .as_mut()
-                .and_then(|tracker| tracker.take(received.destination_port, id, Instant::now()));
-            let response_class = classify_response(received.payload, id);
             match response_class {
                 ResponseClass::Positive => {
                     stats.rx_dns_responses += 1;
@@ -1740,9 +1973,13 @@ fn emit_xdp_record(
         queue_count: config.interface.queue_count,
         recv_mode: config.recv.mode,
         xdp_reply_tracking: config.xdp.reply_tracking,
+        xdp_port_accounting: config.xdp.port_accounting,
         xdp_rx_drain_passes: config.xdp.rx_drain_passes,
         xdp_tx_wakeup_interval: config.xdp.tx_wakeup_interval,
         xdp_pace_wait_fraction: config.xdp.pace_wait_fraction,
+        xdp_pacing: config.xdp.pacing,
+        xdp_rx_idle_sleep_us: config.xdp.rx_idle_sleep_us,
+        xdp_worker_cpu_affinity: &config.xdp.worker_cpu_affinity,
         drop_implementation: drop_implementation(
             config.recv.mode,
             config.xdp.drop_object.is_some(),
