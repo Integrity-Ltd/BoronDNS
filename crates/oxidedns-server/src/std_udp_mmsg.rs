@@ -150,7 +150,11 @@ impl StdUdpMmsg {
         };
         if result < 0 {
             let errno = current_errno();
-            if recv_batch_errno_is_retryable(errno) {
+            if recv_batch_errno_is_interrupted(errno) {
+                self.stats.receive_interrupted_syscalls += 1;
+                return Ok(0);
+            }
+            if recv_batch_errno_is_wouldblock(errno) {
                 self.stats.receive_wouldblock_syscalls += 1;
                 return Ok(0);
             }
@@ -209,7 +213,7 @@ impl StdUdpMmsg {
             }
 
             let error = io::Error::last_os_error();
-            if error.kind() == ErrorKind::WouldBlock {
+            if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::Interrupted {
                 self.stats.send_wouldblock_retries += 1;
                 blocked_retries += 1;
                 if blocked_retries <= SEND_WOULDBLOCK_SPINS {
@@ -217,9 +221,6 @@ impl StdUdpMmsg {
                 } else {
                     std::thread::yield_now();
                 }
-                continue;
-            }
-            if error.kind() == ErrorKind::Interrupted {
                 continue;
             }
             return Err(error);
@@ -265,6 +266,7 @@ impl StdUdpMmsg {
 pub(crate) struct StdUdpMmsgStats {
     pub(crate) receive_syscalls: u64,
     pub(crate) receive_wouldblock_syscalls: u64,
+    pub(crate) receive_interrupted_syscalls: u64,
     pub(crate) received_datagrams: u64,
     pub(crate) send_syscalls: u64,
     pub(crate) sent_datagrams: u64,
@@ -290,8 +292,13 @@ fn current_errno() -> libc::c_int {
 }
 
 #[cfg(target_os = "linux")]
-fn recv_batch_errno_is_retryable(errno: libc::c_int) -> bool {
-    errno == libc::EAGAIN || errno == libc::EINTR
+fn recv_batch_errno_is_wouldblock(errno: libc::c_int) -> bool {
+    errno == libc::EAGAIN
+}
+
+#[cfg(target_os = "linux")]
+fn recv_batch_errno_is_interrupted(errno: libc::c_int) -> bool {
+    errno == libc::EINTR
 }
 
 #[cfg(target_os = "linux")]
@@ -452,9 +459,10 @@ mod tests {
 
     #[test]
     fn recvmmsg_treats_eintr_as_retryable() {
-        assert!(recv_batch_errno_is_retryable(libc::EINTR));
-        assert!(recv_batch_errno_is_retryable(libc::EAGAIN));
-        assert!(!recv_batch_errno_is_retryable(libc::EBADF));
+        assert!(recv_batch_errno_is_interrupted(libc::EINTR));
+        assert!(recv_batch_errno_is_wouldblock(libc::EAGAIN));
+        assert!(!recv_batch_errno_is_interrupted(libc::EBADF));
+        assert!(!recv_batch_errno_is_wouldblock(libc::EBADF));
     }
 
     #[test]

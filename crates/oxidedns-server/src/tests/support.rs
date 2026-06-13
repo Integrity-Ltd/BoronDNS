@@ -702,6 +702,31 @@ async fn spawn_soa_primary_with_spoofed_malformed_packet(serial: u32) -> std::ne
     addr
 }
 
+async fn spawn_soa_primary_with_wrong_qid_truncated_then_serial(
+    serial: u32,
+) -> std::net::SocketAddr {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut buffer = vec![0u8; 512];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let query = &buffer[..len];
+        let header = Header::parse(query).unwrap();
+        assert_eq!(header.qdcount, 1);
+        assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+        let mut wrong_qid_tc = soa_response(header.id.wrapping_add(1), serial);
+        let flags = u16::from_be_bytes([wrong_qid_tc[2], wrong_qid_tc[3]]) | 0x0200;
+        wrong_qid_tc[2..4].copy_from_slice(&flags.to_be_bytes());
+        socket.send_to(&wrong_qid_tc, peer).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let response = soa_response(header.id, serial);
+        socket.send_to(&response, peer).await.unwrap();
+    });
+    addr
+}
+
 async fn spawn_malformed_soa_primary() -> std::net::SocketAddr {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let addr = socket.local_addr().unwrap();

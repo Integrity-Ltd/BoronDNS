@@ -1519,6 +1519,7 @@ fn file_descriptor_limit_check_uses_srs_resource_formula() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn file_descriptor_limit_formula_saturates_extreme_limits() {
     let config = ServerConfig::from_toml_str(
         r#"

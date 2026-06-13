@@ -1037,6 +1037,8 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
          # TYPE oxidedns_udp_mmsg_receive_syscalls_total counter\n\
          # HELP oxidedns_udp_mmsg_receive_wouldblock_syscalls_total Linux recvmmsg calls that found no datagrams on nonblocking dedicated UDP worker sockets.\n\
          # TYPE oxidedns_udp_mmsg_receive_wouldblock_syscalls_total counter\n\
+         # HELP oxidedns_udp_mmsg_receive_interrupted_syscalls_total Linux recvmmsg calls interrupted by a signal before receiving datagrams.\n\
+         # TYPE oxidedns_udp_mmsg_receive_interrupted_syscalls_total counter\n\
          # HELP oxidedns_udp_mmsg_received_datagrams_total UDP datagrams returned by Linux recvmmsg dedicated-worker calls.\n\
          # TYPE oxidedns_udp_mmsg_received_datagrams_total counter\n\
          # HELP oxidedns_udp_mmsg_send_syscalls_total Linux sendmmsg syscalls issued by dedicated UDP workers.\n\
@@ -1051,6 +1053,7 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
     body.push_str(&format!(
         "oxidedns_udp_mmsg_receive_syscalls_total {}\n\
          oxidedns_udp_mmsg_receive_wouldblock_syscalls_total {}\n\
+         oxidedns_udp_mmsg_receive_interrupted_syscalls_total {}\n\
          oxidedns_udp_mmsg_received_datagrams_total {}\n\
          oxidedns_udp_mmsg_send_syscalls_total {}\n\
          oxidedns_udp_mmsg_sent_datagrams_total {}\n\
@@ -1063,6 +1066,10 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
         metrics
             .inner
             .udp_mmsg_receive_wouldblock_syscalls
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_receive_interrupted_syscalls
             .load(Ordering::Relaxed),
         metrics
             .inner
@@ -2353,6 +2360,7 @@ struct RuntimeMetricsInner {
     pub(crate) udp_sent_datagrams: AtomicU64,
     udp_mmsg_receive_syscalls: AtomicU64,
     udp_mmsg_receive_wouldblock_syscalls: AtomicU64,
+    udp_mmsg_receive_interrupted_syscalls: AtomicU64,
     udp_mmsg_received_datagrams: AtomicU64,
     udp_mmsg_send_syscalls: AtomicU64,
     udp_mmsg_sent_datagrams: AtomicU64,
@@ -2869,6 +2877,11 @@ impl RuntimeMetrics {
             self.inner
                 .udp_mmsg_receive_wouldblock_syscalls
                 .fetch_add(stats.receive_wouldblock_syscalls, Ordering::Relaxed);
+        }
+        if stats.receive_interrupted_syscalls != 0 {
+            self.inner
+                .udp_mmsg_receive_interrupted_syscalls
+                .fetch_add(stats.receive_interrupted_syscalls, Ordering::Relaxed);
         }
         if stats.received_datagrams != 0 {
             self.inner

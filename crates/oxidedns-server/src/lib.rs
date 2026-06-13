@@ -39,7 +39,7 @@ use oxidedns_core::{
     ServerConfig,
     axfr::{self, IxfrResponse},
     catalog::{CatalogError, CatalogMember, CatalogMemberTransfer, parse_catalog_members},
-    config::{CatalogZoneConfig, TransferTransportConfig, ZoneConfig},
+    config::{CatalogZoneConfig, ConfigSecretString, TransferTransportConfig, ZoneConfig},
     dns::{DomainName, Header, Opcode, Question, Rcode},
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADALG, TSIG_ERROR_BADKEY, TSIG_ERROR_BADSIG,
@@ -51,7 +51,7 @@ use oxidedns_core::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{Mutex as AsyncMutex, Semaphore, mpsc, oneshot},
     task::JoinSet,
 };
 use tracing::{error, info, warn};
@@ -723,6 +723,7 @@ struct CatalogManager {
     catalogs_by_key: Arc<HashMap<String, CatalogRuntimeConfig>>,
     static_zone_keys: Arc<HashSet<String>>,
     memberships_by_catalog: Arc<Mutex<HashMap<String, HashMap<String, DomainName>>>>,
+    reconcile_lock: Arc<AsyncMutex<()>>,
 }
 
 impl Default for CatalogManager {
@@ -731,6 +732,7 @@ impl Default for CatalogManager {
             catalogs_by_key: Arc::new(HashMap::new()),
             static_zone_keys: Arc::new(HashSet::new()),
             memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+            reconcile_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 }
@@ -789,6 +791,7 @@ impl CatalogManager {
             catalogs_by_key: Arc::new(catalogs_by_key),
             static_zone_keys: Arc::new(static_zone_keys),
             memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+            reconcile_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 
@@ -838,6 +841,7 @@ impl CatalogManager {
         notify_authority: &NotifyAuthority,
         refresh_tx: &mpsc::WeakSender<RefreshRequest>,
     ) {
+        let _reconcile_guard = self.reconcile_lock.lock().await;
         debug_assert_eq!(&metadata.origin, catalog_view.origin());
         let Some(catalog) = self.catalogs_by_key.get(metadata.origin_key.as_ref()) else {
             return;
@@ -3223,7 +3227,7 @@ fn resolve_transfer_primary(
     resolved.client_key_pem = profile
         .client_key_pem
         .as_ref()
-        .map(|secret| secret.expose_secret().to_owned());
+        .map(|secret| ConfigSecretString::from_plaintext(secret.expose_secret()));
     Ok(resolved)
 }
 

@@ -203,6 +203,7 @@ async fn observability_api_reports_catalog_membership() {
                 ),
             ]),
         )]))),
+        reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -496,6 +497,7 @@ fn metrics_body_reports_catalog_membership() {
                 ),
             ]),
         )]))),
+        reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     let metrics = metrics_body(

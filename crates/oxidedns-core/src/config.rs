@@ -2,10 +2,11 @@ use std::{
     collections::HashSet,
     fmt, fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Deref,
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -114,7 +115,7 @@ impl ServerConfig {
         for zone in &mut redacted.zones {
             for primary in &mut zone.transfer_primaries {
                 if primary.client_key_pem.is_some() {
-                    primary.client_key_pem = Some("<redacted>".to_owned());
+                    primary.client_key_pem = Some(ConfigSecretString::from_plaintext("<redacted>"));
                 }
             }
         }
@@ -126,7 +127,7 @@ impl ServerConfig {
                 .chain(catalog_zone.member_transfer_primaries.iter_mut())
             {
                 if primary.client_key_pem.is_some() {
-                    primary.client_key_pem = Some("<redacted>".to_owned());
+                    primary.client_key_pem = Some(ConfigSecretString::from_plaintext("<redacted>"));
                 }
             }
         }
@@ -2415,6 +2416,51 @@ pub fn is_legacy_private_primary(ip: IpAddr) -> bool {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct ConfigSecretString(Zeroizing<String>);
+
+impl ConfigSecretString {
+    pub fn from_plaintext(value: impl Into<String>) -> Self {
+        Self(Zeroizing::new(value.into()))
+    }
+
+    pub fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Deref for ConfigSecretString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.expose_secret()
+    }
+}
+
+impl fmt::Debug for ConfigSecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfigSecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::from_plaintext)
+    }
+}
+
+impl Serialize for ConfigSecretString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.expose_secret())
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransferPrimaryConfig {
@@ -2429,7 +2475,7 @@ pub struct TransferPrimaryConfig {
     pub client_cert: Option<String>,
     pub client_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_key_pem: Option<String>,
+    pub client_key_pem: Option<ConfigSecretString>,
 }
 
 impl fmt::Debug for TransferPrimaryConfig {

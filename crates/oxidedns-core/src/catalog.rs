@@ -206,7 +206,7 @@ fn parse_member_transfer_extension(
             continue;
         }
         let owner_key = rrset.owner.canonical_key();
-        if owner_key == primary_base || owner_key.ends_with(&format!(".{primary_base}")) {
+        if owner_key == primary_base {
             match rrset.rr_type {
                 value if value == RecordType::A as u16 => {
                     for rdata in rrset.rdatas() {
@@ -602,6 +602,48 @@ mod tests {
         );
         assert_eq!(transfer.xfr.as_ref().and_then(|xfr| xfr.port), Some(5300));
         assert_eq!(transfer.notify_sources.len(), 2);
+    }
+
+    #[test]
+    fn ignores_subdomain_member_transfer_extension_owner() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog,
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("alpha.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("grp1.primaries.ext.a.zones.catalog.example.")
+                        .unwrap(),
+                    RecordType::A as u16,
+                    1,
+                    0,
+                    vec![vec![192, 0, 2, 53]],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].transfer, None);
     }
 
     #[test]

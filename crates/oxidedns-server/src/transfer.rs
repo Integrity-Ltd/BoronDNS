@@ -201,31 +201,37 @@ async fn poll_soa_from_primary_inner(
         })?;
 
     let mut buffer = vec![0u8; 4096];
-    let len = socket
-        .recv(&mut buffer)
-        .await
-        .map_err(|source| TransferError::Io {
-            addr: primary,
-            source,
-        })?;
+    loop {
+        let len = socket
+            .recv(&mut buffer)
+            .await
+            .map_err(|source| TransferError::Io {
+                addr: primary,
+                source,
+            })?;
 
-    if udp_response_has_tc(&buffer[..len]) {
-        let tcp_primary = TransferPrimaryConfig::tcp(primary);
-        return poll_soa_from_primary_tcp_inner(
-            &tcp_primary,
-            zone_apex,
-            qclass,
-            qid,
-            tsig,
-            transfer_source,
-            connect_timeout,
-        )
-        .await;
+        match udp_response_tc_status(&buffer[..len], qid) {
+            UdpTcStatus::ValidTruncatedResponse => {
+                let tcp_primary = TransferPrimaryConfig::tcp(primary);
+                return poll_soa_from_primary_tcp_inner(
+                    &tcp_primary,
+                    zone_apex,
+                    qclass,
+                    qid,
+                    tsig,
+                    transfer_source,
+                    connect_timeout,
+                )
+                .await;
+            }
+            UdpTcStatus::InvalidTruncatedResponse => continue,
+            UdpTcStatus::NotTruncated => {}
+        }
+
+        let response =
+            maybe_verify_transfer_response(&buffer[..len], tsig.key, query.request_mac.as_deref())?;
+        return parse_soa_poll_response(primary, zone_apex, qclass, qid, &response);
     }
-
-    let response =
-        maybe_verify_transfer_response(&buffer[..len], tsig.key, query.request_mac.as_deref())?;
-    parse_soa_poll_response(primary, zone_apex, qclass, qid, &response)
 }
 
 async fn poll_soa_from_primary_tcp_inner(
@@ -962,10 +968,25 @@ fn maybe_verify_transfer_response(
     Ok(verified.message)
 }
 
-fn udp_response_has_tc(message: &[u8]) -> bool {
-    Header::parse(message)
-        .map(|header| header.flags & 0x0200 != 0)
-        .unwrap_or(false)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UdpTcStatus {
+    NotTruncated,
+    InvalidTruncatedResponse,
+    ValidTruncatedResponse,
+}
+
+fn udp_response_tc_status(message: &[u8], qid: u16) -> UdpTcStatus {
+    let Ok(header) = Header::parse(message) else {
+        return UdpTcStatus::NotTruncated;
+    };
+    if header.flags & 0x0200 == 0 {
+        return UdpTcStatus::NotTruncated;
+    }
+    if header.id == qid && header.is_response() && header.opcode_value() == 0 {
+        UdpTcStatus::ValidTruncatedResponse
+    } else {
+        UdpTcStatus::InvalidTruncatedResponse
+    }
 }
 
 fn maybe_verify_tcp_transfer_messages(

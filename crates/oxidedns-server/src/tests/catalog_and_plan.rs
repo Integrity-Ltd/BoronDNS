@@ -288,6 +288,104 @@ async fn catalog_snapshot_reconciles_retained_and_removed_members() {
 }
 
 #[tokio::test]
+async fn concurrent_catalog_member_migration_preserves_member_resources() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_origin));
+    let updated_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
+    let updated_b =
+        catalog_snapshot_with_members(catalog_b.clone(), 7, std::slice::from_ref(&member_origin));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(initial_a.clone());
+    zones.insert_snapshot(updated_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+    let initial_a_metadata = zone_metadata_for(&initial_a);
+    let updated_a_metadata = zone_metadata_for(&updated_a);
+    let updated_b_metadata = zone_metadata_for(&updated_b);
+    let refresh_tx = tx.downgrade();
+    let refresh_tx_a = tx.downgrade();
+    let refresh_tx_b = tx.downgrade();
+
+    catalog_manager
+        .apply_snapshot(
+            initial_a.catalog_zone_view(),
+            &initial_a_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &refresh_tx,
+        )
+        .await;
+
+    let ((), ()) = tokio::join!(
+        catalog_manager.apply_snapshot(
+            updated_a.catalog_zone_view(),
+            &updated_a_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &refresh_tx_a,
+        ),
+        catalog_manager.apply_snapshot(
+            updated_b.catalog_zone_view(),
+            &updated_b_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &refresh_tx_b,
+        )
+    );
+
+    assert!(transfer_plan.get(&member_origin).is_some());
+    assert!(zones.contains_exact_zone_for_control(&member_origin));
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key("member.example.")
+    );
+}
+
+#[tokio::test]
 async fn catalog_snapshot_removes_non_text_roundtrippable_member_without_panic() {
     let config = ServerConfig::from_toml_str(
         r#"

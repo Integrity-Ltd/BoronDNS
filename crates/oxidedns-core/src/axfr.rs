@@ -346,7 +346,7 @@ pub fn axfr_response_message_apex_soa_count(
         offset += consumed;
         if record.rr_type == RecordType::Soa as u16
             && record.class == qclass
-            && record.owner == *zone_apex
+            && record.owner.canonical_key() == zone_apex.canonical_key()
         {
             apex_soa_count += 1;
         }
@@ -527,10 +527,11 @@ pub fn parse_ixfr_response(
             qclass,
         )?;
         for _ in 0..header.ancount {
-            let (record, consumed) =
+            let (mut record, consumed) =
                 parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
             offset += consumed;
             validate_record_scope(&record, zone_apex, qclass).map_err(ixfr_scope_error)?;
+            canonicalize_record_owner(&mut record).map_err(|_| IxfrError::MalformedMessage)?;
             answers.push(record);
         }
     }
@@ -538,7 +539,9 @@ pub fn parse_ixfr_response(
     let Some(first) = answers.first() else {
         return Err(IxfrError::MissingInitialSoa);
     };
-    if first.owner != *zone_apex || first.rr_type != RecordType::Soa as u16 {
+    if first.owner.canonical_key() != zone_apex.canonical_key()
+        || first.rr_type != RecordType::Soa as u16
+    {
         return Err(IxfrError::MissingInitialSoa);
     }
 
@@ -597,7 +600,9 @@ fn apply_ixfr_incremental(
         let Some(new_soa) = answers.get(index) else {
             return Err(IxfrError::IncompleteResponse);
         };
-        if new_soa.rr_type != RecordType::Soa as u16 || new_soa.owner != *zone_apex {
+        if new_soa.rr_type != RecordType::Soa as u16
+            || new_soa.owner.canonical_key() != zone_apex.canonical_key()
+        {
             return Err(IxfrError::BrokenSoaChain);
         }
         add_record(&mut records, new_soa.clone())?;
@@ -653,6 +658,11 @@ fn ixfr_scope_error(error: AxfrError) -> IxfrError {
         AxfrError::MissingInitialSoa => IxfrError::MissingInitialSoa,
         other => IxfrError::Axfr(other),
     }
+}
+
+fn canonicalize_record_owner(record: &mut ResourceRecord) -> Result<(), DnsParseError> {
+    record.owner = DomainName::from_absolute_str(&record.owner.canonical_key())?;
+    Ok(())
 }
 
 fn validate_current_soa(
@@ -1758,6 +1768,19 @@ mod tests {
     }
 
     #[test]
+    fn counts_streamed_axfr_apex_soa_case_insensitively() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let mixed_case_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let message = axfr_message(0x1234, vec![mixed_case_soa]);
+
+        assert_eq!(
+            axfr_response_message_apex_soa_count(0x1234, &apex, 1, &message, true)
+                .expect("SOA count"),
+            1
+        );
+    }
+
+    #[test]
     fn rejects_axfr_without_initial_response_question() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2071,6 +2094,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_ixfr_mode2_axfr_fallback_with_mixed_case_apex_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let new_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
+        let a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(0x1234, vec![new_soa.clone(), ns, a, new_soa])],
+        )
+        .expect("mode 2 fallback with mixed-case apex SOA");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert_eq!(snapshot.state, ZoneState::Active);
+    }
+
+    #[test]
     fn parses_ixfr_mode3_current_response() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2083,6 +2133,24 @@ mod tests {
             &[ixfr_message(0x1234, vec![current_soa.clone()])],
         )
         .expect("mode 3 current");
+
+        assert_eq!(response, IxfrResponse::Current);
+    }
+
+    #[test]
+    fn parses_ixfr_mode3_current_response_with_mixed_case_apex_soa() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa]);
+        let mixed_case_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(0x1234, vec![mixed_case_soa])],
+        )
+        .expect("mode 3 current with mixed-case apex SOA");
 
         assert_eq!(response, IxfrResponse::Current);
     }
@@ -2252,6 +2320,82 @@ mod tests {
             panic!("expected updated zone");
         };
         assert_eq!(snapshot.serial, Some(2));
+        assert!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("old.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
+        assert_eq!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("new.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers,
+            vec![new_a]
+        );
+    }
+
+    #[test]
+    fn parses_ixfr_mode1_incremental_diff_with_mixed_case_owners() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let old_a = record(
+            "old.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "EXAMPLE.TEST.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let old_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let old_a_mixed = record(
+            "OLD.EXAMPLE.TEST.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_a = record(
+            "new.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let new_a_mixed = record(
+            "NEW.EXAMPLE.TEST.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 2],
+        );
+        let current_zone = current_zone(vec![current_soa, apex_ns(), old_a]);
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![
+                    new_soa.clone(),
+                    old_soa,
+                    old_a_mixed,
+                    new_soa.clone(),
+                    new_a_mixed,
+                ],
+            )],
+        )
+        .expect("mode 1 diff with mixed-case owners");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
         assert!(
             snapshot
                 .offline_oracle()

@@ -295,6 +295,18 @@ async fn poll_soa_from_primary_ignores_udp_packet_from_unconnected_peer() {
 }
 
 #[tokio::test]
+async fn poll_soa_from_primary_ignores_wrong_qid_tc_response() {
+    let primary = spawn_soa_primary_with_wrong_qid_truncated_then_serial(7).await;
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let serial =
+        poll_soa_from_primary(primary, &apex, 1, 0x1234, std::time::Duration::from_secs(5))
+            .await
+            .expect("SOA poll should ignore wrong-qid TC response");
+
+    assert_eq!(serial, 7);
+}
+
+#[tokio::test]
 async fn poll_soa_from_primary_records_warning_evidence_for_malformed_response() {
     let primary = spawn_malformed_soa_primary().await;
     let apex = DomainName::from_absolute_str("example.test.").unwrap();

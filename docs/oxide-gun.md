@@ -81,9 +81,13 @@ over packet slices without allocating a pseudo-header buffer per packet.
 `--recv-mode process` also opens RX rings and classifies returned DNS responses
 by header fields. The default `--xdp-reply-tracking latency` keeps the
 port-plus-DNS-ID inflight table needed for latency percentiles and unmatched
-reply accounting. `--xdp-reply-tracking count` skips that per-query timestamp
-table and is intended for physical comparison rows where reply percentage is the
-primary gate. Duration limits are checked at batch boundaries, so a
+reply accounting. In process-wide RX mode that shared table is allocated for
+every tracked source-port and DNS-ID pair; the hard cap is 4096 source ports,
+which is intentionally bounded but still large. Use a narrower source-port
+range or `--xdp-reply-tracking count` when latency percentiles are not required.
+`--xdp-reply-tracking count` skips that per-query timestamp table and is
+intended for physical comparison rows where reply percentage is the primary
+gate. Duration limits are checked at batch boundaries, so a
 duration-capped run can overshoot by up to the configured XDP batch size.
 Hardware-lab validation should compare OxideGun TX/RX counters with NIC counters
 and packet capture on the DUT-side link.

@@ -570,6 +570,7 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
     metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
         receive_syscalls: 3,
         receive_wouldblock_syscalls: 5,
+        receive_interrupted_syscalls: 1,
         received_datagrams: 30,
         send_syscalls: 4,
         sent_datagrams: 28,
@@ -606,6 +607,7 @@ fn udp_mmsg_and_worker_metrics_are_reported() {
 
     assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 3"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total 5"));
+    assert!(body.contains("oxidedns_udp_mmsg_receive_interrupted_syscalls_total 1"));
     assert!(body.contains("oxidedns_udp_mmsg_received_datagrams_total 30"));
     assert!(body.contains("oxidedns_udp_mmsg_send_syscalls_total 4"));
     assert!(body.contains("oxidedns_udp_mmsg_sent_datagrams_total 28"));
@@ -694,6 +696,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     metrics.record_udp_mmsg_stats(super::std_udp_mmsg::StdUdpMmsgStats {
         receive_syscalls: 3,
         receive_wouldblock_syscalls: 5,
+        receive_interrupted_syscalls: 1,
         received_datagrams: 30,
         send_syscalls: 4,
         sent_datagrams: 28,
@@ -742,6 +745,7 @@ fn hot_path_detail_off_suppresses_udp_packet_counters() {
     assert!(body.contains("oxidedns_udp_sent_datagrams_total 0"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_syscalls_total 0"));
     assert!(body.contains("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total 0"));
+    assert!(body.contains("oxidedns_udp_mmsg_receive_interrupted_syscalls_total 0"));
     assert!(body.contains("oxidedns_af_xdp_rx_recv_calls_total 11"));
     assert!(body.contains("oxidedns_af_xdp_tx_send_calls_total 7"));
     assert!(body.contains("oxidedns_af_xdp_completed_packets_total 88"));

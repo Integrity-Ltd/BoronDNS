@@ -7,7 +7,7 @@ use std::{
 
 use oxidedns_core::{
     ServerConfig,
-    config::{TransferPrimaryConfig, TransferTransportConfig},
+    config::{ConfigSecretString, TransferPrimaryConfig, TransferTransportConfig},
     dns::DomainName,
     tsig::TsigKey,
 };
@@ -122,10 +122,6 @@ pub(crate) struct SecretString(Zeroizing<String>);
 impl SecretString {
     pub(crate) fn expose_secret(&self) -> &str {
         self.0.as_str()
-    }
-
-    fn to_plaintext(&self) -> String {
-        self.0.to_string()
     }
 }
 
@@ -486,7 +482,7 @@ fn validate_xot_profile_material(
         client_key_pem: profile
             .client_key_pem
             .as_ref()
-            .map(SecretString::to_plaintext),
+            .map(|secret| ConfigSecretString::from_plaintext(secret.expose_secret())),
     };
     build_xot_client_config(&primary)
         .map(|_| ())
