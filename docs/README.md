@@ -103,7 +103,8 @@ and slowly diverging.
 - `two-host-fuzz-soak-campaign.md`: prepared two-host fuzz, sanitizer, soak,
   and XDP evidence campaign runbook for the local physical hosts.
 - `catalog-zone-rfc9432.md`: RFC 9432 catalog-zone implementation notes,
-  Engineering MVP boundary, and E2E test shape.
+  Engineering MVP boundary, opt-in member-transfer extensions, and E2E test
+  shape.
 
 ## Engineering MVP and Evidence
 
@@ -147,6 +148,9 @@ and slowly diverging.
 
 - `release-notes-template.md`: release-note structure and acceptance checklist
   shape.
+- `release-notes-v0.2.0-draft.md`: source-aligned draft release material for
+  the v0.2.0 preparation branch, including version posture and remaining
+  tag-time evidence steps.
 
 ## Archived Historical Inputs
 

@@ -22,6 +22,7 @@ CANONICAL_CATEGORIES = {
     "chaos",
     "control_plane",
     "configuration_warning",
+    "secret_store",
     "signal",
     "startup",
     "shutdown",

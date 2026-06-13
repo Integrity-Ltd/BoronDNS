@@ -9,25 +9,33 @@ configuration	[process].disable_core_dumps	stable	0.1	config/oxidedns.example.to
 configuration	[process].no_new_privileges	stable	0.1	config/oxidedns.example.toml	major	Linux startup hardening toggle for PR_SET_NO_NEW_PRIVS; defaults to true.
 configuration	[health].listeners	stable	0.1	config/oxidedns.example.toml	major	Legacy management listener list remains accepted when [interfaces].mgmt is omitted.
 configuration	[metrics].latency_histogram_buckets	stable	0.1	config/oxidedns.example.toml	minor-additive	Existing bucket semantics are stable; new optional metric fields may be additive.
-configuration	[metrics].hot_path_detail	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional full or reduced hot-path metrics detail; full is the default operational profile.
+configuration	[metrics].hot_path_detail	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional full reduced or off hot-path metrics detail; full is the default operational profile and off is saturation-benchmark only.
 configuration	[logging].format	stable	0.1	config/oxidedns.example.toml	major	Accepted values json logfmt and plain; plain is compatibility/local-debug only.
 configuration	[limits].max_tcp_connections	stable	0.1	config/oxidedns.example.toml	major	Feeds runtime resource validation and TCP overload behavior.
 configuration	[limits].max_tcp_connections_per_source	stable	0.1	config/oxidedns.example.toml	major	Optional per-source-IP TCP connection cap; unset means no per-source cap beyond the global limit.
 configuration	[limits].udp_reuseport_workers	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional standard UDP SO_REUSEPORT worker count; default is one worker.
 configuration	[limits].udp_runtime	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional standard UDP runtime selection; tokio is the default and dedicated is an experimental per-worker OS-thread packet loop.
 configuration	[limits].udp_worker_cpu_affinity	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional Linux CPU id list for dedicated standard UDP workers; length must match udp_reuseport_workers.
+configuration	[limits].udp_socket_receive_buffer_bytes	stable	0.1.5	config/oxidedns.example.toml	minor-additive	Optional Linux SO_RCVBUF request for standard UDP sockets; evidence-gated host tuning.
+configuration	[limits].udp_socket_send_buffer_bytes	stable	0.1.5	config/oxidedns.example.toml	minor-additive	Optional Linux SO_SNDBUF request for standard UDP sockets; evidence-gated host tuning.
+configuration	[limits].udp_socket_max_pacing_rate_bytes_per_second	stable	0.1.5	config/oxidedns.example.toml	minor-additive	Optional Linux SO_MAX_PACING_RATE request for standard UDP sockets; evidence-gated host tuning.
 configuration	[xdp].queue_ids	stable	0.1.4	config/oxidedns.example.toml	minor-additive	Optional sparse AF_XDP queue id list; unset preserves the contiguous range starting at xdp.queue_id.
 configuration	[limits].tcp_connect_timeout_secs	stable	0.1	config/oxidedns.example.toml	major	Controls outbound TCP connection-establishment timeout for AXFR IXFR and XoT transfer paths.
 configuration	[zones] entries	stable	0.1	config/oxidedns.example.toml	major	Zone names, primaries, notify sources, transfer source, TSIG, XoT, and refresh behavior.
 configuration	[tsig_keys] entries	stable	0.1	config/oxidedns.example.toml	major	Static TSIG key schema and redaction behavior.
 configuration	[tsig_keys].secret_file	stable	0.1	config/oxidedns.example.toml	major	Optional TSIG secret file path source; exactly one of secret or secret_file is required.
+configuration	[secret_store].path	stable	0.2	config/oxidedns.example.toml	minor-additive	Optional reloadable plaintext filesystem snapshot root for runtime TSIG keys and named XoT profiles.
 configuration	[zones.transfer_primaries].client_key_pem	stable	0.1	config/oxidedns.example.toml	major	Optional inline XoT client private-key source; exactly one of client_key or client_key_pem is required when client_cert is set.
+configuration	[zones.transfer_primaries].xot_profile	stable	0.2	config/oxidedns.example.toml	minor-additive	Optional reference to a named XoT profile loaded from the configured secret_store snapshot.
+configuration	[catalog_zones].catalog_* and member_* transfer fields	stable	0.2	config/oxidedns.example.toml	minor-additive	Optional split catalog-transfer and member-transfer primaries and TSIG references.
+configuration	[catalog_zones].member_transfer_extensions	stable	0.2	config/oxidedns.example.toml	minor-additive	Optional catalog member transfer metadata parser for primaries.ext _udns-xfr and _udns-notify records.
+configuration	[catalog_zones.member_transfer_policy].unsigned_axfr	stable	0.2	config/oxidedns.example.toml	minor-additive	Optional deny or allow-legacy-private policy for catalog-derived member AXFR.
 configuration	[cookie] policy	stable	0.1	config/oxidedns.example.toml	major	DNS Cookie policy, secret, and tolerance settings.
 configuration	[rrl] policy	stable	0.1	config/oxidedns.example.toml	major	Process-wide RRL policy.
 environment	ODS_<SECTION>_<KEY>	stable	0.1	docs/operator-deployment-guide.md	major	Scalar server health logging limits and TSIG overrides are documented and warn on unknown ODS variables.
 cli	serve	stable	0.1	oxidedns --help	major	Default runtime mode.
 cli	check-config	stable	0.1	oxidedns --help	major	Explicit config validation command.
-cli	--config	stable	0.1	oxidedns --help	major	Configuration path selector.
+cli	--config	stable	0.1	oxidedns --help	major	Configuration path selector; top-level path feeds config-loading modes and mode-specific paths take precedence.
 cli	--validate-config	stable	0.1	oxidedns --help	major	Validation mode alias.
 cli	--dump-config	stable	0.1	oxidedns --help	major	Redacted effective configuration output.
 cli	--example-config	stable	0.1	oxidedns --help	minor-additive	Optional example-config output mode.

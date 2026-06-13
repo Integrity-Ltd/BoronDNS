@@ -389,7 +389,7 @@ FEATURES = {
         ],
         "test_paths": [
             "crates/oxidedns-core/src/axfr.rs",
-            "crates/oxidedns-server/src/tests.rs",
+            "crates/oxidedns-server/src/tests/transfer_protocol.rs",
         ],
         "evidence_paths": [
             "scripts/interop-bind-ixfr-refresh.sh",
@@ -416,7 +416,7 @@ FEATURES = {
             "crates/oxidedns-server/src/transfer.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests.rs",
+            "crates/oxidedns-server/src/tests/refresh_xot_runtime.rs",
         ],
         "evidence_paths": [
             "scripts/interop-knot-xot-docker.sh",
@@ -441,6 +441,10 @@ FEATURES = {
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-core/src/zone.rs",
         ],
+        "test_paths": [
+            "crates/oxidedns-core/src/dns_tests/any_negative_dnssec.rs",
+            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+        ],
         "evidence_paths": [
             "scripts/interop-dnssec-serve.sh",
             "scripts/interop-dnssec-nsec3-serve.sh",
@@ -452,7 +456,7 @@ FEATURES = {
         "source_needles": [
             "nsec3_iterations_exceeded",
             "nsec3_max_iterations",
-            "response_opt_copies_query_do_bit_without_dnssec_augmentation",
+            "u32::from(edns.do_bit) << 15",
         ],
         "test_needles": [
             "do_nxdomain_includes_nsec3_denial_proofs_and_covering_rrsigs",
@@ -469,7 +473,7 @@ FEATURES = {
             "crates/oxidedns-server/src/udp.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests.rs",
+            "crates/oxidedns-server/src/tests/metrics_rrl_udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-rrl-udp.sh",
@@ -498,7 +502,8 @@ FEATURES = {
         ],
         "test_paths": [
             "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-server/src/tests.rs",
+            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+            "crates/oxidedns-server/src/tests/metrics_rrl_udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dns-cookie-dig.sh",
@@ -523,7 +528,7 @@ FEATURES = {
             "crates/oxidedns-server/src/health_metrics.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests.rs",
+            "crates/oxidedns-server/src/tests/catalog_and_plan.rs",
         ],
         "evidence_paths": [
             "docs/catalog-zone-rfc9432.md",
@@ -557,6 +562,9 @@ FEATURES = {
             "crates/oxidedns-core/src/config.rs",
             "crates/oxidedns-server/src/lib.rs",
         ],
+        "test_paths": [
+            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+        ],
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
         ],
@@ -567,7 +575,7 @@ FEATURES = {
             "EDNS_TCP_KEEPALIVE_OPTION",
             "append_edns_padding",
             "metadata.udp_ceiling(options)",
-            "response_opt_copies_query_do_bit_without_dnssec_augmentation",
+            "u32::from(edns.do_bit) << 15",
         ],
         "test_needles": [
             "edns_nsid_request_returns_configured_identifier",
@@ -586,6 +594,10 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/dns.rs",
             "crates/oxidedns-server/src/lib.rs",
+        ],
+        "test_paths": [
+            "crates/oxidedns-core/src/dns_tests/any_negative_dnssec.rs",
+            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dnssec-serve.sh",
@@ -611,16 +623,21 @@ FEATURES = {
             "crates/oxidedns-server/src/lib.rs",
             "crates/oxidedns-server/src/health_metrics.rs",
         ],
+        "test_paths": [
+            "crates/oxidedns-core/src/dns_tests/message_parse_notify.rs",
+        ],
         "evidence_paths": [
             "scripts/interop-chaos-queries.sh",
         ],
         "srs_needles": ["ODS-FR-CHAS-001", "ODS-FR-CHAS-006", "ODS-IF-CONF-018"],
         "source_needles": [
             "answer_chaos_query",
-            "version.bind.",
-            "version.server.",
-            "hostname.bind.",
-            "id.server.",
+            "is_chaos_version_name",
+            "is_chaos_hostname_name",
+            "b\"version\".as_slice(), b\"bind\".as_slice()",
+            "b\"version\".as_slice(), b\"server\".as_slice()",
+            "b\"hostname\".as_slice(), b\"bind\".as_slice()",
+            "b\"id\".as_slice(), b\"server\".as_slice()",
             "oxidedns_chaos_queries_total",
         ],
         "test_needles": [

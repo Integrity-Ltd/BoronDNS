@@ -17,6 +17,43 @@ fn runtime_initializes_loading_zones() {
     assert_eq!(runtime.zone_count(), 1);
 }
 
+#[test]
+fn runtime_initializes_catalog_zones_with_serve_policy() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "hidden.catalog.example."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "catalog-key."
+                serve_catalog_zone = false
+
+                [[catalog_zones]]
+                name = "visible.catalog.example."
+                primaries = ["192.0.2.54:53"]
+                tsig_key = "catalog-key."
+                serve_catalog_zone = true
+            "#,
+    )
+    .expect("valid catalog config");
+    let hidden_catalog = DomainName::from_absolute_str("hidden.catalog.example.").unwrap();
+    let visible_catalog = DomainName::from_absolute_str("visible.catalog.example.").unwrap();
+
+    let runtime = Runtime::new(config);
+
+    assert_eq!(runtime.zone_count(), 2);
+    assert!(runtime.zones.is_hidden(&hidden_catalog));
+    assert!(!runtime.zones.is_hidden(&visible_catalog));
+}
+
 #[tokio::test]
 async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let config = ServerConfig::from_toml_str(
@@ -134,6 +171,144 @@ async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let request = rx.recv().await.expect("member refresh request");
     assert_eq!(request.zone, member_origin);
     assert_eq!(request.reason, super::RefreshReason::Catalog);
+}
+
+#[tokio::test]
+async fn catalog_snapshot_reconciles_retained_and_removed_members() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[tsig_keys]]
+                name = "member-key."
+                algorithm = "hmac-sha256"
+                secret = "bWVtYmVyLXNlY3JldA=="
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                notify_sources = ["198.51.100.54"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "member-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let alpha_origin = DomainName::from_absolute_str("alpha.example.").unwrap();
+    let beta_origin = DomainName::from_absolute_str("beta.example.").unwrap();
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_origin.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, mut rx) = mpsc::channel(2);
+
+    let initial_snapshot = catalog_snapshot_with_members(
+        catalog_origin.clone(),
+        7,
+        &[alpha_origin.clone(), beta_origin.clone()],
+    );
+    zones.insert_snapshot(initial_snapshot.clone());
+    let initial_metadata = zone_metadata_for(&initial_snapshot);
+    catalog_manager
+        .apply_snapshot(
+            initial_snapshot.catalog_zone_view(),
+            &initial_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&alpha_origin).is_some());
+    assert!(transfer_plan.get(&beta_origin).is_some());
+    assert!(notify_authority.is_authorized(&alpha_origin, 1, "10.0.0.53".parse().unwrap()));
+    assert!(notify_authority.is_authorized(&beta_origin, 1, "10.0.0.53".parse().unwrap()));
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&alpha_origin.canonical_key())
+    );
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&beta_origin.canonical_key())
+    );
+    assert_eq!(rx.recv().await.expect("alpha refresh request").zone, alpha_origin);
+    assert_eq!(rx.recv().await.expect("beta refresh request").zone, beta_origin);
+
+    let updated_snapshot =
+        catalog_snapshot_with_members(catalog_origin.clone(), 8, std::slice::from_ref(&alpha_origin));
+    zones.insert_snapshot(updated_snapshot.clone());
+    let updated_metadata = zone_metadata_for(&updated_snapshot);
+    catalog_manager
+        .apply_snapshot(
+            updated_snapshot.catalog_zone_view(),
+            &updated_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&alpha_origin).is_some());
+    assert!(transfer_plan.get(&beta_origin).is_none());
+    assert!(zones.contains_exact_zone_for_control(&alpha_origin));
+    assert!(!zones.contains_exact_zone_for_control(&beta_origin));
+    assert!(notify_authority.is_authorized(&alpha_origin, 1, "10.0.0.53".parse().unwrap()));
+    assert!(!notify_authority.is_authorized(&beta_origin, 1, "10.0.0.53".parse().unwrap()));
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&alpha_origin.canonical_key())
+    );
+    assert!(
+        !refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&beta_origin.canonical_key())
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+fn catalog_snapshot_with_members(
+    catalog_origin: DomainName,
+    serial: u32,
+    members: &[DomainName],
+) -> ZoneSnapshot {
+    let mut rrsets = vec![Rrset::new(
+        DomainName::from_absolute_str(&format!("version.{catalog_origin}")).unwrap(),
+        RecordType::Txt as u16,
+        1,
+        0,
+        vec![catalog_txt("2")],
+    )];
+    for (index, member) in members.iter().enumerate() {
+        rrsets.push(Rrset::new(
+            DomainName::from_absolute_str(&format!("m{index}.zones.{catalog_origin}")).unwrap(),
+            RecordType::Ptr as u16,
+            1,
+            0,
+            vec![member.to_wire()],
+        ));
+    }
+    ZoneSnapshot::active(catalog_origin, Some(serial), rrsets)
 }
 
 #[test]

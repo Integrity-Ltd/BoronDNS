@@ -199,12 +199,13 @@ Validate before starting:
 ```bash
 ./target/release/oxidedns --validate-config /tmp/oxidedns.toml
 ./target/release/oxidedns --dump-config /tmp/oxidedns.toml
+./target/release/oxidedns --config /tmp/oxidedns.toml --validate-config
 ```
 
 ## 8. Run Locally
 
 ```bash
-./target/release/oxidedns serve --config /tmp/oxidedns.toml
+./target/release/oxidedns --config /tmp/oxidedns.toml serve
 ```
 
 In another shell:
@@ -248,8 +249,11 @@ For privileged port 53, prefer one of:
 - keep `[process].disable_core_dumps` and `[process].no_new_privileges` at their
   secure defaults unless you are doing a controlled local debugging run.
 
-OxideDNS ignores `SIGHUP`; configuration changes require a process restart.
-`SIGTERM` and `SIGINT` trigger graceful shutdown.
+OxideDNS ignores `SIGHUP`; configuration topology changes require a process
+restart. If `[secret_store]` is configured, TSIG keys and named XoT profiles
+inside that already configured filesystem root can be reloaded by the
+control-plane `rotate_tsig` or `republish_feed` operations. `SIGTERM` and
+`SIGINT` trigger graceful shutdown.
 
 ## 11. Next Documents
 

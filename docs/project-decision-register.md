@@ -51,7 +51,7 @@ explicit team decision rather than implicit endorsement.
 | Health endpoint response time bounds | §6.4, ODS-IF-HEALTH-005 | ≤ 100 ms probes, ≤ 500 ms metrics, gzip | **Resolved (v0.5): specified; ODS-IF-HEALTH-005** |
 | `/metrics` per-source rate limit | §6.4, ODS-IF-HEALTH-006 | 60/minute default | **Resolved (v0.5): specified; ODS-IF-HEALTH-006** |
 | Include directives in configuration | §6.2, ODS-IF-CONF-001 | NOT supported | **Resolved (v0.5): excluded; ODS-IF-CONF-001** |
-| External secret store integration | §6.2, ODS-IF-CONF-004 | NOT supported (file-path projection only) | **Resolved (v0.5): excluded; ODS-IF-CONF-004** |
+| External secret store client integration | §6.2, ODS-IF-CONF-004 | Do not embed Vault/KMS/PKCS#11/HSM/cloud-secret clients; support filesystem projection only | **Resolved (v0.5, clarified for v0.2.0 prep): direct external-secret clients remain excluded. The implemented `[secret_store]` is a plaintext filesystem snapshot root that can be atomically reloaded for TSIG keys and named XoT profiles. Operators using Vault, Kubernetes Secrets, or HSM-backed processes should project material into that filesystem shape.** |
 | Interface-name binding (`eth0`-style) | §6.2, ODS-IF-CONF-003 | NOT supported (IP addresses only) | **Resolved (v0.5): excluded; ODS-IF-CONF-003** |
 | `health.default_port` (default 8080) | §6.4, ODS-IF-HEALTH-001 | Confirm | **Resolved (v0.9.1): default is 8080 per ODS-IF-HEALTH-001 and the Operator Deployment Guide** |
 | `health.metrics_rate_limit_per_minute` (default 60) | §6.4, ODS-IF-HEALTH-006 | Confirm | **Resolved (v0.9.1): default is 60 per minute per ODS-IF-HEALTH-006 and the Operator Deployment Guide** |

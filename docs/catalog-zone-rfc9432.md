@@ -113,8 +113,8 @@ with records like:
 a.zones.catalog.example. PTR member.example.
 primaries.ext.a.zones.catalog.example. A 198.51.100.53
 primaries.ext.a.zones.catalog.example. TXT "member-key."
-<extension-xfr-owner>.a.zones.catalog.example. TXT "transport=tcp;port=5300;mode=axfr_ixfr"
-<extension-notify-owner>.a.zones.catalog.example. TXT "source=198.51.100.54"
+_udns-xfr.a.zones.catalog.example. TXT "transport=tcp;port=5300"
+_udns-notify.a.zones.catalog.example. TXT "source=198.51.100.54"
 ```
 
 Malformed extension data rejects only the member transfer override. The member
@@ -122,6 +122,11 @@ PTR remains an RFC 9432 catalog member, and OxideDNS falls back to static member
 policy for newly added members or retains the last valid plan for already
 managed members. Multiple distinct TSIG key-name TXT values for one member are
 treated as unsafe because OxideDNS uses one TSIG key per transferred zone.
+
+For XoT member overrides, the catalog TXT can set `transport=xot`, `port`, and
+`server_name`, but the TLS trust/client material still has to be available
+through inherited static configuration or a named XoT profile from
+`[secret_store]`.
 
 ## Operational Model
 
@@ -133,9 +138,10 @@ expiry rules as statically configured zones.
 
 Catalog transfers must be TSIG-authenticated. A catalog producer controls the
 set of zones an OxideDNS instance serves, so OxideDNS rejects `[[catalog_zones]]`
-entries without `tsig_key`. XoT plus tight source-address allowlisting should
-be used where catalog confidentiality is also required; TSIG authenticates the
-transfer but does not encrypt the catalog contents.
+entries without `tsig_key` or `catalog_tsig_key`. XoT plus tight
+source-address allowlisting should be used where catalog confidentiality is also
+required; TSIG authenticates the transfer but does not encrypt the catalog
+contents.
 
 Catalog member transfers inherit `member_tsig_key` when set, otherwise
 `tsig_key`, and are therefore TSIG-authenticated by default. For legacy customer
@@ -163,6 +169,14 @@ The member-zone set inside a catalog is dynamic and follows successful catalog
 transfers. When `[secret_store]` is configured, new or rotated TSIG keys and
 named XoT profiles can be loaded from the filesystem snapshot and then used by
 catalog member references without restarting OxideDNS.
+
+The useful mental model is:
+
+- TOML says which catalogs this process trusts and what local policy applies.
+- The transferred catalog says which member zones should exist.
+- Optional extension records can name where those members transfer from.
+- The local secret store supplies the actual TSIG and XoT secret material by
+  reference.
 
 Each `[[catalog_zones]]` entry has a `max_member_zones` cap, defaulting to
 10,000 per `ODS-NFR-SEC-013`. If a catalog lists more member zones than the

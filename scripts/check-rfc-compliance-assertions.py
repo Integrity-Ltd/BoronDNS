@@ -127,8 +127,10 @@ def parse_rows() -> list[dict[str, str]]:
 def main() -> int:
     rows = parse_rows()
     by_rfc = {row["RFC number"]: row for row in rows}
-    source_text = (REPO_ROOT / "crates" / "oxidedns-core" / "src" / "dns.rs").read_text(
-        encoding="utf-8"
+    dns_root = REPO_ROOT / "crates" / "oxidedns-core" / "src"
+    source_text = (dns_root / "dns.rs").read_text(encoding="utf-8")
+    source_text += "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((dns_root / "dns_tests").glob("*.rs"))
     )
     for path in (SRS, RELEASE_NOTES_TEMPLATE):
         text = path.read_text(encoding="utf-8")

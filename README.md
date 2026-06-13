@@ -19,9 +19,12 @@ server. Retained feature slices stay in scope exactly as bounded in
 release-acceptance evidence gaps tracked separately.
 
 Those retained slices include IXFR with AXFR fallback, outbound XoT transfers,
-passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, broad EDNS
-response behavior, bounded EDE diagnostics, and opt-in CHAOS identification.
-Adjacent features are not implied unless that scope document names them.
+passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, reloadable
+filesystem-backed TSIG/XoT secret snapshots, broad EDNS response behavior,
+bounded EDE diagnostics, and opt-in CHAOS identification. The catalog-zone
+slice includes opt-in member-transfer extensions, and the data plane includes
+UDP/XDP tuning controls. Adjacent features are not implied unless that scope
+document names them.
 
 ## Start Here
 
@@ -39,7 +42,7 @@ Adjacent features are not implied unless that scope document names them.
 cargo run -p oxidedns-cli -- --validate-config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- --dump-config config/oxidedns.example.toml
 cargo run -p oxidedns-cli -- --example-config
-cargo run -p oxidedns-cli -- serve --config config/oxidedns.example.toml
+cargo run -p oxidedns-cli -- --config config/oxidedns.example.toml serve
 ./scripts/check.sh
 ```
 
@@ -49,15 +52,17 @@ keys, XoT files, listener addresses, and management bind address. At least one
 static secondary zone or catalog zone must be configured before service startup.
 
 When no config path is supplied, `oxidedns` reads
-`/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path
-for validation, config dumping, `check-config`, and `serve`.
+`/etc/oxidedns-secondary/config.toml`. Top-level `--config` or
+`OXIDEDNS_CONFIG` can override the path for validation, config dumping,
+`check-config`, and `serve`. Mode-specific paths, such as `serve --config
+path/to/config.toml`, remain supported and take precedence.
 
 ## Workspace
 
 - `oxidedns-core`: configuration, DNS wire parsing, AXFR/IXFR parsing, TSIG, and
   in-memory zone state.
-- `oxidedns-server`: runtime, listeners, transfers, health, metrics, RRL, XoT,
-  and graceful shutdown.
+- `oxidedns-server`: runtime, listeners, transfers, reloadable secret snapshots,
+  health, metrics, RRL, XoT, packet-I/O adapters, and graceful shutdown.
 - `oxidedns-cli`: command-line entrypoint.
 - `oxide-gun`: OxideDNS test-tool DNS load generator with portable UDP self-tests
   and an explicit Linux AF_XDP backend for lab hosts.
@@ -82,6 +87,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [Release notes template](docs/release-notes-template.md)
+- [v0.2.0 release notes draft](docs/release-notes-v0.2.0-draft.md)
 - [Specification document index](docs/README.md)
 
 ## License

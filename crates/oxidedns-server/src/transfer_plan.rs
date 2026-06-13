@@ -234,9 +234,8 @@ fn transfer_plan_from_zone_config(
     let origin = DomainName::from_absolute_str(&zone.name)
         .expect("configuration validation rejects invalid zone names");
     let tsig_key_name = zone.tsig_key.as_ref().map(|name| {
-        let name = DomainName::from_absolute_str(name)
-            .expect("configuration validation rejects invalid TSIG key references");
-        name
+        DomainName::from_absolute_str(name)
+            .expect("configuration validation rejects invalid TSIG key references")
     });
     let primaries = zone.transfer_targets();
     let primary_start =

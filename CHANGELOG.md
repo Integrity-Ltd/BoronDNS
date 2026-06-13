@@ -8,6 +8,12 @@ full evidence pointers and sign-off.
 
 ### Changed
 
+- Updated public-release preparation docs to align with current source-owned
+  behavior for top-level `--config`, reloadable filesystem-backed TSIG/XoT
+  secret snapshots, opt-in catalog member transfer extensions, legacy private
+  unsigned member AXFR policy, UDP/XDP tuning knobs, and hot-path metric modes.
+- Added a v0.2.0 draft release-note document that records the current release
+  scope, package-version posture, retained evidence, and tag-time gates.
 - Removed the unfinished out-of-zone A/AAAA glue transfer tolerance candidate;
   transfer owner validation remains strict, and transfer publication now fails
   closed instead of panicking if a parsed candidate snapshot cannot compile into

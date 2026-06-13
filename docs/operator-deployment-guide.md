@@ -49,10 +49,16 @@ Operational state boundaries:
   a runtime administration API.
 - Zone data lives in memory only. Every process start is a cold start and must
   reacquire zones from configured primaries.
-- Configuration is static for listener, primary, TSIG, and catalog-zone
-  definitions. Changing those settings requires a process restart; there is no
-  SIGHUP reload path. RFC 9432 catalog members are dynamic after a configured
-  catalog zone has transferred successfully.
+- Configuration topology is static. Listener roles, static zones, catalog-zone
+  definitions, transfer primary lists, policy knobs, and the configured
+  secret-store root change only by process restart. `SIGHUP` is ignored.
+- Runtime key material is a narrower exception. When `[secret_store]` is
+  configured, explicit control-plane operations can reload TSIG keys and named
+  XoT profiles from that already configured filesystem root. A failed reload
+  keeps the previous validated snapshot.
+- RFC 9432 catalog members are also runtime data. The configured catalog zone is
+  static, but its member-zone set is derived from transferred catalog contents
+  and reconciled after successful catalog refreshes.
 - Optional external control-plane integration can report transfer telemetry and
   poll durable node operations. It does not add an inbound administrative API
   to OxideDNS.
@@ -180,8 +186,11 @@ oxidedns --validate-config /tmp/oxidedns.example.toml
 ```
 
 When `--config` is omitted, OxideDNS reads
-`/etc/oxidedns-secondary/config.toml`. `OXIDEDNS_CONFIG` can override the path for
-`--validate-config`, `--dump-config`, `check-config`, and `serve`.
+`/etc/oxidedns-secondary/config.toml`. Top-level `--config` or
+`OXIDEDNS_CONFIG` can override the path for `--validate-config`,
+`--dump-config`, `check-config`, and `serve`. Mode-specific paths, such as
+`serve --config /path/to/config.toml`, remain supported and take precedence
+over the top-level path.
 
 OxideDNS also supports an SRS v0.9.1-style `ODS_<SECTION>_<KEY>` environment override
 subset for scalar process settings. These values take precedence over the file
@@ -290,22 +299,38 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
 - `[limits]`: protocol, transfer, TCP, shutdown, EDNS, UDP packet I/O, and
   zone-state timing limits. `udp_batch_size` defaults to 1, preserving the
   ordinary one-datagram-at-a-time socket path; raise it only with retained
-  benchmark evidence for the target host. `zsm_loading_warning_threshold_secs`
-  defaults to 3600 and controls the warning threshold and repeat interval for
-  zones stuck in LOADING.
+  benchmark evidence for the target host. The standard UDP path also exposes
+  `udp_runtime`, `udp_idle_strategy`, optional worker CPU affinity, optional
+  socket buffer sizes, and optional socket pacing-rate hints; these are
+  host-specific tuning controls, not portable defaults.
+  `zsm_loading_warning_threshold_secs` defaults to 3600 and controls the
+  warning threshold and repeat interval for zones stuck in LOADING.
 - `[[zones]]`: served secondary zones and their primary transfer sources. When
   multiple primaries are listed, OxideDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
   later transfer attempts.
 - `[[catalog_zones]]`: RFC 9432 catalog zones. OxideDNS transfers the catalog,
   reads member-zone PTR records below `zones.<catalog-zone>`, and dynamically
-  transfers and serves those member zones. Catalog members inherit the catalog
-  transfer primaries, transfer transport, TSIG key, NOTIFY source policy,
-  transfer source binding, and transfer limits. `tsig_key` is mandatory for
-  catalog zones. `serve_catalog_zone` defaults to `false`, which lets OxideDNS
-  transfer and process the catalog without answering DNS queries for the catalog
-  zone itself. `max_member_zones` defaults to 10,000 and caps the number of
-  catalog-derived member zones accepted from that catalog.
+  transfers and serves those member zones. Catalog transfers themselves must be
+  TSIG-authenticated with `tsig_key` or `catalog_tsig_key`.
+
+  By default, every member inherited from a catalog uses the member-transfer
+  settings on the `[[catalog_zones]]` entry: primaries, transfer transport, TSIG
+  key, NOTIFY sources, transfer source binding, and limits. Use `catalog_*` and
+  `member_*` fields when the catalog should be transferred from one primary but
+  its member zones should be transferred from another.
+
+  `serve_catalog_zone = false` is the default. In that mode OxideDNS transfers
+  and processes the catalog but does not answer DNS queries for the catalog
+  apex or its property names. `max_member_zones` defaults to 10,000 and caps the
+  number of accepted member zones per catalog.
+
+  `member_transfer_extensions = true` enables the supported OxideDNS extension
+  records for catalog-driven secondary-service deployments. Extension records
+  can provide member transfer addresses, TSIG key-name references, transfer
+  transport/port/server-name hints, and NOTIFY sources. They cannot carry raw
+  TSIG secrets, TLS private keys, trust anchors, or client certificates; those
+  still come from static config or `[secret_store]`.
 - `catalog_zones.member_transfer_policy.unsigned_axfr`: local legacy policy for
   catalog-derived member transfers. The default `deny` keeps member transfers
   TSIG-authenticated by inheriting `member_tsig_key` or `tsig_key`.
@@ -320,7 +345,7 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   Snapshot entries can provide TSIG keys and named XoT profiles so catalog
   members can refer to key/profile names without raw secrets in DNS data.
   On Unix, the manifest and TSIG `secret_file` inputs must not be
-  world-readable.
+  world-readable. A failed reload keeps the previous validated snapshot.
 - `[control_plane.telemetry]`: optional outbound callback to an external
   control plane for transfer success, skipped/current, and failure reports.
 - `[control_plane.operations]`: optional outbound polling of external durable
@@ -352,6 +377,25 @@ secret-store roots remain static. Updating TSIG keys or named XoT profiles
 inside the configured secret-store snapshot does not require a process restart
 when the reload succeeds. Operation polling is still not a general runtime
 reconfiguration interface.
+
+A minimal secret-store snapshot looks like this:
+
+```toml
+[[tsig_keys]]
+name = "customer-transfer-key."
+algorithm = "hmac-sha256"
+secret_file = "tsig/customer-transfer-key.secret"
+
+[[xot_profiles]]
+name = "customer-xot"
+trust_anchors = ["xot/ca.pem"]
+client_cert = "xot/client.pem"
+client_key = "xot/client.key"
+```
+
+Paths inside `secrets.toml` are resolved relative to the configured
+`[secret_store].path`. Keep the directory ownership and permissions under the
+same operational controls as static TSIG and TLS files.
 
 See [Catalog Zone support based on RFC 9432](catalog-zone-rfc9432.md)
 for the catalog-specific behavior, security boundary, and PowerDNS primary

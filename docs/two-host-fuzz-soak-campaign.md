@@ -161,6 +161,47 @@ Failures should be treated as useful evidence. Preserve the generated input,
 target log tail, command file, host, commit, and sanitizer/toolchain mode before
 minimizing or rerunning.
 
+## Completed Runs
+
+### 2026-06-12 24-hour ASan fuzz campaign
+
+Campaign ID: `20260612T090724Z`
+
+Remote evidence root:
+`/home/codex/oxidedns-fuzz/target/evidence/fuzz-soak-two-host-20260612T090724Z/`
+
+Result: passed. No `crash-*`, `oom-*`, or `timeout-*` artifacts were present on
+either host at final collection time.
+
+Scope:
+
+| Host | Targets | Result |
+| --- | --- | --- |
+| `oxidedns-1` | `dns_datagram`, `transfer_stream`, `zone_image_datagram` | `passed`, exit `0`, `86400` seconds each |
+| `oxidegun-1` | `notify_edns_datagram`, `tsig_message` | `passed`, exit `0`, `86400` seconds each |
+
+Tooling:
+
+- sanitizer: `address`
+- cargo toolchain: `nightly`
+- cargo: `1.98.0-nightly (fe63976b2 2026-06-11)`
+- rustc nightly: `1.98.0-nightly (b30f3df3b 2026-06-11)`
+- cargo-fuzz: `0.13.2`
+- repository commit on both hosts:
+  `2e772f7080f80c2f1f23d9d7ef101a23dfa1b93b`
+- remote worktrees: clean at final metadata collection
+
+Host metadata at final check:
+
+| Host | Kernel | CPU | CPUs | Memory | Root disk |
+| --- | --- | --- | ---: | ---: | --- |
+| `oxidedns-1` | `7.0.0-22-generic` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 438G total, 368G free |
+| `oxidegun-1` | `7.0.0-22-generic` | Intel Xeon Gold 6140 @ 2.30GHz | 72 | 123Gi | 878G total, 818G free |
+
+Interpretation: this is first-pass stability evidence for the listed fuzz
+targets under one 24-hour ASan-backed campaign. It does not prove parser or
+protocol correctness outside the paths and inputs exercised by the fuzz targets.
+
 ## Scheduling Guidance
 
 Run order after UDP/XDP tuning:

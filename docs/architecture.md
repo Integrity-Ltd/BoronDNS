@@ -30,7 +30,7 @@ accepted.
 | --- | --- | --- |
 | `crates/oxidedns-core/src/dns.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-EDNS`, `ODS-FR-DNSSEC`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, DNS message parts of `ODS-FR-NOTIFY` | DNS wire parsing, EDNS option handling, authoritative response construction, DNSSEC serve-only augmentation, DNS Cookie encoding, and UDP response shaping. |
 | `crates/oxidedns-core/src/axfr.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, `ODS-FR-SPOOF`, RR ingestion parts of `ODS-FR-DNSSEC` and `ODS-FR-URR` | AXFR/IXFR query construction, transfer stream parsing, response validation, unknown-RR preservation, and zone-publication validation. |
-| `crates/oxidedns-core/src/catalog.rs` | RFC 9432 catalog-zone Engineering MVP extension | Catalog schema-version and member-PTR parsing for transferred catalog zones. |
+| `crates/oxidedns-core/src/catalog.rs` | RFC 9432 catalog-zone Engineering MVP extension plus opt-in member-transfer metadata parsing | Catalog schema-version and member-PTR parsing for transferred catalog zones, with optional parsing of BIND-compatible `primaries.ext` records and OxideDNS `_udns-xfr` / `_udns-notify` extension records when enabled by configuration. |
 | `crates/oxidedns-core/src/config.rs` | `ODS-IF-CONF`, configuration surfaces for protocol families, interface roles, limits, TSIG, XoT, DNS Cookies, RRL, metrics, and health | Static TOML configuration schema, validation, warning catalogue inputs, redacted dump support, and environment-override targets. |
 | `crates/oxidedns-core/src/tsig.rs` | `ODS-FR-TSIG`, TSIG-dependent clauses of AXFR, IXFR, NOTIFY, ordinary query signing, and TSIG error response handling | TSIG key material handling, MAC verification/signing, TCP response-stream verification, truncation handling, and TSIG error construction. |
 | `crates/oxidedns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
@@ -89,7 +89,7 @@ implementation code for review locality, but they are not counted toward the
 | Continuous verification posture | `scripts/check.sh` is the current local continuous verification entry point. Hosted continuous CI for every main-branch candidate is intentionally deferred while the repository remains private to avoid spending CI minutes on heavyweight evidence tooling before a public-release gate exists. The tag-push/workflow-dispatch release workflow is artifact publication automation and may supply retained release-gate logs when a release process accepts that evidence. | `ODS-VER-011`, `ODS-NFR-SEC-006` |
 | Interface segregation | DNS query, outbound zone-transfer, and management traffic are configured through separate `[interfaces].dns`, `[interfaces].transfer`, and `[interfaces].mgmt` roles. DNS entries accept legacy socket-address strings and `{ address, name }` pairs; the optional name is retained for future XDP attachment and ignored by the current socket backend. | `ODS-IF-NET-005..007`, Appendix C.6.1 |
 | Post-MVP optimization tracks | Production promotion of AF_XDP/XDP, io_uring packet I/O, NSD-style packed-binary arenas, and hot response caches remains gated by `docs/future-optimization-tracks.md`; the current server AF_XDP/eBPF code is feature-gated lab/pre-NIC scaffolding only. | Appendix C.6, `ODS-INV-006`, `ODS-NFR-SEC-001`, `ODS-NFR-RES-002` |
-| Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit the catalog transfer policy, and do not create an administrative API or primary-serving path. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-rfc9432.md`, Appendix C.3.9 catalog-zone scope update |
+| Catalog-zone provisioning | RFC 9432 catalog-zone definitions are static TOML entries. Their member zones are dynamic transfer data from configured primaries, remain memory-only, inherit catalog/member transfer policy, and may opt into catalog-carried transfer address/transport/key-name/NOTIFY metadata. Catalog data never carries raw TSIG or TLS secret material, and this path does not create an administrative API or primary-serving mode. Catalog zones are hidden from DNS query lookup by default through `serve_catalog_zone = false`. | `docs/catalog-zone-rfc9432.md`, Appendix C.3.9 catalog-zone scope update |
 
 ## Catalog-Zone Runtime Shape
 
@@ -102,8 +102,11 @@ The current implementation uses a deliberately small runtime model:
   catalog membership state used for metrics and reconciliation.
 - Catalog member zones inherit transfer primaries, TSIG, NOTIFY source policy,
   transfer source binding, and transfer limits from the static
-  `[[catalog_zones]]` entry. Catalog `primaries` properties are ignored by
-  policy.
+  `[[catalog_zones]]` entry. When `member_transfer_extensions = true`, the
+  parsed catalog member can override the inherited member transfer plan with
+  BIND-compatible `primaries.ext` A/AAAA/TXT data and OxideDNS `_udns-xfr` /
+  `_udns-notify` TXT records. Those records carry addresses, TSIG key-name
+  references, transport/port/server-name hints, and NOTIFY sources only.
 - A successful catalog refresh reconciles the previous and newly parsed member
   sets. Added members schedule normal zone acquisition with refresh reason
   `Catalog`; removed managed members are withdrawn from in-memory service.

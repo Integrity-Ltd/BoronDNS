@@ -323,13 +323,11 @@ impl ServerConfig {
                         zone.name
                     ))
                 })?;
-                if !tsig_key_names.contains(&key_name.canonical_key()) {
-                    if !allow_runtime_tsig_keys {
-                        return Err(ConfigError::Invalid(format!(
-                            "zone {} references unknown TSIG key {tsig_key}",
-                            zone.name
-                        )));
-                    }
+                if !tsig_key_names.contains(&key_name.canonical_key()) && !allow_runtime_tsig_keys {
+                    return Err(ConfigError::Invalid(format!(
+                        "zone {} references unknown TSIG key {tsig_key}",
+                        zone.name
+                    )));
                 }
             }
         }
@@ -348,13 +346,11 @@ impl ServerConfig {
                         catalog_zone.name
                     ))
                 })?;
-                if !tsig_key_names.contains(&key_name.canonical_key()) {
-                    if !allow_runtime_tsig_keys {
-                        return Err(ConfigError::Invalid(format!(
-                            "catalog zone {} references unknown {field} {tsig_key}",
-                            catalog_zone.name
-                        )));
-                    }
+                if !tsig_key_names.contains(&key_name.canonical_key()) && !allow_runtime_tsig_keys {
+                    return Err(ConfigError::Invalid(format!(
+                        "catalog zone {} references unknown {field} {tsig_key}",
+                        catalog_zone.name
+                    )));
                 }
             }
         }

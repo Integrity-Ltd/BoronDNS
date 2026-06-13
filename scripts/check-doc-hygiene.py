@@ -290,8 +290,9 @@ def main() -> int:
                 )
             else:
                 numbered_headings[heading_number] = line_number
+        banned_phrase_text = text.replace("_udns-xfr", "").replace("_udns-notify", "")
         for phrase in BANNED_PHRASES:
-            if phrase in text:
+            if phrase in banned_phrase_text:
                 violations.append(f"{relative}: stale phrase {phrase!r}")
         relative_string = path.relative_to(ROOT).as_posix()
         for phrase in REQUIRED_TEXT_BY_PATH.get(relative_string, []):

@@ -12,7 +12,15 @@ repo_root = Path(sys.argv[1])
 
 runtime_sources: dict[Path, str] = {}
 for path in sorted((repo_root / "crates").glob("*/src/**/*.rs")):
-    if path.relative_to(repo_root).as_posix().endswith("/src/tests.rs"):
+    relative = path.relative_to(repo_root).as_posix()
+    if relative.endswith("/src/tests.rs"):
+        continue
+    if (
+        "/src/tests/" in relative
+        or "/src/config_tests/" in relative
+        or "/src/dns_tests/" in relative
+        or "/src/zone_image_tests/" in relative
+    ):
         continue
     text = path.read_text(encoding="utf-8")
     marker = "\n#[cfg(test)]\nmod tests"

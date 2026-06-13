@@ -17,6 +17,10 @@ runtime_files = sorted(
     if "crates/oxide-gun/" not in path.relative_to(repo_root).as_posix()
     and "crates/oxide-gun-ebpf/" not in path.relative_to(repo_root).as_posix()
     and not path.relative_to(repo_root).as_posix().endswith("/src/tests.rs")
+    and "/src/tests/" not in path.relative_to(repo_root).as_posix()
+    and "/src/config_tests/" not in path.relative_to(repo_root).as_posix()
+    and "/src/dns_tests/" not in path.relative_to(repo_root).as_posix()
+    and "/src/zone_image_tests/" not in path.relative_to(repo_root).as_posix()
 )
 
 def runtime_text(path: Path) -> str:
@@ -102,7 +106,7 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
     ),
     (
         "ODS-INV-005 static configuration/control surface",
-        "No reload/runtime configuration/admin control surface terms found outside the audited POSIX signal-disposition adapter; RFC 9432 catalog members are dynamic zone data from configured transfer primaries.",
+        "No reload/runtime configuration/admin control surface terms found outside the audited POSIX signal-disposition adapter and the explicitly configured SecretStore runtime key-material reload path; RFC 9432 catalog members are dynamic zone data from configured transfer primaries.",
         [
             re.compile(r"\bSIGHUP\b"),
             re.compile(r"\breload\b", re.IGNORECASE),
@@ -179,6 +183,14 @@ for title, success, patterns, paths in checks:
         for line_number, line in enumerate(text.splitlines(), start=1):
             for pattern in patterns:
                 if pattern.search(line):
+                    if title.startswith("ODS-INV-005") and (
+                        path == Path("crates/oxidedns-server/src/secret_store.rs")
+                        or (
+                            path == Path("crates/oxidedns-server/src/lib.rs")
+                            and "secrets.reload()" in line
+                        )
+                    ):
+                        continue
                     matches.append(f"{path}:{line_number}: {line.strip()}")
     print()
     print(f"check={title}")
@@ -244,12 +256,17 @@ required_fragments = [
     ("Arc snapshot publication", "Arc::new(snapshot)", zone_text),
     (
         "transfer Arc snapshot publication",
-        "pub fn insert_snapshot_arc_for_transfer(&self, snapshot: Arc<ZoneSnapshot>) -> ZoneMetadata",
+        "pub fn insert_snapshot_arc_for_transfer(",
+        zone_text,
+    ),
+    (
+        "transfer Arc snapshot publication returns cached metadata or image error",
+        "Result<ZoneMetadata, ZoneImageBuildError>",
         zone_text,
     ),
     (
         "runtime publishes shared transfer snapshot and consumes cached metadata",
-        "let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone())",
+        "match zones.insert_snapshot_arc_for_transfer(snapshot.clone())",
         server_text,
     ),
 ]
@@ -3732,7 +3749,7 @@ if "zones.insert_snapshot((*snapshot).clone())" in refresh_text:
     refresh_clone_failures.append("IXFR updated path clones full transferred snapshot before publication")
 if "zones.insert_snapshot(snapshot.clone())" in refresh_text:
     refresh_clone_failures.append("AXFR updated path clones full transferred snapshot before publication")
-if "let metadata = zones.insert_snapshot_arc_for_transfer(snapshot.clone())" not in refresh_text:
+if "match zones.insert_snapshot_arc_for_transfer(snapshot.clone())" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not consume cached metadata returned by shared Arc transfer publication")
 if "let serial = snapshot.serial;" in refresh_text:
     refresh_clone_failures.append("refresh updated path still reads completion serial from the old snapshot layout")
