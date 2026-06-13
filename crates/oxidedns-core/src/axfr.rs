@@ -449,6 +449,12 @@ fn parse_axfr_response_with_question(
                 zone_records.push(record);
             }
         }
+        ensure_no_authority_additional_or_trailing_bytes(
+            message,
+            offset,
+            header.nscount,
+            header.arcount,
+        )?;
     }
 
     if initial_soa.is_none() {
@@ -491,6 +497,7 @@ pub fn parse_soa_response(
     }
 
     let mut offset = validate_soa_response_question(message, header.qdcount, zone_apex, qclass)?;
+    let mut serial = None;
     for _ in 0..header.ancount {
         let (record, consumed) =
             parse_record(message, offset).map_err(|_| SoaQueryError::MalformedMessage)?;
@@ -500,11 +507,18 @@ pub fn parse_soa_response(
         if record.owner.canonical_key() == zone_apex.canonical_key()
             && record.rr_type == RecordType::Soa as u16
         {
-            return soa_serial(&record.rdata).map_err(|_| SoaQueryError::MalformedMessage);
+            serial = Some(soa_serial(&record.rdata).map_err(|_| SoaQueryError::MalformedMessage)?);
         }
     }
+    ensure_no_authority_additional_or_trailing_bytes(
+        message,
+        offset,
+        header.nscount,
+        header.arcount,
+    )
+    .map_err(|_| SoaQueryError::MalformedMessage)?;
 
-    Err(SoaQueryError::MissingSoa)
+    serial.ok_or(SoaQueryError::MissingSoa)
 }
 
 pub fn parse_ixfr_response(
@@ -555,6 +569,13 @@ pub fn parse_ixfr_response(
             normalize_record_owner(&mut record);
             answers.push(record);
         }
+        ensure_no_authority_additional_or_trailing_bytes(
+            message,
+            offset,
+            header.nscount,
+            header.arcount,
+        )
+        .map_err(|_| IxfrError::MalformedMessage)?;
     }
 
     let Some(first) = answers.first() else {
@@ -998,6 +1019,18 @@ fn parse_record(message: &[u8], offset: usize) -> Result<(ResourceRecord, usize)
         },
         offset - start,
     ))
+}
+
+fn ensure_no_authority_additional_or_trailing_bytes(
+    message: &[u8],
+    offset: usize,
+    nscount: u16,
+    arcount: u16,
+) -> Result<(), DnsParseError> {
+    if nscount != 0 || arcount != 0 || offset != message.len() {
+        return Err(DnsParseError::FormErr);
+    }
+    Ok(())
 }
 
 fn normalize_transfer_rdata(
@@ -1627,12 +1660,7 @@ mod tests {
         out.extend_from_slice(&qtype.to_be_bytes());
         out.extend_from_slice(&qclass.to_be_bytes());
         for answer in answers {
-            out.extend_from_slice(&answer.owner.to_wire());
-            out.extend_from_slice(&answer.rr_type.to_be_bytes());
-            out.extend_from_slice(&answer.class.to_be_bytes());
-            out.extend_from_slice(&answer.ttl.to_be_bytes());
-            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
-            out.extend_from_slice(&answer.rdata);
+            append_wire_record(&mut out, &answer);
         }
         out
     }
@@ -1649,18 +1677,32 @@ mod tests {
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
         for answer in answers {
-            out.extend_from_slice(&answer.owner.to_wire());
-            out.extend_from_slice(&answer.rr_type.to_be_bytes());
-            out.extend_from_slice(&answer.class.to_be_bytes());
-            out.extend_from_slice(&answer.ttl.to_be_bytes());
-            out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
-            out.extend_from_slice(&answer.rdata);
+            append_wire_record(&mut out, &answer);
         }
         out
     }
 
     fn soa_message(qid: u16, answers: Vec<ResourceRecord>) -> Vec<u8> {
         transfer_response_message(qid, "example.test.", RecordType::Soa as u16, 1, answers)
+    }
+
+    fn append_wire_record(out: &mut Vec<u8>, record: &ResourceRecord) {
+        out.extend_from_slice(&record.owner.to_wire());
+        out.extend_from_slice(&record.rr_type.to_be_bytes());
+        out.extend_from_slice(&record.class.to_be_bytes());
+        out.extend_from_slice(&record.ttl.to_be_bytes());
+        out.extend_from_slice(&(record.rdata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&record.rdata);
+    }
+
+    fn append_authority_record(message: &mut Vec<u8>, record: &ResourceRecord) {
+        message[8..10].copy_from_slice(&1u16.to_be_bytes());
+        append_wire_record(message, record);
+    }
+
+    fn append_additional_record(message: &mut Vec<u8>, record: &ResourceRecord) {
+        message[10..12].copy_from_slice(&1u16.to_be_bytes());
+        append_wire_record(message, record);
     }
 
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
@@ -1939,6 +1981,32 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn rejects_axfr_response_with_authority_or_trailing_bytes() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let ns = apex_ns();
+        let mut response = axfr_message(0x1234, vec![soa.clone(), ns.clone(), soa]);
+        append_authority_record(&mut response, &ns);
+
+        let error = parse_axfr_response(0x1234, &apex, 1, &[response])
+            .expect_err("AXFR authority section must be rejected");
+        assert_eq!(error, AxfrError::MalformedMessage);
+
+        let mut response = axfr_message(
+            0x1234,
+            vec![
+                record("example.test.", RecordType::Soa as u16, soa_rdata()),
+                apex_ns(),
+                record("example.test.", RecordType::Soa as u16, soa_rdata()),
+            ],
+        );
+        response.push(0);
+        let error = parse_axfr_response(0x1234, &apex, 1, &[response])
+            .expect_err("AXFR trailing bytes must be rejected");
+        assert_eq!(error, AxfrError::MalformedMessage);
     }
 
     #[test]
@@ -2320,6 +2388,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_soa_response_with_additional_or_trailing_bytes() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut response = soa_message(0x1234, vec![soa]);
+        append_additional_record(&mut response, &apex_ns());
+
+        let error = parse_soa_response(0x1234, &apex, 1, &response)
+            .expect_err("SOA response additional section must be rejected");
+        assert_eq!(error, SoaQueryError::MalformedMessage);
+
+        let mut response = soa_message(
+            0x1234,
+            vec![record("example.test.", RecordType::Soa as u16, soa_rdata())],
+        );
+        response.push(0);
+        let error = parse_soa_response(0x1234, &apex, 1, &response)
+            .expect_err("SOA response trailing bytes must be rejected");
+        assert_eq!(error, SoaQueryError::MalformedMessage);
+    }
+
+    #[test]
     fn parses_ixfr_mode2_axfr_fallback_into_active_zone() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2345,6 +2434,36 @@ mod tests {
         };
         assert_eq!(snapshot.state, ZoneState::Active);
         assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
+    fn rejects_ixfr_response_with_authority_or_trailing_bytes() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa.clone()]);
+        let mut response = ixfr_message(0x1234, vec![new_soa.clone(), current_soa, new_soa]);
+        append_authority_record(&mut response, &apex_ns());
+
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("IXFR authority section must be rejected");
+        assert_eq!(error, IxfrError::MalformedMessage);
+
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let mut response = ixfr_message(0x1234, vec![new_soa.clone(), current_soa, new_soa]);
+        response.push(0);
+        let error = parse_ixfr_response(0x1234, &apex, 1, &current_zone, &[response])
+            .expect_err("IXFR trailing bytes must be rejected");
+        assert_eq!(error, IxfrError::MalformedMessage);
     }
 
     #[test]

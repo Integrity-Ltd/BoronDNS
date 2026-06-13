@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use oxidedns_core::{
@@ -25,6 +28,7 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) tsig_fudge_seconds: u16,
     pub(crate) max_transfer_ingest_bytes: u64,
     pub(crate) transfer_sources: Vec<SocketAddr>,
+    generation: u64,
 }
 
 impl ZoneTransferPlan {
@@ -44,7 +48,18 @@ impl ZoneTransferPlan {
             tsig_fudge_seconds: self.tsig_fudge_seconds,
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
             transfer_sources: self.transfer_sources.clone(),
+            generation: 0,
         }
+    }
+
+    fn same_transfer_shape(&self, other: &Self) -> bool {
+        self.origin == other.origin
+            && self.qclass == other.qclass
+            && self.primaries == other.primaries
+            && self.tsig_key_name == other.tsig_key_name
+            && self.tsig_fudge_seconds == other.tsig_fudge_seconds
+            && self.max_transfer_ingest_bytes == other.max_transfer_ingest_bytes
+            && self.transfer_sources == other.transfer_sources
     }
 }
 
@@ -52,6 +67,7 @@ impl ZoneTransferPlan {
 pub(crate) struct TransferPlan {
     zones_by_key: Arc<Mutex<HashMap<String, ZoneTransferPlan>>>,
     catalog_member_templates_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
+    next_generation: Arc<AtomicU64>,
 }
 
 impl TransferPlan {
@@ -63,26 +79,29 @@ impl TransferPlan {
         config: &ServerConfig,
         primary_start_index: impl Fn(usize) -> Result<usize, getrandom::Error>,
     ) -> Result<Self, RuntimeError> {
+        let next_generation = Arc::new(AtomicU64::new(1));
         let mut zones_by_key = HashMap::new();
         let mut catalog_member_templates_by_key = HashMap::new();
         for zone in &config.zones {
-            let plan = transfer_plan_from_zone_config(
+            let mut plan = transfer_plan_from_zone_config(
                 zone,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
+            assign_generation(&mut plan, &next_generation);
             zones_by_key.insert(plan.origin.canonical_key(), plan);
         }
         for catalog_zone in &config.catalog_zones {
-            let plan = transfer_plan_from_catalog_zone_config(
+            let mut plan = transfer_plan_from_catalog_zone_config(
                 catalog_zone,
                 config.tsig.fudge_seconds,
                 config.limits.max_transfer_ingest_bytes,
                 &config.interfaces.transfer,
                 &primary_start_index,
             )?;
+            assign_generation(&mut plan, &next_generation);
             let catalog_key = plan.origin.canonical_key();
             let member_template = transfer_plan_from_catalog_member_config(
                 catalog_zone,
@@ -98,6 +117,7 @@ impl TransferPlan {
         Ok(Self {
             zones_by_key: Arc::new(Mutex::new(zones_by_key)),
             catalog_member_templates_by_key: Arc::new(catalog_member_templates_by_key),
+            next_generation,
         })
     }
 
@@ -109,11 +129,56 @@ impl TransferPlan {
             .cloned()
     }
 
-    pub(crate) fn insert(&self, plan: ZoneTransferPlan) {
+    pub(crate) fn if_current_plan<R>(
+        &self,
+        plan: &ZoneTransferPlan,
+        action: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let zones_by_key = self
+            .zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned");
+        if zones_by_key
+            .get(&plan.origin.canonical_key())
+            .is_some_and(|current| current.generation == plan.generation)
+        {
+            Some(action())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_current_plan(&self, plan: &ZoneTransferPlan) -> bool {
+        self.zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned")
+            .get(&plan.origin.canonical_key())
+            .is_some_and(|current| current.generation == plan.generation)
+    }
+
+    pub(crate) fn insert(&self, mut plan: ZoneTransferPlan) {
+        assign_generation(&mut plan, &self.next_generation);
         self.zones_by_key
             .lock()
             .expect("transfer plan lock poisoned")
             .insert(plan.origin.canonical_key(), plan);
+    }
+
+    pub(crate) fn insert_preserving_generation_if_unchanged(&self, mut plan: ZoneTransferPlan) {
+        let mut zones_by_key = self
+            .zones_by_key
+            .lock()
+            .expect("transfer plan lock poisoned");
+        let key = plan.origin.canonical_key();
+        if let Some(current) = zones_by_key.get(&key)
+            && current.same_transfer_shape(&plan)
+        {
+            plan.generation = current.generation;
+            zones_by_key.insert(key, plan);
+            return;
+        }
+        assign_generation(&mut plan, &self.next_generation);
+        zones_by_key.insert(key, plan);
     }
 
     pub(crate) fn catalog_member_plan(
@@ -127,9 +192,13 @@ impl TransferPlan {
             .get(&catalog_origin.canonical_key())
             .map(|plan| plan.for_member_origin(member_origin))?;
         if let Some(transfer_override) = transfer_override {
-            self.apply_catalog_member_override(template, transfer_override)
+            let mut plan = self.apply_catalog_member_override(template, transfer_override)?;
+            assign_generation(&mut plan, &self.next_generation);
+            Some(plan)
         } else {
-            Some(template)
+            let mut plan = template;
+            assign_generation(&mut plan, &self.next_generation);
+            Some(plan)
         }
     }
 
@@ -224,6 +293,10 @@ impl TransferPlan {
     }
 }
 
+fn assign_generation(plan: &mut ZoneTransferPlan, next_generation: &AtomicU64) {
+    plan.generation = next_generation.fetch_add(1, Ordering::Relaxed);
+}
+
 fn transfer_plan_from_zone_config(
     zone: &ZoneConfig,
     tsig_fudge_seconds: u16,
@@ -249,6 +322,7 @@ fn transfer_plan_from_zone_config(
         tsig_fudge_seconds,
         max_transfer_ingest_bytes,
         transfer_sources: transfer_sources.to_vec(),
+        generation: 0,
     })
 }
 

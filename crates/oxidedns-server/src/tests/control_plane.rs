@@ -174,6 +174,7 @@ fn control_plane_operation_parser_accepts_all_supported_operations() {
 #[tokio::test]
 async fn disabled_control_plane_operation_client_noops() {
     let client = ControlPlaneOperationClient {
+        enabled: false,
         endpoint_url: None,
         node_id: None,
         bearer_token: None,
@@ -196,6 +197,31 @@ async fn disabled_control_plane_operation_client_noops() {
             Some("no-op"),
         )
         .await;
+}
+
+#[test]
+fn control_plane_operation_client_honors_disabled_flag_with_credentials() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [control_plane.operations]
+            enabled = false
+            endpoint_url = "https://udns.example.test"
+            node_id = "node-a"
+            bearer_token = "token-a"
+
+            [[zones]]
+            name = "alpha.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect("disabled operations config with staged credentials should validate");
+    let client = ControlPlaneOperationClient::from_config(&config);
+
+    assert!(!client.enabled());
 }
 
 #[tokio::test]

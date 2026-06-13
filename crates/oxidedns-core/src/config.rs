@@ -322,9 +322,22 @@ impl ServerConfig {
 
         let tsig_key_names = self.validate_tsig_keys()?;
         let allow_runtime_tsig_keys = self.secret_store.enabled();
+        let mut configured_zone_names = HashSet::new();
 
         for zone in &self.zones {
             zone.validate()?;
+            let zone_name = DomainName::from_absolute_str(&zone.name).map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "zone {} name must be an absolute DNS name",
+                    zone.name
+                ))
+            })?;
+            if !configured_zone_names.insert(zone_name.canonical_key()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate configured zone apex {}",
+                    zone.name
+                )));
+            }
             if self.transfer.require_tsig && zone.tsig_key.is_none() {
                 return Err(ConfigError::Invalid(format!(
                     "zone {} requires tsig_key because transfer.require_tsig is true",
@@ -348,6 +361,18 @@ impl ServerConfig {
         }
         for catalog_zone in &self.catalog_zones {
             catalog_zone.validate()?;
+            let catalog_name = DomainName::from_absolute_str(&catalog_zone.name).map_err(|_| {
+                ConfigError::Invalid(format!(
+                    "catalog zone {} name must be an absolute DNS name",
+                    catalog_zone.name
+                ))
+            })?;
+            if !configured_zone_names.insert(catalog_name.canonical_key()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate configured zone apex {}",
+                    catalog_zone.name
+                )));
+            }
             if catalog_zone.catalog_tsig_key_name().is_none() {
                 return Err(ConfigError::Invalid(format!(
                     "catalog zone {} requires tsig_key because catalog-zone transfers must be TSIG-authenticated",

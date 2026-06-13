@@ -265,8 +265,13 @@ required_fragments = [
         zone_text,
     ),
     (
+        "runtime guards transfer publication with current transfer-plan ownership",
+        ".if_current_plan(plan, ||",
+        server_text,
+    ),
+    (
         "runtime publishes shared transfer snapshot and consumes cached metadata",
-        "match zones.insert_snapshot_arc_for_transfer(snapshot.clone())",
+        "zones.insert_snapshot_arc_for_transfer(snapshot.clone())",
         server_text,
     ),
 ]
@@ -3749,7 +3754,9 @@ if "zones.insert_snapshot((*snapshot).clone())" in refresh_text:
     refresh_clone_failures.append("IXFR updated path clones full transferred snapshot before publication")
 if "zones.insert_snapshot(snapshot.clone())" in refresh_text:
     refresh_clone_failures.append("AXFR updated path clones full transferred snapshot before publication")
-if "match zones.insert_snapshot_arc_for_transfer(snapshot.clone())" not in refresh_text:
+if ".if_current_plan(plan, ||" not in refresh_text:
+    refresh_clone_failures.append("refresh updated path does not guard transfer publication on current transfer-plan ownership")
+if "zones.insert_snapshot_arc_for_transfer(snapshot.clone())" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not consume cached metadata returned by shared Arc transfer publication")
 if "let serial = snapshot.serial;" in refresh_text:
     refresh_clone_failures.append("refresh updated path still reads completion serial from the old snapshot layout")

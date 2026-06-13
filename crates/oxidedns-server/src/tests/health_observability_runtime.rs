@@ -203,6 +203,7 @@ async fn observability_api_reports_catalog_membership() {
                 ),
             ]),
         )]))),
+        desired_memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
         reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -497,6 +498,7 @@ fn metrics_body_reports_catalog_membership() {
                 ),
             ]),
         )]))),
+        desired_memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
         reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 

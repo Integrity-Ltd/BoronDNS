@@ -60,6 +60,11 @@ algorithm = "hmac-sha256"
 secret = "c2VjcmV0LWtleQ=="
 EOF
 redaction_config_path="$(repo_relative_path "$redaction_config")"
+expected_version="$(cargo pkgid -p oxidedns-cli | sed -E 's/^.*[#@]([^#@]+)$/\1/')"
+if [[ -z "$expected_version" ]]; then
+    printf 'failed to determine oxidedns-cli package version\n' >&2
+    exit 1
+fi
 
 run_capture version-long cargo run -q -p oxidedns-cli -- --version
 run_capture version-short cargo run -q -p oxidedns-cli -- -V
@@ -75,10 +80,10 @@ run_capture checked-in-config-dump cargo run -q -p oxidedns-cli -- \
 run_capture redacted-config-dump cargo run -q -p oxidedns-cli -- \
     --dump-config "$redaction_config_path"
 
-require_text "$evidence_dir/version-long.stdout" "oxidedns 0.1.3"
+require_text "$evidence_dir/version-long.stdout" "oxidedns $expected_version"
 require_text "$evidence_dir/version-long.stdout" "build commit:"
 require_text "$evidence_dir/version-long.stdout" "rustc:"
-require_text "$evidence_dir/version-short.stdout" "oxidedns 0.1.3"
+require_text "$evidence_dir/version-short.stdout" "oxidedns $expected_version"
 
 require_text "$evidence_dir/help-long.stdout" "--version"
 require_text "$evidence_dir/help-long.stdout" "--help"

@@ -288,6 +288,9 @@ fn load_config_inner(path: &Path) -> anyhow::Result<LoadedConfig> {
     }
     oxidedns_server::validate_runtime_config(&config)
         .context("validating runtime configuration")?;
+    oxidedns_server::validate_secret_store_config(&config)
+        .map_err(RuntimeError::InvalidRuntimeConfig)
+        .context("validating secret store configuration")?;
     let mut warnings = override_report.warnings;
     warnings.extend(config.configuration_warnings());
     warnings.extend(

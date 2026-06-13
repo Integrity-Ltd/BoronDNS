@@ -54,6 +54,222 @@ fn runtime_initializes_catalog_zones_with_serve_policy() {
     assert!(!runtime.zones.is_hidden(&visible_catalog));
 }
 
+#[test]
+fn removed_transfer_plan_prevents_stale_transfer_publication() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid config");
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let stale_plan = transfer_plan.get(&origin).expect("initial transfer plan");
+    transfer_plan.remove(&origin);
+
+    let zones = ZoneStore::new();
+    let snapshot = Arc::new(ZoneSnapshot::active(
+        origin.clone(),
+        Some(2),
+        vec![
+            Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata_with_serial(2)],
+            ),
+            Rrset::new(
+                origin.clone(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![ns_rdata_for_zone("example.test.")],
+            ),
+        ],
+    ));
+
+    let published = transfer_plan.if_current_plan(&stale_plan, || {
+        zones.insert_snapshot_arc_for_transfer(snapshot)
+    });
+
+    assert!(published.is_none());
+    assert!(!zones.contains_exact_zone_for_control(&origin));
+
+    let replacement_plan = TransferPlan::from_config(&config)
+        .expect("replacement transfer plan")
+        .get(&origin)
+        .expect("replacement plan");
+    transfer_plan.insert(replacement_plan);
+    let snapshot = Arc::new(ZoneSnapshot::active(
+        origin.clone(),
+        Some(3),
+        vec![
+            Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata_with_serial(3)],
+            ),
+            Rrset::new(
+                origin.clone(),
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![ns_rdata_for_zone("example.test.")],
+            ),
+        ],
+    ));
+    let published = transfer_plan.if_current_plan(&stale_plan, || {
+        zones.insert_snapshot_arc_for_transfer(snapshot)
+    });
+
+    assert!(published.is_none());
+    assert!(!zones.contains_exact_zone_for_control(&origin));
+}
+
+#[test]
+fn stale_transfer_plan_success_does_not_recreate_refresh_status() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid config");
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let stale_plan = transfer_plan.get(&origin).expect("initial transfer plan");
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let snapshot = active_member_snapshot(origin.clone(), 2);
+    let metadata = zone_metadata_for(&snapshot);
+
+    transfer_plan.remove(&origin);
+    assert!(!record_success_if_current_plan(
+        &refresh_registry,
+        &transfer_plan,
+        &stale_plan,
+        &metadata,
+    ));
+
+    assert!(
+        !refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&origin.canonical_key())
+    );
+}
+
+#[test]
+fn refresh_pending_queue_coalesces_and_stays_bounded() {
+    let mut pending = std::collections::VecDeque::new();
+    let mut pending_keys = HashSet::new();
+    let mut active_keys = HashSet::new();
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+
+    enqueue_pending_refresh_request(
+        &mut pending,
+        &mut pending_keys,
+        &active_keys,
+        RefreshRequest {
+            zone: origin.clone(),
+            requested_serial: Some(1),
+            reason: RefreshReason::Notify,
+        },
+    );
+    enqueue_pending_refresh_request(
+        &mut pending,
+        &mut pending_keys,
+        &active_keys,
+        RefreshRequest {
+            zone: origin.clone(),
+            requested_serial: Some(3),
+            reason: RefreshReason::ControlPlane,
+        },
+    );
+
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].requested_serial, Some(3));
+    assert_eq!(pending[0].reason, RefreshReason::ControlPlane);
+
+    enqueue_pending_refresh_request(
+        &mut pending,
+        &mut pending_keys,
+        &active_keys,
+        RefreshRequest {
+            zone: origin,
+            requested_serial: Some(4),
+            reason: RefreshReason::Notify,
+        },
+    );
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].requested_serial, Some(4));
+    assert_eq!(pending[0].reason, RefreshReason::Notify);
+
+    pending.clear();
+    pending_keys.clear();
+    for index in 0..NOTIFY_REFRESH_QUEUE_CAPACITY {
+        enqueue_pending_refresh_request(
+            &mut pending,
+            &mut pending_keys,
+            &active_keys,
+            RefreshRequest {
+                zone: DomainName::from_absolute_str(&format!("zone-{index}.example.")).unwrap(),
+                requested_serial: None,
+                reason: RefreshReason::Notify,
+            },
+        );
+    }
+    enqueue_pending_refresh_request(
+        &mut pending,
+        &mut pending_keys,
+        &active_keys,
+        RefreshRequest {
+            zone: DomainName::from_absolute_str("overflow.example.").unwrap(),
+            requested_serial: None,
+            reason: RefreshReason::Notify,
+        },
+    );
+
+    assert_eq!(pending.len(), NOTIFY_REFRESH_QUEUE_CAPACITY);
+    assert!(!pending.iter().any(|request| request.zone.to_string() == "overflow.example."));
+
+    let active_origin = DomainName::from_absolute_str("active.example.").unwrap();
+    active_keys.insert(active_origin.canonical_key());
+    enqueue_pending_refresh_request(
+        &mut pending,
+        &mut pending_keys,
+        &active_keys,
+        RefreshRequest {
+            zone: active_origin.clone(),
+            requested_serial: Some(9),
+            reason: RefreshReason::Notify,
+        },
+    );
+
+    assert_eq!(pending.len(), NOTIFY_REFRESH_QUEUE_CAPACITY);
+    assert!(
+        pending
+            .iter()
+            .any(|request| request.zone == active_origin && request.requested_serial == Some(9))
+    );
+}
+
 #[tokio::test]
 async fn catalog_snapshot_adds_member_transfer_plan_and_hides_catalog() {
     let config = ServerConfig::from_toml_str(
@@ -388,6 +604,493 @@ async fn concurrent_catalog_member_migration_preserves_member_resources() {
 }
 
 #[tokio::test]
+async fn catalog_member_migration_preserves_destination_when_add_seen_first() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_origin));
+    let updated_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
+    let updated_b =
+        catalog_snapshot_with_members(catalog_b.clone(), 7, std::slice::from_ref(&member_origin));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(initial_a.clone());
+    zones.insert_snapshot(updated_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+
+    catalog_manager
+        .apply_snapshot(
+            initial_a.catalog_zone_view(),
+            &zone_metadata_for(&initial_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    catalog_manager
+        .apply_snapshot(
+            updated_b.catalog_zone_view(),
+            &zone_metadata_for(&updated_b),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    catalog_manager
+        .apply_snapshot(
+            updated_a.catalog_zone_view(),
+            &zone_metadata_for(&updated_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&member_origin).is_some());
+    assert!(zones.contains_exact_zone_for_control(&member_origin));
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key("member.example.")
+    );
+}
+
+#[tokio::test]
+async fn retained_catalog_member_keeps_transfer_plan_generation_when_unchanged() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let snapshot =
+        catalog_snapshot_with_members(catalog_origin.clone(), 7, std::slice::from_ref(&member_origin));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_origin.clone());
+    zones.insert_snapshot(snapshot.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+    let metadata = zone_metadata_for(&snapshot);
+
+    catalog_manager
+        .apply_snapshot(
+            snapshot.catalog_zone_view(),
+            &metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    let in_flight_plan = transfer_plan.get(&member_origin).expect("member transfer plan");
+
+    catalog_manager
+        .apply_snapshot(
+            snapshot.catalog_zone_view(),
+            &metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.is_current_plan(&in_flight_plan));
+}
+
+#[tokio::test]
+async fn concurrent_catalog_member_migration_preserves_active_snapshot_when_remove_seen_first() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_origin));
+    let updated_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
+    let updated_b =
+        catalog_snapshot_with_members(catalog_b.clone(), 7, std::slice::from_ref(&member_origin));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(initial_a.clone());
+    zones.insert_snapshot(updated_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+
+    catalog_manager
+        .apply_snapshot(
+            initial_a.catalog_zone_view(),
+            &zone_metadata_for(&initial_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    let active_snapshot = active_member_snapshot(member_origin.clone(), 42);
+    let active_metadata = zones
+        .insert_snapshot_arc_for_transfer(Arc::new(active_snapshot))
+        .expect("publish active member");
+    refresh_registry.record_success_from_metadata(&active_metadata);
+
+    let updated_a_metadata = zone_metadata_for(&updated_a);
+    let updated_b_metadata = zone_metadata_for(&updated_b);
+    let refresh_tx_a = tx.downgrade();
+    let refresh_tx_b = tx.downgrade();
+    let ((), ()) = tokio::join!(
+        catalog_manager.apply_snapshot(
+            updated_a.catalog_zone_view(),
+            &updated_a_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &refresh_tx_a,
+        ),
+        catalog_manager.apply_snapshot(
+            updated_b.catalog_zone_view(),
+            &updated_b_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &refresh_tx_b,
+        )
+    );
+
+    let restored = zones
+        .exact_zone_control_metadata(&member_origin)
+        .expect("member snapshot restored");
+    assert_eq!(restored.serial, Some(42));
+    assert!(
+        refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&member_origin.canonical_key())
+    );
+}
+
+#[tokio::test]
+async fn catalog_member_later_readd_starts_loading_without_stale_restore() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_origin));
+    let updated_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
+    let updated_b =
+        catalog_snapshot_with_members(catalog_b.clone(), 7, std::slice::from_ref(&member_origin));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(initial_a.clone());
+    zones.insert_snapshot(updated_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+
+    catalog_manager
+        .apply_snapshot(
+            initial_a.catalog_zone_view(),
+            &zone_metadata_for(&initial_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    let active_snapshot = active_member_snapshot(member_origin.clone(), 42);
+    let active_metadata = zones
+        .insert_snapshot_arc_for_transfer(Arc::new(active_snapshot))
+        .expect("publish active member");
+    refresh_registry.record_success_from_metadata(&active_metadata);
+
+    catalog_manager
+        .apply_snapshot(
+            updated_a.catalog_zone_view(),
+            &zone_metadata_for(&updated_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    assert!(!zones.contains_exact_zone_for_control(&member_origin));
+
+    catalog_manager
+        .apply_snapshot(
+            updated_b.catalog_zone_view(),
+            &zone_metadata_for(&updated_b),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    let readded = zones
+        .exact_zone_control_metadata(&member_origin)
+        .expect("member re-added as loading");
+    assert_eq!(readded.state, ZoneState::Loading);
+    assert_eq!(readded.serial, None);
+}
+
+#[tokio::test]
+async fn rejected_catalog_member_transfer_override_does_not_preserve_other_catalog_ownership() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+                member_transfer_extensions = true
+
+                [catalog_zones.member_transfer_policy]
+                unsigned_axfr = "allow-legacy-private"
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    let initial_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_origin));
+    let updated_a = catalog_snapshot_with_members(catalog_a.clone(), 8, &[]);
+    let rejected_b = ZoneSnapshot::active(
+        catalog_b.clone(),
+        Some(7),
+        vec![
+            Rrset::new(
+                DomainName::from_absolute_str("version.b.catalog.example.").unwrap(),
+                RecordType::Txt as u16,
+                1,
+                0,
+                vec![catalog_txt("2")],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("a.zones.b.catalog.example.").unwrap(),
+                RecordType::Ptr as u16,
+                1,
+                0,
+                vec![member_origin.to_wire()],
+            ),
+            Rrset::new(
+                DomainName::from_absolute_str("primaries.ext.a.zones.b.catalog.example.").unwrap(),
+                RecordType::A as u16,
+                1,
+                0,
+                vec![vec![203, 0, 113, 53]],
+            ),
+        ],
+    );
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(initial_a.clone());
+    zones.insert_snapshot(rejected_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(4);
+
+    catalog_manager
+        .apply_snapshot(
+            initial_a.catalog_zone_view(),
+            &zone_metadata_for(&initial_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    catalog_manager
+        .apply_snapshot(
+            rejected_b.catalog_zone_view(),
+            &zone_metadata_for(&rejected_b),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    catalog_manager
+        .apply_snapshot(
+            updated_a.catalog_zone_view(),
+            &zone_metadata_for(&updated_a),
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&member_origin).is_none());
+    assert!(!zones.contains_exact_zone_for_control(&member_origin));
+}
+
+#[tokio::test]
 async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
     let config = ServerConfig::from_toml_str(
         r#"
@@ -633,6 +1336,29 @@ fn catalog_snapshot_with_member_wires(
         ));
     }
     ZoneSnapshot::active(catalog_origin, Some(serial), rrsets)
+}
+
+fn active_member_snapshot(origin: DomainName, serial: u32) -> ZoneSnapshot {
+    ZoneSnapshot::active(
+        origin.clone(),
+        Some(serial),
+        vec![
+            Rrset::new(
+                origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                300,
+                vec![soa_rdata_with_serial(serial)],
+            ),
+            Rrset::new(
+                origin,
+                RecordType::Ns as u16,
+                1,
+                300,
+                vec![ns_rdata_for_zone("example.test.")],
+            ),
+        ],
+    )
 }
 
 #[test]

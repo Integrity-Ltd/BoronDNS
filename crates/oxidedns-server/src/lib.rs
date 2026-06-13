@@ -141,6 +141,12 @@ use transfer::{
 };
 pub(crate) use transfer::{build_xot_client_config, load_pem_certs_for_primary};
 pub use transfer::{poll_soa_from_primary, transfer_axfr_from_primary, transfer_ixfr_from_primary};
+
+pub fn validate_secret_store_config(config: &ServerConfig) -> Result<(), String> {
+    SecretManager::from_config(config)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
 use transfer_plan::{TransferPlan, ZoneTransferPlan};
 #[cfg(test)]
 use transfer_plan::{rotate_transfer_targets, uniform_index_from_u64};
@@ -727,11 +733,87 @@ impl RefreshReason {
     }
 }
 
+fn enqueue_pending_refresh_request(
+    pending_requests: &mut VecDeque<RefreshRequest>,
+    pending_keys: &mut HashSet<String>,
+    active_keys: &HashSet<String>,
+    request: RefreshRequest,
+) {
+    let key = request.zone.canonical_key();
+    if pending_keys.contains(&key) {
+        if let Some(existing) = pending_requests
+            .iter_mut()
+            .find(|queued| queued.zone.canonical_key() == key)
+        {
+            merge_refresh_request(existing, request);
+        }
+        return;
+    }
+    if pending_requests.len() >= NOTIFY_REFRESH_QUEUE_CAPACITY {
+        if active_keys.contains(&key)
+            && let Some(evicted) = pending_requests.pop_back()
+        {
+            let evicted_key = evicted.zone.canonical_key();
+            pending_keys.remove(&evicted_key);
+            warn!(
+                zone = %evicted.zone,
+                reason = %evicted.reason.as_str(),
+                retained_zone = %request.zone,
+                retained_reason = %request.reason.as_str(),
+                queue_capacity = NOTIFY_REFRESH_QUEUE_CAPACITY,
+                "pending refresh request evicted to retain active-zone follow-up"
+            );
+        } else {
+            warn!(
+                zone = %request.zone,
+                reason = %request.reason.as_str(),
+                queue_capacity = NOTIFY_REFRESH_QUEUE_CAPACITY,
+                "refresh request dropped because internal pending queue is full"
+            );
+            return;
+        }
+    }
+    pending_keys.insert(key);
+    pending_requests.push_back(request);
+}
+
+fn record_success_if_current_plan(
+    refresh_registry: &ZoneRefreshRegistry,
+    transfer_plan: &TransferPlan,
+    plan: &ZoneTransferPlan,
+    metadata: &ZoneMetadata,
+) -> bool {
+    if transfer_plan.is_current_plan(plan) {
+        refresh_registry.record_success_from_metadata(metadata);
+        true
+    } else {
+        warn!(
+            zone = %plan.origin,
+            "refresh success ignored because zone no longer has the same transfer plan"
+        );
+        false
+    }
+}
+
+fn merge_refresh_request(existing: &mut RefreshRequest, incoming: RefreshRequest) {
+    if let Some(incoming_serial) = incoming.requested_serial {
+        match existing.requested_serial {
+            Some(existing_serial) if serial_after(incoming_serial, existing_serial) => {
+                existing.requested_serial = Some(incoming_serial);
+            }
+            None => existing.requested_serial = Some(incoming_serial),
+            _ => {}
+        }
+    }
+    existing.reason = incoming.reason;
+}
+
 #[derive(Debug, Clone)]
 struct CatalogManager {
     catalogs_by_key: Arc<HashMap<String, CatalogRuntimeConfig>>,
     static_zone_keys: Arc<HashSet<String>>,
     memberships_by_catalog: Arc<Mutex<HashMap<String, HashMap<String, DomainName>>>>,
+    desired_memberships_by_catalog: Arc<Mutex<HashMap<String, HashMap<String, DomainName>>>>,
     reconcile_lock: Arc<AsyncMutex<()>>,
 }
 
@@ -741,6 +823,7 @@ impl Default for CatalogManager {
             catalogs_by_key: Arc::new(HashMap::new()),
             static_zone_keys: Arc::new(HashSet::new()),
             memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+            desired_memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
             reconcile_lock: Arc::new(AsyncMutex::new(())),
         }
     }
@@ -800,6 +883,7 @@ impl CatalogManager {
             catalogs_by_key: Arc::new(catalogs_by_key),
             static_zone_keys: Arc::new(static_zone_keys),
             memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
+            desired_memberships_by_catalog: Arc::new(Mutex::new(HashMap::new())),
             reconcile_lock: Arc::new(AsyncMutex::new(())),
         }
     }
@@ -850,18 +934,11 @@ impl CatalogManager {
         notify_authority: &NotifyAuthority,
         refresh_tx: &mpsc::WeakSender<RefreshRequest>,
     ) {
-        let reconcile_guard = self.reconcile_lock.lock().await;
         debug_assert_eq!(&metadata.origin, catalog_view.origin());
         let Some(catalog) = self.catalogs_by_key.get(metadata.origin_key.as_ref()) else {
             return;
         };
         let catalog_origin = catalog.origin.clone();
-
-        if catalog.config.serve_catalog_zone {
-            zones.show_zone(&catalog.origin);
-        } else {
-            zones.hide_zone(&catalog.origin);
-        }
 
         let members = match parse_catalog_members(catalog_view) {
             Ok(members) => members,
@@ -872,30 +949,10 @@ impl CatalogManager {
         };
 
         let catalog_key = catalog.origin.canonical_key();
-        let (old_members_by_key, old_member_keys, other_catalog_member_keys) = {
-            let memberships = self
-                .memberships_by_catalog
-                .lock()
-                .expect("catalog membership lock poisoned");
-            let old_members_by_key = memberships.get(&catalog_key).cloned().unwrap_or_default();
-            let old_member_keys = old_members_by_key.keys().cloned().collect::<HashSet<_>>();
-            let other_catalog_member_keys = memberships
-                .iter()
-                .filter(|(known_catalog_key, _)| *known_catalog_key != &catalog_key)
-                .flat_map(|(_, members_by_key)| members_by_key.keys().cloned())
-                .collect::<HashSet<_>>();
-            (
-                old_members_by_key,
-                old_member_keys,
-                other_catalog_member_keys,
-            )
-        };
         let mut members_by_key = HashMap::<String, CatalogMember>::new();
         for member in members {
             let member_key = member.zone.canonical_key();
-            if self.catalogs_by_key.contains_key(&member_key)
-                || other_catalog_member_keys.contains(&member_key)
-            {
+            if self.catalogs_by_key.contains_key(&member_key) {
                 error!(
                     category = "transfer",
                     event = "catalog_member_name_clash",
@@ -937,8 +994,6 @@ impl CatalogManager {
                 "catalog member zone limit exceeded; dropping excess catalog members"
             );
         }
-        let new_member_keys = members_by_key.keys().cloned().collect::<HashSet<_>>();
-
         if transfer_plan.get(&catalog.origin).is_none() {
             warn!(
                 category = "transfer",
@@ -949,7 +1004,61 @@ impl CatalogManager {
             return;
         }
 
+        let mut new_member_keys = HashSet::<String>::new();
+        for (member_key, member) in &members_by_key {
+            let transfer_override = catalog
+                .config
+                .member_transfer_extensions
+                .then_some(member.transfer.as_ref())
+                .flatten();
+            if transfer_plan
+                .catalog_member_plan(&catalog.origin, member.zone.clone(), transfer_override)
+                .is_some()
+            {
+                new_member_keys.insert(member_key.clone());
+            } else {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_without_valid_member_transfer_plan",
+                    catalog_zone = %catalog.origin,
+                    zone = %member.zone,
+                    "catalog zone has no valid member transfer plan"
+                );
+            }
+        }
+
+        let desired_members_by_key = members_by_key
+            .iter()
+            .filter(|(key, _)| new_member_keys.contains(*key))
+            .map(|(key, member)| (key.clone(), member.zone.clone()))
+            .collect::<HashMap<_, _>>();
+        self.desired_memberships_by_catalog
+            .lock()
+            .expect("catalog desired membership lock poisoned")
+            .insert(catalog_key.clone(), desired_members_by_key.clone());
+
+        tokio::task::yield_now().await;
+
+        let reconcile_guard = self.reconcile_lock.lock().await;
+
+        if catalog.config.serve_catalog_zone {
+            zones.show_zone(&catalog.origin);
+        } else {
+            zones.hide_zone(&catalog.origin);
+        }
+
+        let (old_members_by_key, old_member_keys) = {
+            let memberships = self
+                .memberships_by_catalog
+                .lock()
+                .expect("catalog membership lock poisoned");
+            let old_members_by_key = memberships.get(&catalog_key).cloned().unwrap_or_default();
+            let old_member_keys = old_members_by_key.keys().cloned().collect::<HashSet<_>>();
+            (old_members_by_key, old_member_keys)
+        };
+
         let mut pending_catalog_refreshes = Vec::<DomainName>::new();
+        let mut accepted_members_by_key = HashMap::<String, DomainName>::new();
         let mut added = new_member_keys
             .difference(&old_member_keys)
             .cloned()
@@ -980,6 +1089,7 @@ impl CatalogManager {
                 continue;
             };
             transfer_plan.insert(member_plan);
+            accepted_members_by_key.insert(member_key, member_origin.clone());
             notify_authority.add_zone_from_catalog(
                 &member_origin,
                 &catalog.config,
@@ -1023,7 +1133,8 @@ impl CatalogManager {
                 );
                 continue;
             };
-            transfer_plan.insert(member_plan);
+            transfer_plan.insert_preserving_generation_if_unchanged(member_plan);
+            accepted_members_by_key.insert(member_key, member.zone.clone());
             notify_authority.add_zone_from_catalog(
                 &member.zone,
                 &catalog.config,
@@ -1051,9 +1162,9 @@ impl CatalogManager {
                 continue;
             };
             let still_owned_by_other_catalog = self
-                .memberships_by_catalog
+                .desired_memberships_by_catalog
                 .lock()
-                .expect("catalog membership lock poisoned")
+                .expect("catalog desired membership lock poisoned")
                 .iter()
                 .filter(|(known_catalog_key, _)| *known_catalog_key != &catalog_key)
                 .any(|(_, members_by_key)| members_by_key.contains_key(&member_key));
@@ -1076,13 +1187,11 @@ impl CatalogManager {
         self.memberships_by_catalog
             .lock()
             .expect("catalog membership lock poisoned")
-            .insert(
-                catalog_key,
-                members_by_key
-                    .into_iter()
-                    .map(|(key, member)| (key, member.zone))
-                    .collect(),
-            );
+            .insert(catalog_key.clone(), accepted_members_by_key.clone());
+        self.desired_memberships_by_catalog
+            .lock()
+            .expect("catalog desired membership lock poisoned")
+            .insert(catalog_key, accepted_members_by_key);
 
         drop(reconcile_guard);
         let Some(refresh_tx) = refresh_tx.upgrade() else {
@@ -2488,6 +2597,7 @@ impl ControlPlaneTelemetryReporter {
 
 #[derive(Clone)]
 struct ControlPlaneOperationClient {
+    enabled: bool,
     endpoint_url: Option<Arc<str>>,
     node_id: Option<Arc<str>>,
     bearer_token: Option<Arc<str>>,
@@ -2532,6 +2642,7 @@ impl ControlPlaneOperationClient {
     fn from_config(config: &ServerConfig) -> Self {
         let operations = &config.control_plane.operations;
         Self {
+            enabled: operations.enabled,
             endpoint_url: operations
                 .endpoint_url
                 .as_ref()
@@ -2552,7 +2663,10 @@ impl ControlPlaneOperationClient {
     }
 
     fn enabled(&self) -> bool {
-        self.endpoint_url.is_some() && self.node_id.is_some() && self.bearer_token.is_some()
+        self.enabled
+            && self.endpoint_url.is_some()
+            && self.node_id.is_some()
+            && self.bearer_token.is_some()
     }
 
     async fn poll(&self) -> Result<Vec<ControlPlaneOperation>, String> {
@@ -2828,14 +2942,30 @@ async fn serve_refresh_requests(
     // Keep draining the bounded mpsc channel even when resident transfer tasks
     // are capped; catalog apply_snapshot can enqueue through the same channel.
     let mut pending_requests = VecDeque::<RefreshRequest>::new();
+    let mut pending_keys = HashSet::<String>::new();
+    let mut active_keys = HashSet::<String>::new();
     let mut refresh_rx_open = true;
     let max_resident_transfer_tasks = settings.max_resident_transfer_tasks.max(1);
 
     loop {
         while transfers.len() < max_resident_transfer_tasks {
-            let Some(request) = pending_requests.pop_front() else {
+            let mut request = None;
+            for _ in 0..pending_requests.len() {
+                let Some(candidate) = pending_requests.pop_front() else {
+                    break;
+                };
+                if active_keys.contains(&candidate.zone.canonical_key()) {
+                    pending_requests.push_back(candidate);
+                } else {
+                    request = Some(candidate);
+                    break;
+                }
+            }
+            let Some(request) = request else {
                 break;
             };
+            let request_key = request.zone.canonical_key();
+            pending_keys.remove(&request_key);
 
             let Some(plan) = catalog_runtime.transfer_plan.get(&request.zone) else {
                 let zone = &request.zone;
@@ -2847,9 +2977,12 @@ async fn serve_refresh_requests(
             if notify_serial_is_current(&zones, &request) {
                 let zone = &request.zone;
                 if let Some(metadata) = zones.exact_zone_control_metadata(zone) {
-                    catalog_runtime
-                        .refresh_registry
-                        .record_success_from_metadata(&metadata);
+                    record_success_if_current_plan(
+                        &catalog_runtime.refresh_registry,
+                        &catalog_runtime.transfer_plan,
+                        &plan,
+                        &metadata,
+                    );
                 } else {
                     catalog_runtime.refresh_registry.cancel_in_progress(zone);
                 }
@@ -2861,6 +2994,7 @@ async fn serve_refresh_requests(
                 );
                 continue;
             }
+            active_keys.insert(request_key.clone());
 
             let axfr_timeout = settings.axfr_timeout;
             let ixfr_timeout = settings.ixfr_timeout;
@@ -2884,6 +3018,7 @@ async fn serve_refresh_requests(
                         RefreshAttemptContext {
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
+                            transfer_plan: catalog_runtime.transfer_plan.clone(),
                             secrets: catalog_runtime.secrets.clone(),
                             ixfr_timeout,
                             axfr_timeout,
@@ -2893,13 +3028,24 @@ async fn serve_refresh_requests(
                     )
                     .await
                 };
+                if outcome.obsolete {
+                    catalog_runtime
+                        .refresh_registry
+                        .cancel_in_progress(&request.zone);
+                    return request_key;
+                }
                 match outcome.success {
                     Some(success) => {
                         let (metadata, updated_snapshot) =
                             success.into_metadata_and_updated_snapshot();
-                        catalog_runtime
-                            .refresh_registry
-                            .record_success_from_metadata(&metadata);
+                        if !record_success_if_current_plan(
+                            &catalog_runtime.refresh_registry,
+                            &catalog_runtime.transfer_plan,
+                            &plan,
+                            &metadata,
+                        ) {
+                            return request_key;
+                        }
                         let telemetry_status = if updated_snapshot.is_some() {
                             "success"
                         } else {
@@ -2942,6 +3088,7 @@ async fn serve_refresh_requests(
                         );
                     }
                 }
+                request_key
             });
         }
 
@@ -2951,13 +3098,26 @@ async fn serve_refresh_requests(
 
         tokio::select! {
             result = transfers.join_next(), if !transfers.is_empty() => {
-                if let Some(Err(error)) = result {
-                    warn!(%error, "refresh transfer task failed");
+                if let Some(result) = result {
+                    match result {
+                        Ok(key) => {
+                            active_keys.remove(&key);
+                        }
+                        Err(error) => {
+                            active_keys.clear();
+                            warn!(%error, "refresh transfer task failed");
+                        }
+                    }
                 }
             }
             request = refresh_rx.recv(), if refresh_rx_open => {
                 if let Some(request) = request {
-                    pending_requests.push_back(request);
+                    enqueue_pending_refresh_request(
+                        &mut pending_requests,
+                        &mut pending_keys,
+                        &active_keys,
+                        request,
+                    );
                 } else {
                     refresh_rx_open = false;
                 }
@@ -2998,6 +3158,7 @@ struct InitialLoadSettings {
 struct RefreshAttemptContext<'a> {
     ixfr_cooldowns: &'a IxfrCooldownRegistry,
     metrics: &'a RuntimeMetrics,
+    transfer_plan: TransferPlan,
     secrets: SecretManager,
     ixfr_timeout: Duration,
     axfr_timeout: Duration,
@@ -3009,6 +3170,7 @@ struct RefreshAttemptContext<'a> {
 struct RefreshZoneOutcome {
     success: Option<RefreshZoneSuccess>,
     failure_cause: Option<String>,
+    obsolete: bool,
 }
 
 #[derive(Debug)]
@@ -3025,6 +3187,7 @@ impl RefreshZoneOutcome {
         Self {
             success: Some(RefreshZoneSuccess::Current(metadata)),
             failure_cause: None,
+            obsolete: false,
         }
     }
 
@@ -3032,6 +3195,7 @@ impl RefreshZoneOutcome {
         Self {
             success: Some(RefreshZoneSuccess::Updated { snapshot, metadata }),
             failure_cause: None,
+            obsolete: false,
         }
     }
 
@@ -3039,6 +3203,15 @@ impl RefreshZoneOutcome {
         Self {
             success: None,
             failure_cause,
+            obsolete: false,
+        }
+    }
+
+    fn obsolete() -> Self {
+        Self {
+            success: None,
+            failure_cause: None,
+            obsolete: true,
         }
     }
 }
@@ -3096,6 +3269,7 @@ async fn run_initial_zone_loads(
                         RefreshAttemptContext {
                             ixfr_cooldowns: &ixfr_cooldowns,
                             metrics: &metrics,
+                            transfer_plan: catalog_runtime.transfer_plan.clone(),
                             secrets: catalog_runtime.secrets.clone(),
                             ixfr_timeout,
                             axfr_timeout,
@@ -3105,6 +3279,12 @@ async fn run_initial_zone_loads(
                     )
                     .await
                 };
+                if outcome.obsolete {
+                    catalog_runtime
+                        .refresh_registry
+                        .cancel_in_progress(&plan.origin);
+                    return;
+                }
                 match outcome.success {
                     Some(success) => {
                         let (metadata, updated_snapshot) =
@@ -3334,6 +3514,14 @@ async fn refresh_zone_from_primaries_with_outcome(
                 "SOA serial hint confirmed zone current"
             );
             if let Some(metadata) = current_metadata.take() {
+                if !context.transfer_plan.is_current_plan(plan) {
+                    warn!(
+                        zone = %plan.origin,
+                        reason = %context.reason,
+                        "SOA serial hint current result discarded because zone no longer has the same transfer plan"
+                    );
+                    return RefreshZoneOutcome::obsolete();
+                }
                 return RefreshZoneOutcome::current(metadata);
             }
             last_failure_cause = Some("current zone disappeared after SOA serial hint".to_string());
@@ -3430,6 +3618,15 @@ async fn refresh_zone_from_primaries_with_outcome(
                         "SOA poll confirmed zone current"
                     );
                     if let Some(metadata) = current_metadata.take() {
+                        if !context.transfer_plan.is_current_plan(plan) {
+                            warn!(
+                                zone = %plan.origin,
+                                %primary,
+                                reason = %context.reason,
+                                "SOA poll current result discarded because zone no longer has the same transfer plan"
+                            );
+                            return RefreshZoneOutcome::obsolete();
+                        }
                         return RefreshZoneOutcome::current(metadata);
                     }
                     last_failure_cause =
@@ -3516,8 +3713,19 @@ async fn refresh_zone_from_primaries_with_outcome(
                     {
                         Ok(IxfrResponse::Updated(snapshot)) => {
                             let snapshot: Arc<ZoneSnapshot> = Arc::from(snapshot);
-                            match zones.insert_snapshot_arc_for_transfer(snapshot.clone()) {
-                                Ok(metadata) => {
+                            match context.transfer_plan.if_current_plan(plan, || {
+                                zones.insert_snapshot_arc_for_transfer(snapshot.clone())
+                            }) {
+                                None => {
+                                    warn!(
+                                        zone = %plan.origin,
+                                        %primary,
+                                        reason = %context.reason,
+                                        "IXFR result discarded because zone no longer has a transfer plan"
+                                    );
+                                    return RefreshZoneOutcome::obsolete();
+                                }
+                                Some(Ok(metadata)) => {
                                     context.metrics.record_ixfr_succeeded();
                                     let serial = metadata.serial;
                                     info!(
@@ -3529,7 +3737,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                                     );
                                     return RefreshZoneOutcome::updated(snapshot, metadata);
                                 }
-                                Err(error) => {
+                                Some(Err(error)) => {
                                     context.metrics.record_ixfr_failed();
                                     warn!(
                                         zone = %plan.origin,
@@ -3550,6 +3758,15 @@ async fn refresh_zone_from_primaries_with_outcome(
                                 reason = %context.reason,
                                 "IXFR confirmed zone current"
                             );
+                            if !context.transfer_plan.is_current_plan(plan) {
+                                warn!(
+                                    zone = %plan.origin,
+                                    %primary,
+                                    reason = %context.reason,
+                                    "IXFR current result discarded because zone no longer has the same transfer plan"
+                                );
+                                return RefreshZoneOutcome::obsolete();
+                            }
                             return RefreshZoneOutcome::current(current.into_metadata());
                         }
                         Err(error) => {
@@ -3613,8 +3830,19 @@ async fn refresh_zone_from_primaries_with_outcome(
         {
             Ok(snapshot) => {
                 let snapshot = Arc::new(snapshot);
-                match zones.insert_snapshot_arc_for_transfer(snapshot.clone()) {
-                    Ok(metadata) => {
+                match context.transfer_plan.if_current_plan(plan, || {
+                    zones.insert_snapshot_arc_for_transfer(snapshot.clone())
+                }) {
+                    None => {
+                        warn!(
+                            zone = %plan.origin,
+                            %primary,
+                            reason = %context.reason,
+                            "AXFR result discarded because zone no longer has a transfer plan"
+                        );
+                        return RefreshZoneOutcome::obsolete();
+                    }
+                    Some(Ok(metadata)) => {
                         context.metrics.record_axfr_succeeded();
                         let serial = metadata.serial;
                         info!(
@@ -3626,7 +3854,7 @@ async fn refresh_zone_from_primaries_with_outcome(
                         );
                         return RefreshZoneOutcome::updated(snapshot, metadata);
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         last_failure_cause = Some(format!(
                             "AXFR publication failed for primary {primary}: {error}"
                         ));

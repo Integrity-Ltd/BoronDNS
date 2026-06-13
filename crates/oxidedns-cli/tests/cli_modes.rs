@@ -402,6 +402,132 @@ fn missing_tsig_secret_file_exits_with_ioerr() {
 }
 
 #[test]
+fn validate_config_rejects_missing_secret_store_manifest() {
+    let root = unique_temp_path("missing-secret-store", "dir");
+    let config = write_config(
+        "missing-secret-store",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [secret_store]
+            path = "{}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            tsig_key = "runtime-key."
+        "#,
+            root.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("validating secret store configuration"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn validate_config_rejects_missing_secret_store_tsig_reference() {
+    let root = unique_temp_path("missing-secret-store-tsig", "dir");
+    write_secret_store_manifest(&root, "");
+    let config = write_config(
+        "missing-secret-store-tsig",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [secret_store]
+            path = "{}"
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+            tsig_key = "runtime-key."
+        "#,
+            root.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("check-config")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns check-config");
+
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("references TSIG key runtime-key."),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn validate_config_rejects_missing_secret_store_xot_profile() {
+    let root = unique_temp_path("missing-secret-store-xot", "dir");
+    write_secret_store_manifest(&root, "");
+    let config = write_config(
+        "missing-secret-store-xot",
+        &format!(
+            r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [secret_store]
+            path = "{}"
+
+            [[zones]]
+            name = "example.test."
+
+            [[zones.transfer_primaries]]
+            addr = "192.0.2.53:853"
+            transport = "xot"
+            server_name = "primary.example.test"
+            xot_profile = "missing-profile"
+        "#,
+            root.display()
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--validate-config")
+        .arg(&config)
+        .output()
+        .expect("run oxidedns --validate-config");
+
+    assert_eq!(output.status.code(), Some(EX_CONFIG_INVALID));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("references XoT profile missing-profile"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(config);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn dump_config_includes_ods_environment_overrides() {
     let config = write_config(
         "dump-env",
@@ -969,13 +1095,29 @@ fn serve_tcp_bind_failure_exits_with_cantcreat() {
 }
 
 fn write_config(label: &str, contents: &str) -> PathBuf {
+    let path = unique_temp_path(label, "toml");
+    fs::write(&path, contents).expect("write test config");
+    path
+}
+
+fn unique_temp_path(label: &str, extension: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time after epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("oxidedns-{label}-{unique}.toml"));
-    fs::write(&path, contents).expect("write test config");
-    path
+    std::env::temp_dir().join(format!("oxidedns-{label}-{unique}.{extension}"))
+}
+
+fn write_secret_store_manifest(root: &std::path::Path, contents: &str) {
+    fs::create_dir_all(root).expect("create secret store root");
+    let manifest = root.join("secrets.toml");
+    fs::write(&manifest, contents).expect("write secret store manifest");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600))
+            .expect("secure secret store manifest");
+    }
 }
 
 fn checked_in_example_config_path() -> PathBuf {

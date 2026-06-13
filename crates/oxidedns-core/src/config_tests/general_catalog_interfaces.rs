@@ -228,6 +228,55 @@
     }
 
     #[test]
+    fn rejects_duplicate_zone_apexes_case_insensitively() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+
+                [[zones]]
+                name = "EXAMPLE.TEST."
+                primaries = ["192.0.2.54:53"]
+            "#,
+        )
+        .expect_err("duplicate zone apexes must fail validation");
+
+        assert!(error.to_string().contains("duplicate configured zone apex"));
+    }
+
+    #[test]
+    fn rejects_static_zone_and_catalog_zone_apex_clash() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+
+                [[catalog_zones]]
+                name = "example.test."
+                primaries = ["192.0.2.54:53"]
+                notify_sources = ["192.0.2.54"]
+                tsig_key = "catalog-key."
+            "#,
+        )
+        .expect_err("static zone and catalog apex clash must fail validation");
+
+        assert!(error.to_string().contains("duplicate configured zone apex"));
+    }
+
+    #[test]
     fn rejects_invalid_catalog_zone_names_before_runtime_startup() {
         for (name, expected) in [
             ("", "catalog zone name must not be empty"),

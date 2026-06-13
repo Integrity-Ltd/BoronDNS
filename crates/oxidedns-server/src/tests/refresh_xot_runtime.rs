@@ -807,6 +807,7 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -880,6 +881,7 @@ async fn refresh_signs_axfr_query_when_zone_has_tsig_key() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -944,6 +946,7 @@ async fn refresh_xot_transfer_also_uses_tsig_when_configured() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -1074,6 +1077,7 @@ async fn refresh_xot_handshake_failure_does_not_retry_cleartext() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(50),
             axfr_timeout: std::time::Duration::from_millis(50),
@@ -1133,6 +1137,7 @@ async fn refresh_xot_rejects_certificate_name_mismatch_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1191,6 +1196,7 @@ async fn refresh_xot_rejects_missing_dot_alpn_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1254,6 +1260,7 @@ async fn refresh_xot_rejects_tls12_only_primary_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1313,6 +1320,7 @@ async fn refresh_xot_rejects_untrusted_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1371,6 +1379,7 @@ async fn refresh_xot_rejects_expired_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1432,6 +1441,7 @@ async fn refresh_xot_uses_configured_client_certificate() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -1488,6 +1498,7 @@ async fn refresh_xot_rejects_missing_client_certificate_before_query() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_millis(100),
             axfr_timeout: std::time::Duration::from_millis(100),
@@ -1835,6 +1846,7 @@ async fn refresh_axfr_uses_xot_tls_transport() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -1906,6 +1918,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
@@ -1924,6 +1937,7 @@ async fn refresh_uses_axfr_during_ixfr_disabled_cooldown() {
         RefreshAttemptContext {
             ixfr_cooldowns: &ixfr_cooldowns,
             metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
             secrets: SecretManager::from_config(&config).expect("test configuration loads secret snapshot"),
             ixfr_timeout: std::time::Duration::from_secs(5),
             axfr_timeout: std::time::Duration::from_secs(5),
