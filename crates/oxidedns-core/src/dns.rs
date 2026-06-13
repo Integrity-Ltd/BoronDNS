@@ -220,7 +220,7 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DomainName {
     labels: Vec<Vec<u8>>,
 }
@@ -550,6 +550,14 @@ impl DomainName {
             key.push('.');
         }
         key
+    }
+
+    pub(crate) fn to_ascii_lowercased(&self) -> Self {
+        let mut name = self.clone();
+        for label in &mut name.labels {
+            label.make_ascii_lowercase();
+        }
+        name
     }
 
     pub fn to_wire(&self) -> Vec<u8> {

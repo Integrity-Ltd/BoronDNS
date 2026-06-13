@@ -494,9 +494,10 @@ pub fn parse_ixfr_response(
     current_zone: &ZoneSnapshot,
     messages: &[Vec<u8>],
 ) -> Result<IxfrResponse, IxfrError> {
-    let current_soa = current_zone
+    let mut current_soa = current_zone
         .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
+    normalize_record_owner(&mut current_soa);
     validate_current_soa(&current_soa, zone_apex, qclass)?;
     if messages.is_empty() {
         return Err(IxfrError::EmptyResponse);
@@ -531,7 +532,7 @@ pub fn parse_ixfr_response(
                 parse_record(message, offset).map_err(|_| IxfrError::MalformedMessage)?;
             offset += consumed;
             validate_record_scope(&record, zone_apex, qclass).map_err(ixfr_scope_error)?;
-            canonicalize_record_owner(&mut record).map_err(|_| IxfrError::MalformedMessage)?;
+            normalize_record_owner(&mut record);
             answers.push(record);
         }
     }
@@ -573,11 +574,15 @@ fn apply_ixfr_incremental(
 ) -> Result<IxfrResponse, IxfrError> {
     let outer_soa = answers.first().ok_or(IxfrError::MissingInitialSoa)?;
     let final_serial = soa_serial(&outer_soa.rdata).map_err(|_| IxfrError::MalformedMessage)?;
-    let current_soa = current_zone
+    let mut current_soa = current_zone
         .transfer_soa_record(qclass)
         .ok_or(IxfrError::InvalidCurrentSoa)?;
+    normalize_record_owner(&mut current_soa);
     let mut expected_old_soa = current_soa;
     let mut records = current_zone.transfer_records();
+    for record in &mut records {
+        normalize_record_owner(record);
+    }
     let mut index = 1usize;
 
     while index < answers.len() {
@@ -660,9 +665,8 @@ fn ixfr_scope_error(error: AxfrError) -> IxfrError {
     }
 }
 
-fn canonicalize_record_owner(record: &mut ResourceRecord) -> Result<(), DnsParseError> {
-    record.owner = DomainName::from_absolute_str(&record.owner.canonical_key())?;
-    Ok(())
+fn normalize_record_owner(record: &mut ResourceRecord) {
+    record.owner = record.owner.to_ascii_lowercased();
 }
 
 fn validate_current_soa(
@@ -1277,11 +1281,12 @@ fn validate_exact_apex_soa(
     zone_apex: &DomainName,
     records: &[ResourceRecord],
 ) -> Result<(), AxfrError> {
+    let zone_apex = zone_apex.to_ascii_lowercased();
     let soa_records = records
         .iter()
         .filter(|record| record.rr_type == RecordType::Soa as u16)
         .collect::<Vec<_>>();
-    if soa_records.len() == 1 && soa_records[0].owner.canonical_key() == zone_apex.canonical_key() {
+    if soa_records.len() == 1 && soa_records[0].owner.to_ascii_lowercased() == zone_apex {
         Ok(())
     } else {
         Err(AxfrError::InvalidZoneSoa)
@@ -1289,9 +1294,9 @@ fn validate_exact_apex_soa(
 }
 
 fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Result<(), AxfrError> {
+    let zone_apex = zone_apex.to_ascii_lowercased();
     if records.iter().any(|record| {
-        record.owner.canonical_key() == zone_apex.canonical_key()
-            && record.rr_type == RecordType::Ns as u16
+        record.owner.to_ascii_lowercased() == zone_apex && record.rr_type == RecordType::Ns as u16
     }) {
         Ok(())
     } else {
@@ -1300,30 +1305,31 @@ fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Resul
 }
 
 fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<(), AxfrError> {
-    let mut dname_rrsets = HashSet::<(String, u16)>::new();
+    let mut dname_rrsets = HashSet::<(DomainName, u16)>::new();
     for record in records {
         if record.rr_type != RecordType::Dname as u16 {
             continue;
         }
 
-        let record_key = record.owner.canonical_key();
+        let record_key = record.owner.to_ascii_lowercased();
         let dname_key = (record_key.clone(), record.class);
         if !dname_rrsets.insert(dname_key) {
             return Err(AxfrError::MultipleDnameRecords);
         }
 
         if records.iter().any(|other| {
-            other.owner.canonical_key() == record_key && other.rr_type == RecordType::Cname as u16
+            other.owner.to_ascii_lowercased() == record_key
+                && other.rr_type == RecordType::Cname as u16
         }) {
             return Err(AxfrError::DnameCoexistsWithCname);
         }
     }
 
     for record in records {
-        let record_key = record.owner.canonical_key();
+        let record_key = record.owner.to_ascii_lowercased();
         if record.rr_type == RecordType::Cname as u16
             && records.iter().any(|other| {
-                other.owner.canonical_key() == record_key
+                other.owner.to_ascii_lowercased() == record_key
                     && other.rr_type != RecordType::Cname as u16
                     && !is_dnssec_cname_exception_type(other.rr_type)
             })
@@ -1342,11 +1348,12 @@ fn is_dnssec_cname_exception_type(rr_type: u16) -> bool {
 }
 
 fn rrsets_from_records(records: Vec<ResourceRecord>) -> Vec<Rrset> {
-    let mut rrset_indexes = HashMap::<(String, u16, u16), usize>::new();
+    let mut rrset_indexes = HashMap::<(DomainName, u16, u16), usize>::new();
     let mut rrsets = Vec::<RrsetAccumulator>::new();
 
-    for record in records {
-        let key = (record.owner.canonical_key(), record.rr_type, record.class);
+    for mut record in records {
+        normalize_record_owner(&mut record);
+        let key = (record.owner.clone(), record.rr_type, record.class);
         if let Some(&index) = rrset_indexes.get(&key) {
             let existing = &mut rrsets[index];
             if existing.ttl != record.ttl {
@@ -1488,8 +1495,16 @@ mod tests {
     }
 
     fn record(owner: &str, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
+        record_with_owner(
+            DomainName::from_absolute_str(owner).unwrap(),
+            rr_type,
+            rdata,
+        )
+    }
+
+    fn record_with_owner(owner: DomainName, rr_type: u16, rdata: Vec<u8>) -> ResourceRecord {
         ResourceRecord {
-            owner: DomainName::from_absolute_str(owner).unwrap(),
+            owner,
             rr_type,
             class: 1,
             ttl: 300,
@@ -1618,6 +1633,16 @@ mod tests {
         )
     }
 
+    fn embedded_dot_owner(first_label: &[u8]) -> DomainName {
+        let mut wire = Vec::new();
+        wire.push(first_label.len() as u8);
+        wire.extend_from_slice(first_label);
+        wire.extend_from_slice(b"\x07example\x04test\x00");
+        let (owner, consumed) = DomainName::parse(&wire, 0).unwrap();
+        assert_eq!(consumed, wire.len());
+        owner
+    }
+
     #[test]
     fn builds_axfr_query_wire_message() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
@@ -1734,6 +1759,38 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    #[test]
+    fn parses_axfr_lowercases_owner_without_splitting_embedded_dot_label() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mixed_embedded_dot_owner = embedded_dot_owner(b"A.B");
+        let lower_embedded_dot_owner = embedded_dot_owner(b"a.b");
+        let split_owner = DomainName::from_absolute_str("a.b.example.test.").unwrap();
+        let dotted_a = record_with_owner(
+            mixed_embedded_dot_owner,
+            RecordType::A as u16,
+            vec![192, 0, 2, 11],
+        );
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dotted_a, soa],
+            )],
+        )
+        .expect("AXFR with embedded-dot owner label");
+
+        let owners = snapshot
+            .transfer_records()
+            .into_iter()
+            .map(|record| record.owner)
+            .collect::<Vec<_>>();
+        assert!(owners.contains(&lower_embedded_dot_owner));
+        assert!(!owners.contains(&split_owner));
     }
 
     #[test]
@@ -2418,6 +2475,102 @@ mod tests {
                 .answers,
             vec![new_a]
         );
+    }
+
+    #[test]
+    fn parses_ixfr_mode1_delete_against_mixed_case_current_zone_owner() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let old_a_mixed_current = record(
+            "WWW.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let old_a_lower_ixfr = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let old_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa, apex_ns(), old_a_mixed_current]);
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), old_soa, old_a_lower_ixfr, new_soa],
+            )],
+        )
+        .expect("mode 1 delete against mixed-case current owner");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        assert!(
+            snapshot
+                .offline_oracle()
+                .lookup(
+                    &DomainName::from_absolute_str("www.example.test.").unwrap(),
+                    RecordType::A as u16,
+                    1,
+                )
+                .answers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn parses_ixfr_mode1_embedded_dot_owner_without_restructuring_labels() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let lower_embedded_dot_owner = embedded_dot_owner(b"a.b");
+        let split_owner = DomainName::from_absolute_str("a.b.example.test.").unwrap();
+        let old_embedded_dot_a = record_with_owner(
+            embedded_dot_owner(b"A.B"),
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let old_embedded_dot_a_ixfr = record_with_owner(
+            lower_embedded_dot_owner.clone(),
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let old_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let current_zone = current_zone(vec![current_soa, apex_ns(), old_embedded_dot_a]);
+        let response = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), old_soa, old_embedded_dot_a_ixfr, new_soa],
+            )],
+        )
+        .expect("mode 1 delete of owner with embedded dot label");
+
+        let IxfrResponse::Updated(snapshot) = response else {
+            panic!("expected updated zone");
+        };
+        let owners = snapshot
+            .transfer_records()
+            .into_iter()
+            .map(|record| record.owner)
+            .collect::<Vec<_>>();
+        assert!(!owners.contains(&lower_embedded_dot_owner));
+        assert!(!owners.contains(&split_owner));
     }
 
     #[test]

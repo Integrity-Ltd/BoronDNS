@@ -982,30 +982,38 @@ impl CatalogManager {
                 );
                 continue;
             };
-            if refresh_tx
-                .send(RefreshRequest {
-                    zone: member_origin.clone(),
-                    requested_serial: None,
-                    reason: RefreshReason::Catalog,
-                })
-                .await
-                .is_err()
-            {
-                warn!(
-                    category = "transfer",
-                    event = "catalog_member_refresh_queue_closed",
-                    catalog_zone = %catalog.origin,
-                    zone = %member_origin,
-                    "catalog member refresh queue closed"
-                );
-            } else {
-                info!(
-                    category = "transfer",
-                    event = "catalog_member_added",
-                    catalog_zone = %catalog.origin,
-                    zone = %member_origin,
-                    "added catalog-managed member zone"
-                );
+            match refresh_tx.try_send(RefreshRequest {
+                zone: member_origin.clone(),
+                requested_serial: None,
+                reason: RefreshReason::Catalog,
+            }) {
+                Ok(()) => {
+                    info!(
+                        category = "transfer",
+                        event = "catalog_member_added",
+                        catalog_zone = %catalog.origin,
+                        zone = %member_origin,
+                        "added catalog-managed member zone"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!(
+                        category = "transfer",
+                        event = "catalog_member_refresh_queue_full",
+                        catalog_zone = %catalog.origin,
+                        zone = %member_origin,
+                        "catalog member refresh queue full; refresh request dropped"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    warn!(
+                        category = "transfer",
+                        event = "catalog_member_refresh_queue_closed",
+                        catalog_zone = %catalog.origin,
+                        zone = %member_origin,
+                        "catalog member refresh queue closed"
+                    );
+                }
             }
         }
 

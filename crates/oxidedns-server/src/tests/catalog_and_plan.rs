@@ -386,6 +386,95 @@ async fn concurrent_catalog_member_migration_preserves_member_resources() {
 }
 
 #[tokio::test]
+async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "a.catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+
+                [[catalog_zones]]
+                name = "b.catalog.example."
+                catalog_primaries = ["192.0.2.54:53"]
+                member_primaries = ["10.0.0.54:53"]
+                catalog_tsig_key = "catalog-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_a = DomainName::from_absolute_str("a.catalog.example.").unwrap();
+    let catalog_b = DomainName::from_absolute_str("b.catalog.example.").unwrap();
+    let member_a = DomainName::from_absolute_str("a-member.example.").unwrap();
+    let member_b = DomainName::from_absolute_str("b-member.example.").unwrap();
+    let snapshot_a =
+        catalog_snapshot_with_members(catalog_a.clone(), 7, std::slice::from_ref(&member_a));
+    let snapshot_b =
+        catalog_snapshot_with_members(catalog_b.clone(), 7, std::slice::from_ref(&member_b));
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_a.clone());
+    zones.insert_loading_hidden(catalog_b.clone());
+    zones.insert_snapshot(snapshot_a.clone());
+    zones.insert_snapshot(snapshot_b.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, _rx) = mpsc::channel(1);
+    tx.try_send(RefreshRequest {
+        zone: DomainName::from_absolute_str("queued.example.").unwrap(),
+        requested_serial: None,
+        reason: RefreshReason::Catalog,
+    })
+    .expect("prefill refresh queue");
+    let metadata_a = zone_metadata_for(&snapshot_a);
+    let metadata_b = zone_metadata_for(&snapshot_b);
+    let refresh_tx_a = tx.downgrade();
+    let refresh_tx_b = tx.downgrade();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        let ((), ()) = tokio::join!(
+            catalog_manager.apply_snapshot(
+                snapshot_a.catalog_zone_view(),
+                &metadata_a,
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &refresh_tx_a,
+            ),
+            catalog_manager.apply_snapshot(
+                snapshot_b.catalog_zone_view(),
+                &metadata_b,
+                &zones,
+                &transfer_plan,
+                &refresh_registry,
+                &notify_authority,
+                &refresh_tx_b,
+            )
+        );
+    })
+    .await
+    .expect("full refresh queue must not block catalog reconciliation");
+
+    assert!(zones.contains_exact_zone_for_control(&member_a));
+    assert!(zones.contains_exact_zone_for_control(&member_b));
+}
+
+#[tokio::test]
 async fn catalog_snapshot_removes_non_text_roundtrippable_member_without_panic() {
     let config = ServerConfig::from_toml_str(
         r#"
