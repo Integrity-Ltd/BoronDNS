@@ -2322,6 +2322,33 @@ impl CatalogZoneConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.name.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "catalog zone name must not be empty".to_owned(),
+            ));
+        }
+
+        if !self.name.ends_with('.') {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} must be an absolute DNS name ending with '.'",
+                self.name
+            )));
+        }
+
+        DomainName::from_absolute_str(&self.name).map_err(|_| {
+            ConfigError::Invalid(format!(
+                "catalog zone {} is not a valid DNS name",
+                self.name
+            ))
+        })?;
+
+        if !self.class.eq_ignore_ascii_case("IN") {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} uses unsupported class {}; only IN is currently allowed",
+                self.name, self.class
+            )));
+        }
+
         if self.max_member_zones == 0 {
             return Err(ConfigError::Invalid(format!(
                 "catalog zone {} max_member_zones must be at least 1",

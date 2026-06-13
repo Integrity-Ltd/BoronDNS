@@ -668,6 +668,7 @@ fn apply_ixfr_incremental(
     for record in &mut records {
         normalize_record_owner(record);
     }
+    let mut records = IndexedRecordSet::new(records);
     let mut index = 1usize;
 
     while index < answers.len() {
@@ -679,11 +680,11 @@ fn apply_ixfr_incremental(
         if old_soa.rr_type != RecordType::Soa as u16 || old_soa != &expected_old_soa {
             return Err(IxfrError::BrokenSoaChain);
         }
-        remove_record(&mut records, old_soa)?;
+        records.remove(old_soa)?;
         index += 1;
 
         while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
-            remove_record(&mut records, &answers[index])?;
+            records.remove(&answers[index])?;
             index += 1;
         }
 
@@ -695,12 +696,12 @@ fn apply_ixfr_incremental(
         {
             return Err(IxfrError::BrokenSoaChain);
         }
-        add_record(&mut records, new_soa.clone())?;
+        records.add(new_soa.clone())?;
         expected_old_soa = new_soa.clone();
         index += 1;
 
         while index < answers.len() && answers[index].rr_type != RecordType::Soa as u16 {
-            add_record(&mut records, answers[index].clone())?;
+            records.add(answers[index].clone())?;
             index += 1;
         }
     }
@@ -713,6 +714,7 @@ fn apply_ixfr_incremental(
     if expected_old_soa != *outer_soa || final_applied_serial != final_serial {
         return Err(IxfrError::BrokenSoaChain);
     }
+    let records = records.into_records();
     validate_zone_record_set(zone_apex, &records).map_err(IxfrError::Axfr)?;
 
     Ok(IxfrResponse::Updated(Box::new(ZoneSnapshot::active(
@@ -722,23 +724,98 @@ fn apply_ixfr_incremental(
     ))))
 }
 
-fn remove_record(
-    records: &mut Vec<ResourceRecord>,
-    target: &ResourceRecord,
-) -> Result<(), IxfrError> {
-    let Some(index) = records.iter().position(|record| record == target) else {
-        return Err(IxfrError::DeleteAbsentRecord);
-    };
-    records.remove(index);
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RecordKey {
+    owner: DomainName,
+    rr_type: u16,
+    class: u16,
+    ttl: u32,
+    rdata: Vec<u8>,
 }
 
-fn add_record(records: &mut Vec<ResourceRecord>, record: ResourceRecord) -> Result<(), IxfrError> {
-    if records.contains(&record) {
-        return Err(IxfrError::AddExistingRecord);
+impl RecordKey {
+    fn from_record(record: &ResourceRecord) -> Self {
+        Self {
+            owner: record.owner.clone(),
+            rr_type: record.rr_type,
+            class: record.class,
+            ttl: record.ttl,
+            rdata: record.rdata.clone(),
+        }
     }
-    records.push(record);
-    Ok(())
+}
+
+struct IndexedRecordSet {
+    records: Vec<ResourceRecord>,
+    positions: HashMap<RecordKey, Vec<usize>>,
+    slot_indexes: Vec<usize>,
+}
+
+impl IndexedRecordSet {
+    fn new(records: Vec<ResourceRecord>) -> Self {
+        let mut indexed = Self {
+            records: Vec::with_capacity(records.len()),
+            positions: HashMap::with_capacity(records.len()),
+            slot_indexes: Vec::with_capacity(records.len()),
+        };
+        for record in records {
+            indexed.push_unchecked(record);
+        }
+        indexed
+    }
+
+    fn add(&mut self, record: ResourceRecord) -> Result<(), IxfrError> {
+        let key = RecordKey::from_record(&record);
+        if self
+            .positions
+            .get(&key)
+            .is_some_and(|positions| !positions.is_empty())
+        {
+            return Err(IxfrError::AddExistingRecord);
+        }
+        self.push_unchecked(record);
+        Ok(())
+    }
+
+    fn remove(&mut self, target: &ResourceRecord) -> Result<(), IxfrError> {
+        let key = RecordKey::from_record(target);
+        let Some(target_positions) = self.positions.get_mut(&key) else {
+            return Err(IxfrError::DeleteAbsentRecord);
+        };
+        let Some(index) = target_positions.pop() else {
+            return Err(IxfrError::DeleteAbsentRecord);
+        };
+
+        let last_index = self.records.len() - 1;
+        self.records.swap_remove(index);
+        self.slot_indexes.swap_remove(index);
+
+        if index != last_index {
+            let moved_key = RecordKey::from_record(&self.records[index]);
+            let moved_slot = self.slot_indexes[index];
+            let moved_positions = self
+                .positions
+                .get_mut(&moved_key)
+                .expect("moved IXFR record remains indexed");
+            moved_positions[moved_slot] = index;
+        }
+
+        Ok(())
+    }
+
+    fn into_records(self) -> Vec<ResourceRecord> {
+        self.records
+    }
+
+    fn push_unchecked(&mut self, record: ResourceRecord) {
+        let key = RecordKey::from_record(&record);
+        let index = self.records.len();
+        let positions = self.positions.entry(key).or_default();
+        let slot_index = positions.len();
+        positions.push(index);
+        self.records.push(record);
+        self.slot_indexes.push(slot_index);
+    }
 }
 
 fn ixfr_scope_error(error: AxfrError) -> IxfrError {
@@ -3042,6 +3119,38 @@ mod tests {
             )],
         )
         .expect_err("absent delete");
+
+        assert_eq!(error, IxfrError::DeleteAbsentRecord);
+    }
+
+    #[test]
+    fn rejects_ixfr_delete_when_only_ttl_differs() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let existing_a = record(
+            "www.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 1],
+        );
+        let mut wrong_ttl_a = existing_a.clone();
+        wrong_ttl_a.ttl += 1;
+        let new_soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(2),
+        );
+        let current_zone = current_zone(vec![current_soa.clone(), existing_a]);
+        let error = parse_ixfr_response(
+            0x1234,
+            &apex,
+            1,
+            &current_zone,
+            &[ixfr_message(
+                0x1234,
+                vec![new_soa.clone(), current_soa, wrong_ttl_a, new_soa],
+            )],
+        )
+        .expect_err("TTL is part of exact IXFR record identity");
 
         assert_eq!(error, IxfrError::DeleteAbsentRecord);
     }

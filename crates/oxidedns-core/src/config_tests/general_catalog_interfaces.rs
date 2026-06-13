@@ -228,6 +228,72 @@
     }
 
     #[test]
+    fn rejects_invalid_catalog_zone_names_before_runtime_startup() {
+        for (name, expected) in [
+            ("", "catalog zone name must not be empty"),
+            (
+                "example",
+                "must be an absolute DNS name ending with '.'",
+            ),
+            ("a..b.", "is not a valid DNS name"),
+        ] {
+            let toml = format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+                    listen_tcp = []
+
+                    [[tsig_keys]]
+                    name = "catalog-key."
+                    algorithm = "hmac-sha256"
+                    secret = "dG9wc2VjcmV0"
+
+                    [[catalog_zones]]
+                    name = "{name}"
+                    primaries = ["192.0.2.53:53"]
+                    tsig_key = "catalog-key."
+                "#
+            );
+            let error = ServerConfig::from_toml_str(&toml)
+                .expect_err("invalid catalog zone name is rejected by validation");
+
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected:?} in {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_catalog_zone_class() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                class = "CH"
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "catalog-key."
+            "#,
+        )
+        .expect_err("catalog zones only support IN");
+
+        assert!(
+            error
+                .to_string()
+                .contains("uses unsupported class CH; only IN is currently allowed")
+        );
+    }
+
+    #[test]
     fn parses_split_catalog_and_member_transfer_policy() {
         let config = ServerConfig::from_toml_str(
             r#"
