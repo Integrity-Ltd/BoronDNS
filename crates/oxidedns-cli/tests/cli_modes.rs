@@ -145,6 +145,50 @@ fn oxidedns_config_env_supplies_default_config_path_for_validation_modes() {
 }
 
 #[test]
+fn top_level_config_flag_supplies_config_path_for_validation_modes() {
+    let config = write_config(
+        "top-level-config-flag",
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["127.0.0.1:9"]
+        "#,
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--config")
+        .arg(&config)
+        .arg("--validate-config")
+        .output()
+        .expect("run oxidedns --config with --validate-config");
+    assert!(
+        validate.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    assert!(String::from_utf8_lossy(&validate.stdout).contains("configuration ok"));
+
+    let dump = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+        .arg("--config")
+        .arg(&config)
+        .arg("--dump-config")
+        .output()
+        .expect("run oxidedns --config with --dump-config");
+    assert!(
+        dump.status.success(),
+        "expected success, stderr={}",
+        String::from_utf8_lossy(&dump.stderr)
+    );
+    assert!(String::from_utf8_lossy(&dump.stdout).contains("[[zones]]"));
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn validate_config_emits_json_bootstrap_logs_before_configured_logging() {
     let config = write_config(
         "bootstrap-logs",

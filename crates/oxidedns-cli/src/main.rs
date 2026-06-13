@@ -41,7 +41,7 @@ const EX_IOERR: u8 = 74;
 const EX_CONFIG: u8 = 78;
 const HELP_FOOTER: &str = concat!(
     "Configuration: default path /etc/oxidedns-secondary/config.toml",
-    "; override subcommands with --config or OXIDEDNS_CONFIG.\n",
+    "; override config-loading modes with --config or OXIDEDNS_CONFIG.\n",
     "Operator Deployment Guide: docs/operator-deployment-guide.md\n",
     "Project: internal OxideDNS repository; see README.md and docs/."
 );
@@ -59,6 +59,13 @@ const LOG_TRUNCATION_MARKER: &str = "...<truncated>";
 struct Cli {
     #[arg(short = 'V', long, action = ArgAction::SetTrue, help = "Print version information and exit")]
     version: bool,
+
+    #[arg(
+        long,
+        value_name = "CONFIG",
+        help = "Configuration file path for config-loading modes"
+    )]
+    config: Option<PathBuf>,
 
     #[arg(
         long,
@@ -86,12 +93,12 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     CheckConfig {
-        #[arg(short, long, env = "OXIDEDNS_CONFIG", default_value = DEFAULT_CONFIG_PATH)]
-        config: PathBuf,
+        #[arg(short, long, value_name = "CONFIG")]
+        config: Option<PathBuf>,
     },
     Serve {
-        #[arg(short, long, env = "OXIDEDNS_CONFIG", default_value = DEFAULT_CONFIG_PATH)]
-        config: PathBuf,
+        #[arg(short, long, value_name = "CONFIG")]
+        config: Option<PathBuf>,
     },
 }
 
@@ -188,23 +195,26 @@ enum Mode {
 
 fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
     let mut selected = Vec::new();
+    let global_config = cli.config.as_ref();
 
     if cli.version {
         selected.push(Mode::Version);
     }
     if let Some(config) = cli.validate_config {
-        selected.push(Mode::ValidateConfig(config_path(config)));
+        selected.push(Mode::ValidateConfig(config_path(global_config, config)));
     }
     if let Some(config) = cli.dump_config {
-        selected.push(Mode::DumpConfig(config_path(config)));
+        selected.push(Mode::DumpConfig(config_path(global_config, config)));
     }
     if cli.example_config {
         selected.push(Mode::ExampleConfig);
     }
     if let Some(command) = cli.command {
         selected.push(match command {
-            Command::CheckConfig { config } => Mode::CheckConfig(config),
-            Command::Serve { config } => Mode::Serve(config),
+            Command::CheckConfig { config } => {
+                Mode::CheckConfig(config_path(global_config, config))
+            }
+            Command::Serve { config } => Mode::Serve(config_path(global_config, config)),
         });
     }
 
@@ -215,8 +225,10 @@ fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
     }
 }
 
-fn config_path(config: Option<PathBuf>) -> PathBuf {
-    config.unwrap_or_else(default_config_path)
+fn config_path(global_config: Option<&PathBuf>, mode_config: Option<PathBuf>) -> PathBuf {
+    mode_config
+        .or_else(|| global_config.cloned())
+        .unwrap_or_else(default_config_path)
 }
 
 fn default_config_path() -> PathBuf {
@@ -995,24 +1007,20 @@ mod tests {
     #[test]
     fn commands_default_to_srs_config_path() {
         let cli = Cli::try_parse_from(["oxidedns", "check-config"]).expect("check-config CLI");
-        match cli.command.expect("command") {
-            Command::CheckConfig { config } => {
-                assert_eq!(config, PathBuf::from(DEFAULT_CONFIG_PATH));
-            }
-            Command::Serve { .. } => panic!("expected check-config command"),
-        }
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::CheckConfig(PathBuf::from(DEFAULT_CONFIG_PATH))
+        );
 
         let cli = Cli::try_parse_from(["oxidedns", "serve"]).expect("serve CLI");
-        match cli.command.expect("command") {
-            Command::Serve { config } => {
-                assert_eq!(config, PathBuf::from(DEFAULT_CONFIG_PATH));
-            }
-            Command::CheckConfig { .. } => panic!("expected serve command"),
-        }
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::Serve(PathBuf::from(DEFAULT_CONFIG_PATH))
+        );
     }
 
     #[test]
-    fn explicit_config_path_overrides_default() {
+    fn command_config_path_overrides_default() {
         let cli = Cli::try_parse_from([
             "oxidedns",
             "serve",
@@ -1021,11 +1029,83 @@ mod tests {
         ])
         .expect("serve CLI");
         match cli.command.expect("command") {
-            Command::Serve { config } => {
+            Command::Serve {
+                config: Some(config),
+            } => {
                 assert_eq!(config, PathBuf::from("config/oxidedns.example.toml"));
             }
+            Command::Serve { .. } => panic!("expected explicit serve config"),
             Command::CheckConfig { .. } => panic!("expected serve command"),
         }
+    }
+
+    #[test]
+    fn global_config_path_feeds_config_loading_modes() {
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--config",
+            "config/oxidedns.example.toml",
+            "serve",
+        ])
+        .expect("serve CLI");
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::Serve(PathBuf::from("config/oxidedns.example.toml"))
+        );
+
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--config",
+            "config/oxidedns.example.toml",
+            "--validate-config",
+        ])
+        .expect("validate CLI");
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::ValidateConfig(PathBuf::from("config/oxidedns.example.toml"))
+        );
+
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--config",
+            "config/oxidedns.example.toml",
+            "--dump-config",
+        ])
+        .expect("dump CLI");
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::DumpConfig(PathBuf::from("config/oxidedns.example.toml"))
+        );
+    }
+
+    #[test]
+    fn mode_config_path_overrides_global_config_path() {
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--config",
+            "/tmp/global.toml",
+            "serve",
+            "--config",
+            "config/oxidedns.example.toml",
+        ])
+        .expect("serve CLI");
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::Serve(PathBuf::from("config/oxidedns.example.toml"))
+        );
+
+        let cli = Cli::try_parse_from([
+            "oxidedns",
+            "--config",
+            "/tmp/global.toml",
+            "--validate-config",
+            "config/oxidedns.example.toml",
+        ])
+        .expect("validate CLI");
+        assert_eq!(
+            selected_mode(cli).expect("mode"),
+            Mode::ValidateConfig(PathBuf::from("config/oxidedns.example.toml"))
+        );
     }
 
     #[test]
