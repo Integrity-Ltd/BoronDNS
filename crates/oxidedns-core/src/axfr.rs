@@ -1400,10 +1400,10 @@ fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<()
         has_cname_incompatible_data: bool,
     }
 
-    let mut owner_kinds = HashMap::<String, OwnerRecordKinds>::new();
-    let mut dname_rrsets = HashSet::<(String, u16)>::new();
+    let mut owner_kinds = HashMap::<DomainName, OwnerRecordKinds>::new();
+    let mut dname_rrsets = HashSet::<(DomainName, u16)>::new();
     for record in records {
-        let owner_key = record.owner.canonical_key();
+        let owner_key = record.owner.to_ascii_lowercased();
         let kinds = owner_kinds.entry(owner_key.clone()).or_default();
 
         if record.rr_type == RecordType::Dname as u16 {
@@ -3533,6 +3533,35 @@ mod tests {
         .expect_err("multiple DNAME records");
 
         assert_eq!(error, AxfrError::MultipleDnameRecords);
+    }
+
+    #[test]
+    fn accepts_axfr_dname_owners_that_collide_as_canonical_strings() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let embedded_dot = record_with_owner(
+            embedded_dot_owner(b"a.b"),
+            RecordType::Dname as u16,
+            name_rdata("embedded-target.example.test."),
+        );
+        let split_labels = record(
+            "a.b.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("split-target.example.test."),
+        );
+
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), embedded_dot, split_labels, soa],
+            )],
+        )
+        .expect("structurally distinct DNAME owners must not be merged");
+
+        assert_eq!(snapshot.serial, Some(1));
     }
 
     #[test]
