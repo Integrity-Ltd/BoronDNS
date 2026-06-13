@@ -56,7 +56,7 @@ pub enum RuntimeError {
     PrimaryRotationRandom(getrandom::Error),
 
     #[error(
-        "file-descriptor rlimit is insufficient for configured connection limits: current {current}, required {required}; increase the service/container nofile limit, for example systemd LimitNOFILE=65536 or docker run --ulimit nofile=65536:65536"
+        "file-descriptor rlimit is insufficient for configured connection limits: current {current}, required {required}; increase the supervisor or container nofile limit, for example docker run --ulimit nofile=65536:65536"
     )]
     InsufficientFileDescriptorLimit { current: u64, required: u64 },
 

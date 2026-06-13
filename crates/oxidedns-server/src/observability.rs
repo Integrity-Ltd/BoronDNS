@@ -237,26 +237,11 @@ fn kib_to_bytes(kib: u64) -> u64 {
 }
 
 pub(crate) fn time_sync_observability_value() -> Value {
-    if let Some(status) = systemd_timesync_observability_value() {
-        return status;
-    }
     json!({
         "status": "unknown",
         "source": "unavailable",
-        "checked": ["/run/systemd/timesync/synchronized"],
+        "checked": [],
     })
-}
-
-fn systemd_timesync_observability_value() -> Option<Value> {
-    let path = "/run/systemd/timesync/synchronized";
-    let text = fs::read_to_string(path).ok()?;
-    let normalized = text.trim().to_ascii_lowercase();
-    let synchronized = matches!(normalized.as_str(), "yes" | "true" | "1");
-    Some(json!({
-        "status": if synchronized { "ok" } else { "unsynchronized" },
-        "source": path,
-        "synchronized": synchronized,
-    }))
 }
 
 pub(crate) fn certificate_observability_value(materials: &[TransferMaterial]) -> Value {

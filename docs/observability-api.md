@@ -100,9 +100,10 @@ include_filesystems = true
 # Default: true.
 include_process_resources = true
 
-# Include host time-synchronization status. OxideDNS only reads
-# /run/systemd/timesync/synchronized when present; it does not implement NTP/SNTP
-# and does not spawn timedatectl, chronyc, or ntpq. Default: true.
+# Include host time-synchronization status. OxideDNS does not implement NTP/SNTP,
+# does not spawn host commands, and does not inspect supervisor-specific service
+# files. Until a portable configured source exists, this reports unknown.
+# Default: true.
 include_time_sync_status = true
 
 # Include certificate expiry summaries for configured XoT/mTLS files.
@@ -321,13 +322,8 @@ black-box probes, not this API.
 
 Clock correctness matters for TSIG and DNSSEC signature validity, but OxideDNS
 does not implement its own NTP/SNTP protocol client and does not spawn host
-commands. The time endpoint only summarizes status available from existing host
-service status files or OS interfaces:
-
-- `/run/systemd/timesync/synchronized` where systemd-timesyncd exposes it;
-- container-provided host-time status where available.
-
-If no status source is available, the endpoint should return `unknown`, not
+commands or inspect supervisor-specific service files. Until a portable,
+explicitly configured status source exists, the endpoint returns `unknown`, not
 `ok`.
 
 Certificate status should be limited to configured files OxideDNS already uses,
