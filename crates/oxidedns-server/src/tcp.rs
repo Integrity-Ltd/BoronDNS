@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
+    io::{self, ErrorKind},
     net::IpAddr,
     pin::Pin,
     sync::{
@@ -38,6 +39,11 @@ use crate::{
     signal_notify_refresh,
 };
 
+const ERRNO_EMFILE: i32 = 24;
+const ERRNO_ENFILE: i32 = 23;
+const ERRNO_ENOBUFS: i32 = 105;
+const ERRNO_ENOMEM: i32 = 12;
+
 pub(crate) async fn serve_tcp(
     listener: TcpListener,
     zones: ZoneStore,
@@ -47,7 +53,21 @@ pub(crate) async fn serve_tcp(
     info!(%local_addr, "TCP listener bound");
 
     loop {
-        let (stream, peer) = listener.accept().await.map_err(RuntimeError::Tcp)?;
+        let (stream, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => match classify_tcp_accept_error(&error) {
+                TcpAcceptErrorAction::Continue => {
+                    debug!(%local_addr, %error, "transient TCP accept error");
+                    continue;
+                }
+                TcpAcceptErrorAction::Backoff(delay) => {
+                    warn!(%local_addr, %error, "resource pressure during TCP accept; backing off");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                TcpAcceptErrorAction::Fatal => return Err(RuntimeError::Tcp(error)),
+            },
+        };
         let connection_permit = match try_acquire_tcp_connection_slot(
             settings.active_connections.clone(),
             settings.active_connections_by_source.clone(),
@@ -125,6 +145,30 @@ pub(crate) async fn serve_tcp(
             }
         });
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TcpAcceptErrorAction {
+    Continue,
+    Backoff(Duration),
+    Fatal,
+}
+
+pub(crate) fn classify_tcp_accept_error(error: &io::Error) -> TcpAcceptErrorAction {
+    match error.kind() {
+        ErrorKind::ConnectionAborted | ErrorKind::Interrupted => TcpAcceptErrorAction::Continue,
+        _ if is_tcp_accept_resource_pressure(error) => {
+            TcpAcceptErrorAction::Backoff(Duration::from_millis(50))
+        }
+        _ => TcpAcceptErrorAction::Fatal,
+    }
+}
+
+fn is_tcp_accept_resource_pressure(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERRNO_EMFILE | ERRNO_ENFILE | ERRNO_ENOBUFS | ERRNO_ENOMEM)
+    )
 }
 
 #[derive(Clone)]

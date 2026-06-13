@@ -371,6 +371,38 @@
     }
 
     #[test]
+    fn catalog_member_transfer_policy_deny_requires_member_tsig_key() {
+        let error = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [transfer]
+                require_tsig = true
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["203.0.113.53:53"]
+                catalog_tsig_key = "catalog-key."
+            "#,
+        )
+        .expect_err("deny-unsigned member transfers require a member TSIG key");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires member_tsig_key or shared tsig_key")
+        );
+    }
+
+    #[test]
     fn rejects_split_catalog_policy_with_missing_member_key() {
         let error = ServerConfig::from_toml_str(
             r#"

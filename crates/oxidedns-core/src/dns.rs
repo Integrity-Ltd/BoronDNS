@@ -726,12 +726,22 @@ fn wire_labels_match_name_suffix(mut wire: &[u8], labels: &[Vec<u8>]) -> Option<
 
 impl fmt::Display for DomainName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use std::fmt::Write as _;
+
         if self.labels.is_empty() {
             return f.write_str(".");
         }
 
         for label in &self.labels {
-            write!(f, "{}.", String::from_utf8_lossy(label))?;
+            for byte in label {
+                match *byte {
+                    b'\\' | b'.' | 0x00..=0x20 | 0x7f..=0xff => {
+                        write!(f, "\\{byte:03}")?;
+                    }
+                    byte => f.write_char(byte as char)?,
+                }
+            }
+            f.write_char('.')?;
         }
         Ok(())
     }

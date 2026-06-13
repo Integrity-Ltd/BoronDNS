@@ -2348,6 +2348,19 @@ impl CatalogZoneConfig {
             )));
         }
         self.member_transfer_policy.validate(&self.name)?;
+        if self.catalog_tsig_key_name().is_some()
+            && !self.member_transfer_allows_unsigned_axfr()
+            && self.member_tsig_key_name().is_none()
+            && self
+                .member_transfer_targets()
+                .iter()
+                .any(|primary| primary.transport == TransferTransportConfig::Tcp)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "catalog zone {} requires member_tsig_key or shared tsig_key because member-zone TCP transfers are configured to deny unsigned AXFR",
+                self.name
+            )));
+        }
         if self.member_transfer_allows_unsigned_axfr() && self.member_tsig_key_name().is_none() {
             for primary in self.member_transfer_targets() {
                 if primary.transport == TransferTransportConfig::Tcp

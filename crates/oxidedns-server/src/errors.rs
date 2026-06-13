@@ -151,4 +151,14 @@ pub enum TransferError {
         received_bytes: u64,
         limit_bytes: u64,
     },
+
+    #[error(
+        "{protocol} session from primary {addr} exceeded configured ingestion message cap at {received_messages} messages (limit {limit_messages})"
+    )]
+    IngestMessageLimit {
+        protocol: &'static str,
+        addr: SocketAddr,
+        received_messages: u64,
+        limit_messages: u64,
+    },
 }

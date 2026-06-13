@@ -24,6 +24,14 @@
     }
 
     #[test]
+    fn domain_name_display_escapes_non_printable_label_octets() {
+        let (name, consumed) = DomainName::parse(b"\x05a\x1b\x00\\.\x01b\x00", 0).unwrap();
+
+        assert_eq!(consumed, 9);
+        assert_eq!(name.to_string(), "a\\027\\000\\092\\046.b.");
+    }
+
+    #[test]
     fn domain_name_replaces_borrowed_wire_suffix_without_parsing_domain() {
         let qname = DomainName::from_absolute_str("leaf.subtree.example.test.").unwrap();
         let suffix_wire = DomainName::from_absolute_str("subtree.example.test.")
@@ -335,4 +343,3 @@
         assert_eq!(&copy_record[9..11], &3u16.to_be_bytes());
         assert_eq!(&copy_record[11..], b"\x02ok");
     }
-

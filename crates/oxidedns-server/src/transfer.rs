@@ -29,6 +29,8 @@ use tracing::{info, warn};
 
 use crate::TransferError;
 
+pub(crate) const DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT: u64 = 4096;
+
 pub async fn transfer_axfr_from_primary(
     primary: SocketAddr,
     zone_apex: &DomainName,
@@ -905,24 +907,37 @@ fn default_transfer_ingest_bytes() -> u64 {
     4 * 1024 * 1024 * 1024
 }
 
-struct TransferIngestTracker {
+pub(crate) struct TransferIngestTracker {
     protocol: &'static str,
     addr: SocketAddr,
     limit_bytes: u64,
     received_bytes: u64,
+    limit_messages: u64,
+    received_messages: u64,
 }
 
 impl TransferIngestTracker {
-    fn new(protocol: &'static str, addr: SocketAddr, limit_bytes: u64) -> Self {
+    pub(crate) fn new(protocol: &'static str, addr: SocketAddr, limit_bytes: u64) -> Self {
         Self {
             protocol,
             addr,
             limit_bytes,
             received_bytes: 0,
+            limit_messages: DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT,
+            received_messages: 0,
         }
     }
 
-    fn record_message(&mut self, message_len: usize) -> Result<(), TransferError> {
+    pub(crate) fn record_message(&mut self, message_len: usize) -> Result<(), TransferError> {
+        let next_messages = self.received_messages.saturating_add(1);
+        if next_messages > self.limit_messages {
+            return Err(TransferError::IngestMessageLimit {
+                protocol: self.protocol,
+                addr: self.addr,
+                received_messages: next_messages,
+                limit_messages: self.limit_messages,
+            });
+        }
         let next = self.received_bytes.saturating_add(message_len as u64);
         if next > self.limit_bytes {
             return Err(TransferError::IngestSizeLimit {
@@ -932,6 +947,7 @@ impl TransferIngestTracker {
                 limit_bytes: self.limit_bytes,
             });
         }
+        self.received_messages = next_messages;
         self.received_bytes = next;
         Ok(())
     }

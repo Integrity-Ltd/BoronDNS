@@ -189,6 +189,29 @@ async fn transfer_ixfr_enforces_ingestion_size_cap() {
     ));
 }
 
+#[test]
+fn transfer_ingest_tracker_enforces_message_count_cap() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let mut ingest = TransferIngestTracker::new("IXFR", primary, u64::MAX);
+    for _ in 0..DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT {
+        ingest.record_message(0).expect("message below cap");
+    }
+
+    let error = ingest
+        .record_message(0)
+        .expect_err("message count cap should be enforced");
+    assert!(matches!(
+        error,
+        TransferError::IngestMessageLimit {
+            protocol: "IXFR",
+            received_messages,
+            limit_messages,
+            ..
+        } if received_messages == DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT + 1
+            && limit_messages == DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT
+    ));
+}
+
 #[tokio::test]
 async fn transfer_ixfr_from_primary_applies_mode1_incremental_diff() {
     let primary = spawn_ixfr_mode1_primary().await;

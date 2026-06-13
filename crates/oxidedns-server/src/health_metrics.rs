@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     io::Write,
     net::{IpAddr, SocketAddr},
@@ -24,13 +24,14 @@ use oxidedns_core::{
     zone::{ZoneShapeHistogramBucket, ZoneState, ZoneStore},
 };
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, task};
 use tracing::{info, warn};
 
 use crate::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, CatalogManager,
-    CookiePrefixMetricSettings, IpPrefix, NotifyRefreshAction, NotifyTsigResult, RuntimeError,
-    RuntimeStatus, RuntimeStatusValue, ZoneRefreshRegistry, cookie_metric_prefix,
+    CatalogMemberMetric, CookiePrefixMetricSettings, IpPrefix, NotifyRefreshAction,
+    NotifyTsigResult, RuntimeError, RuntimeStatus, RuntimeStatusValue, ZoneRefreshRegistry,
+    cookie_metric_prefix,
     observability::{
         ObservabilityAuth, ObservabilityAuthError, TransferMaterial,
         certificate_observability_value, filesystem_observability_value, fraction_value,
@@ -296,16 +297,26 @@ async fn observability_resources(
         return response;
     }
     let config = &state.observability;
-    let filesystems = if config.include_filesystems {
-        filesystem_observability_value()
-    } else {
-        json!({"status": "disabled"})
-    };
-    let process_resources = if config.include_process_resources {
-        process_resources_observability_value()
-    } else {
-        json!({"status": "disabled"})
-    };
+    let include_filesystems = config.include_filesystems;
+    let include_process_resources = config.include_process_resources;
+    let (filesystems, process_resources) = task::spawn_blocking(move || {
+        let filesystems = if include_filesystems {
+            filesystem_observability_value()
+        } else {
+            json!({"status": "disabled"})
+        };
+        let process_resources = if include_process_resources {
+            process_resources_observability_value()
+        } else {
+            json!({"status": "disabled"})
+        };
+        (filesystems, process_resources)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        let value = json!({"status": "error", "error": error.to_string()});
+        (value.clone(), value)
+    });
     observability_response(observability_base_value(
         &state,
         json!({
@@ -324,11 +335,16 @@ async fn observability_time(
     if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
         return response;
     }
-    let status = if state.observability.include_time_sync_status {
-        time_sync_observability_value()
-    } else {
-        json!({"status": "disabled"})
-    };
+    let include_time_sync_status = state.observability.include_time_sync_status;
+    let status = task::spawn_blocking(move || {
+        if include_time_sync_status {
+            time_sync_observability_value()
+        } else {
+            json!({"status": "disabled"})
+        }
+    })
+    .await
+    .unwrap_or_else(|error| json!({"status": "error", "error": error.to_string()}));
     observability_response(observability_base_value(&state, status))
 }
 
@@ -340,11 +356,17 @@ async fn observability_certificates(
     if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
         return response;
     }
-    let status = if state.observability.include_certificate_status {
-        certificate_observability_value(&state.transfer_materials)
-    } else {
-        json!({"status": "disabled"})
-    };
+    let include_certificate_status = state.observability.include_certificate_status;
+    let transfer_materials = state.transfer_materials.clone();
+    let status = task::spawn_blocking(move || {
+        if include_certificate_status {
+            certificate_observability_value(&transfer_materials)
+        } else {
+            json!({"status": "disabled"})
+        }
+    })
+    .await
+    .unwrap_or_else(|error| json!({"status": "error", "error": error.to_string()}));
     observability_response(observability_base_value(&state, status))
 }
 
@@ -357,11 +379,24 @@ async fn observability_zones(
         return response;
     }
     let zones = if state.observability.include_zone_detail {
+        let catalog_members = state.catalog_manager.member_metrics();
+        let catalog_member_keys = catalog_members
+            .iter()
+            .map(|member| member.member_zone.canonical_key())
+            .collect::<HashSet<_>>();
+        let zone_query_counts = state.metrics.zone_query_counts();
         state
             .zones
             .zone_metadata()
             .into_iter()
-            .map(|metadata| zone_observability_value(&state, &metadata))
+            .map(|metadata| {
+                zone_observability_value(
+                    &state,
+                    &metadata,
+                    &catalog_member_keys,
+                    &zone_query_counts,
+                )
+            })
             .collect::<Vec<_>>()
     } else {
         Vec::new()
@@ -401,9 +436,15 @@ async fn observability_zone(
             json!({"error": "zone_not_found", "zone": requested}),
         ));
     };
+    let catalog_members = state.catalog_manager.member_metrics();
+    let catalog_member_keys = catalog_members
+        .iter()
+        .map(|member| member.member_zone.canonical_key())
+        .collect::<HashSet<_>>();
+    let zone_query_counts = state.metrics.zone_query_counts();
     observability_response(observability_base_value(
         &state,
-        zone_observability_value(&state, &metadata),
+        zone_observability_value(&state, &metadata, &catalog_member_keys, &zone_query_counts),
     ))
 }
 
@@ -419,7 +460,7 @@ async fn observability_catalogs(
         &state,
         json!({
             "configured": state.catalog_manager.catalogs_by_key.len(),
-            "memberships": catalog_observability_values(&state),
+            "memberships": catalog_observability_values(&state, &state.catalog_manager.member_metrics()),
         }),
     ))
 }
@@ -708,26 +749,21 @@ fn zone_counts_value(state: &HealthEndpointState) -> Value {
 fn zone_observability_value(
     state: &HealthEndpointState,
     metadata: &oxidedns_core::zone::ZoneMetadata,
+    catalog_member_keys: &HashSet<String>,
+    zone_query_counts: &HashMap<String, u64>,
 ) -> Value {
     let source = if state
         .catalog_manager
         .is_catalog_key(metadata.origin_key.as_ref())
     {
         "catalog_zone"
-    } else if state
-        .catalog_manager
-        .member_metrics()
-        .iter()
-        .any(|member| member.member_zone == metadata.origin)
-    {
+    } else if catalog_member_keys.contains(metadata.origin_key.as_ref()) {
         "catalog_derived"
     } else {
         "configured"
     };
     let queries = if state.metrics.hot_path_detail_enabled() {
-        state
-            .metrics
-            .zone_query_counts()
+        zone_query_counts
             .get(metadata.origin_key.as_ref())
             .copied()
             .map(Value::from)
@@ -747,16 +783,17 @@ fn zone_observability_value(
     })
 }
 
-fn catalog_observability_values(state: &HealthEndpointState) -> Vec<Value> {
+fn catalog_observability_values(
+    state: &HealthEndpointState,
+    catalog_members: &[CatalogMemberMetric],
+) -> Vec<Value> {
     let mut values = state
         .catalog_manager
         .catalogs_by_key
         .values()
         .map(|catalog| {
-            let members = state
-                .catalog_manager
-                .member_metrics()
-                .into_iter()
+            let members = catalog_members
+                .iter()
                 .filter(|member| member.catalog_zone == catalog.origin)
                 .collect::<Vec<_>>();
             json!({

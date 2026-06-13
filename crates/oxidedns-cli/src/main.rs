@@ -611,6 +611,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | TransferError::Tsig(_)
                 | TransferError::TlsHandshake { .. }
                 | TransferError::IngestSizeLimit { .. }
+                | TransferError::IngestMessageLimit { .. }
                 | TransferError::XotAlpn { .. } => EX_GENERAL,
             };
         }
@@ -999,12 +1000,22 @@ fn trim_debug_string(value: String) -> String {
 }
 
 fn escape_logfmt_string(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(escaped, "\\u{:04x}", character as u32);
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn log_filter(configured_level: &str) -> anyhow::Result<EnvFilter> {
@@ -1659,6 +1670,7 @@ mod tests {
         assert_eq!(log_level_name(&Level::WARN), "warning");
         assert_eq!(logfmt_value("refresh failed"), "\"refresh failed\"");
         assert_eq!(logfmt_value("example.test."), "example.test.");
+        assert_eq!(logfmt_value("bad\u{1b}\0name"), "\"bad\\u001b\\u0000name\"");
         assert_eq!(trim_debug_string("\"192.0.2.53\"".to_owned()), "192.0.2.53");
     }
 

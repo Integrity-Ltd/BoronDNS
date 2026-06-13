@@ -305,12 +305,14 @@ async fn concurrent_catalog_member_migration_preserves_member_resources() {
                 catalog_primaries = ["192.0.2.53:53"]
                 member_primaries = ["10.0.0.53:53"]
                 catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
 
                 [[catalog_zones]]
                 name = "b.catalog.example."
                 catalog_primaries = ["192.0.2.54:53"]
                 member_primaries = ["10.0.0.54:53"]
                 catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
             "#,
     )
     .expect("valid catalog config");
@@ -403,12 +405,14 @@ async fn catalog_reconciliation_does_not_block_when_refresh_queue_is_full() {
                 catalog_primaries = ["192.0.2.53:53"]
                 member_primaries = ["10.0.0.53:53"]
                 catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
 
                 [[catalog_zones]]
                 name = "b.catalog.example."
                 catalog_primaries = ["192.0.2.54:53"]
                 member_primaries = ["10.0.0.54:53"]
                 catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
             "#,
     )
     .expect("valid catalog config");
@@ -1039,6 +1043,74 @@ async fn catalog_snapshot_enforces_member_zone_cap() {
         "member_count=2",
         "dropped=1",
     ]));
+}
+
+#[tokio::test]
+async fn catalog_member_cap_counts_only_accepted_members_after_clash_filter() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[zones]]
+                name = "alpha.example."
+                primaries = ["192.0.2.54:53"]
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                primaries = ["192.0.2.53:53"]
+                tsig_key = "catalog-key."
+                max_member_zones = 1
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let alpha_origin = DomainName::from_absolute_str("alpha.example.").unwrap();
+    let beta_origin = DomainName::from_absolute_str("beta.example.").unwrap();
+    let snapshot = catalog_snapshot_with_members(
+        catalog_origin.clone(),
+        7,
+        &[alpha_origin.clone(), beta_origin.clone()],
+    );
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_origin);
+    zones.insert_loading(alpha_origin.clone());
+    zones.insert_snapshot(snapshot.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, mut rx) = mpsc::channel(2);
+    let metadata = zone_metadata_for(&snapshot);
+
+    catalog_manager
+        .apply_snapshot(
+            snapshot.catalog_zone_view(),
+            &metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&beta_origin).is_some());
+    assert_eq!(
+        rx.recv().await.expect("member refresh request").zone,
+        beta_origin
+    );
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

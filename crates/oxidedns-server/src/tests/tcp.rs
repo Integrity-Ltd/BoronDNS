@@ -79,6 +79,26 @@ async fn tcp_connection_serves_authoritative_response() {
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
 }
 
+#[test]
+fn tcp_accept_errors_classify_transient_resource_and_fatal_cases() {
+    assert_eq!(
+        classify_tcp_accept_error(&std::io::Error::from(std::io::ErrorKind::ConnectionAborted)),
+        TcpAcceptErrorAction::Continue
+    );
+    assert_eq!(
+        classify_tcp_accept_error(&std::io::Error::from(std::io::ErrorKind::Interrupted)),
+        TcpAcceptErrorAction::Continue
+    );
+    assert_eq!(
+        classify_tcp_accept_error(&std::io::Error::from_raw_os_error(24)),
+        TcpAcceptErrorAction::Backoff(std::time::Duration::from_millis(50))
+    );
+    assert_eq!(
+        classify_tcp_accept_error(&std::io::Error::from_raw_os_error(9)),
+        TcpAcceptErrorAction::Fatal
+    );
+}
+
 #[tokio::test]
 async fn tcp_connection_serves_back_to_back_framed_queries() {
     let zones = ZoneStore::new();
@@ -654,4 +674,3 @@ async fn tcp_listener_closes_connections_over_per_source_limit() {
     drop(third);
     server.abort();
 }
-

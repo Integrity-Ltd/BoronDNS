@@ -1543,7 +1543,7 @@ impl XdpPacketTemplate {
         .map_err(|_| anyhow!("failed to build XDP packet template"))?;
         let (udp_start, map_zero_udp_checksum) = match (source.ip, target.ip()) {
             (IpAddr::V4(_), IpAddr::V4(_)) => (ETHERNET_HEADER_LEN + IPV4_HEADER_LEN, true),
-            (IpAddr::V6(_), IpAddr::V6(_)) => (ETHERNET_HEADER_LEN + IPV6_HEADER_LEN, false),
+            (IpAddr::V6(_), IpAddr::V6(_)) => (ETHERNET_HEADER_LEN + IPV6_HEADER_LEN, true),
             _ => bail!("source and target IP families do not match"),
         };
         let udp_checksum = u16::from_be_bytes([frame[udp_start + 6], frame[udp_start + 7]]);
@@ -2448,7 +2448,8 @@ fn udp_ipv6_checksum(source: Ipv6Addr, target: Ipv6Addr, udp_payload: &[u8]) -> 
     let target = target.octets();
     let len = (udp_payload.len() as u32).to_be_bytes();
     let next_header = [0, 0, 0, 17];
-    checksum_parts(&[&source, &target, &len, &next_header, udp_payload])
+    let sum = checksum_parts(&[&source, &target, &len, &next_header, udp_payload]);
+    if sum == 0 { 0xffff } else { sum }
 }
 
 fn checksum(bytes: &[u8]) -> u16 {
@@ -2623,6 +2624,7 @@ mod tests {
         .expect("expected frame builds");
         let template = XdpPacketTemplate::new(target_mac, source_mac, source, target, &encoded[0])
             .expect("template builds");
+        assert!(template.map_zero_udp_checksum);
 
         let mut packet_buf = [0_u8; 2 * 1024];
         let mut packet = xdp::Packet::testing_new(&mut packet_buf);
@@ -2668,6 +2670,26 @@ mod tests {
 
         assert_eq!(len, expected_frame.len());
         assert_eq!(&packet[..], expected_frame.as_slice());
+    }
+
+    #[test]
+    fn ipv6_udp_checksum_maps_computed_zero_to_ffff() {
+        let payload = [0xff, 0xe6, 0, 0, 0, 0, 0, 0];
+
+        assert_eq!(
+            checksum_parts(&[
+                &Ipv6Addr::UNSPECIFIED.octets(),
+                &Ipv6Addr::UNSPECIFIED.octets(),
+                &(payload.len() as u32).to_be_bytes(),
+                &[0, 0, 0, 17],
+                &payload,
+            ]),
+            0
+        );
+        assert_eq!(
+            udp_ipv6_checksum(Ipv6Addr::UNSPECIFIED, Ipv6Addr::UNSPECIFIED, &payload),
+            0xffff
+        );
     }
 
     #[test]

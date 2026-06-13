@@ -1029,9 +1029,7 @@ fn algorithm_name_wire(algorithm: TsigAlgorithm) -> Vec<u8> {
 }
 
 fn canonical_name_wire(name: &DomainName) -> Vec<u8> {
-    DomainName::from_absolute_str(&name.canonical_key())
-        .expect("canonical DNS keys are absolute DNS names")
-        .to_wire()
+    name.to_ascii_lowercased().to_wire()
 }
 
 fn append_u48(out: &mut Vec<u8>, value: u64) {
@@ -1081,6 +1079,14 @@ mod tests {
         assert_eq!(TsigAlgorithm::HmacSha384.mac_len(), 48);
         assert_eq!(TsigAlgorithm::HmacSha512.name(), "hmac-sha512");
         assert_eq!(TsigAlgorithm::HmacSha512.mac_len(), 64);
+    }
+
+    #[test]
+    fn canonical_name_wire_preserves_non_ascii_label_octets() {
+        let (name, consumed) = DomainName::parse(b"\x02A\xc3\x00", 0).unwrap();
+
+        assert_eq!(consumed, 4);
+        assert_eq!(canonical_name_wire(&name), b"\x02a\xc3\x00");
     }
 
     #[test]

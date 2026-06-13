@@ -124,20 +124,22 @@ use shutdown::{
 };
 #[cfg(test)]
 use tcp::{
-    TcpQueryHook, handle_tcp_connection, handle_tcp_connection_with_query_hook, write_tcp_message,
+    TcpAcceptErrorAction, TcpQueryHook, classify_tcp_accept_error, handle_tcp_connection,
+    handle_tcp_connection_with_query_hook, write_tcp_message,
 };
 use tcp::{TcpServerSettings, serve_tcp};
+#[cfg(test)]
+use transfer::{
+    DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT, TransferIngestTracker, load_pem_certs,
+    load_pem_private_key_from_file, poll_soa_from_primary_with_tsig, query_id_from_random_bytes,
+    tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
+};
 use transfer::{
     TransferSession, TransferTsig, poll_soa_from_primary_with_tsig_and_source,
     transfer_axfr_from_target_with_tsig_and_source, transfer_ixfr_from_target_with_tsig,
     transfer_query_id, tsig_time_signed, unix_timestamp_seconds,
 };
 pub(crate) use transfer::{build_xot_client_config, load_pem_certs_for_primary};
-#[cfg(test)]
-use transfer::{
-    load_pem_certs, load_pem_private_key_from_file, poll_soa_from_primary_with_tsig,
-    query_id_from_random_bytes, tcp_connect_with_timeout, transfer_axfr_from_target_with_tsig,
-};
 pub use transfer::{poll_soa_from_primary, transfer_axfr_from_primary, transfer_ixfr_from_primary};
 use transfer_plan::{TransferPlan, ZoneTransferPlan};
 #[cfg(test)]
@@ -744,10 +746,10 @@ impl Default for CatalogManager {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CatalogMemberMetric {
-    catalog_zone: DomainName,
-    member_zone: DomainName,
-    managed: bool,
+pub(crate) struct CatalogMemberMetric {
+    pub(crate) catalog_zone: DomainName,
+    pub(crate) member_zone: DomainName,
+    pub(crate) managed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -860,27 +862,13 @@ impl CatalogManager {
             zones.hide_zone(&catalog.origin);
         }
 
-        let mut members = match parse_catalog_members(catalog_view) {
+        let members = match parse_catalog_members(catalog_view) {
             Ok(members) => members,
             Err(error) => {
                 log_catalog_error(&error);
                 return;
             }
         };
-        let member_count = members.len();
-        if member_count > catalog.config.max_member_zones {
-            let dropped = member_count - catalog.config.max_member_zones;
-            members.truncate(catalog.config.max_member_zones);
-            error!(
-                category = "transfer",
-                event = "catalog_member_limit_exceeded",
-                catalog_zone = %catalog.origin,
-                max_member_zones = catalog.config.max_member_zones,
-                member_count,
-                dropped,
-                "catalog member zone limit exceeded; dropping excess catalog members"
-            );
-        }
 
         let catalog_key = catalog.origin.canonical_key();
         let (old_members_by_key, old_member_keys, other_catalog_member_keys) = {
@@ -916,7 +904,37 @@ impl CatalogManager {
                 );
                 continue;
             }
+            if self.static_zone_keys.contains(&member_key) {
+                error!(
+                    category = "transfer",
+                    event = "catalog_member_name_clash",
+                    catalog_zone = %catalog.origin,
+                    zone = %member.zone,
+                    "catalog member zone already has static configuration; ignoring incoming member"
+                );
+                continue;
+            }
             members_by_key.insert(member_key, member);
+        }
+        let member_count = members_by_key.len();
+        if member_count > catalog.config.max_member_zones {
+            let dropped = member_count - catalog.config.max_member_zones;
+            let mut retained_member_keys = members_by_key.keys().cloned().collect::<Vec<_>>();
+            retained_member_keys.sort();
+            let retained_member_keys = retained_member_keys
+                .into_iter()
+                .take(catalog.config.max_member_zones)
+                .collect::<HashSet<_>>();
+            members_by_key.retain(|member_key, _| retained_member_keys.contains(member_key));
+            error!(
+                category = "transfer",
+                event = "catalog_member_limit_exceeded",
+                catalog_zone = %catalog.origin,
+                max_member_zones = catalog.config.max_member_zones,
+                member_count,
+                dropped,
+                "catalog member zone limit exceeded; dropping excess catalog members"
+            );
         }
         let new_member_keys = members_by_key.keys().cloned().collect::<HashSet<_>>();
 
@@ -941,16 +959,6 @@ impl CatalogManager {
                 continue;
             };
             let member_origin = member.zone.clone();
-            if self.static_zone_keys.contains(&member_key) {
-                error!(
-                    category = "transfer",
-                    event = "catalog_member_name_clash",
-                    catalog_zone = %catalog.origin,
-                    zone = %member_origin,
-                    "catalog member zone already has static configuration; ignoring incoming member"
-                );
-                continue;
-            }
             let transfer_override = catalog
                 .config
                 .member_transfer_extensions
