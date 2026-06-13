@@ -40,9 +40,12 @@ are not implied unless that document names them.
 
 OxideDNS targets an **Engineering MVP**: a working, testable secondary server with
 clear operating boundaries. It is not yet a final SRS release-acceptance build —
-release-acceptance evidence gaps are tracked separately in the
-[MVP gap register](docs/mvp-gap-register.md). The implemented Engineering MVP is
-wider than a minimal static-zone secondary. Retained feature slices stay in
+the remaining formal release-acceptance evidence queue is tracked separately in
+the [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md).
+That register currently has no open Engineering MVP implementation decisions;
+its active rows are release-evidence, formal acceptance, or project-decision
+overlays. The implemented Engineering MVP is wider than a minimal static-zone
+secondary. Retained feature slices stay in
 scope exactly as bounded in [Implemented feature scope](docs/implemented-feature-scope.md):
 IXFR with AXFR fallback, outbound XoT transfers, passive DNSSEC serving, RRL,
 DNS Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
@@ -115,7 +118,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 - [Catalog Zone support based on RFC 9432](docs/catalog-zone-rfc9432.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Implemented feature scope](docs/implemented-feature-scope.md)
-- [MVP gap register](docs/mvp-gap-register.md)
+- [Engineering MVP and SRS acceptance gap register](docs/mvp-gap-register.md)
 - [SRS review disposition](docs/srs-review-disposition.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
