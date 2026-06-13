@@ -461,6 +461,45 @@ async fn spawn_axfr_primary_recording_query(
     (addr, observed_query)
 }
 
+async fn spawn_signed_catalog_axfr_primary_with_member(
+    catalog_zone: &'static str,
+    member_zone: &'static str,
+    serial: u32,
+) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(header.qdcount, 1);
+        assert_eq!(header.arcount, 1);
+        let (_, qname_len) = DomainName::parse(&query, 12).unwrap();
+        let qtype_offset = 12 + qname_len;
+        assert_eq!(
+            u16::from_be_bytes([query[qtype_offset], query[qtype_offset + 1]]),
+            RecordType::Axfr as u16
+        );
+
+        let request_mac = extract_query_tsig_mac(&query);
+        let response = catalog_axfr_response(catalog_zone, member_zone, header.id, serial);
+        let key = TsigKey::from_base64("catalog-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let signed = key
+            .sign_response(
+                &response,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        stream
+            .write_all(&frame_tcp_message(&signed.message))
+            .await
+            .unwrap();
+    });
+    addr
+}
+
 async fn spawn_axfr_primary_recording_peer(
     serial: u32,
 ) -> (
@@ -822,6 +861,53 @@ fn axfr_response(qid: u16, serial: u32) -> Vec<u8> {
 
 fn axfr_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
     transfer_response_for_zone(qid, zone, RecordType::Axfr as u16, serial)
+}
+
+fn catalog_axfr_response(catalog_zone: &str, member_zone: &str, qid: u16, serial: u32) -> Vec<u8> {
+    let soa = record(
+        catalog_zone,
+        RecordType::Soa as u16,
+        soa_rdata_with_serial(serial),
+    );
+    let ns = record(
+        catalog_zone,
+        RecordType::Ns as u16,
+        ns_rdata_for_zone(catalog_zone),
+    );
+    let version = record(
+        &format!("version.{catalog_zone}"),
+        RecordType::Txt as u16,
+        vec![1, b'2'],
+    );
+    let member = record(
+        &format!("m0.zones.{catalog_zone}"),
+        RecordType::Ptr as u16,
+        DomainName::from_absolute_str(member_zone).unwrap().to_wire(),
+    );
+    let answers = vec![soa.clone(), ns, version, member, soa];
+    let mut out = Vec::new();
+    out.extend_from_slice(&qid.to_be_bytes());
+    out.extend_from_slice(&0x8000u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(
+        &DomainName::from_absolute_str(catalog_zone)
+            .unwrap()
+            .to_wire(),
+    );
+    out.extend_from_slice(&(RecordType::Axfr as u16).to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    for answer in answers {
+        out.extend_from_slice(&answer.owner.to_wire());
+        out.extend_from_slice(&answer.rr_type.to_be_bytes());
+        out.extend_from_slice(&answer.class.to_be_bytes());
+        out.extend_from_slice(&answer.ttl.to_be_bytes());
+        out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&answer.rdata);
+    }
+    out
 }
 
 fn ixfr_mode2_response(qid: u16, serial: u32) -> Vec<u8> {

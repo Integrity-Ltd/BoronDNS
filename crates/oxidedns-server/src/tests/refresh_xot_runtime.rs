@@ -519,6 +519,7 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
             ixfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
+            max_resident_transfer_tasks: 16,
             telemetry: ControlPlaneTelemetryReporter::disabled(),
         },
     )
@@ -623,6 +624,7 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
             ixfr_timeout: std::time::Duration::from_secs(5),
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            max_resident_transfer_tasks: 8,
             telemetry: ControlPlaneTelemetryReporter::disabled(),
         },
     ));
@@ -652,47 +654,43 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
 
 #[tokio::test]
 async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated() {
-    let config = ServerConfig::from_toml_str(
+    let catalog_primary =
+        spawn_signed_catalog_axfr_primary_with_member("catalog.example.", "member.example.", 2)
+            .await;
+    let config = ServerConfig::from_toml_str(&format!(
         r#"
                 [server]
                 listen_udp = ["127.0.0.1:5300"]
                 listen_tcp = []
 
-                [[zones]]
-                name = "alpha.test."
-                primaries = ["192.0.2.53:53"]
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["{catalog_primary}"]
+                member_primaries = ["127.0.0.1:9"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "catalog-key."
 
                 [[zones]]
-                name = "beta.test."
-                primaries = ["192.0.2.54:53"]
-            "#,
-    )
+                name = "filler.test."
+                primaries = ["127.0.0.1:9"]
+            "#
+    ))
     .expect("valid config");
     let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
-    let transfer_limit = Arc::new(tokio::sync::Semaphore::new(1));
-    let held_permit = transfer_limit
-        .clone()
-        .acquire_owned()
-        .await
-        .expect("hold only transfer permit");
     let zones = ZoneStore::new();
-    for zone in ["alpha.test.", "beta.test."] {
-        let apex = DomainName::from_absolute_str(zone).unwrap();
-        zones.insert_snapshot(ZoneSnapshot::active(
-            apex.clone(),
-            Some(1),
-            vec![Rrset::new(
-                apex.clone(),
-                RecordType::Soa as u16,
-                1,
-                3600,
-                vec![soa_rdata_with_serial(1)],
-            )],
-        ));
-    }
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let filler_origin = DomainName::from_absolute_str("filler.test.").unwrap();
+    let member_origin = DomainName::from_absolute_str("member.example.").unwrap();
+    zones.insert_loading_hidden(catalog_origin.clone());
+    zones.insert_loading(filler_origin.clone());
     let (tx, rx) = mpsc::channel(1);
     tx.send(RefreshRequest {
-        zone: DomainName::from_absolute_str("alpha.test.").unwrap(),
+        zone: catalog_origin,
         requested_serial: Some(2),
         reason: super::RefreshReason::Notify,
     })
@@ -701,7 +699,7 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
 
     let worker = tokio::spawn(serve_refresh_requests(
         rx,
-        zones,
+        zones.clone(),
         CatalogRuntime {
             manager: CatalogManager::from_config(&config),
             transfer_plan,
@@ -720,24 +718,48 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
         RefreshWorkerSettings {
             axfr_timeout: std::time::Duration::from_millis(100),
             ixfr_timeout: std::time::Duration::from_millis(100),
-            tcp_connect_timeout: std::time::Duration::from_millis(100),
-            transfer_limit,
+            tcp_connect_timeout: std::time::Duration::from_millis(50),
+            transfer_limit: Arc::new(tokio::sync::Semaphore::new(1)),
+            max_resident_transfer_tasks: 1,
             telemetry: ControlPlaneTelemetryReporter::disabled(),
         },
     ));
 
     tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(RefreshRequest {
-        zone: DomainName::from_absolute_str("beta.test.").unwrap(),
+        zone: filler_origin.clone(),
         requested_serial: Some(2),
         reason: super::RefreshReason::Notify,
     }))
     .await
     .expect("refresh worker should drain the bounded queue before transfer permits free")
-    .expect("second refresh request queued");
+    .expect("first filler refresh request queued");
+    tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(RefreshRequest {
+        zone: filler_origin,
+        requested_serial: Some(3),
+        reason: super::RefreshReason::Notify,
+    }))
+    .await
+    .expect("refresh worker should drain a full queue while a catalog apply may enqueue")
+    .expect("second filler refresh request queued");
 
-    worker.abort();
-    let _ = worker.await;
-    drop(held_permit);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if zones.contains_exact_zone_for_control(&member_origin) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("catalog refresh should stage the member before enqueueing its refresh");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    drop(tx);
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), worker)
+        .await
+        .expect("refresh worker should not deadlock on catalog member enqueue")
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

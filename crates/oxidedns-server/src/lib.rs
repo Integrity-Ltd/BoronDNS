@@ -1,7 +1,7 @@
 #![deny(unsafe_code)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::{
         Arc, Mutex,
@@ -165,6 +165,7 @@ pub struct Runtime {
 }
 
 const NOTIFY_REFRESH_QUEUE_CAPACITY: usize = 1024;
+const TRANSFER_TASK_BACKLOG_MULTIPLIER: usize = 4;
 const ZSM_SCHEDULER_TICK: Duration = Duration::from_secs(1);
 const SOA_TIMER_NEAR_MAX_WARNING_PERCENT: u64 = 90;
 
@@ -278,6 +279,8 @@ impl Runtime {
         );
         metrics.set_configuration_warnings(startup_warning_count as u64);
         let transfer_limit = Arc::new(Semaphore::new(self.config.limits.max_concurrent_transfers));
+        let max_resident_transfer_tasks =
+            max_resident_transfer_tasks(self.config.limits.max_concurrent_transfers);
         let control_plane_telemetry = ControlPlaneTelemetryReporter::from_config(&self.config);
 
         info!(
@@ -400,6 +403,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: transfer_limit.clone(),
+                max_resident_transfer_tasks,
                 telemetry: control_plane_telemetry.clone(),
             },
         ));
@@ -423,6 +427,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: transfer_limit.clone(),
+                max_resident_transfer_tasks,
                 telemetry: control_plane_telemetry,
             },
         ));
@@ -684,6 +689,7 @@ impl Runtime {
                     self.config.limits.tcp_connect_timeout_secs,
                 ),
                 transfer_limit: Arc::new(Semaphore::new(max_concurrent_transfers)),
+                max_resident_transfer_tasks: max_resident_transfer_tasks(max_concurrent_transfers),
                 telemetry: ControlPlaneTelemetryReporter::disabled(),
             },
         )
@@ -2810,124 +2816,142 @@ async fn serve_refresh_requests(
     settings: RefreshWorkerSettings,
 ) -> Result<(), RuntimeError> {
     let mut transfers = JoinSet::new();
+    // Keep draining the bounded mpsc channel even when resident transfer tasks
+    // are capped; catalog apply_snapshot can enqueue through the same channel.
+    let mut pending_requests = VecDeque::<RefreshRequest>::new();
+    let mut refresh_rx_open = true;
+    let max_resident_transfer_tasks = settings.max_resident_transfer_tasks.max(1);
 
     loop {
+        while transfers.len() < max_resident_transfer_tasks {
+            let Some(request) = pending_requests.pop_front() else {
+                break;
+            };
+
+            let Some(plan) = catalog_runtime.transfer_plan.get(&request.zone) else {
+                let zone = &request.zone;
+                warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
+                catalog_runtime.refresh_registry.cancel_in_progress(zone);
+                continue;
+            };
+
+            if notify_serial_is_current(&zones, &request) {
+                let zone = &request.zone;
+                if let Some(metadata) = zones.exact_zone_control_metadata(zone) {
+                    catalog_runtime
+                        .refresh_registry
+                        .record_success_from_metadata(&metadata);
+                } else {
+                    catalog_runtime.refresh_registry.cancel_in_progress(zone);
+                }
+                info!(
+                    zone = %zone,
+                    requested_serial = ?request.requested_serial,
+                    action = "refresh_skipped_current",
+                    "NOTIFY serial is not newer than active zone"
+                );
+                continue;
+            }
+
+            let axfr_timeout = settings.axfr_timeout;
+            let ixfr_timeout = settings.ixfr_timeout;
+            let tcp_connect_timeout = settings.tcp_connect_timeout;
+            let telemetry = settings.telemetry.clone();
+            let transfer_limit = settings.transfer_limit.clone();
+            let zones = zones.clone();
+            let catalog_runtime = catalog_runtime.clone();
+            let ixfr_cooldowns = ixfr_cooldowns.clone();
+            let metrics = metrics.clone();
+            transfers.spawn(async move {
+                let outcome = {
+                    let _transfer_permit = transfer_limit
+                        .acquire_owned()
+                        .await
+                        .expect("transfer semaphore is not closed");
+                    refresh_zone_from_primaries_with_outcome(
+                        &zones,
+                        &plan,
+                        request.requested_serial,
+                        RefreshAttemptContext {
+                            ixfr_cooldowns: &ixfr_cooldowns,
+                            metrics: &metrics,
+                            secrets: catalog_runtime.secrets.clone(),
+                            ixfr_timeout,
+                            axfr_timeout,
+                            tcp_connect_timeout,
+                            reason: request.reason.as_str(),
+                        },
+                    )
+                    .await
+                };
+                match outcome.success {
+                    Some(success) => {
+                        let (metadata, updated_snapshot) =
+                            success.into_metadata_and_updated_snapshot();
+                        catalog_runtime
+                            .refresh_registry
+                            .record_success_from_metadata(&metadata);
+                        let telemetry_status = if updated_snapshot.is_some() {
+                            "success"
+                        } else {
+                            "skipped"
+                        };
+                        telemetry
+                            .report_success(&metadata, telemetry_status, request.reason.as_str())
+                            .await;
+                        if let Some(snapshot) = updated_snapshot.as_deref().filter(|_| {
+                            catalog_runtime
+                                .manager
+                                .is_catalog_key(metadata.origin_key.as_ref())
+                        }) {
+                            catalog_runtime
+                                .manager
+                                .apply_snapshot(
+                                    snapshot.catalog_zone_view(),
+                                    &metadata,
+                                    &zones,
+                                    &catalog_runtime.transfer_plan,
+                                    &catalog_runtime.refresh_registry,
+                                    &catalog_runtime.notify_authority,
+                                    &catalog_runtime.refresh_tx,
+                                )
+                                .await;
+                        }
+                    }
+                    None => {
+                        telemetry
+                            .report_failure(
+                                &request.zone,
+                                outcome.failure_cause.as_deref(),
+                                request.reason.as_str(),
+                            )
+                            .await;
+                        catalog_runtime.refresh_registry.record_failure_with_cause(
+                            &request.zone,
+                            zones.exact_zone_control_metadata(&request.zone),
+                            outcome.failure_cause,
+                        );
+                    }
+                }
+            });
+        }
+
+        if !refresh_rx_open && pending_requests.is_empty() && transfers.is_empty() {
+            break;
+        }
+
         tokio::select! {
             result = transfers.join_next(), if !transfers.is_empty() => {
                 if let Some(Err(error)) = result {
                     warn!(%error, "refresh transfer task failed");
                 }
             }
-            request = refresh_rx.recv() => {
-                let Some(request) = request else {
-                    break;
-                };
-
-                let Some(plan) = catalog_runtime.transfer_plan.get(&request.zone) else {
-                    let zone = &request.zone;
-                    warn!(zone = %zone, "accepted NOTIFY for zone without transfer plan");
-                    catalog_runtime.refresh_registry.cancel_in_progress(zone);
-                    continue;
-                };
-
-                if notify_serial_is_current(&zones, &request) {
-                    let zone = &request.zone;
-                    if let Some(metadata) = zones.exact_zone_control_metadata(zone) {
-                        catalog_runtime.refresh_registry.record_success_from_metadata(&metadata);
-                    } else {
-                        catalog_runtime.refresh_registry.cancel_in_progress(zone);
-                    }
-                    info!(
-                        zone = %zone,
-                        requested_serial = ?request.requested_serial,
-                        action = "refresh_skipped_current",
-                        "NOTIFY serial is not newer than active zone"
-                    );
-                    continue;
+            request = refresh_rx.recv(), if refresh_rx_open => {
+                if let Some(request) = request {
+                    pending_requests.push_back(request);
+                } else {
+                    refresh_rx_open = false;
                 }
-
-                let axfr_timeout = settings.axfr_timeout;
-                let ixfr_timeout = settings.ixfr_timeout;
-                let tcp_connect_timeout = settings.tcp_connect_timeout;
-                let telemetry = settings.telemetry.clone();
-                let transfer_limit = settings.transfer_limit.clone();
-                let zones = zones.clone();
-                let catalog_runtime = catalog_runtime.clone();
-                let ixfr_cooldowns = ixfr_cooldowns.clone();
-                let metrics = metrics.clone();
-                transfers.spawn(async move {
-                    let outcome = {
-                        let _transfer_permit = transfer_limit
-                            .acquire_owned()
-                            .await
-                            .expect("transfer semaphore is not closed");
-                        refresh_zone_from_primaries_with_outcome(
-                            &zones,
-                            &plan,
-                            request.requested_serial,
-                            RefreshAttemptContext {
-                                ixfr_cooldowns: &ixfr_cooldowns,
-                                metrics: &metrics,
-                                secrets: catalog_runtime.secrets.clone(),
-                                ixfr_timeout,
-                                axfr_timeout,
-                                tcp_connect_timeout,
-                                reason: request.reason.as_str(),
-                            },
-                        )
-                        .await
-                    };
-                    match outcome.success {
-                        Some(success) => {
-                            let (metadata, updated_snapshot) =
-                                success.into_metadata_and_updated_snapshot();
-                            catalog_runtime
-                                .refresh_registry
-                                .record_success_from_metadata(&metadata);
-                            let telemetry_status = if updated_snapshot.is_some() {
-                                "success"
-                            } else {
-                                "skipped"
-                            };
-                            telemetry
-                                .report_success(&metadata, telemetry_status, request.reason.as_str())
-                                .await;
-                            if let Some(snapshot) = updated_snapshot
-                                .as_deref()
-                                .filter(|_| {
-                                    catalog_runtime.manager.is_catalog_key(metadata.origin_key.as_ref())
-                                })
-                            {
-                                catalog_runtime
-                                    .manager
-                                    .apply_snapshot(
-                                        snapshot.catalog_zone_view(),
-                                        &metadata,
-                                        &zones,
-                                        &catalog_runtime.transfer_plan,
-                                        &catalog_runtime.refresh_registry,
-                                        &catalog_runtime.notify_authority,
-                                        &catalog_runtime.refresh_tx,
-                                    )
-                                    .await;
-                            }
-                        }
-                        None => {
-                            telemetry
-                                .report_failure(
-                                    &request.zone,
-                                    outcome.failure_cause.as_deref(),
-                                    request.reason.as_str(),
-                                )
-                                .await;
-                            catalog_runtime.refresh_registry.record_failure_with_cause(
-                                &request.zone,
-                                zones.exact_zone_control_metadata(&request.zone),
-                                outcome.failure_cause,
-                            );
-                        }
-                    }
-                });
             }
         }
     }
@@ -2947,6 +2971,7 @@ struct RefreshWorkerSettings {
     ixfr_timeout: Duration,
     tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
+    max_resident_transfer_tasks: usize,
     telemetry: ControlPlaneTelemetryReporter,
 }
 
@@ -2956,6 +2981,7 @@ struct InitialLoadSettings {
     ixfr_timeout: Duration,
     tcp_connect_timeout: Duration,
     transfer_limit: Arc<Semaphore>,
+    max_resident_transfer_tasks: usize,
     telemetry: ControlPlaneTelemetryReporter,
 }
 
@@ -3026,100 +3052,118 @@ async fn run_initial_zone_loads(
     settings: InitialLoadSettings,
 ) -> Result<(), RuntimeError> {
     let mut transfers = JoinSet::new();
+    let mut initial_origins = initial_origins.into_iter();
+    let max_resident_transfer_tasks = settings.max_resident_transfer_tasks.max(1);
 
-    for zone_apex in initial_origins {
-        let plan = catalog_runtime
-            .transfer_plan
-            .get(&zone_apex)
-            .expect("configuration validation builds a transfer plan for each zone");
-        let zones = zones.clone();
-        let catalog_runtime = catalog_runtime.clone();
-        let ixfr_cooldowns = ixfr_cooldowns.clone();
-        let metrics = metrics.clone();
-        let axfr_timeout = settings.axfr_timeout;
-        let ixfr_timeout = settings.ixfr_timeout;
-        let tcp_connect_timeout = settings.tcp_connect_timeout;
-        let telemetry = settings.telemetry.clone();
-        let transfer_limit = settings.transfer_limit.clone();
-
-        transfers.spawn(async move {
-            let outcome = {
-                let _transfer_permit = transfer_limit
-                    .acquire_owned()
-                    .await
-                    .expect("transfer semaphore is not closed");
-                refresh_zone_from_primaries_with_outcome(
-                    &zones,
-                    &plan,
-                    None,
-                    RefreshAttemptContext {
-                        ixfr_cooldowns: &ixfr_cooldowns,
-                        metrics: &metrics,
-                        secrets: catalog_runtime.secrets.clone(),
-                        ixfr_timeout,
-                        axfr_timeout,
-                        tcp_connect_timeout,
-                        reason: "initial",
-                    },
-                )
-                .await
+    loop {
+        while transfers.len() < max_resident_transfer_tasks {
+            let Some(zone_apex) = initial_origins.next() else {
+                break;
             };
-            match outcome.success {
-                Some(success) => {
-                    let (metadata, updated_snapshot) = success.into_metadata_and_updated_snapshot();
-                    catalog_runtime
-                        .refresh_registry
-                        .record_success_from_metadata(&metadata);
-                    let telemetry_status = if updated_snapshot.is_some() {
-                        "success"
-                    } else {
-                        "skipped"
-                    };
-                    telemetry
-                        .report_success(&metadata, telemetry_status, "initial")
-                        .await;
-                    if let Some(snapshot) = updated_snapshot.as_deref().filter(|_| {
+            let plan = catalog_runtime
+                .transfer_plan
+                .get(&zone_apex)
+                .expect("configuration validation builds a transfer plan for each zone");
+            let zones = zones.clone();
+            let catalog_runtime = catalog_runtime.clone();
+            let ixfr_cooldowns = ixfr_cooldowns.clone();
+            let metrics = metrics.clone();
+            let axfr_timeout = settings.axfr_timeout;
+            let ixfr_timeout = settings.ixfr_timeout;
+            let tcp_connect_timeout = settings.tcp_connect_timeout;
+            let telemetry = settings.telemetry.clone();
+            let transfer_limit = settings.transfer_limit.clone();
+
+            transfers.spawn(async move {
+                let outcome = {
+                    let _transfer_permit = transfer_limit
+                        .acquire_owned()
+                        .await
+                        .expect("transfer semaphore is not closed");
+                    refresh_zone_from_primaries_with_outcome(
+                        &zones,
+                        &plan,
+                        None,
+                        RefreshAttemptContext {
+                            ixfr_cooldowns: &ixfr_cooldowns,
+                            metrics: &metrics,
+                            secrets: catalog_runtime.secrets.clone(),
+                            ixfr_timeout,
+                            axfr_timeout,
+                            tcp_connect_timeout,
+                            reason: "initial",
+                        },
+                    )
+                    .await
+                };
+                match outcome.success {
+                    Some(success) => {
+                        let (metadata, updated_snapshot) =
+                            success.into_metadata_and_updated_snapshot();
                         catalog_runtime
-                            .manager
-                            .is_catalog_key(metadata.origin_key.as_ref())
-                    }) {
-                        catalog_runtime
-                            .manager
-                            .apply_snapshot(
-                                snapshot.catalog_zone_view(),
-                                &metadata,
-                                &zones,
-                                &catalog_runtime.transfer_plan,
-                                &catalog_runtime.refresh_registry,
-                                &catalog_runtime.notify_authority,
-                                &catalog_runtime.refresh_tx,
-                            )
+                            .refresh_registry
+                            .record_success_from_metadata(&metadata);
+                        let telemetry_status = if updated_snapshot.is_some() {
+                            "success"
+                        } else {
+                            "skipped"
+                        };
+                        telemetry
+                            .report_success(&metadata, telemetry_status, "initial")
                             .await;
+                        if let Some(snapshot) = updated_snapshot.as_deref().filter(|_| {
+                            catalog_runtime
+                                .manager
+                                .is_catalog_key(metadata.origin_key.as_ref())
+                        }) {
+                            catalog_runtime
+                                .manager
+                                .apply_snapshot(
+                                    snapshot.catalog_zone_view(),
+                                    &metadata,
+                                    &zones,
+                                    &catalog_runtime.transfer_plan,
+                                    &catalog_runtime.refresh_registry,
+                                    &catalog_runtime.notify_authority,
+                                    &catalog_runtime.refresh_tx,
+                                )
+                                .await;
+                        }
+                    }
+                    None => {
+                        let zone_apex = &plan.origin;
+                        telemetry
+                            .report_failure(zone_apex, outcome.failure_cause.as_deref(), "initial")
+                            .await;
+                        catalog_runtime.refresh_registry.record_failure_with_cause(
+                            zone_apex,
+                            zones.exact_zone_control_metadata(zone_apex),
+                            outcome.failure_cause,
+                        );
+                        warn!(zone = %zone_apex, "zone remains in LOADING state");
                     }
                 }
-                None => {
-                    let zone_apex = &plan.origin;
-                    telemetry
-                        .report_failure(zone_apex, outcome.failure_cause.as_deref(), "initial")
-                        .await;
-                    catalog_runtime.refresh_registry.record_failure_with_cause(
-                        zone_apex,
-                        zones.exact_zone_control_metadata(zone_apex),
-                        outcome.failure_cause,
-                    );
-                    warn!(zone = %zone_apex, "zone remains in LOADING state");
-                }
-            }
-        });
-    }
+            });
+        }
 
-    while let Some(result) = transfers.join_next().await {
-        if let Err(error) = result {
+        if transfers.is_empty() {
+            break;
+        }
+
+        if let Some(result) = transfers.join_next().await
+            && let Err(error) = result
+        {
             warn!(%error, "initial zone transfer task failed");
         }
     }
 
     Ok(())
+}
+
+fn max_resident_transfer_tasks(max_concurrent_transfers: usize) -> usize {
+    max_concurrent_transfers
+        .saturating_mul(TRANSFER_TASK_BACKLOG_MULTIPLIER)
+        .max(1)
 }
 
 async fn serve_scheduled_refreshes(
