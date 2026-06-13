@@ -100,9 +100,9 @@ include_filesystems = true
 # Default: true.
 include_process_resources = true
 
-# Include host time-synchronization status from OS services such as timedatectl,
-# chronyc, or ntpq when available. OxideDNS must not implement NTP/SNTP itself.
-# Default: true.
+# Include host time-synchronization status. OxideDNS only reads
+# /run/systemd/timesync/synchronized when present; it does not implement NTP/SNTP
+# and does not spawn timedatectl, chronyc, or ntpq. Default: true.
 include_time_sync_status = true
 
 # Include certificate expiry summaries for configured XoT/mTLS files.
@@ -172,6 +172,8 @@ Every response should include:
 - `schema_version`;
 - `generated_at_unix_seconds`;
 - build/runtime identity labels;
+- `metrics_detail`;
+- a top-level `data` envelope wrapping the endpoint-specific payload;
 - enough status fields for the control plane or an operator to decide whether the data is
   fresh, partial, or disabled by configuration.
 
@@ -204,57 +206,56 @@ Example:
   "schema_version": 1,
   "generated_at_unix_seconds": 1791133200,
   "server": {
-    "name": "edge-sec-1",
-    "version": "0.1.4",
+    "version": "X.Y.Z",
+    "status": "running",
     "uptime_seconds": 86400,
-    "status": "ready",
     "draining": false
   },
-  "zones": {
-    "configured": 12,
-    "catalog_derived": 240,
-    "active": 252,
-    "loading": 0,
-    "expired": 0,
-    "rrsig_expiring_soon": 1
-  },
-  "transfers": {
-    "active": 2,
-    "last_failure_unix_seconds": 1791132000,
-    "recent_failures": 1,
-    "ixfr_fallbacks_recent": 3
-  },
-  "catalogs": {
-    "configured": 3,
-    "active": 3,
-    "members_applied": 240,
-    "members_dropped_by_cap": 0
-  },
-  "resources": {
-    "filesystems": [
-      {
-        "path": "/var/log/oxidedns",
-        "size_human": "20G",
-        "used_human": "8.1G",
-        "available_human": "11G",
-        "used_percent": 43
-      }
-    ],
-    "process_memory_rss_bytes": 187695104,
-    "process_cpu_percent": 2.4,
-    "open_fds": 218,
-    "fd_limit": 65536
-  },
-  "time": {
-    "source": "system",
-    "synchronized": true,
-    "service": "chronyd",
-    "last_checked_unix_seconds": 1791133190
+  "metrics_detail": "full",
+  "data": {
+    "zones": {
+      "configured_or_known": 252,
+      "active": 252,
+      "loading": 0,
+      "expired": 0,
+      "catalog_derived": 240,
+      "catalog_zones": 3
+    },
+    "catalogs": {
+      "configured": 3,
+      "members_applied": 240,
+      "members_total": 240
+    },
+    "transfers": {
+      "axfr_started": 18,
+      "axfr_succeeded": 17,
+      "axfr_failed": 1,
+      "ixfr_started": 96,
+      "ixfr_succeeded": 95,
+      "ixfr_failed": 1
+    },
+    "security": {
+      "notify_unauthorized": 0,
+      "rrl_dropped": 0,
+      "dns_cookie_badcookie": 0
+    },
+    "zone_image": {
+      "serve_hits": 1048576,
+      "direct_hits": 1040000,
+      "semantic_hits": 8576,
+      "serve_failures": 0
+    }
   }
 }
 ```
 
-The resource block is intentionally coarse. The current implementation reads
+Every response is wrapped in the envelope shown above: `server.status` is one of
+`running`, `draining`, or `unhealthy`, and `server.version` reflects the running
+binary's version (derived from `CARGO_PKG_VERSION`), so the literal value varies
+by build. The endpoint-specific payload always lives under the top-level `data`
+key.
+
+The resources endpoint is intentionally coarse. The current implementation reads
 `/proc/self/status`, `/proc/self/stat`, `/proc/self/fd`, `/proc/self/limits`,
 and `statvfs("/")` through the audited OS-adapter module for a small process
 and filesystem view. It should not grow into full host inventory.

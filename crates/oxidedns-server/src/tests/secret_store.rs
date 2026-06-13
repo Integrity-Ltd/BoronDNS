@@ -212,3 +212,56 @@ fn file_secret_store_reloads_xot_profiles() {
     assert_eq!(resolved.trust_anchors[0], trust_anchor_two.display().to_string());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn file_secret_store_redacts_inline_xot_private_key_debug() {
+    let root = unique_test_path("oxidedns-secret-store-xot-debug", "dir");
+    let (cert_path, key_path) = write_self_signed_xot_cert_files_for_name("primary.example.test");
+    let key_pem = std::fs::read_to_string(&key_path).expect("read generated private key");
+    write_secret_store_manifest(
+        &root,
+        &format!(
+            r#"
+            [[xot_profiles]]
+            name = "customer-xot"
+            trust_anchors = ["{}"]
+            client_cert = "{}"
+            client_key_pem = '''
+{}'''
+        "#,
+            cert_path.display(),
+            cert_path.display(),
+            key_pem
+        ),
+    );
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [secret_store]
+            path = "{}"
+
+            [[zones]]
+            name = "example.test."
+
+            [[zones.transfer_primaries]]
+            addr = "192.0.2.53:853"
+            transport = "xot"
+            server_name = "primary.example.test"
+            xot_profile = "customer-xot"
+        "#,
+        root.display()
+    ))
+    .expect("valid XoT profile config");
+    let secrets = SecretManager::from_config(&config).expect("secret snapshot");
+    let profile = secrets.xot_profile("customer-xot").expect("loaded profile");
+    let debug = format!("{profile:?}");
+
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("PRIVATE KEY"));
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_file(key_path);
+    let _ = std::fs::remove_file(cert_path);
+}

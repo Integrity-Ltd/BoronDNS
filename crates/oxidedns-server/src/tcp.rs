@@ -636,12 +636,8 @@ pub(crate) async fn write_tcp_message<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    match tokio::time::timeout(
-        write_timeout,
-        stream.write_all(&frame_dns_tcp_message(message)),
-    )
-    .await
-    {
+    let framed = frame_dns_tcp_message(message)?;
+    match tokio::time::timeout(write_timeout, stream.write_all(&framed)).await {
         Ok(Ok(())) => Ok(true),
         Ok(Err(error)) => Err(RuntimeError::Tcp(error)),
         Err(_) => Ok(false),
@@ -692,9 +688,36 @@ where
     }
 }
 
-fn frame_dns_tcp_message(message: &[u8]) -> Vec<u8> {
+fn frame_dns_tcp_message(message: &[u8]) -> Result<Vec<u8>, RuntimeError> {
+    let len = u16::try_from(message.len()).map_err(|_| {
+        RuntimeError::Tcp(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DNS-over-TCP response exceeds 65535-byte frame limit",
+        ))
+    })?;
     let mut framed = Vec::with_capacity(message.len() + 2);
-    framed.extend_from_slice(&(message.len() as u16).to_be_bytes());
+    framed.extend_from_slice(&len.to_be_bytes());
     framed.extend_from_slice(message);
-    framed
+    Ok(framed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_frame_rejects_messages_above_dns_tcp_limit() {
+        let oversized = vec![0u8; usize::from(u16::MAX) + 1];
+        let error = frame_dns_tcp_message(&oversized).expect_err("oversized TCP DNS message");
+
+        assert!(matches!(error, RuntimeError::Tcp(_)));
+    }
+
+    #[test]
+    fn tcp_frame_prefixes_exact_message_length() {
+        let framed = frame_dns_tcp_message(&[1, 2, 3, 4]).expect("valid TCP DNS message");
+
+        assert_eq!(&framed[..2], &4u16.to_be_bytes());
+        assert_eq!(&framed[2..], &[1, 2, 3, 4]);
+    }
 }

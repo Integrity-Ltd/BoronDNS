@@ -956,6 +956,47 @@ fn rrl_limiter_evicts_least_recent_key_at_capacity() {
 }
 
 #[test]
+fn rrl_limiter_touch_keeps_recent_key_at_capacity() {
+    let config = RrlConfig {
+        positive_per_second: 0,
+        slip: 0,
+        max_keys: 2,
+        ipv4_prefix_len: 32,
+        ..RrlConfig::default()
+    };
+    let metrics = RuntimeMetrics::new();
+    let limiter = RrlLimiter::from_config(&config, metrics.clone());
+
+    for addr in ["192.0.2.1", "192.0.2.2", "192.0.2.1", "192.0.2.3"] {
+        assert!(matches!(
+            limiter.apply(addr.parse().unwrap(), positive_query_response()),
+            RrlDecision::Drop
+        ));
+    }
+    assert_eq!(metrics.snapshot().rrl_key_evictions, 1);
+
+    assert!(matches!(
+        limiter.apply("192.0.2.1".parse().unwrap(), positive_query_response()),
+        RrlDecision::Drop
+    ));
+    assert_eq!(
+        metrics.snapshot().rrl_key_evictions,
+        1,
+        "recently touched key should still be tracked"
+    );
+
+    assert!(matches!(
+        limiter.apply("192.0.2.2".parse().unwrap(), positive_query_response()),
+        RrlDecision::Drop
+    ));
+    assert_eq!(
+        metrics.snapshot().rrl_key_evictions,
+        2,
+        "least-recent key should have been evicted before reinsertion"
+    );
+}
+
+#[test]
 fn rrl_response_categories_follow_srs_buckets() {
     assert_eq!(
         response_category(&positive_query_response()),

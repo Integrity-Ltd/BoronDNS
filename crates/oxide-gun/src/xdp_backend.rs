@@ -25,11 +25,11 @@ use xdp::slab::Slab;
 use xdp::socket::{BindFlags, PollTimeout, XdpSocketBuilder};
 
 use super::{
-    DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MacAddr, PortSelect, QueryPool,
-    QuerySelect, QueryTemplate, RecvMode, ResponseClass, SourceEndpoint, SourceSelector, Stats,
-    XdpMode, XdpPacing, XdpPortAccounting, XdpReplyTracking, XdpZeroCopyMode, build_dns_query,
-    classify_response, drop_implementation, parse_ipv4_cidr, query_pool, response_id,
-    serde_plain_drop_implementation,
+    DEFAULT_TARGET, DropImplementation, FileConfig, LogFormat, MAX_XDP_INFLIGHT_SOURCE_PORTS,
+    MacAddr, PortSelect, QueryPool, QuerySelect, QueryTemplate, RecvMode, ResponseClass,
+    SourceEndpoint, SourceSelector, Stats, XdpMode, XdpPacing, XdpPortAccounting, XdpReplyTracking,
+    XdpZeroCopyMode, build_dns_query, classify_response, drop_implementation, parse_ipv4_cidr,
+    query_pool, response_id, serde_plain_drop_implementation,
 };
 
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -308,17 +308,24 @@ struct SharedInflight {
 }
 
 impl SharedInflight {
-    fn new(first_port: u16, last_port: u16, origin: Instant) -> Self {
+    fn new(first_port: u16, last_port: u16, origin: Instant) -> Result<Self> {
         let port_count = usize::from(last_port - first_port) + 1;
-        let entry_count = port_count * (usize::from(u16::MAX) + 1);
+        if port_count > MAX_XDP_INFLIGHT_SOURCE_PORTS {
+            bail!(
+                "XDP latency tracking source port span {port_count} exceeds maximum {MAX_XDP_INFLIGHT_SOURCE_PORTS}"
+            );
+        }
+        let entry_count = port_count
+            .checked_mul(usize::from(u16::MAX) + 1)
+            .ok_or_else(|| anyhow!("XDP latency tracking inflight table size overflow"))?;
         let sent_micros = (0..entry_count).map(|_| AtomicU64::new(0)).collect();
-        Self {
+        Ok(Self {
             first_port,
             port_count,
             origin,
             sent_micros,
             outstanding: AtomicU64::new(0),
-        }
+        })
     }
 
     fn insert(&self, port: u16, id: u16, sent_at: Instant) {
@@ -615,7 +622,7 @@ fn run_multi_queue(config: &FileConfig) -> Result<()> {
         && config.xdp.reply_tracking == XdpReplyTracking::Latency
     {
         let (first_port, last_port) = source_port_bounds(&aggregate_config)?;
-        Some(Arc::new(SharedInflight::new(first_port, last_port, start)))
+        Some(Arc::new(SharedInflight::new(first_port, last_port, start)?))
     } else {
         None
     };
@@ -1873,10 +1880,17 @@ fn receive_available_xdp(
                     umem.free_packet(packet);
                     continue;
                 };
-                (
-                    classify_response(received.payload, id),
-                    tracker.take(received.destination_port, id, Instant::now()),
-                )
+                let Some(latency) = take_tracked_reply_latency(
+                    tracker,
+                    received.destination_port,
+                    id,
+                    Instant::now(),
+                    stats,
+                ) else {
+                    umem.free_packet(packet);
+                    continue;
+                };
+                (classify_response(received.payload, id), Some(latency))
             } else {
                 (super::classify_response_payload(received.payload), None)
             };
@@ -1913,19 +1927,13 @@ fn receive_available_xdp(
                     stats.rx_dns_unmatched += 1;
                 }
             }
-            if inflight.is_some() {
-                match latency {
-                    Some(latency)
-                        if !matches!(
-                            response_class,
-                            ResponseClass::Unmatched | ResponseClass::Timeout
-                        ) =>
-                    {
-                        stats.latency.record(latency);
-                    }
-                    None => stats.rx_dns_unmatched += 1,
-                    Some(_) => {}
-                }
+            if let Some(latency) = latency
+                && !matches!(
+                    response_class,
+                    ResponseClass::Unmatched | ResponseClass::Timeout
+                )
+            {
+                stats.latency.record(latency);
             }
         } else {
             stats.rx_dns_unmatched += 1;
@@ -1940,6 +1948,22 @@ fn receive_available_xdp(
             .context("failed to replenish AF_XDP fill ring")?;
     }
     Ok(received)
+}
+
+fn take_tracked_reply_latency(
+    tracker: &mut InflightTracker,
+    port: u16,
+    id: u16,
+    now: Instant,
+    stats: &mut Stats,
+) -> Option<Duration> {
+    match tracker.take(port, id, now) {
+        Some(latency) => Some(latency),
+        None => {
+            stats.rx_dns_unmatched += 1;
+            None
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2658,7 +2682,7 @@ mod tests {
     #[test]
     fn shared_inflight_distinguishes_same_id_on_different_ports() {
         let first = Instant::now();
-        let inflight = SharedInflight::new(53000, 53001, first);
+        let inflight = SharedInflight::new(53000, 53001, first).expect("small inflight table");
         let second = first + Duration::from_micros(10);
         inflight.insert(53000, 7, first);
         inflight.insert(53001, 7, second);
@@ -2672,6 +2696,34 @@ mod tests {
             Some(Duration::from_micros(15))
         );
         assert_eq!(inflight.take(53000, 7, second), None);
+    }
+
+    #[test]
+    fn shared_inflight_rejects_excessive_source_port_span() {
+        let first_port = 1;
+        let last_port = first_port + MAX_XDP_INFLIGHT_SOURCE_PORTS as u16;
+        let error = SharedInflight::new(first_port, last_port, Instant::now())
+            .expect_err("source port span exceeds cap");
+
+        assert!(
+            error.to_string().contains("source port span"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn missing_tracked_reply_counts_only_unmatched() {
+        let first = Instant::now();
+        let inflight = SharedInflight::new(53000, 53000, first).expect("small inflight table");
+        let mut tracker = InflightTracker::Shared(Arc::new(inflight));
+        let mut stats = Stats::default();
+
+        assert_eq!(
+            take_tracked_reply_latency(&mut tracker, 53000, 7, first, &mut stats),
+            None
+        );
+        assert_eq!(stats.rx_dns_unmatched, 1);
+        assert_eq!(stats.rx_dns_responses, 0);
     }
 
     #[test]

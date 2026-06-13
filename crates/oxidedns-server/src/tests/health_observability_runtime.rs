@@ -192,7 +192,16 @@ async fn observability_api_reports_catalog_membership() {
         static_zone_keys: Arc::new(HashSet::from(["static.example.".to_owned()])),
         memberships_by_catalog: Arc::new(Mutex::new(HashMap::from([(
             "catalog.example.".to_owned(),
-            HashSet::from(["alpha.example.".to_owned(), "static.example.".to_owned()]),
+            HashMap::from([
+                (
+                    "alpha.example.".to_owned(),
+                    DomainName::from_absolute_str("alpha.example.").unwrap(),
+                ),
+                (
+                    "static.example.".to_owned(),
+                    DomainName::from_absolute_str("static.example.").unwrap(),
+                ),
+            ]),
         )]))),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -476,7 +485,16 @@ fn metrics_body_reports_catalog_membership() {
         static_zone_keys: Arc::new(HashSet::from(["static.example.".to_owned()])),
         memberships_by_catalog: Arc::new(Mutex::new(HashMap::from([(
             "catalog.example.".to_owned(),
-            HashSet::from(["alpha.example.".to_owned(), "static.example.".to_owned()]),
+            HashMap::from([
+                (
+                    "alpha.example.".to_owned(),
+                    DomainName::from_absolute_str("alpha.example.").unwrap(),
+                ),
+                (
+                    "static.example.".to_owned(),
+                    DomainName::from_absolute_str("static.example.").unwrap(),
+                ),
+            ]),
         )]))),
     };
 

@@ -19,9 +19,11 @@ The repository pins the expected Rust toolchain in `rust-toolchain.toml`.
 Required for normal build and test work:
 
 ```bash
-rustup toolchain install 1.95
-rustup component add rustfmt clippy --toolchain 1.95
+rustup toolchain install stable
+rustup component add rustfmt clippy
+rustup component add llvm-tools-preview
 cargo install cargo-deny cargo-machete
+cargo install cargo-llvm-cov --locked
 # Install shfmt and shellcheck with the host package manager.
 ```
 
@@ -87,7 +89,7 @@ cargo build --locked --release -p oxidedns-cli
 For a host install:
 
 ```bash
-sudo install -m 0755 target/release/oxidedns /usr/local/sbin/oxidedns
+sudo install -m 0755 target/release/oxidedns /usr/local/bin/oxidedns
 ```
 
 ## 5. Build the Installer Archive

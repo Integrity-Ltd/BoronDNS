@@ -78,7 +78,10 @@ pub(super) fn runtime_config_warnings_at(
 fn required_file_descriptor_limit_inner(config: &ServerConfig) -> u64 {
     let tcp_connections = config.limits.max_tcp_connections as u64;
     let outbound_transfers = config.limits.max_concurrent_transfers as u64;
-    2 * (tcp_connections + outbound_transfers + 100)
+    tcp_connections
+        .saturating_add(outbound_transfers)
+        .saturating_add(100)
+        .saturating_mul(2)
 }
 
 fn transfer_targets_with_names(config: &ServerConfig) -> Vec<(String, TransferPrimaryConfig)> {

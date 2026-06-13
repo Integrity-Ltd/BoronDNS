@@ -146,8 +146,15 @@ fn lookup_user_by_name(name: &str) -> Result<Option<UserIdentity>, io::Error> {
             buffer.resize(buffer.len().saturating_mul(2).max(1024), 0);
             continue;
         }
+        if user_lookup_errno_is_not_found(rc) {
+            return Ok(None);
+        }
         return Err(io::Error::from_raw_os_error(rc));
     }
+}
+
+fn user_lookup_errno_is_not_found(rc: libc::c_int) -> bool {
+    matches!(rc, libc::ENOENT | libc::ESRCH)
 }
 
 fn passwd_buffer_size() -> usize {
@@ -245,6 +252,13 @@ mod tests {
         let name = format!("oxidedns-missing-user-{}", std::process::id());
         let result = lookup_user_by_name(&name).expect("lookup should complete");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn user_lookup_maps_nss_not_found_errnos_to_missing_user() {
+        assert!(user_lookup_errno_is_not_found(libc::ENOENT));
+        assert!(user_lookup_errno_is_not_found(libc::ESRCH));
+        assert!(!user_lookup_errno_is_not_found(libc::EPERM));
     }
 
     #[test]

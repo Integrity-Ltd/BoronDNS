@@ -287,10 +287,109 @@ async fn catalog_snapshot_reconciles_retained_and_removed_members() {
     assert!(rx.try_recv().is_err());
 }
 
+#[tokio::test]
+async fn catalog_snapshot_removes_non_text_roundtrippable_member_without_panic() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [[tsig_keys]]
+                name = "catalog-key."
+                algorithm = "hmac-sha256"
+                secret = "dG9wc2VjcmV0"
+
+                [[tsig_keys]]
+                name = "member-key."
+                algorithm = "hmac-sha256"
+                secret = "bWVtYmVyLXNlY3JldA=="
+
+                [[catalog_zones]]
+                name = "catalog.example."
+                catalog_primaries = ["192.0.2.53:53"]
+                member_primaries = ["10.0.0.53:53"]
+                catalog_tsig_key = "catalog-key."
+                member_tsig_key = "member-key."
+            "#,
+    )
+    .expect("valid catalog config");
+    let catalog_origin = DomainName::from_absolute_str("catalog.example.").unwrap();
+    let member_wire = vec![
+        3, b'a', b'.', b'b', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0,
+    ];
+    let (member_origin, consumed) = DomainName::parse(&member_wire, 0).unwrap();
+    assert_eq!(consumed, member_wire.len());
+    let zones = ZoneStore::new();
+    zones.insert_loading_hidden(catalog_origin.clone());
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let catalog_manager = CatalogManager::from_config(&config);
+    let refresh_registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let notify_authority = NotifyAuthority::from_config_for_test(&config);
+    let (tx, mut rx) = mpsc::channel(1);
+
+    let initial_snapshot =
+        catalog_snapshot_with_member_wires(catalog_origin.clone(), 7, &[member_wire]);
+    zones.insert_snapshot(initial_snapshot.clone());
+    let initial_metadata = zone_metadata_for(&initial_snapshot);
+    catalog_manager
+        .apply_snapshot(
+            initial_snapshot.catalog_zone_view(),
+            &initial_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+    assert!(transfer_plan.get(&member_origin).is_some());
+    assert_eq!(rx.recv().await.expect("member refresh request").zone, member_origin);
+
+    let updated_snapshot = catalog_snapshot_with_member_wires(catalog_origin.clone(), 8, &[]);
+    zones.insert_snapshot(updated_snapshot.clone());
+    let updated_metadata = zone_metadata_for(&updated_snapshot);
+    catalog_manager
+        .apply_snapshot(
+            updated_snapshot.catalog_zone_view(),
+            &updated_metadata,
+            &zones,
+            &transfer_plan,
+            &refresh_registry,
+            &notify_authority,
+            &tx.downgrade(),
+        )
+        .await;
+
+    assert!(transfer_plan.get(&member_origin).is_none());
+    assert!(!zones.contains_exact_zone_for_control(&member_origin));
+    assert!(
+        !refresh_registry
+            .snapshots_by_zone()
+            .contains_key(&member_origin.canonical_key())
+    );
+}
+
 fn catalog_snapshot_with_members(
     catalog_origin: DomainName,
     serial: u32,
     members: &[DomainName],
+) -> ZoneSnapshot {
+    let member_wires = members
+        .iter()
+        .map(DomainName::to_wire)
+        .collect::<Vec<_>>();
+    catalog_snapshot_with_member_wires(catalog_origin, serial, &member_wires)
+}
+
+fn catalog_snapshot_with_member_wires(
+    catalog_origin: DomainName,
+    serial: u32,
+    member_wires: &[Vec<u8>],
 ) -> ZoneSnapshot {
     let mut rrsets = vec![Rrset::new(
         DomainName::from_absolute_str(&format!("version.{catalog_origin}")).unwrap(),
@@ -299,13 +398,13 @@ fn catalog_snapshot_with_members(
         0,
         vec![catalog_txt("2")],
     )];
-    for (index, member) in members.iter().enumerate() {
+    for (index, member_wire) in member_wires.iter().enumerate() {
         rrsets.push(Rrset::new(
             DomainName::from_absolute_str(&format!("m{index}.zones.{catalog_origin}")).unwrap(),
             RecordType::Ptr as u16,
             1,
             0,
-            vec![member.to_wire()],
+            vec![member_wire.clone()],
         ));
     }
     ZoneSnapshot::active(catalog_origin, Some(serial), rrsets)

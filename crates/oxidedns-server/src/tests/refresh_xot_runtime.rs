@@ -1519,6 +1519,28 @@ fn file_descriptor_limit_check_uses_srs_resource_formula() {
 }
 
 #[test]
+fn file_descriptor_limit_formula_saturates_extreme_limits() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [limits]
+                max_tcp_connections = 18446744073709551615
+                max_concurrent_transfers = 18446744073709551615
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid config");
+
+    assert_eq!(required_file_descriptor_limit(&config), u64::MAX);
+}
+
+#[test]
 fn runtime_config_warnings_report_expiring_xot_trust_anchors() {
     let (trust_anchor, _key_path) =
         write_expiring_self_signed_xot_cert_files_for_name("primary.example.test");

@@ -10,6 +10,7 @@ use oxidedns_core::{
 };
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 use crate::IpPrefix;
 
@@ -30,15 +31,15 @@ pub(crate) struct DnsCookieSecretStore {
     rotation_interval: Option<Duration>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DnsCookieSecrets {
-    pub(crate) current: [u8; 16],
-    pub(crate) previous: Option<[u8; 16]>,
+    pub(crate) current: Zeroizing<[u8; 16]>,
+    pub(crate) previous: Option<Zeroizing<[u8; 16]>>,
 }
 
 struct DnsCookieSecretState {
-    current: [u8; 16],
-    previous: Option<[u8; 16]>,
+    current: Zeroizing<[u8; 16]>,
+    previous: Option<Zeroizing<[u8; 16]>>,
     generated_at: Instant,
 }
 
@@ -59,8 +60,8 @@ impl DnsCookieSecretStore {
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(DnsCookieSecretState {
-                current,
-                previous,
+                current: Zeroizing::new(current),
+                previous: previous.map(Zeroizing::new),
                 generated_at,
             })),
             rotation_interval,
@@ -85,8 +86,8 @@ impl DnsCookieSecretStore {
         {
             match generate_secret() {
                 Ok(secret) => {
-                    state.previous = Some(state.current);
-                    state.current = secret;
+                    let previous = std::mem::replace(&mut state.current, Zeroizing::new(secret));
+                    state.previous = Some(previous);
                     state.generated_at = Instant::now();
                     info!(
                         category = "cookie",
@@ -104,8 +105,8 @@ impl DnsCookieSecretStore {
             }
         }
         DnsCookieSecrets {
-            current: state.current,
-            previous: state.previous,
+            current: state.current.clone(),
+            previous: state.previous.clone(),
         }
     }
 }
@@ -162,7 +163,7 @@ pub(crate) fn dns_cookie_context<'a>(
     settings: DnsCookieRuntimeSettings,
 ) -> Option<DnsCookieContext<'a>> {
     let mut context = DnsCookieContext::new(peer_ip, &secrets.current, current_unix_time_secs());
-    context.previous_server_secret = secrets.previous.as_ref();
+    context.previous_server_secret = secrets.previous.as_deref();
     context.policy = settings.policy?;
     context.past_window_secs = settings.past_window_secs;
     context.future_window_secs = settings.future_window_secs;

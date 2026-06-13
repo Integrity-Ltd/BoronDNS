@@ -8,7 +8,7 @@ use std::{
 use oxidedns_core::{
     axfr::{self, AxfrError, IxfrResponse},
     config::{TransferPrimaryConfig, TransferTransportConfig},
-    dns::DomainName,
+    dns::{DomainName, Header},
     tsig::{DEFAULT_TSIG_FUDGE_SECS, TsigError, TsigKey},
     zone::ZoneSnapshot,
 };
@@ -151,7 +151,16 @@ pub(crate) async fn poll_soa_from_primary_with_tsig_and_source(
     timeout_duration: Duration,
 ) -> Result<u32, TransferError> {
     tokio::time::timeout(timeout_duration, async {
-        poll_soa_from_primary_inner(primary, zone_apex, qclass, qid, tsig, transfer_source).await
+        poll_soa_from_primary_inner(
+            primary,
+            zone_apex,
+            qclass,
+            qid,
+            tsig,
+            transfer_source,
+            timeout_duration,
+        )
+        .await
     })
     .await
     .map_err(|_| TransferError::Timeout {
@@ -166,6 +175,7 @@ async fn poll_soa_from_primary_inner(
     qid: u16,
     tsig: TransferTsig<'_>,
     transfer_source: Option<SocketAddr>,
+    connect_timeout: Duration,
 ) -> Result<u32, TransferError> {
     let socket = UdpSocket::bind(outbound_udp_bind_addr(primary, transfer_source))
         .await
@@ -190,7 +200,7 @@ async fn poll_soa_from_primary_inner(
             source,
         })?;
 
-    let mut buffer = vec![0u8; 512];
+    let mut buffer = vec![0u8; 4096];
     let len = socket
         .recv(&mut buffer)
         .await
@@ -199,9 +209,76 @@ async fn poll_soa_from_primary_inner(
             source,
         })?;
 
+    if udp_response_has_tc(&buffer[..len]) {
+        let tcp_primary = TransferPrimaryConfig::tcp(primary);
+        return poll_soa_from_primary_tcp_inner(
+            &tcp_primary,
+            zone_apex,
+            qclass,
+            qid,
+            tsig,
+            transfer_source,
+            connect_timeout,
+        )
+        .await;
+    }
+
     let response =
         maybe_verify_transfer_response(&buffer[..len], tsig.key, query.request_mac.as_deref())?;
-    match axfr::parse_soa_response(qid, zone_apex, qclass, &response) {
+    parse_soa_poll_response(primary, zone_apex, qclass, qid, &response)
+}
+
+async fn poll_soa_from_primary_tcp_inner(
+    primary: &TransferPrimaryConfig,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    tsig: TransferTsig<'_>,
+    transfer_source: Option<SocketAddr>,
+    connect_timeout: Duration,
+) -> Result<u32, TransferError> {
+    let mut stream = connect_transfer_stream(primary, transfer_source, connect_timeout).await?;
+    let query = maybe_sign_transfer_query(axfr::build_soa_query(qid, zone_apex, qclass), tsig)?;
+    let framed_query = axfr::frame_tcp_message(&query.message);
+    stream
+        .write_all(&framed_query)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary.addr,
+            source,
+        })?;
+
+    let mut length_prefix = [0u8; 2];
+    stream
+        .read_exact(&mut length_prefix)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary.addr,
+            source,
+        })?;
+    let message_len = u16::from_be_bytes(length_prefix) as usize;
+    let mut message = vec![0u8; message_len];
+    stream
+        .read_exact(&mut message)
+        .await
+        .map_err(|source| TransferError::Io {
+            addr: primary.addr,
+            source,
+        })?;
+
+    let response =
+        maybe_verify_transfer_response(&message, tsig.key, query.request_mac.as_deref())?;
+    parse_soa_poll_response(primary.addr, zone_apex, qclass, qid, &response)
+}
+
+fn parse_soa_poll_response(
+    primary: SocketAddr,
+    zone_apex: &DomainName,
+    qclass: u16,
+    qid: u16,
+    response: &[u8],
+) -> Result<u32, TransferError> {
+    match axfr::parse_soa_response(qid, zone_apex, qclass, response) {
         Ok(serial) => Ok(serial),
         Err(error) => {
             warn!(
@@ -883,6 +960,12 @@ fn maybe_verify_transfer_response(
 
     let verified = tsig_key.verify_response(message, request_mac, tsig_time_signed())?;
     Ok(verified.message)
+}
+
+fn udp_response_has_tc(message: &[u8]) -> bool {
+    Header::parse(message)
+        .map(|header| header.flags & 0x0200 != 0)
+        .unwrap_or(false)
 }
 
 fn maybe_verify_tcp_transfer_messages(

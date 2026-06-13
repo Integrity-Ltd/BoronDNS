@@ -69,8 +69,8 @@ Operational state boundaries:
 
 Install prerequisites for a source build:
 
-- Rust toolchain matching `rust-toolchain.toml` and workspace Rust version
-  `1.95`.
+- Rust stable toolchain (per `rust-toolchain.toml`); MSRV `1.95` declared in
+  `Cargo.toml`.
 - Cargo.
 - Optional validation tools used by interop scripts: `dig`, `curl`, `python3`,
   BIND 9 tools, Docker, `openssl`, and `timeout`, depending on which script is
@@ -90,7 +90,7 @@ the reproducible-build handoff after two independent clean builds match.
 Install it to a host path managed by the operator:
 
 ```sh
-sudo install -m 0755 target/release/oxidedns /usr/local/sbin/oxidedns
+sudo install -m 0755 target/release/oxidedns /usr/local/bin/oxidedns
 ```
 
 The tag-push release workflow publishes local-use artifacts for
@@ -224,6 +224,9 @@ implemented warning catalogue is:
   build version. Public deployments should prefer an empty value or a softer
   family/anycast label.
 - `dns_cookies_disabled`: `[cookie] policy = "disabled"`.
+- `interfaces_dns_mgmt_overlap`: `[interfaces].dns` and `[interfaces].mgmt`
+  overlap without being set equal, so management traffic shares a DNS listener
+  address unintentionally.
 - `rrl_global_allowlist`: `[rrl] allowlist` contains `0.0.0.0/0` or `::/0`.
 - `tcp_idle_timeout_large`: `[limits] tcp_idle_timeout_secs` is greater than
   120.
@@ -231,6 +234,17 @@ implemented warning catalogue is:
 - `tsig_hmac_sha1`: a configured TSIG key uses `hmac-sha1`.
 - `transfer_ingest_cap_low`: `[limits] max_transfer_ingest_bytes` is below
   100 MiB.
+- `nsec3_iterations_large`: `[dnssec] nsec3_max_iterations` exceeds the
+  compatibility default of 100.
+- `zone_transfer_unauthenticated`: `[transfer] require_tsig = false` and a
+  configured zone without `tsig_key` transfers from a primary, so that transfer
+  is not TSIG-authenticated.
+- `catalog_transfer_cleartext`: a `[[catalog_zones]]` entry has at least one
+  non-XoT primary; TSIG authenticates catalog contents but does not encrypt
+  them.
+- `catalog_member_unsigned_axfr_allowed`: a `[[catalog_zones]]` entry allows
+  legacy unsigned member AXFR (`member_transfer_policy.unsigned_axfr =
+  "allow-legacy-private"`) while `member_tsig_key` is unset.
 - `xot_trust_anchor_expiring_soon`: a configured XoT trust-anchor certificate
   expires within 30 days of process startup.
 - `soa_timer_near_max_effective_interval`: a transferred SOA REFRESH or RETRY
@@ -503,7 +517,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/sbin/oxidedns serve --config /etc/oxidedns-secondary/config.toml
+ExecStart=/usr/local/bin/oxidedns serve --config /etc/oxidedns-secondary/config.toml
 User=oxidedns
 Group=oxidedns
 Restart=on-failure
@@ -540,7 +554,10 @@ Notes:
 
 ## Health and Metrics
 
-If `[server].health` is configured, OxideDNS exposes a plain HTTP endpoint with:
+When a health listener resolves, OxideDNS exposes a plain HTTP endpoint with the
+routes below. The listener is taken from `[health].bind_address`/`bind_port` if
+set, otherwise `[server].health`, otherwise each `[interfaces].mgmt` address on
+`[health].default_port` (the example config uses `[health]`/`[interfaces].mgmt`):
 
 - `GET /livez`: returns HTTP 200 with a JSON liveness body whenever the process
   can answer the probe, including while zones are loading or the runtime is

@@ -151,6 +151,7 @@ impl ServerConfig {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.server.validate()?;
         self.interfaces.validate(&self.server)?;
         self.process.validate()?;
         if self.dns_udp_listeners().is_empty() && self.dns_tcp_listeners().is_empty() {
@@ -748,6 +749,13 @@ pub struct ServerSettings {
     pub log_format: LogFormatConfig,
 }
 
+impl ServerSettings {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_txt_character_string("server.nsid", &self.nsid)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
@@ -1104,6 +1112,15 @@ impl ObservabilityConfig {
             return Err(ConfigError::Invalid(
                 "observability.path_prefix must not contain '.' or '..' path segments".to_owned(),
             ));
+        }
+        if matches!(
+            self.path_prefix.as_str(),
+            "/livez" | "/healthz" | "/readyz" | "/metrics"
+        ) {
+            return Err(ConfigError::Invalid(format!(
+                "observability.path_prefix {} conflicts with a built-in management route",
+                self.path_prefix
+            )));
         }
         if self.rate_limit_per_minute == 0 {
             return Err(ConfigError::Invalid(

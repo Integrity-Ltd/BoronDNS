@@ -4,27 +4,50 @@
 
 OxideDNS is a secondary-only authoritative DNS server. It loads zone data from
 configured primary DNS servers over AXFR or IXFR, keeps the active zone state in
-memory, and serves authoritative DNS answers over UDP and TCP.
-It is not a recursive resolver, forwarder, primary DNS server, or zone-file
-loader.
-It uses separate DNS, transfer, and management interface roles. OxideDNS accepts authorized NOTIFY on the DNS listeners.
+memory, and serves authoritative answers over UDP and TCP.
 
-The project is currently aimed at an Engineering MVP: a working, testable
-secondary server with clear operating boundaries. It is not yet a final SRS
-release-acceptance build.
+It is **not** a recursive resolver, forwarder, primary DNS server, or zone-file
+loader. It never originates zone data — it only re-serves what it transfers from
+a primary.
 
-The implemented Engineering MVP is wider than a minimal static-zone secondary
-server. Retained feature slices stay in scope exactly as bounded in
-[Implemented feature scope](docs/implemented-feature-scope.md), with
-release-acceptance evidence gaps tracked separately.
+Network listeners are split into three roles, configured under `[interfaces]`:
 
-Those retained slices include IXFR with AXFR fallback, outbound XoT transfers,
-passive DNSSEC serving, RRL, DNS Cookies, RFC 9432 catalog zones, reloadable
-filesystem-backed TSIG/XoT secret snapshots, broad EDNS response behavior,
-bounded EDE diagnostics, and opt-in CHAOS identification. The catalog-zone
-slice includes opt-in member-transfer extensions, and the data plane includes
-UDP/XDP tuning controls. Adjacent features are not implied unless that scope
-document names them.
+- `dns` — UDP/TCP query sockets; these also receive authorized inbound NOTIFY.
+- `transfer` — outbound source addresses used when pulling transfers from primaries.
+- `mgmt` — the operator-facing management interface for health and metrics.
+
+OxideDNS accepts authorized NOTIFY on the DNS listeners; there is no separate
+NOTIFY listener role.
+
+## Features
+
+- Incremental zone transfer (IXFR) with automatic full-transfer (AXFR) fallback.
+- Outbound zone transfer over TLS (XoT).
+- Passive DNSSEC serving — serves the RRSIG/NSEC/NSEC3 records received from the
+  primary; OxideDNS never signs.
+- Response Rate Limiting (RRL) and DNS Cookies for UDP abuse mitigation.
+- RFC 9432 catalog zones, with opt-in member-transfer extensions.
+- Reloadable, filesystem-backed TSIG / XoT secret snapshots.
+- Broad EDNS(0) handling with bounded Extended DNS Error (EDE) diagnostics.
+- Opt-in CHAOS-class identification (`version.bind` / `hostname.bind`).
+- UDP / XDP data-plane tuning controls.
+
+The exact boundaries of each slice are defined in
+[Implemented feature scope](docs/implemented-feature-scope.md); adjacent features
+are not implied unless that document names them.
+
+## Project Status
+
+OxideDNS targets an **Engineering MVP**: a working, testable secondary server with
+clear operating boundaries. It is not yet a final SRS release-acceptance build —
+release-acceptance evidence gaps are tracked separately in the
+[MVP gap register](docs/mvp-gap-register.md). The implemented Engineering MVP is
+wider than a minimal static-zone secondary. Retained feature slices stay in
+scope exactly as bounded in [Implemented feature scope](docs/implemented-feature-scope.md):
+IXFR with AXFR fallback, outbound XoT transfers, passive DNSSEC serving, RRL,
+DNS Cookies, RFC 9432 catalog zones, bounded EDE diagnostics, and opt-in CHAOS
+identification. Adjacent features are not implied unless that scope document
+names them.
 
 ## Start Here
 
@@ -38,11 +61,21 @@ document names them.
 
 ## Quick Local Commands
 
+Requires a Rust toolchain; `rust-toolchain.toml` selects the channel automatically
+via rustup (MSRV is `1.95`). See
+[DevOps getting started](docs/devops-getting-started.md) for full setup and release
+builds. Each line below is an independent mode, not a sequence:
+
 ```bash
+# Validate the config and exit (non-zero on error).
 cargo run -p oxidedns-cli -- --validate-config config/oxidedns.example.toml
+# Print the effective config with secrets redacted.
 cargo run -p oxidedns-cli -- --dump-config config/oxidedns.example.toml
+# Print a fresh annotated example config to stdout.
 cargo run -p oxidedns-cli -- --example-config
+# Run the server.
 cargo run -p oxidedns-cli -- --config config/oxidedns.example.toml serve
+# Run the local lint + test gate.
 ./scripts/check.sh
 ```
 

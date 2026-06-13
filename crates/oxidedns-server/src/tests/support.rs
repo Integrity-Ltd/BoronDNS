@@ -746,6 +746,51 @@ async fn spawn_signed_soa_primary_with_serial(serial: u32) -> std::net::SocketAd
     addr
 }
 
+async fn spawn_truncated_udp_tcp_soa_primary(serial: u32) -> std::net::SocketAddr {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap();
+    tokio::spawn(async move {
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let mut buffer = vec![0u8; 1024];
+        let (len, peer) = socket.recv_from(&mut buffer).await.unwrap();
+        let query = &buffer[..len];
+        let header = Header::parse(query).unwrap();
+        assert_eq!(header.qdcount, 1);
+        assert_eq!(query_qtype(query), RecordType::Soa as u16);
+
+        let mut response = soa_response(header.id, serial);
+        let flags = u16::from_be_bytes([response[2], response[3]]) | 0x0200;
+        response[2..4].copy_from_slice(&flags.to_be_bytes());
+        socket.send_to(&response, peer).await.unwrap();
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut length_prefix = [0u8; 2];
+        stream.read_exact(&mut length_prefix).await.unwrap();
+        let query_len = u16::from_be_bytes(length_prefix) as usize;
+        let mut query = vec![0u8; query_len];
+        stream.read_exact(&mut query).await.unwrap();
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(query_qtype(&query), RecordType::Soa as u16);
+
+        let request_mac = extract_query_tsig_mac(&query);
+        let response = soa_response(header.id, serial);
+        let signed = key
+            .sign_response(
+                &response,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        stream
+            .write_all(&frame_tcp_message(&signed.message))
+            .await
+            .unwrap();
+    });
+    addr
+}
+
 fn axfr_response(qid: u16, serial: u32) -> Vec<u8> {
     axfr_response_for_zone(qid, "example.test.", serial)
 }

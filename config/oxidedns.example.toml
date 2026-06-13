@@ -61,6 +61,7 @@ metrics_rate_limit_idle_seconds = 300
 latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
 # "full" keeps detailed query, rcode, latency, and cookie-prefix metrics.
 # "reduced" keeps coarse hot-path counters while skipping mutex-backed detail.
+# "off" additionally suppresses the coarse hot-path counters; saturation/benchmark only.
 hot_path_detail = "full"
 # Disabled by default. Enable only for benchmark captures that need pipeline
 # stage timings or response-cache candidacy counters.

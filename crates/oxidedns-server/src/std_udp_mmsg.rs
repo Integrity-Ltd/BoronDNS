@@ -150,7 +150,7 @@ impl StdUdpMmsg {
         };
         if result < 0 {
             let errno = current_errno();
-            if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
+            if recv_batch_errno_is_retryable(errno) {
                 self.stats.receive_wouldblock_syscalls += 1;
                 return Ok(0);
             }
@@ -219,6 +219,9 @@ impl StdUdpMmsg {
                 }
                 continue;
             }
+            if error.kind() == ErrorKind::Interrupted {
+                continue;
+            }
             return Err(error);
         }
         Ok(sent)
@@ -284,6 +287,11 @@ fn zeroed_vec<T>(len: usize) -> Vec<T> {
 fn current_errno() -> libc::c_int {
     // SAFETY: Linux exposes thread-local errno through __errno_location.
     unsafe { *libc::__errno_location() }
+}
+
+#[cfg(target_os = "linux")]
+fn recv_batch_errno_is_retryable(errno: libc::c_int) -> bool {
+    errno == libc::EAGAIN || errno == libc::EINTR
 }
 
 #[cfg(target_os = "linux")]
@@ -440,6 +448,13 @@ mod tests {
                 .expect("empty nonblocking receive"),
             0
         );
+    }
+
+    #[test]
+    fn recvmmsg_treats_eintr_as_retryable() {
+        assert!(recv_batch_errno_is_retryable(libc::EINTR));
+        assert!(recv_batch_errno_is_retryable(libc::EAGAIN));
+        assert!(!recv_batch_errno_is_retryable(libc::EBADF));
     }
 
     #[test]

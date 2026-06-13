@@ -36,9 +36,7 @@ jobs:
       - name: Check release tag matches Cargo version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
-          tag="${GITHUB_REF_NAME#v}"
-          test "$tag" = "$version"
+          scripts/check-version-consistency.py --tag "${GITHUB_REF_NAME#v}"
 
       - name: Shell checks
         run: scripts/check-shell-scripts.sh

@@ -11,7 +11,7 @@ use oxidedns_core::{
     dns::DomainName,
     tsig::TsigKey,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -113,7 +113,35 @@ pub(crate) struct XotSecretProfile {
     pub(crate) trust_anchors: Vec<String>,
     pub(crate) client_cert: Option<String>,
     pub(crate) client_key: Option<String>,
-    pub(crate) client_key_pem: Option<String>,
+    pub(crate) client_key_pem: Option<SecretString>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    pub(crate) fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+
+    fn to_plaintext(&self) -> String {
+        self.0.to_string()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(|secret| Self(Zeroizing::new(secret)))
+    }
 }
 
 #[derive(Clone)]
@@ -363,7 +391,7 @@ struct FileTsigKey {
     name: String,
     algorithm: String,
     #[serde(default)]
-    secret: Option<String>,
+    secret: Option<SecretString>,
     #[serde(default)]
     secret_file: Option<PathBuf>,
 }
@@ -371,19 +399,13 @@ struct FileTsigKey {
 impl FileTsigKey {
     fn secret_base64(&mut self, root: &Path) -> Result<Zeroizing<String>, SecretStoreError> {
         match (self.secret.take(), &self.secret_file) {
-            (Some(secret), None) => {
-                let secret = Zeroizing::new(secret);
-                Ok(Zeroizing::new(secret.trim().to_owned()))
-            }
+            (Some(secret), None) => Ok(Zeroizing::new(secret.expose_secret().trim().to_owned())),
             (None, Some(path)) => read_store_text_file(root, path)
                 .map(|secret| Zeroizing::new(secret.trim().to_owned())),
-            (Some(secret), Some(_)) => {
-                let _secret = Zeroizing::new(secret);
-                Err(SecretStoreError::Invalid(format!(
-                    "secret-store TSIG key {} must set exactly one of secret or secret_file",
-                    self.name
-                )))
-            }
+            (Some(_secret), Some(_)) => Err(SecretStoreError::Invalid(format!(
+                "secret-store TSIG key {} must set exactly one of secret or secret_file",
+                self.name
+            ))),
             (None, None) => Err(SecretStoreError::Invalid(format!(
                 "secret-store TSIG key {} must set exactly one of secret or secret_file",
                 self.name
@@ -403,7 +425,7 @@ struct FileXotProfile {
     #[serde(default)]
     client_key: Option<PathBuf>,
     #[serde(default)]
-    client_key_pem: Option<String>,
+    client_key_pem: Option<SecretString>,
 }
 
 impl FileXotProfile {
@@ -461,7 +483,10 @@ fn validate_xot_profile_material(
         trust_anchors: profile.trust_anchors.clone(),
         client_cert: profile.client_cert.clone(),
         client_key: profile.client_key.clone(),
-        client_key_pem: profile.client_key_pem.clone(),
+        client_key_pem: profile
+            .client_key_pem
+            .as_ref()
+            .map(SecretString::to_plaintext),
     };
     build_xot_client_config(&primary)
         .map(|_| ())

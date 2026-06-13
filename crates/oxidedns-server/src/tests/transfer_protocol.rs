@@ -428,6 +428,26 @@ async fn poll_soa_from_primary_rejects_unsigned_response_when_tsig_expected() {
 }
 
 #[tokio::test]
+async fn signed_soa_poll_retries_udp_tc_over_tcp_before_tsig_verification() {
+    let primary = spawn_truncated_udp_tcp_soa_primary(7).await;
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+    let serial = poll_soa_from_primary_with_tsig(
+        primary,
+        &apex,
+        1,
+        0x1234,
+        TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect("UDP TC response should retry the SOA poll over TCP");
+
+    assert_eq!(serial, 7);
+}
+
+#[tokio::test]
 async fn axfr_binds_configured_transfer_source() {
     let (primary, peer_rx) = spawn_axfr_primary_recording_peer(7).await;
     let target = TransferPrimaryConfig::tcp(primary);
@@ -506,13 +526,13 @@ fn dns_cookie_secret_store_rotates_only_after_configured_interval() {
     });
     let disabled = DnsCookieSecretStore::new_at([3; 16], Some([2; 16]), None, generated_at);
 
-    assert_eq!(rotated.current, [2; 16]);
-    assert_eq!(rotated.previous, Some([1; 16]));
-    assert_eq!(retained.current, [2; 16]);
-    assert_eq!(retained.previous, Some([1; 16]));
+    assert_eq!(*rotated.current, [2; 16]);
+    assert_eq!(rotated.previous.as_deref(), Some(&[1; 16]));
+    assert_eq!(*retained.current, [2; 16]);
+    assert_eq!(retained.previous.as_deref(), Some(&[1; 16]));
     let disabled_current = disabled.current_with_generator(|| Ok([4; 16]));
-    assert_eq!(disabled_current.current, [3; 16]);
-    assert_eq!(disabled_current.previous, Some([2; 16]));
+    assert_eq!(*disabled_current.current, [3; 16]);
+    assert_eq!(disabled_current.previous.as_deref(), Some(&[2; 16]));
     assert!(captured.contains_all(&["DNS Cookie server secret rotated", "secret_fingerprint=",]));
 }
 
@@ -544,18 +564,17 @@ fn dns_cookie_secret_store_uses_configured_shared_secrets() {
     let secrets = store.current();
 
     assert_eq!(
-        secrets.current,
+        *secrets.current,
         [
             0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
             0xee, 0xff,
         ]
     );
     assert_eq!(
-        secrets.previous,
-        Some([
+        secrets.previous.as_deref(),
+        Some(&[
             0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
             0x11, 0x00,
         ])
     );
 }
-

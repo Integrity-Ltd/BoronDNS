@@ -722,7 +722,7 @@ impl RefreshReason {
 struct CatalogManager {
     catalogs_by_key: Arc<HashMap<String, CatalogRuntimeConfig>>,
     static_zone_keys: Arc<HashSet<String>>,
-    memberships_by_catalog: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    memberships_by_catalog: Arc<Mutex<HashMap<String, HashMap<String, DomainName>>>>,
 }
 
 impl Default for CatalogManager {
@@ -802,17 +802,14 @@ impl CatalogManager {
             .lock()
             .expect("catalog membership lock poisoned");
         let mut samples = Vec::new();
-        for (catalog_key, member_keys) in memberships.iter() {
+        for (catalog_key, members_by_key) in memberships.iter() {
             let Some(catalog_zone) = DomainName::from_absolute_str(catalog_key).ok() else {
                 continue;
             };
-            for member_key in member_keys {
-                let Some(member_zone) = DomainName::from_absolute_str(member_key).ok() else {
-                    continue;
-                };
+            for (member_key, member_zone) in members_by_key {
                 samples.push(CatalogMemberMetric {
                     catalog_zone: catalog_zone.clone(),
-                    member_zone,
+                    member_zone: member_zone.clone(),
                     managed: !self.static_zone_keys.contains(member_key),
                 });
             }
@@ -875,18 +872,23 @@ impl CatalogManager {
         }
 
         let catalog_key = catalog.origin.canonical_key();
-        let (old_member_keys, other_catalog_member_keys) = {
+        let (old_members_by_key, old_member_keys, other_catalog_member_keys) = {
             let memberships = self
                 .memberships_by_catalog
                 .lock()
                 .expect("catalog membership lock poisoned");
-            let old_member_keys = memberships.get(&catalog_key).cloned().unwrap_or_default();
+            let old_members_by_key = memberships.get(&catalog_key).cloned().unwrap_or_default();
+            let old_member_keys = old_members_by_key.keys().cloned().collect::<HashSet<_>>();
             let other_catalog_member_keys = memberships
                 .iter()
                 .filter(|(known_catalog_key, _)| *known_catalog_key != &catalog_key)
-                .flat_map(|(_, member_keys)| member_keys.iter().cloned())
+                .flat_map(|(_, members_by_key)| members_by_key.keys().cloned())
                 .collect::<HashSet<_>>();
-            (old_member_keys, other_catalog_member_keys)
+            (
+                old_members_by_key,
+                old_member_keys,
+                other_catalog_member_keys,
+            )
         };
         let mut members_by_key = HashMap::<String, CatalogMember>::new();
         for member in members {
@@ -1051,8 +1053,26 @@ impl CatalogManager {
             if self.static_zone_keys.contains(&member_key) {
                 continue;
             }
-            let member_origin = DomainName::from_absolute_str(&member_key)
-                .expect("canonical zone key is an absolute DNS name");
+            let Some(member_origin) = old_members_by_key.get(&member_key).cloned() else {
+                warn!(
+                    category = "transfer",
+                    event = "catalog_member_remove_missing_previous_origin",
+                    catalog_zone = %catalog.origin,
+                    zone_key = %member_key,
+                    "catalog membership was missing previous member origin; skipping removal"
+                );
+                continue;
+            };
+            let still_owned_by_other_catalog = self
+                .memberships_by_catalog
+                .lock()
+                .expect("catalog membership lock poisoned")
+                .iter()
+                .filter(|(known_catalog_key, _)| *known_catalog_key != &catalog_key)
+                .any(|(_, members_by_key)| members_by_key.contains_key(&member_key));
+            if still_owned_by_other_catalog {
+                continue;
+            }
             transfer_plan.remove(&member_origin);
             notify_authority.remove_zone(&member_origin);
             refresh_registry.remove_zone(&member_origin);
@@ -1069,7 +1089,13 @@ impl CatalogManager {
         self.memberships_by_catalog
             .lock()
             .expect("catalog membership lock poisoned")
-            .insert(catalog_key, new_member_keys);
+            .insert(
+                catalog_key,
+                members_by_key
+                    .into_iter()
+                    .map(|(key, member)| (key, member.zone))
+                    .collect(),
+            );
     }
 }
 
@@ -3194,7 +3220,10 @@ fn resolve_transfer_primary(
     resolved.trust_anchors = profile.trust_anchors;
     resolved.client_cert = profile.client_cert;
     resolved.client_key = profile.client_key;
-    resolved.client_key_pem = profile.client_key_pem;
+    resolved.client_key_pem = profile
+        .client_key_pem
+        .as_ref()
+        .map(|secret| secret.expose_secret().to_owned());
     Ok(resolved)
 }
 

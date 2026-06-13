@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     dns::{DomainName, RecordType},
-    zone::CatalogZoneView,
+    zone::{CatalogZoneView, Rrset},
 };
 
 // ODS-NFR-MAINT-004 principal functional requirement references for RFC 9432
@@ -78,14 +78,28 @@ pub fn parse_catalog_members(
     let catalog = catalog_view.origin();
     let zones_owner = DomainName::from_absolute_str(&format!("zones.{catalog}"))
         .expect("valid catalog origin builds valid zones owner");
+    let zones_owner_key = zones_owner.canonical_key();
     let mut ptr_records_by_owner = BTreeMap::<String, Vec<_>>::new();
+    let extension_rrsets_by_member = extension_rrsets_by_member(catalog_view);
 
     for rrset in catalog_view.rrsets() {
         if rrset.class != 1 || rrset.rr_type != RecordType::Ptr as u16 {
             continue;
         }
-        if rrset.owner.parent().as_ref() != Some(&zones_owner) {
+        if rrset
+            .owner
+            .parent()
+            .map(|parent| parent.canonical_key())
+            .as_deref()
+            != Some(zones_owner_key.as_str())
+        {
             continue;
+        }
+        if rrset.rdatas().is_empty() {
+            return Err(CatalogError::MalformedMemberPtr {
+                catalog: catalog.clone(),
+                owner: rrset.owner.clone(),
+            });
         }
         ptr_records_by_owner
             .entry(rrset.owner.canonical_key())
@@ -130,7 +144,13 @@ pub fn parse_catalog_members(
         members.push(CatalogMember {
             member_node: owner.clone(),
             zone: member,
-            transfer: parse_member_transfer_extension(catalog_view, owner),
+            transfer: parse_member_transfer_extension(
+                owner,
+                extension_rrsets_by_member
+                    .get(owner.canonical_key().as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+            ),
         });
     }
 
@@ -138,9 +158,39 @@ pub fn parse_catalog_members(
     Ok(members)
 }
 
+fn extension_rrsets_by_member<'a>(
+    catalog_view: CatalogZoneView<'a>,
+) -> HashMap<String, Vec<&'a Rrset>> {
+    let mut rrsets_by_member = HashMap::<String, Vec<&Rrset>>::new();
+    for rrset in catalog_view.rrsets() {
+        if rrset.class != 1 {
+            continue;
+        }
+        let owner_key = rrset.owner.canonical_key();
+        let Some(member_key) = extension_member_key(&owner_key) else {
+            continue;
+        };
+        rrsets_by_member.entry(member_key).or_default().push(rrset);
+    }
+    rrsets_by_member
+}
+
+fn extension_member_key(owner_key: &str) -> Option<String> {
+    if let Some(rest) = owner_key.strip_prefix("primaries.ext.") {
+        return Some(rest.to_owned());
+    }
+    if let Some(rest) = owner_key.strip_prefix("_udns-xfr.") {
+        return Some(rest.to_owned());
+    }
+    if let Some(rest) = owner_key.strip_prefix("_udns-notify.") {
+        return Some(rest.to_owned());
+    }
+    None
+}
+
 fn parse_member_transfer_extension(
-    catalog_view: CatalogZoneView<'_>,
     member_node: &DomainName,
+    extension_rrsets: &[&Rrset],
 ) -> Option<CatalogMemberTransfer> {
     let primary_base = format!("primaries.ext.{}", member_node.canonical_key());
     let xfr_owner = format!("_udns-xfr.{}", member_node.canonical_key());
@@ -151,7 +201,7 @@ fn parse_member_transfer_extension(
     let mut notify_sources = Vec::new();
     let mut malformed = false;
 
-    for rrset in catalog_view.rrsets() {
+    for rrset in extension_rrsets {
         if rrset.class != 1 {
             continue;
         }
@@ -332,10 +382,11 @@ fn validate_catalog_version(catalog_view: &CatalogZoneView<'_>) -> Result<(), Ca
     let catalog = catalog_view.origin();
     let version_owner = DomainName::from_absolute_str(&format!("version.{catalog}"))
         .expect("valid catalog origin builds valid version owner");
+    let version_owner_key = version_owner.canonical_key();
     let version_records = catalog_view.rrsets().find_map(|rrset| {
         (rrset.class == 1
             && rrset.rr_type == RecordType::Txt as u16
-            && rrset.owner == version_owner)
+            && rrset.owner.canonical_key() == version_owner_key)
             .then(|| rrset.rdatas())
     });
 
@@ -406,6 +457,73 @@ mod tests {
 
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+    }
+
+    #[test]
+    fn parses_catalog_version_and_member_owner_case_insensitively() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog,
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("VERSION.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.ZONES.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![
+                        DomainName::from_absolute_str("Alpha.example.")
+                            .unwrap()
+                            .to_wire(),
+                    ],
+                ),
+            ],
+        );
+
+        let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
+
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+    }
+
+    #[test]
+    fn empty_catalog_member_ptr_rrset_is_malformed_without_panicking() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog.clone(),
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![txt("2")],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    Vec::new(),
+                ),
+            ],
+        );
+
+        assert_eq!(
+            parse_catalog_members(snapshot.catalog_zone_view()),
+            Err(CatalogError::MalformedMemberPtr {
+                catalog,
+                owner: DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+            })
+        );
     }
 
     #[test]

@@ -587,14 +587,6 @@ pub fn verify_request(
     if tsig.error != TSIG_ERROR_NOERROR {
         return Err(TsigError::ResponseError(tsig.error));
     }
-    if tsig.original_id
-        != u16::from_be_bytes([
-            unsigned_message[DNS_HEADER_ID_OFFSET],
-            unsigned_message[DNS_HEADER_ID_OFFSET + 1],
-        ])
-    {
-        return Err(TsigError::MalformedTsig);
-    }
     if now_unix.saturating_add(tsig.fudge as u64) < tsig.time_signed
         || tsig.time_signed.saturating_add(tsig.fudge as u64) < now_unix
     {

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     fmt,
     net::IpAddr,
     sync::{Arc, Mutex},
@@ -160,7 +160,7 @@ struct RrlState {
     max_keys: usize,
     allowlist: Vec<IpPrefix>,
     buckets: HashMap<RrlKey, RrlBucket>,
-    lru: VecDeque<RrlKey>,
+    next_order: u128,
 }
 
 impl RrlState {
@@ -184,7 +184,7 @@ impl RrlState {
                 .map(|prefix| IpPrefix::parse(prefix).expect("validated RRL allowlist prefix"))
                 .collect(),
             buckets: HashMap::new(),
-            lru: VecDeque::new(),
+            next_order: 0,
         }
     }
 
@@ -204,14 +204,16 @@ impl RrlState {
         let rate = self.rates.for_category(category);
         if !self.buckets.contains_key(&key) {
             self.evict_one_if_needed(metrics);
-            self.buckets.insert(key, RrlBucket::new(rate));
+            let order = self.allocate_order();
+            self.buckets.insert(key, RrlBucket::new(rate, order));
             metrics.set_rrl_tracked_keys(self.tracked_keys());
         }
-        self.touch_lru(key);
 
+        let order = self.allocate_order();
         let Some(bucket) = self.buckets.get_mut(&key) else {
             return RrlDecision::Send(response);
         };
+        bucket.touch(order);
         if bucket.take_token(rate) {
             return RrlDecision::Send(response);
         }
@@ -245,18 +247,24 @@ impl RrlState {
         if self.buckets.len() < self.max_keys {
             return;
         }
-        while let Some(key) = self.lru.pop_front() {
-            if self.buckets.remove(&key).is_some() {
-                metrics.record_rrl_key_evicted();
-                metrics.set_rrl_tracked_keys(self.tracked_keys());
-                return;
-            }
+        let Some(oldest_key) = self
+            .buckets
+            .iter()
+            .min_by_key(|(_, bucket)| bucket.order)
+            .map(|(key, _)| *key)
+        else {
+            return;
+        };
+        if self.buckets.remove(&oldest_key).is_some() {
+            metrics.record_rrl_key_evicted();
+            metrics.set_rrl_tracked_keys(self.tracked_keys());
         }
     }
 
-    fn touch_lru(&mut self, key: RrlKey) {
-        self.lru.retain(|candidate| *candidate != key);
-        self.lru.push_back(key);
+    fn allocate_order(&mut self) -> u128 {
+        let order = self.next_order;
+        self.next_order = self.next_order.wrapping_add(1);
+        order
     }
 
     fn tracked_keys(&self) -> u64 {
@@ -301,15 +309,21 @@ struct RrlBucket {
     tokens: f64,
     last_refill: Instant,
     limited_count: u64,
+    order: u128,
 }
 
 impl RrlBucket {
-    fn new(rate: u32) -> Self {
+    fn new(rate: u32, order: u128) -> Self {
         Self {
             tokens: f64::from(rate),
             last_refill: Instant::now(),
             limited_count: 0,
+            order,
         }
+    }
+
+    fn touch(&mut self, order: u128) {
+        self.order = order;
     }
 
     fn take_token(&mut self, rate: u32) -> bool {

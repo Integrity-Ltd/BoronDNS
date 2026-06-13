@@ -120,6 +120,9 @@ pub enum SoaQueryError {
     #[error("SOA response question does not match the SOA poll query")]
     MismatchedQuestion,
 
+    #[error("SOA response was truncated")]
+    Truncated,
+
     #[error("SOA response did not contain an SOA answer at the zone apex")]
     MissingSoa,
 
@@ -407,7 +410,7 @@ fn parse_axfr_response_with_question(
             if record.rr_type == RecordType::Soa as u16 {
                 match &initial_soa {
                     None => {
-                        if record.owner != *zone_apex {
+                        if record.owner.canonical_key() != zone_apex.canonical_key() {
                             return Err(AxfrError::MissingInitialSoa);
                         }
                         zone_serial = Some(soa_serial(&record.rdata)?);
@@ -459,6 +462,9 @@ pub fn parse_soa_response(
     if header.opcode_value() != 0 {
         return Err(SoaQueryError::MismatchedOpcode);
     }
+    if header.flags & 0x0200 != 0 {
+        return Err(SoaQueryError::Truncated);
+    }
     let rcode = (header.flags & 0x000f) as u8;
     if rcode != 0 {
         return Err(SoaQueryError::ErrorRcode(rcode));
@@ -471,7 +477,9 @@ pub fn parse_soa_response(
         offset += consumed;
 
         validate_soa_answer_scope(&record, zone_apex, qclass)?;
-        if record.owner == *zone_apex && record.rr_type == RecordType::Soa as u16 {
+        if record.owner.canonical_key() == zone_apex.canonical_key()
+            && record.rr_type == RecordType::Soa as u16
+        {
             return soa_serial(&record.rdata).map_err(|_| SoaQueryError::MalformedMessage);
         }
     }
@@ -1263,7 +1271,7 @@ fn validate_exact_apex_soa(
         .iter()
         .filter(|record| record.rr_type == RecordType::Soa as u16)
         .collect::<Vec<_>>();
-    if soa_records.len() == 1 && soa_records[0].owner == *zone_apex {
+    if soa_records.len() == 1 && soa_records[0].owner.canonical_key() == zone_apex.canonical_key() {
         Ok(())
     } else {
         Err(AxfrError::InvalidZoneSoa)
@@ -1271,10 +1279,10 @@ fn validate_exact_apex_soa(
 }
 
 fn validate_apex_ns(zone_apex: &DomainName, records: &[ResourceRecord]) -> Result<(), AxfrError> {
-    if records
-        .iter()
-        .any(|record| record.owner == *zone_apex && record.rr_type == RecordType::Ns as u16)
-    {
+    if records.iter().any(|record| {
+        record.owner.canonical_key() == zone_apex.canonical_key()
+            && record.rr_type == RecordType::Ns as u16
+    }) {
         Ok(())
     } else {
         Err(AxfrError::MissingApexNs)
@@ -1288,23 +1296,24 @@ fn validate_cname_and_dname_coexistence(records: &[ResourceRecord]) -> Result<()
             continue;
         }
 
-        let dname_key = (record.owner.canonical_key(), record.class);
+        let record_key = record.owner.canonical_key();
+        let dname_key = (record_key.clone(), record.class);
         if !dname_rrsets.insert(dname_key) {
             return Err(AxfrError::MultipleDnameRecords);
         }
 
-        if records
-            .iter()
-            .any(|other| other.owner == record.owner && other.rr_type == RecordType::Cname as u16)
-        {
+        if records.iter().any(|other| {
+            other.owner.canonical_key() == record_key && other.rr_type == RecordType::Cname as u16
+        }) {
             return Err(AxfrError::DnameCoexistsWithCname);
         }
     }
 
     for record in records {
+        let record_key = record.owner.canonical_key();
         if record.rr_type == RecordType::Cname as u16
             && records.iter().any(|other| {
-                other.owner == record.owner
+                other.owner.canonical_key() == record_key
                     && other.rr_type != RecordType::Cname as u16
                     && !is_dnssec_cname_exception_type(other.rr_type)
             })
@@ -2780,6 +2789,28 @@ mod tests {
     }
 
     #[test]
+    fn accepts_soa_response_answer_owner_case_insensitively() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let serial = parse_soa_response(0x1234, &apex, 1, &soa_message(0x1234, vec![soa]))
+            .expect("SOA answer owner comparison is case-insensitive");
+
+        assert_eq!(serial, 1);
+    }
+
+    #[test]
+    fn rejects_truncated_soa_response() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let mut response = soa_message(0x1234, vec![soa]);
+        response[2] |= 0x02;
+        let error =
+            parse_soa_response(0x1234, &apex, 1, &response).expect_err("truncated SOA response");
+
+        assert_eq!(error, SoaQueryError::Truncated);
+    }
+
+    #[test]
     fn rejects_soa_response_without_apex_soa() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let a = record(
@@ -2845,6 +2876,26 @@ mod tests {
     }
 
     #[test]
+    fn accepts_axfr_apex_soa_and_ns_owners_case_insensitively() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("EXAMPLE.TEST.", RecordType::Soa as u16, soa_rdata());
+        let ns = record(
+            "Example.Test.",
+            RecordType::Ns as u16,
+            name_rdata("ns.example.test."),
+        );
+        let snapshot = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(0x1234, vec![soa.clone(), ns, soa])],
+        )
+        .expect("mixed-case apex SOA and NS owners");
+
+        assert_eq!(snapshot.serial, Some(1));
+    }
+
+    #[test]
     fn rejects_ixfr_mode2_fallback_without_apex_ns() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let current_soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
@@ -2891,6 +2942,34 @@ mod tests {
             )],
         )
         .expect_err("CNAME with non-DNSSEC data");
+
+        assert_eq!(error, AxfrError::CnameCoexistsWithOtherData);
+    }
+
+    #[test]
+    fn rejects_axfr_cname_with_mixed_case_non_dnssec_data() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let cname = record(
+            "ALIAS.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let a = record(
+            "alias.example.test.",
+            RecordType::A as u16,
+            vec![192, 0, 2, 10],
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), cname, a, soa],
+            )],
+        )
+        .expect_err("mixed-case CNAME with non-DNSSEC data");
 
         assert_eq!(error, AxfrError::CnameCoexistsWithOtherData);
     }
@@ -2957,6 +3036,34 @@ mod tests {
             )],
         )
         .expect_err("DNAME with CNAME data");
+
+        assert_eq!(error, AxfrError::DnameCoexistsWithCname);
+    }
+
+    #[test]
+    fn rejects_axfr_dname_with_mixed_case_cname_data() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
+        let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
+        let dname = record(
+            "Redirect.example.test.",
+            RecordType::Dname as u16,
+            name_rdata("target.example.test."),
+        );
+        let cname = record(
+            "redirect.example.test.",
+            RecordType::Cname as u16,
+            name_rdata("target.example.test."),
+        );
+        let error = parse_axfr_response(
+            0x1234,
+            &apex,
+            1,
+            &[axfr_message(
+                0x1234,
+                vec![soa.clone(), apex_ns(), dname, cname, soa],
+            )],
+        )
+        .expect_err("mixed-case DNAME with CNAME data");
 
         assert_eq!(error, AxfrError::DnameCoexistsWithCname);
     }

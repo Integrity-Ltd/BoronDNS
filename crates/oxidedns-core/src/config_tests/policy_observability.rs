@@ -135,6 +135,28 @@
     }
 
     #[test]
+    fn rejects_oversized_nsid() {
+        let nsid = "x".repeat(256);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                nsid = "{nsid}"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+        ))
+        .expect_err("oversized NSID must fail validation");
+
+        assert!(
+            error.to_string().contains("server.nsid"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn parses_dns_cookie_policy_configuration() {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -325,6 +347,10 @@
             ("path_prefix = \"obs\"", "absolute HTTP path"),
             ("path_prefix = \"/obs/\"", "must not end with '/'"),
             ("path_prefix = \"/../obs\"", "must not contain"),
+            (
+                "path_prefix = \"/metrics\"",
+                "conflicts with a built-in management route",
+            ),
             ("rate_limit_per_minute = 0", "rate_limit_per_minute"),
             ("rate_limit_idle_seconds = 0", "rate_limit_idle_seconds"),
         ] {

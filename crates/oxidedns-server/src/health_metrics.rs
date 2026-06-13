@@ -259,12 +259,10 @@ async fn observability_index(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_index_value(&state),
-    )
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
+    observability_response(observability_index_value(&state))
 }
 
 async fn observability_summary(
@@ -272,12 +270,10 @@ async fn observability_summary(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_summary_value(&state),
-    )
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
+    observability_response(observability_summary_value(&state))
 }
 
 async fn observability_runtime(
@@ -285,12 +281,10 @@ async fn observability_runtime(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_runtime_value(&state),
-    )
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
+    observability_response(observability_runtime_value(&state))
 }
 
 async fn observability_resources(
@@ -298,6 +292,9 @@ async fn observability_resources(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let config = &state.observability;
     let filesystems = if config.include_filesystems {
         filesystem_observability_value()
@@ -309,19 +306,14 @@ async fn observability_resources(
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(
-        peer.ip(),
-        &headers,
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(
-            &state,
-            json!({
-                "filesystems": filesystems,
-                "process_resources": process_resources,
-                "note": "resource probing is bounded to host-local snapshots; this endpoint does not perform external checks"
-            }),
-        ),
-    )
+        json!({
+            "filesystems": filesystems,
+            "process_resources": process_resources,
+            "note": "resource probing is bounded to host-local snapshots; this endpoint does not perform external checks"
+        }),
+    ))
 }
 
 async fn observability_time(
@@ -329,17 +321,15 @@ async fn observability_time(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let status = if state.observability.include_time_sync_status {
         time_sync_observability_value()
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_base_value(&state, status),
-    )
+    observability_response(observability_base_value(&state, status))
 }
 
 async fn observability_certificates(
@@ -347,17 +337,15 @@ async fn observability_certificates(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let status = if state.observability.include_certificate_status {
         certificate_observability_value(&state.transfer_materials)
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_base_value(&state, status),
-    )
+    observability_response(observability_base_value(&state, status))
 }
 
 async fn observability_zones(
@@ -365,6 +353,9 @@ async fn observability_zones(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let zones = if state.observability.include_zone_detail {
         state
             .zones
@@ -375,19 +366,14 @@ async fn observability_zones(
     } else {
         Vec::new()
     };
-    observability_response(
-        peer.ip(),
-        &headers,
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(
-            &state,
-            json!({
-                "detail": state.observability.include_zone_detail,
-                "counts": zone_counts_value(&state),
-                "zones": zones,
-            }),
-        ),
-    )
+        json!({
+            "detail": state.observability.include_zone_detail,
+            "counts": zone_counts_value(&state),
+            "zones": zones,
+        }),
+    ))
 }
 
 async fn observability_zone(
@@ -396,6 +382,9 @@ async fn observability_zone(
     Path(zone): Path<String>,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let requested = if zone.ends_with('.') {
         zone
     } else {
@@ -407,22 +396,15 @@ async fn observability_zone(
             .as_ref()
             .eq_ignore_ascii_case(&requested)
     }) else {
-        return observability_response(
-            peer.ip(),
-            &headers,
+        return observability_response(observability_base_value(
             &state,
-            observability_base_value(
-                &state,
-                json!({"error": "zone_not_found", "zone": requested}),
-            ),
-        );
+            json!({"error": "zone_not_found", "zone": requested}),
+        ));
     };
-    observability_response(
-        peer.ip(),
-        &headers,
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(&state, zone_observability_value(&state, &metadata)),
-    )
+        zone_observability_value(&state, &metadata),
+    ))
 }
 
 async fn observability_catalogs(
@@ -430,18 +412,16 @@ async fn observability_catalogs(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
-    observability_response(
-        peer.ip(),
-        &headers,
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(
-            &state,
-            json!({
-                "configured": state.catalog_manager.catalogs_by_key.len(),
-                "memberships": catalog_observability_values(&state),
-            }),
-        ),
-    )
+        json!({
+            "configured": state.catalog_manager.catalogs_by_key.len(),
+            "memberships": catalog_observability_values(&state),
+        }),
+    ))
 }
 
 async fn observability_transfers(
@@ -449,6 +429,9 @@ async fn observability_transfers(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let snapshot = state.metrics.snapshot();
     let scheduler = zone_scheduler_observability_values(&state);
     let failures_since_success = scheduler
@@ -459,38 +442,33 @@ async fn observability_transfers(
         .iter()
         .filter(|zone| zone["next_refresh_unix_seconds"].is_number())
         .count();
-    observability_response(
-        peer.ip(),
-        &headers,
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(
-            &state,
-            json!({
-                "active": {
-                    "status": "not_tracked",
-                    "reason": "transfer sessions are counted and scheduler state is tracked, but in-flight session detail is not retained"
-                },
-                "counters": {
-                    "axfr_started": snapshot.axfr_started,
-                    "axfr_succeeded": snapshot.axfr_succeeded,
-                    "axfr_failed": snapshot.axfr_failed,
-                    "ixfr_started": snapshot.ixfr_started,
-                    "ixfr_succeeded": snapshot.ixfr_succeeded,
-                    "ixfr_failed": snapshot.ixfr_failed,
-                    "total_started": snapshot.axfr_started.saturating_add(snapshot.ixfr_started),
-                    "total_succeeded": snapshot.axfr_succeeded.saturating_add(snapshot.ixfr_succeeded),
-                    "total_failed": snapshot.axfr_failed.saturating_add(snapshot.ixfr_failed),
-                },
-                "scheduler": {
-                    "zones_reported": scheduler.len(),
-                    "zones_waiting_for_refresh": zones_waiting,
-                    "failures_since_success_total": failures_since_success,
-                },
-                "transfer_materials": transfer_material_observability_counts(&state.transfer_materials),
-                "per_zone_scheduler": scheduler,
-            }),
-        ),
-    )
+        json!({
+            "active": {
+                "status": "not_tracked",
+                "reason": "transfer sessions are counted and scheduler state is tracked, but in-flight session detail is not retained"
+            },
+            "counters": {
+                "axfr_started": snapshot.axfr_started,
+                "axfr_succeeded": snapshot.axfr_succeeded,
+                "axfr_failed": snapshot.axfr_failed,
+                "ixfr_started": snapshot.ixfr_started,
+                "ixfr_succeeded": snapshot.ixfr_succeeded,
+                "ixfr_failed": snapshot.ixfr_failed,
+                "total_started": snapshot.axfr_started.saturating_add(snapshot.ixfr_started),
+                "total_succeeded": snapshot.axfr_succeeded.saturating_add(snapshot.ixfr_succeeded),
+                "total_failed": snapshot.axfr_failed.saturating_add(snapshot.ixfr_failed),
+            },
+            "scheduler": {
+                "zones_reported": scheduler.len(),
+                "zones_waiting_for_refresh": zones_waiting,
+                "failures_since_success_total": failures_since_success,
+            },
+            "transfer_materials": transfer_material_observability_counts(&state.transfer_materials),
+            "per_zone_scheduler": scheduler,
+        }),
+    ))
 }
 
 async fn observability_security(
@@ -498,6 +476,9 @@ async fn observability_security(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let snapshot = state.metrics.snapshot();
     let rcode_counts = if state.metrics.hot_path_detail_enabled() {
         state.metrics.query_rcode_counts()
@@ -519,53 +500,48 @@ async fn observability_security(
         .saturating_add(snapshot.notify_tsig_badtime)
         .saturating_add(snapshot.notify_tsig_badalg)
         .saturating_add(snapshot.notify_tsig_badtrunc);
-    observability_response(
-        peer.ip(),
-        &headers,
+    observability_response(observability_base_value(
         &state,
-        observability_base_value(
-            &state,
-            json!({
-                "recursion": {
-                    "authoritative_only": true,
-                    "recursive_service": false,
-                    "refused_queries": refused_queries,
-                },
-                "notify": {
-                    "received": snapshot.notify_received,
-                    "unauthorized": snapshot.notify_unauthorized,
-                    "refresh_signalled": snapshot.notify_refresh_signalled,
-                    "refresh_deduplicated": snapshot.notify_refresh_deduplicated,
-                    "unauthorized_fraction": fraction_value(snapshot.notify_unauthorized, snapshot.notify_received),
-                },
-                "tsig_notify": {
-                    "ok": snapshot.notify_tsig_ok,
-                    "badkey": snapshot.notify_tsig_badkey,
-                    "badsig": snapshot.notify_tsig_badsig,
-                    "badtime": snapshot.notify_tsig_badtime,
-                    "badalg": snapshot.notify_tsig_badalg,
-                    "badtrunc": snapshot.notify_tsig_badtrunc,
-                    "failures": notify_tsig_failures,
-                },
-                "dns_cookie": {
-                    "no_cookie": snapshot.dns_cookie_no_cookie,
-                    "client_only": snapshot.dns_cookie_client_only,
-                    "valid_server": snapshot.dns_cookie_valid_server,
-                    "invalid_server": snapshot.dns_cookie_invalid_server,
-                    "badcookie": snapshot.dns_cookie_badcookie,
-                    "prefix_detail": state.metrics.hot_path_detail_label(),
-                },
-                "rrl": {
-                    "subject": snapshot.rrl_subject,
-                    "dropped": snapshot.rrl_dropped,
-                    "truncated": snapshot.rrl_truncated,
-                    "tracked_keys": snapshot.rrl_tracked_keys,
-                    "key_evictions": snapshot.rrl_key_evictions,
-                },
-                "wrong_interface": {"status": "not_tracked"},
-            }),
-        ),
-    )
+        json!({
+            "recursion": {
+                "authoritative_only": true,
+                "recursive_service": false,
+                "refused_queries": refused_queries,
+            },
+            "notify": {
+                "received": snapshot.notify_received,
+                "unauthorized": snapshot.notify_unauthorized,
+                "refresh_signalled": snapshot.notify_refresh_signalled,
+                "refresh_deduplicated": snapshot.notify_refresh_deduplicated,
+                "unauthorized_fraction": fraction_value(snapshot.notify_unauthorized, snapshot.notify_received),
+            },
+            "tsig_notify": {
+                "ok": snapshot.notify_tsig_ok,
+                "badkey": snapshot.notify_tsig_badkey,
+                "badsig": snapshot.notify_tsig_badsig,
+                "badtime": snapshot.notify_tsig_badtime,
+                "badalg": snapshot.notify_tsig_badalg,
+                "badtrunc": snapshot.notify_tsig_badtrunc,
+                "failures": notify_tsig_failures,
+            },
+            "dns_cookie": {
+                "no_cookie": snapshot.dns_cookie_no_cookie,
+                "client_only": snapshot.dns_cookie_client_only,
+                "valid_server": snapshot.dns_cookie_valid_server,
+                "invalid_server": snapshot.dns_cookie_invalid_server,
+                "badcookie": snapshot.dns_cookie_badcookie,
+                "prefix_detail": state.metrics.hot_path_detail_label(),
+            },
+            "rrl": {
+                "subject": snapshot.rrl_subject,
+                "dropped": snapshot.rrl_dropped,
+                "truncated": snapshot.rrl_truncated,
+                "tracked_keys": snapshot.rrl_tracked_keys,
+                "key_evictions": snapshot.rrl_key_evictions,
+            },
+            "wrong_interface": {"status": "not_tracked"},
+        }),
+    ))
 }
 
 async fn observability_config(
@@ -573,6 +549,9 @@ async fn observability_config(
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
+    if let Some(response) = observability_preflight(peer.ip(), &headers, &state) {
+        return response;
+    }
     let config = &state.observability;
     let body = if config.include_config_summary {
         json!({
@@ -597,26 +576,24 @@ async fn observability_config(
     } else {
         json!({"status": "disabled"})
     };
-    observability_response(
-        peer.ip(),
-        &headers,
-        &state,
-        observability_base_value(&state, body),
-    )
+    observability_response(observability_base_value(&state, body))
 }
 
-fn observability_response(
+fn observability_preflight(
     source: IpAddr,
     headers: &HeaderMap,
     state: &HealthEndpointState,
-    value: Value,
-) -> Response {
+) -> Option<Response> {
     if let Err(error) = state.observability_auth.authorize(headers) {
-        return observability_auth_error_response(error);
+        return Some(observability_auth_error_response(error));
     }
     if let Err(retry_after_seconds) = state.observability_rate_limiter.check(source) {
-        return rate_limited_response(retry_after_seconds);
+        return Some(rate_limited_response(retry_after_seconds));
     }
+    None
+}
+
+fn observability_response(value: Value) -> Response {
     json_response(StatusCode::OK, value.to_string())
 }
 

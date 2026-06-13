@@ -781,7 +781,29 @@ where
         }
     }
 
-    best
+    hard_truncate_rendered_entry(best, max_entry_length_bytes)
+}
+
+fn hard_truncate_rendered_entry(entry: Vec<u8>, max_entry_length_bytes: usize) -> Vec<u8> {
+    if entry.len() <= max_entry_length_bytes {
+        return entry;
+    }
+    if max_entry_length_bytes == 0 {
+        return Vec::new();
+    }
+    let keep_newline = entry.last() == Some(&b'\n');
+    let text = String::from_utf8(entry).unwrap_or_default();
+    let content_limit = if keep_newline {
+        max_entry_length_bytes - 1
+    } else {
+        max_entry_length_bytes
+    };
+    let boundary = previous_char_boundary(&text, content_limit);
+    let mut out = text.as_bytes()[..boundary].to_vec();
+    if keep_newline {
+        out.push(b'\n');
+    }
+    out
 }
 
 fn previous_char_boundary(text: &str, mut index: usize) -> usize {
@@ -986,10 +1008,19 @@ fn escape_logfmt_string(value: &str) -> String {
 }
 
 fn log_filter(configured_level: &str) -> anyhow::Result<EnvFilter> {
-    let level = std::env::var("OXIDEDNS_LOG_LEVEL")
+    let override_level = std::env::var("OXIDEDNS_LOG_LEVEL")
         .or_else(|_| std::env::var("RUST_LOG"))
-        .unwrap_or_else(|_| normalize_log_level(configured_level).to_owned());
+        .ok();
+    let level = selected_log_filter_level(configured_level, override_level);
     EnvFilter::try_new(level).map_err(|error| anyhow!("invalid log level: {error}"))
+}
+
+fn selected_log_filter_level(configured_level: &str, override_level: Option<String>) -> String {
+    override_level
+        .as_deref()
+        .map(normalize_log_level)
+        .unwrap_or_else(|| normalize_log_level(configured_level))
+        .to_owned()
 }
 
 fn normalize_log_level(level: &str) -> &str {
@@ -1409,6 +1440,14 @@ mod tests {
     }
 
     #[test]
+    fn warning_log_level_override_is_normalized_before_env_filter() {
+        assert_eq!(
+            selected_log_filter_level("info", Some("warning".to_owned())),
+            "warn"
+        );
+    }
+
+    #[test]
     fn configured_log_level_builds_env_filter() {
         log_filter("info,oxidedns_server=debug").expect("valid env filter");
         let error = log_filter("oxidedns_server=notalevel").expect_err("invalid env filter");
@@ -1593,6 +1632,13 @@ mod tests {
         assert!(text.starts_with("{\"message\":\""));
         assert!(text.contains(LOG_TRUNCATION_MARKER));
         assert!(text.contains("\"truncated\":true"));
+    }
+
+    #[test]
+    fn rendered_truncation_fallback_is_hard_capped_for_tiny_limits() {
+        let truncated = truncated_json_log_entry("hello", 8);
+
+        assert!(truncated.len() <= 8);
     }
 
     #[test]

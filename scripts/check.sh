@@ -19,6 +19,7 @@ python3 -m py_compile scripts/check-zsm-engineering-mvp-matrix.py
 python3 -m py_compile scripts/check-functional-requirement-references.py
 python3 -m py_compile scripts/check-rfc-compliance-assertions.py
 python3 -m py_compile scripts/check-srs-identifier-registry.py
+python3 -m py_compile scripts/check-version-consistency.py
 python3 -m py_compile scripts/check-doc-hygiene.py
 python3 -m py_compile scripts/check-srs-hygiene.py
 python3 -m py_compile scripts/check-srs-review-disposition.py
@@ -38,6 +39,7 @@ python3 scripts/check-zsm-engineering-mvp-matrix.py
 python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-rfc-compliance-assertions.py
 python3 scripts/check-srs-identifier-registry.py
+python3 scripts/check-version-consistency.py
 python3 scripts/check-doc-hygiene.py
 python3 scripts/check-srs-hygiene.py
 python3 scripts/check-srs-review-disposition.py

@@ -39,10 +39,12 @@ accepted.
 | `crates/oxidedns-server/src/lib.rs` | Runtime integration for catalog reconciliation, refresh scheduling, NOTIFY/TSIG preparation, task supervision, and listener orchestration | Runtime startup, listener task wiring, catalog membership reconciliation, refresh scheduling, initial zone loads, NOTIFY authority, TSIG packet preparation, and runtime task supervision. |
 | `crates/oxidedns-server/src/udp.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NOTIFY`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, and UDP transport behavior | UDP listener binding, socket/reuseport worker setup, packet receive/send loops, query metrics observation, RRL application, DNS Cookie observation, and packet response handling. |
 | `crates/oxidedns-server/src/tcp.rs` | `ODS-FR-TCP`, TCP query serving, NOTIFY over TCP, and TCP overload behavior | TCP listener accept loop, global/per-source connection limits, DNS-over-TCP message framing, in-flight query limits, response writer, and TCP packet handling. |
-| `crates/oxidedns-server/src/health_metrics.rs` | `ODS-NFR-OBS`, health endpoints, metrics endpoint, runtime counters, and ZoneImage serve metrics | `/healthz`, `/readyz`, and `/metrics` serving, metrics compression/rate limiting, runtime counter snapshots, latency histograms, ZoneImage serve counters, and catalog/refresh metric rendering. |
+| `crates/oxidedns-server/src/health_metrics.rs` | `ODS-NFR-OBS`, health endpoints, metrics endpoint, runtime counters, and ZoneImage serve metrics | `/livez`, `/healthz`, `/readyz`, and `/metrics` serving, metrics compression/rate limiting, runtime counter snapshots, latency histograms, ZoneImage serve counters, and catalog/refresh metric rendering. |
+| `crates/oxidedns-server/src/observability.rs` | `ODS-NFR-OBS`, in-process JSON observability/management API | Bearer-token auth (`ObservabilityAuth`, constant-time), reduced-metrics mode, certificate/resource/time-sync status reporting, and transfer-material provisioning for the management endpoints. |
 | `crates/oxidedns-server/src/rate_limit.rs` | `ODS-FR-RRL` and NOTIFY log suppression | Response-rate limiting buckets, slip/drop decisions, RRL summaries, notify log limiting, response classification helpers, and truncated RRL response construction. |
 | `crates/oxidedns-server/src/transfer.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, and `ODS-FR-XOT` outbound transfer I/O | SOA polling, AXFR/IXFR TCP sessions, XoT TLS transport, TSIG transfer signing/verification, transfer query IDs, and PEM trust/client-certificate loading. |
 | `crates/oxidedns-server/src/transfer_plan.rs` | Transfer target planning and primary rotation for static and catalog zones | TSIG key resolution into transfer plans, transfer-source matching, primary rotation with rejection-sampling start index, catalog member plan derivation, and initial transfer origin ordering. |
+| `crates/oxidedns-server/src/secret_store.rs` | Reloadable transfer secret store | `SecretManager` filesystem-backed TSIG/XoT secret manifest parsing, `RwLock`-backed reload over a retained static-key snapshot baseline, and zeroized secret material. |
 | `crates/oxidedns-server/src/dns_cookie.rs` | `ODS-FR-COOKIE` runtime cookie secret helpers | DNS Cookie runtime settings, process-local Server Secret generation/rotation, configured shared-secret and previous-secret rollover state, cookie context construction, secret fingerprint redaction, and source-prefix metric configuration. |
 | `crates/oxidedns-server/src/config_validation.rs` | Runtime configuration validation and warning generation | Runtime configuration checks, XoT trust-anchor/client-key validation, file-descriptor limit formula, and warning emission inputs. |
 | `crates/oxidedns-server/src/runtime_status.rs` | Runtime readiness and draining status | Shared runtime status cell used by health and shutdown paths. |
@@ -136,7 +138,7 @@ first-party Rust code in this workspace. OxideGun remains support-tool scope; it
 does not expand the OxideDNS server runtime or the externally observable DNS
 protocol requirements.
 
-Current `scripts/audit-maintainability.sh` output reports 31,990 first-party
+Current `scripts/audit-maintainability.sh` output reports 53,740 first-party
 production Rust source lines, which is above the 15,000-line `SHOULD` target.
 Current ODS-NFR-MAINT-001 over-target rationale: the count reflects the
 implemented Engineering MVP scope now retained after external review, including

@@ -14,6 +14,8 @@ use time::OffsetDateTime;
 #[cfg(feature = "xdp")]
 mod xdp_backend;
 
+const MAX_XDP_INFLIGHT_SOURCE_PORTS: usize = 4096;
+
 const DEFAULT_TARGET: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 53);
 const DEFAULT_QNAME: &str = "example.test.";
 const DEFAULT_QTYPE: &str = "A";
@@ -1412,7 +1414,36 @@ fn validate_xdp_config(config: &FileConfig) -> Result<()> {
     {
         bail!("all source.list entries must use the same IP family as target.address");
     }
+    let tracking_ports = source_port_tracking_width(&config.source)?;
+    if tracking_ports > MAX_XDP_INFLIGHT_SOURCE_PORTS {
+        bail!(
+            "XDP latency tracking source port span {tracking_ports} exceeds maximum {MAX_XDP_INFLIGHT_SOURCE_PORTS}; use a narrower source.port_range or source.port_list span"
+        );
+    }
     Ok(())
+}
+
+fn source_port_tracking_width(source: &SourceConfig) -> Result<usize> {
+    let (first, last) = if !source.port_list.is_empty() {
+        let first = source
+            .port_list
+            .iter()
+            .min()
+            .copied()
+            .ok_or_else(|| anyhow!("source.port_list is empty"))?;
+        let last = source
+            .port_list
+            .iter()
+            .max()
+            .copied()
+            .ok_or_else(|| anyhow!("source.port_list is empty"))?;
+        (first, last)
+    } else if let Some(range) = &source.port_range {
+        parse_port_range(range)?
+    } else {
+        (source.port, source.port)
+    };
+    Ok(usize::from(last - first) + 1)
 }
 
 fn effective_source_is_ipv4(config: &SourceConfig) -> bool {
@@ -2260,5 +2291,22 @@ mod tests {
         config.source.range_count = Some(4);
 
         validate_config(&config).expect("IPv6 XDP source range is valid");
+    }
+
+    #[test]
+    fn xdp_validation_rejects_excessive_source_port_span() {
+        let mut config = FileConfig::default();
+        config.backend.kind = Backend::Xdp;
+        config.interface.nic = Some("veth0".to_owned());
+        config.interface.queue_count = 1;
+        config.source.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 1]));
+        config.target.mac = Some(MacAddr([0x02, 0, 0, 0, 0, 2]));
+        config.source.port_range = Some("1-65535".to_owned());
+
+        let error = validate_config(&config).expect_err("wide source port span must fail");
+        assert!(
+            error.to_string().contains("source port span"),
+            "unexpected error: {error}"
+        );
     }
 }

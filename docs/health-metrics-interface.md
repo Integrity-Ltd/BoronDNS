@@ -54,7 +54,8 @@ Not ready:
 {"status":"not-ready","reason":"loading","version":"<version>","zones_active":0,"zones_loading":42,"zones_expired":0}
 ```
 
-The stable `reason` values currently include `loading` and `no_active_zones`.
+The stable `reason` values currently include `loading`, `expired`, and
+`no_active_zones`.
 
 Draining:
 
@@ -86,6 +87,8 @@ The metrics endpoint exposes these implemented metric families:
   where named below;
 - SRS v0.9.1 per-zone status series:
   `oxidedns_secondary_zone_state`,
+  `oxidedns_secondary_zone_loading_seconds` (seconds the zone has been in
+  LOADING state during this process uptime),
   `oxidedns_secondary_zone_soa_serial`,
   `oxidedns_secondary_zone_last_refresh_seconds`,
   `oxidedns_secondary_zone_next_refresh_seconds`,
@@ -197,14 +200,16 @@ they are promoted into a requirement.
 ## Evidence
 
 Current code and local tests for this interface live in
-`crates/oxidedns-server/src/lib.rs`:
+`crates/oxidedns-server/src/` (the module is declared in `lib.rs`):
 
-- `health_router`, `livez`, `readyz`, `healthz`, `metrics`,
+- production symbols in `crates/oxidedns-server/src/health_metrics.rs`:
+  `health_router`, `livez`, `readyz`, `healthz`, `metrics`,
   `rate_limited_response`, and `readiness_response`;
-- `health_endpoint_reports_starting_until_zone_active`;
-- `health_endpoint_handles_readyz_metrics_404_and_405`;
-- `metrics_endpoint_rate_limits_per_source_without_limiting_health`;
-- `health_endpoint_reports_draining_and_unready_during_shutdown`.
+- tests in `crates/oxidedns-server/src/tests/health_observability_runtime.rs`:
+  - `health_endpoint_reports_starting_until_zone_active`;
+  - `health_endpoint_handles_readyz_metrics_404_and_405`;
+  - `metrics_endpoint_rate_limits_per_source_without_limiting_health`;
+  - `health_endpoint_reports_draining_and_unready_during_shutdown`.
 
 Retained script evidence is captured by
 `scripts/capture-health-metrics-evidence.sh` and release snapshots.
