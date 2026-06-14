@@ -38,7 +38,7 @@ cargo check --manifest-path fuzz/Cargo.toml
 
 For retained local evidence, use the short campaign runner from the repository
 root. It defaults to all known fuzz targets for 10 seconds per target and writes
-logs, artifacts, command lines, `campaign-summary.tsv`, and
+logs, artifacts, isolated per-run corpus directories, command lines, `campaign-summary.tsv`, and
 tool-version/config records under `target/fuzz-evidence/<timestamp>/`:
 
 ```sh
@@ -68,8 +68,10 @@ artifact directory, and command file, so a 24-hour campaign can be attached to
 release notes without scraping individual logs.
 
 Generated cargo-fuzz corpus files under `fuzz/corpus/` are ignored by default.
-Promote minimized regression inputs into a tracked fixture intentionally rather
-than committing the auto-grown local corpus wholesale.
+The campaign runner uses an isolated corpus directory under the evidence root
+for each target, which avoids shared-corpus races when multiple target instances
+run in parallel. Promote minimized regression inputs into a tracked fixture
+intentionally rather than committing the auto-grown local corpus wholesale.
 
 If the default `cargo` on `PATH` is a wrapper that cannot see the repository's
 real filesystem path, either use `--toolchain nightly` so the runner prepends

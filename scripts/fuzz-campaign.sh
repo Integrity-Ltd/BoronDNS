@@ -234,10 +234,11 @@ run_target() {
     local target="$1"
     local target_log="$evidence_dir/logs/$target.log"
     local artifact_dir="$evidence_dir/artifacts/$target"
+    local corpus_dir="$evidence_dir/corpus/$target"
     local command_file="$evidence_dir/logs/$target.command"
     local -a cmd
 
-    mkdir -p "$artifact_dir"
+    mkdir -p "$artifact_dir" "$corpus_dir"
     if [[ -n "$cargo_toolchain" ]]; then
         cmd=(
             rustup run "$cargo_toolchain" "$cargo_bin" fuzz run
@@ -252,6 +253,7 @@ run_target() {
     fi
     cmd+=(
         "$target"
+        "$corpus_dir"
         --
         "-max_total_time=$duration"
         "-artifact_prefix=$artifact_dir/"

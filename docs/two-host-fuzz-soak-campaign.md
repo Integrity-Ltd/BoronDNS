@@ -64,6 +64,30 @@ scripts/fuzz-soak-two-host-campaign.sh status --evidence-dir target/evidence/fuz
 scripts/fuzz-soak-two-host-campaign.sh collect --evidence-dir target/evidence/fuzz-soak-two-host-<timestamp>
 ```
 
+For CPU-saturating campaigns, repeat the target set and weight the host list.
+For example, the 2:3 host weighting below launches 75 fuzz services, which is
+about 30 instances on the 48-core `oxidedns-1` host and 45 instances on the
+72-core `oxidegun-1` host:
+
+```sh
+scripts/fuzz-soak-two-host-campaign.sh launch \
+  --remote-repo /home/codex/oxidedns-fuzz \
+  --duration 86400 \
+  --target-repeat 15 \
+  --sampler-interval 60 \
+  --sanitizer address \
+  --host oxidedns-1 \
+  --host oxidegun-1 \
+  --host oxidedns-1 \
+  --host oxidegun-1 \
+  --host oxidegun-1
+```
+
+The helper gives each repeated target instance a unique evidence directory and
+installs one sampler service per physical host. Sampler output is retained under
+`host/<host>/host-samples.tsv` and records active fuzz units, matching process
+count, aggregate CPU, aggregate RSS, load averages, and available memory.
+
 For formal SRS fuzz evidence, retain at least one 24-hour run per parser target.
 The two-host split reduces wall-clock time but does not reduce per-target
 duration.
