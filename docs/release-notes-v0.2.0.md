@@ -21,7 +21,7 @@ Status vocabulary used below:
 
 | Category | Representative scope | Status | Evidence pointer |
 | --- | --- | --- | --- |
-| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates and selected current-primary matrix; Deferred for XoT, production-depth, and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `target/evidence/20260613T235555Z/`; `target/evidence/primary-matrix-20260614T010049Z/` |
+| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates, selected current-primary matrix, and selected local XoT release breadth; Deferred for production-depth and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `docs/xot-release-evidence-v0.2.0.md`; `target/evidence/20260613T235555Z/`; `target/evidence/primary-matrix-20260614T010049Z/`; `target/evidence/xot-release-20260614T014700Z/` |
 | ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, resource evidence handoff, and release security posture | Verified for local gates and static-binary reproducibility; Deferred for production reference benchmark, package/image reproducibility, artifact signing, and long soak | `target/evidence/20260613T235555Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260613T235555Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md` |
 | ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260613T235555Z/cli-evidence/`; `target/evidence/20260613T235555Z/interface-compatibility/current-interface-baseline.tsv` |
 | ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260613T235555Z/logs/` |
@@ -74,6 +74,13 @@ The v0.2.0 local release evidence in
 interop cases. `docs/primary-interop-matrix-v0.2.0.md` records the command,
 scope, tested versions, case table, and retained artifact layout.
 
+The v0.2.0 local XoT release evidence in
+`target/evidence/xot-release-20260614T014700Z` passed 3 of 3 selected XoT
+cases: Knot DNS XoT AXFR, Knot DNS XoT+TSIG AXFR, and BIND catalog-zone
+transfer over XoT+TSIG. `docs/xot-release-evidence-v0.2.0.md` records the
+case scope, primary versions, retained artifact layout, and remaining formal
+XoT acceptance limits.
+
 | Primary | Version | Runtime source | Selected capabilities |
 | --- | --- | --- | --- |
 | BIND 9 | 9.20.23 stable | Arch Linux host package | AXFR; TSIG AXFR; NOTIFY refresh; IXFR refresh |
@@ -84,8 +91,9 @@ scope, tested versions, case table, and retained artifact layout.
 The original release snapshot directory
 `target/evidence/20260613T235555Z/interop-primary-versions/INDEX.tsv` still
 contains only the snapshot header. The selected matrix above is the current
-retained local primary-version evidence. XoT and broader production acceptance
-remain separate deferred rows.
+retained local primary-version evidence for the non-XoT primary matrix. The
+selected XoT evidence above is current retained local XoT evidence. Broader
+production acceptance remains a separate deferred row.
 
 ## Failed Requirement Decisions
 
@@ -94,7 +102,7 @@ No Failed requirement decision is accepted for v0.2.0.
 | Decision | Status | Release action |
 | --- | --- | --- |
 | Any release blocker classified Failed | Verified absent | Do not tag if a Failed blocker appears before publication |
-| Production-depth benchmark, long soak, XoT release matrix, package/image reproducibility, artifact signing | Deferred | Named in handoff sections rather than claimed as completed |
+| Production-depth benchmark, long soak, package/image reproducibility, artifact signing, broader formal XoT failure/mTLS/prohibited-suite acceptance | Deferred | Named in handoff sections rather than claimed as completed |
 
 ## Appendix C.5 Decision Review
 
@@ -128,7 +136,7 @@ formal retained release evidence is complete.
 | RFC 1995 | Incremental Zone Transfer in DNS | Partially Compliant | IXFR client-side clauses | Additional real-primary IXFR matrix remains open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-ixfr-refresh.sh`; `scripts/interop-knot-ixfr-refresh-docker.sh` |
 | RFC 1996 | DNS NOTIFY | Partially Compliant | NOTIFY receiver-side clauses | Signed-NOTIFY fault matrix and retained refresh-trigger artifacts remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-notify-negative.sh` |
 | RFC 8945 | Secret Key Transaction Authentication for DNS | Partially Compliant | TSIG request/response, transfer, and NOTIFY authentication | Full TSIG truncation and transfer-stream release evidence remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-tsig-axfr.sh`; `docs/verification-ledger.md` |
-| RFC 9103 | DNS Zone Transfer over TLS | Partially Compliant | XoT client-side transfer clauses only | Broader real-primary XoT matrix remains open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-knot-xot-docker.sh`; `scripts/audit-xot-revocation.sh` |
+| RFC 9103 | DNS Zone Transfer over TLS | Partially Compliant | XoT client-side transfer clauses only | Selected Knot and BIND XoT release breadth is retained; broader failure-class, mTLS, default-port, prohibited-suite, and optional NSD XoT evidence remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/xot-release-evidence-v0.2.0.md`; `scripts/interop-knot-xot-docker.sh`; `scripts/audit-xot-revocation.sh` |
 | RFC 9432 | DNS Catalog Zones | Partially Compliant | catalog consumer behavior and explicit OxideDNS member-transfer extension profile | Broader release-level catalog evidence remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/catalog-zone-rfc9432.md`; catalog interop scripts |
 | RFC 7314 | EDNS EXPIRE Option | Informative Only | excluded experimental zone-expire signalling | Not implemented by design | N/A | SRS v0.9.1 | `docs/OxideDNS-Secondary-SRS-v0.9.1.md` |
 | RFC 4033 | DNS Security Introduction and Requirements | Informative Only | DNSSEC architecture context | None; context citation only | N/A | SRS v0.9.1 | `docs/OxideDNS-Secondary-SRS-v0.9.1.md` |

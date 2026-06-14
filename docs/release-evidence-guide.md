@@ -144,3 +144,19 @@ Retain each successful real-primary run's `primary-version.txt`, redacted
 configuration, relevant packet/log artifacts, and traceability TSVs when the
 script produces them. Release notes must publish the primary versions and
 configuration modes used for accepted interop evidence.
+
+## XoT Release Evidence
+
+For the selected v0.2.0 XoT breadth run, retain the outputs from:
+
+- `scripts/interop-knot-xot-docker.sh`
+- `scripts/interop-knot-xot-tsig-docker.sh`
+- `scripts/interop-bind-xot-catalog-zone-docker.sh`
+
+The current retained bundle is recorded in `docs/xot-release-evidence-v0.2.0.md`
+and lives under `target/evidence/xot-release-20260614T014700Z`. The bundle
+keeps per-case status/log files, `primary-version.txt`, ALPN probes,
+certificate summaries, readiness/metrics/query artifacts, and per-case
+traceability TSVs. TSIG and RNDC-bearing artifacts must be retained only in
+redacted form, and the retained bundle should pass a direct scan for fixture
+secret values before it is cited in release notes.
