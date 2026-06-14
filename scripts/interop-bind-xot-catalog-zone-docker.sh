@@ -70,8 +70,20 @@ member_zone="$workdir/member.example.zone"
 named_conf="$workdir/named.conf"
 rndc_conf="$workdir/rndc.conf"
 oxidedns_conf="$workdir/oxidedns.toml"
+named_conf_redacted="$workdir/named.conf.redacted"
+rndc_conf_redacted="$workdir/rndc.conf.redacted"
+oxidedns_conf_redacted="$workdir/oxidedns.toml.redacted"
 traceability_tsv="$workdir/bind-xot-catalog-zone-traceability.tsv"
 summary_tsv="$workdir/bind-xot-catalog-zone-summary.tsv"
+
+redact_config() {
+    local src="$1"
+    local dst="$2"
+    sed \
+        -e "s/$tsig_secret/<redacted-tsig-secret>/g" \
+        -e "s/$rndc_secret/<redacted-rndc-secret>/g" \
+        "$src" >"$dst"
+}
 
 write_catalog_zone() {
     local serial="$1"
@@ -220,6 +232,9 @@ options {
 };
 EOF
 
+redact_config "$named_conf" "$named_conf_redacted"
+redact_config "$rndc_conf" "$rndc_conf_redacted"
+
 set +e
 bind_probe="$(
     docker run --rm \
@@ -263,8 +278,8 @@ record_docker_primary_version \
     "tls-xot-catalog-refresh" \
     "tls-alpn-dot+tsig-hmac-sha256" \
     "named -V" \
-    "$named_conf" \
-    "$rndc_conf" \
+    "$named_conf_redacted" \
+    "$rndc_conf_redacted" \
     "$workdir/catalog-initial.zone" \
     "$workdir/member-initial.zone"
 
@@ -309,6 +324,7 @@ if ((plain_status == 0)) && [[ "$plain_axfr" == *"version.catalog.example."* ]];
     echo "BIND unexpectedly allowed signed catalog AXFR on plain TCP despite transport tls policy" >&2
     exit 1
 fi
+sed -i "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/plain-signed-axfr.out"
 
 dig "@127.0.0.1" \
     -p "$bind_tls_port" \
@@ -322,6 +338,7 @@ if [[ "$tls_catalog_axfr" != *"version.catalog.example."* ]] || [[ "$tls_catalog
     echo "BIND XoT signed catalog AXFR did not include expected fixture records" >&2
     exit 1
 fi
+sed -i "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/tls-signed-catalog-axfr.out"
 
 cat >"$oxidedns_conf" <<EOF
 [server]
@@ -360,6 +377,7 @@ transport = "xot"
 server_name = "$server_name"
 trust_anchors = ["$workdir/ca.crt"]
 EOF
+redact_config "$oxidedns_conf" "$oxidedns_conf_redacted"
 
 cargo build -p oxidedns-cli >/dev/null
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
@@ -428,14 +446,14 @@ docker logs "$container" >"$workdir/named.log" 2>&1 || true
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
 ODS-VER-003	retained-real-primary	bind_xot_catalog_zone	alpn-probe.txt; tls-signed-catalog-axfr.out; bind-xot-catalog-zone-summary.tsv	BIND 9 serves an RFC 9432 catalog over XoT with ALPN dot and TSIG, and OxideDNS consumes it as a secondary.
-ODS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; oxidedns.toml	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and OxideDNS configures both protections.
+ODS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; oxidedns.toml.redacted	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and OxideDNS configures both protections.
 ODS-FR-PROV-006	retained-real-primary	bind_xot_catalog_live_update	catalog-added.zone; catalog-removed.zone; member-added.out; member-removed.out	Live catalog updates from BIND are reconciled while OxideDNS remains running.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     for artifact in \
-        named.conf rndc.conf oxidedns.toml named.log oxidedns.log primary-version.txt \
+        named.conf.redacted rndc.conf.redacted oxidedns.toml.redacted named.log oxidedns.log primary-version.txt \
         alpn-probe.txt server-certificate.txt plain-signed-axfr.out tls-signed-catalog-axfr.out \
         catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
         member-added.out member-removed.out metrics-after-remove.txt readyz-initial.json \

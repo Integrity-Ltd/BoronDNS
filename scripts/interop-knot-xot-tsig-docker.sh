@@ -27,6 +27,7 @@ container="oxidedns-knot-xot-tsig-$$"
 server_name="primary.alpha.test"
 artifact_dir="${OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
 traceability_tsv="$workdir/knot-xot-tsig-traceability.tsv"
+knot_conf_redacted="$workdir/knot.conf.redacted"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -135,6 +136,7 @@ zone:
   - domain: alpha.test.
     acl: transfer_acl
 EOF
+sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/knot.conf" >"$knot_conf_redacted"
 
 set +e
 knot_probe="$(
@@ -167,7 +169,7 @@ if ! docker run -d --name "$container" \
     echo "skipping Knot XoT+TSIG Docker interop: failed to start Alpine/Knot container" >&2
     exit 0
 fi
-record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-xot-tsig" "tls-xot-axfr" "tls-alpn-dot+tsig-hmac-sha256" "knotd -V" "$workdir/knot.conf" "$zone_file"
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-xot-tsig" "tls-xot-axfr" "tls-alpn-dot+tsig-hmac-sha256" "knotd -V" "$knot_conf_redacted" "$zone_file"
 
 alpn_probe=""
 for _ in {1..120}; do
@@ -377,7 +379,7 @@ EOF
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
-    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/knot.conf" >"$artifact_dir/knot.conf.redacted"
+    cp "$knot_conf_redacted" "$artifact_dir/knot.conf.redacted"
     sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
     cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
     cp "$workdir/ca.crt" "$artifact_dir/ca.crt"
