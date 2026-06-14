@@ -42,7 +42,9 @@ jobs:
         run: scripts/check-shell-scripts.sh
 
       - name: Build installer
-        run: scripts/package-installer.sh
+        run: |
+          rm -rf target/dist
+          scripts/package-installer.sh
 
       - name: Docker installer smoke
         run: scripts/test-installer-docker.sh
