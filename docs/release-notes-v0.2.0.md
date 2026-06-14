@@ -22,7 +22,7 @@ Status vocabulary used below:
 | Category | Representative scope | Status | Evidence pointer |
 | --- | --- | --- | --- |
 | ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates and selected current-primary matrix; Deferred for XoT, production-depth, and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `target/evidence/20260613T235555Z/`; `target/evidence/primary-matrix-20260614T010049Z/` |
-| ODS-NFR | Maintainability, security review inputs, observability, resource evidence handoff, and release security posture | Verified for local gates; Deferred for production reference benchmark, independent reproducible build, and long soak | `target/evidence/20260613T235555Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260613T235555Z/unsafe-dependency-evidence/geiger-summary.env` |
+| ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, resource evidence handoff, and release security posture | Verified for local gates and static-binary reproducibility; Deferred for production reference benchmark, package/image reproducibility, artifact signing, and long soak | `target/evidence/20260613T235555Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260613T235555Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md` |
 | ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260613T235555Z/cli-evidence/`; `target/evidence/20260613T235555Z/interface-compatibility/current-interface-baseline.tsv` |
 | ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260613T235555Z/logs/` |
 | ODS-NEG | Explicitly excluded surfaces, including inbound ordinary DoT/DoH/DoQ and unsupported config aliases | Verified by docs/source alignment checks | `docs/implemented-feature-scope.md`; `docs/operator-deployment-guide.md` |
@@ -39,10 +39,13 @@ catalog-zone, TSIG/XoT, health/metrics, config, CLI, and evidence tooling in
 tree so release claims remain directly traceable. Further server module
 decomposition remains a maintainability candidate, not a release blocker.
 
-Reproducible-build handoff or completed bit-identical comparison: Deferred.
-The snapshot includes `target/evidence/20260613T235555Z/reproducible-build-handoff/`
-for an independent bit-identical comparison; no completed independent comparison
-is claimed in this release note.
+Reproducible-build handoff or completed bit-identical comparison: Verified for
+the static musl binaries. `docs/reproducible-build-v0.2.0.md` records
+`target/evidence/reproducible-build-20260614T013236Z`, where two clean release
+builds in separate target directories produced matching `x86_64-unknown-linux-musl`
+`oxidedns` and `oxide-gun` binaries. Installer/archive normalization, Docker
+image archive reproducibility, artifact signing, and external independent-builder
+sign-off remain separate release-governance work.
 
 ## Regression Delta
 
@@ -91,7 +94,7 @@ No Failed requirement decision is accepted for v0.2.0.
 | Decision | Status | Release action |
 | --- | --- | --- |
 | Any release blocker classified Failed | Verified absent | Do not tag if a Failed blocker appears before publication |
-| Production-depth benchmark, long soak, XoT release matrix, independent reproducible build | Deferred | Named in handoff sections rather than claimed as completed |
+| Production-depth benchmark, long soak, XoT release matrix, package/image reproducibility, artifact signing | Deferred | Named in handoff sections rather than claimed as completed |
 
 ## Appendix C.5 Decision Review
 
@@ -168,8 +171,10 @@ process change.
 Vulnerability disclosure policy reviewed: Verified against `SECURITY.md`.
 
 Release signing mechanism and verification instructions: Deferred to the
-signing handoff. The preferred mechanism remains Sigstore/Cosign with detached
-OpenPGP allowed as fallback.
+signing handoff. Static binary reproducibility is verified in
+`docs/reproducible-build-v0.2.0.md`; public artifact signatures are not yet
+claimed. The preferred mechanism remains Sigstore/Cosign with detached OpenPGP
+allowed as fallback.
 
 Security audit findings and remediation actions: no accepted Failed blocker is
 recorded for this release. Security review ownership is still an explicit

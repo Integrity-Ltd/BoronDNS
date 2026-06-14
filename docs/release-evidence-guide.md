@@ -114,6 +114,21 @@ one evidence package instead of a full snapshot.
 | Soak | `scripts/capture-soak-handoff.sh` | Creates the 30-day soak report template, RSS/file-descriptor/metrics/event TSV schemas, weekly summary template, requirement traceability map, and operator sign-off template. |
 | Release governance | `scripts/capture-release-handoff.sh` | Creates the evidence attachment map, role ownership TSV, scheduled CI/manual-run plan, signing runbook, release-note fill plan, external-operator acceptance template, and release-readiness checklist. |
 
+## Reproducible Build Evidence
+
+Use `scripts/reproducible-build-compare.sh` to run the local static-binary
+comparison. The script builds `oxidedns` and `oxide-gun` twice in separate clean
+target directories for `x86_64-unknown-linux-musl`, fixes the embedded
+`OXIDEDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
+`artifact-manifest.tsv`, `comparison.tsv`, and `reproducible-build-summary.env`
+under `target/evidence/reproducible-build-...`.
+
+The comparison intentionally uses the concrete rustup Cargo and rustc binaries
+instead of the local `cargo` shim so build-script environment values reach the
+compiled binary. A passing comparison verifies the raw static binaries only; it
+does not sign artifacts or claim installer archive or Docker image archive
+reproducibility.
+
 For the formal SRS MVP release gate, release notes must also include the
 external operator acceptance signature, accepting operator identity, and
 accepted scope statement required by `ODS-VER-008` and `ODS-VER-015`.

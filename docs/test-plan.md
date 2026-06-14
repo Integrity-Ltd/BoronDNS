@@ -124,7 +124,7 @@ these rows remain handoff obligations unless completed artifacts are retained.
 | --- | --- | --- | --- |
 | Long fuzz campaign | Weekly during release acceptance execution; at least 24 hours per parser before final signoff | `scripts/fuzz-campaign.sh --duration 86400` with retained `campaign-summary.tsv` | release/operations owners later fill the summary during 24-hour parser campaigns |
 | Performance regression run | Weekly on Reference Hardware Profile | `scripts/capture-benchmark-handoff.sh` provides `benchmark-report-template.md`, metric/resource TSV schemas, baseline-history template, runbook, and operator sign-off template; later execution fills those artifacts and runs `scripts/check-perf-regression.py --candidate <file> --history <history>` | release/operations owners later fill the report during Reference Hardware/Profile benchmark execution |
-| Reproducible-build comparison | Gate before formal SRS MVP or public artifact signing | `scripts/capture-reproducible-build-handoff.sh` provides fixed build inputs, runbook, artifact manifest schema, comparison schema, release-note snippet, and release-engineer sign-off template; later execution fills those artifacts after two independent clean builds | release/operations owners later fill the comparison before claiming ODS-NFR-MAINT-005 |
+| Reproducible-build comparison | Gate before formal SRS MVP or public artifact signing | `scripts/reproducible-build-compare.sh` performs the static-binary comparison and `docs/reproducible-build-v0.2.0.md` records the v0.2.0 passing evidence; `scripts/capture-reproducible-build-handoff.sh` still provides release-engineer sign-off templates | release/operations owners still fill signing, package/image, and external sign-off evidence before claiming broader artifact acceptance |
 | Soak snapshot | Weekly while later soak execution is active | `scripts/capture-soak-handoff.sh` provides `soak-report-template.md`, TSV sample schemas, weekly summary template, and operator sign-off template | release/operations owners later fill the report during the 30-day run |
 | Differential primary comparison | Monthly | BIND/NSD/Knot interop scripts | add differential assertions beyond pass/fail interop |
 
@@ -188,10 +188,10 @@ exists; it does not prove that the long-running soak has been executed.
 `scripts/capture-reproducible-build-handoff.sh` is intentionally a setup
 artifact. It creates fixed build inputs, a runbook, artifact-manifest and
 comparison TSV schemas, requirement traceability, release-note snippet, and
-release-engineer sign-off template for the later independent bit-identical build
-comparison. A generated handoff directory proves the Engineering MVP setup
-exists; it does not prove ODS-NFR-MAINT-005 until completed manifests from two
-independent builders match.
+release-engineer sign-off template. `scripts/reproducible-build-compare.sh`
+now produces completed local static-binary manifests and comparison TSVs; the
+handoff remains for external sign-off, package/image follow-up, and release
+signing.
 
 When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`

@@ -7,9 +7,9 @@ to be retained before formal SRS MVP acceptance. It currently covers module orga
 and the current over-target line-count rationale for `ODS-NFR-MAINT-001`, the
 release-signing choice for `ODS-NFR-MAINT-008`, source-level functional
 requirement references for `ODS-NFR-MAINT-004`, and verification
-responsibility allocation for `ODS-VER-015`. Broader architecture content,
-completed reproducible-build proof, and signed release artifacts remain tracked
-as formal SRS acceptance gaps in `docs/mvp-gap-register.md`.
+responsibility allocation for `ODS-VER-015`, and the completed v0.2.0
+static-binary reproducible-build proof. Broader architecture content and signed
+release artifacts remain tracked in `docs/mvp-gap-register.md`.
 
 ## Module Organisation
 
@@ -85,7 +85,7 @@ implementation code for review locality, but they are not counted toward the
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
 | Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Interface compatibility posture | Externally observable configuration, CLI, exit-code, environment, signal, metric, log-field, health, and network-role surfaces are tracked in `docs/interface-stability-baseline.tsv` under the policy in `docs/interface-compatibility-policy.md`; `scripts/check-interface-compatibility.py` checks the current baseline and can compare a previous release baseline. | `ODS-NFR-MAINT-006`, `ODS-IF-CONF-002` |
-| Reproducible build posture | `cargo build --locked` with fixed `OXIDEDNS_BUILD_*` values is the baseline command; `scripts/capture-reproducible-build-handoff.sh` records the runbook and schemas, while bit-identical independent build evidence is still required before formal SRS MVP acceptance. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
+| Reproducible build posture | `scripts/reproducible-build-compare.sh` performs two clean static-binary builds with fixed `SOURCE_DATE_EPOCH` and `OXIDEDNS_BUILD_*` values; `docs/reproducible-build-v0.2.0.md` records matching v0.2.0 `oxidedns` and `oxide-gun` musl binary digests. The handoff script still owns release-engineer sign-off and package/image artifact follow-up. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
 | Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
 | Runtime task supervision | Tokio `JoinSet`/`JoinHandle` completion is inspected for listener, refresh, health, background, and TCP query tasks. Panicking or failed supervised tasks are logged through the runtime warning path rather than treated as a normative SRS mechanism such as `catch_unwind`. | `ODS-INV-006`, `ODS-NFR-SEC-001` |
 | Continuous verification posture | `scripts/check.sh` is the current local continuous verification entry point. Hosted continuous CI for every main-branch candidate is intentionally deferred while the repository remains private to avoid spending CI minutes on heavyweight evidence tooling before a public-release gate exists. The tag-push/workflow-dispatch release workflow is artifact publication automation and may supply retained release-gate logs when a release process accepts that evidence. | `ODS-VER-011`, `ODS-NFR-SEC-006` |

@@ -37,8 +37,9 @@ SRS acceptance activities tracked in `docs/mvp-gap-register.md`:
 - Reference Hardware/Profile benchmark campaigns.
 - Production-depth `info` verbosity profiling under release traffic.
 - External operator acceptance.
-- Independent reproducible-build comparison.
-- Signed release artifact production.
+- External independent-builder sign-off, package/image reproducibility evidence,
+  and signed release artifact production beyond the completed v0.2.0
+  static-binary comparison in `docs/reproducible-build-v0.2.0.md`.
 
 Setup scripts, schemas, runbooks, and handoff directories for those activities
 may exist in this repository for release/operations use. They are not

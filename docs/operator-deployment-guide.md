@@ -84,8 +84,10 @@ cargo build --locked --release -p oxidedns-cli
 
 Release builds use `--locked` so the checked-in lockfile is part of the build
 input. This is necessary input for reproducible-build evidence, but it is not
-proof of bit-identical reproducibility by itself; release/operations must fill
-the reproducible-build handoff after two independent clean builds match.
+proof of bit-identical reproducibility by itself. For v0.2.0 static-binary
+evidence, use `scripts/reproducible-build-compare.sh` and the retained summary
+in `docs/reproducible-build-v0.2.0.md`; signing and package/image artifact
+evidence are release-governance work.
 
 Install it to a host path managed by the operator:
 
