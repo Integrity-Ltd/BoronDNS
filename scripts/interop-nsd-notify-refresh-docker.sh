@@ -19,11 +19,22 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
 container="oxidedns-nsd-notify-refresh-$$"
 artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+
+copy_failure_artifacts() {
+    if [[ -z "$artifact_dir" ]]; then
+        return
+    fi
+
+    mkdir -p "$artifact_dir"
+    rm -rf "$artifact_dir/workdir"
+    cp -a "$workdir" "$artifact_dir/workdir"
+}
 
 cleanup() {
     local status=$?
@@ -36,13 +47,15 @@ cleanup() {
         wait "$notify_proxy_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
+        docker logs "$container" >"$workdir/nsd-container.log" 2>&1 || true
         if ((status != 0)); then
             echo "---- nsd container logs ----" >&2
-            docker logs "$container" >&2 || true
+            cat "$workdir/nsd-container.log" >&2 || true
         fi
         docker rm -f "$container" >/dev/null 2>&1 || true
     fi
     if ((status != 0)); then
+        copy_failure_artifacts
         [[ -f "$workdir/notify-proxy.log" ]] && {
             echo "---- notify-proxy.log ----" >&2
             tail -120 "$workdir/notify-proxy.log" >&2
@@ -67,6 +80,29 @@ for _ in range(4):
 print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
 PY
 )
+
+host_notify_address="$(
+    python3 - <<'PY'
+import socket
+
+for target in (("1.1.1.1", 53), ("8.8.8.8", 53)):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(target)
+        print(sock.getsockname()[0])
+        break
+    except OSError:
+        pass
+    finally:
+        sock.close()
+PY
+)"
+if [[ -z "$host_notify_address" ]]; then
+    host_notify_address="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+fi
+if [[ -z "$host_notify_address" ]]; then
+    host_notify_address="172.17.0.1"
+fi
 
 zone_file="$workdir/alpha.test.zone"
 nsd_conf="$workdir/nsd.conf"
@@ -108,7 +144,7 @@ cat >"$nsd_conf" <<EOF
 server:
     do-ip4: yes
     do-ip6: no
-    ip-address: 0.0.0.0@$nsd_port
+    ip-address: 0.0.0.0@5353
     hide-version: yes
     verbosity: 1
     database: "/tmp/nsd.db"
@@ -122,7 +158,7 @@ remote-control:
 zone:
     name: "alpha.test."
     zonefile: "/work/alpha.test.zone"
-    notify: 127.0.0.1@$notify_port NOKEY
+    notify: $host_notify_address@$notify_port NOKEY
     notify-retry: 1
     provide-xfr: 0.0.0.0/0 NOKEY
 EOF
@@ -144,7 +180,7 @@ def log(message):
 
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(("127.0.0.1", listen_port))
+sock.bind(("0.0.0.0", listen_port))
 
 while True:
     packet, peer = sock.recvfrom(4096)
@@ -174,10 +210,11 @@ PY
 
 cargo build -p oxidedns-cli >/dev/null
 if ! docker run -d --name "$container" \
-    --network host \
+    -p "127.0.0.1:$nsd_port:5353/tcp" \
+    -p "127.0.0.1:$nsd_port:5353/udp" \
     -v "$workdir:/work:rw" \
     alpine:latest \
-    sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && nsd -c /work/nsd.conf && tail -f /dev/null' \
+    sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && exec nsd -d -c /work/nsd.conf' \
     >/dev/null; then
     echo "skipping NSD NOTIFY Docker interop: failed to start Alpine/NSD container" >&2
     exit 0

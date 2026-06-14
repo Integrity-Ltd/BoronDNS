@@ -21,7 +21,7 @@ Status vocabulary used below:
 
 | Category | Representative scope | Status | Evidence pointer |
 | --- | --- | --- | --- |
-| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates; Deferred for broader production-retained interop artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `target/evidence/20260613T235555Z/` |
+| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates and selected current-primary matrix; Deferred for XoT, production-depth, and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `target/evidence/20260613T235555Z/`; `target/evidence/primary-matrix-20260614T010049Z/` |
 | ODS-NFR | Maintainability, security review inputs, observability, resource evidence handoff, and release security posture | Verified for local gates; Deferred for production reference benchmark, independent reproducible build, and long soak | `target/evidence/20260613T235555Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260613T235555Z/unsafe-dependency-evidence/geiger-summary.env` |
 | ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260613T235555Z/cli-evidence/`; `target/evidence/20260613T235555Z/interface-compatibility/current-interface-baseline.tsv` |
 | ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260613T235555Z/logs/` |
@@ -64,13 +64,25 @@ classified as an initial baseline.
 
 ## Interop Primary Versions
 
-The release snapshot retained no real-primary version artifacts in
-`target/evidence/20260613T235555Z/interop-primary-versions/INDEX.tsv`; the file
-contains only the header row `source_path` and `snapshot_path`.
+Status: Verified for the selected local current-primary matrix.
 
-Status: Deferred for formal retained real-primary version evidence. Existing
-interop scripts and documentation remain in tree, but this release note does not
-claim a completed retained BIND/Knot/NSD/XoT version matrix.
+The v0.2.0 local release evidence in
+`target/evidence/primary-matrix-20260614T010049Z` passed 12 of 12 selected
+interop cases. `docs/primary-interop-matrix-v0.2.0.md` records the command,
+scope, tested versions, case table, and retained artifact layout.
+
+| Primary | Version | Runtime source | Selected capabilities |
+| --- | --- | --- | --- |
+| BIND 9 | 9.20.23 stable | Arch Linux host package | AXFR; TSIG AXFR; NOTIFY refresh; IXFR refresh |
+| NSD | 4.14.2 | Alpine Linux v3.24 container package | AXFR; TSIG AXFR; NOTIFY refresh |
+| Knot DNS | 3.5.3 | Alpine Linux v3.24 container package | AXFR; TSIG AXFR; NOTIFY refresh; IXFR refresh |
+| PowerDNS Authoritative | 5.0.5 | `powerdns/pdns-auth-50:latest`, Debian 13 container | PostgreSQL catalog zone with TSIG transfer |
+
+The original release snapshot directory
+`target/evidence/20260613T235555Z/interop-primary-versions/INDEX.tsv` still
+contains only the snapshot header. The selected matrix above is the current
+retained local primary-version evidence. XoT and broader production acceptance
+remain separate deferred rows.
 
 ## Failed Requirement Decisions
 
@@ -79,7 +91,7 @@ No Failed requirement decision is accepted for v0.2.0.
 | Decision | Status | Release action |
 | --- | --- | --- |
 | Any release blocker classified Failed | Verified absent | Do not tag if a Failed blocker appears before publication |
-| Production-depth benchmark, long soak, real-primary version retention, independent reproducible build | Deferred | Named in handoff sections rather than claimed as completed |
+| Production-depth benchmark, long soak, XoT release matrix, independent reproducible build | Deferred | Named in handoff sections rather than claimed as completed |
 
 ## Appendix C.5 Decision Review
 
@@ -109,7 +121,7 @@ formal retained release evidence is complete.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | RFC 1034 | Domain Names: Concepts and Facilities | Partially Compliant | secondary authoritative server clauses | Full retained release traceability remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/appendix-a-traceability-matrix.md`; `docs/verification-ledger.md` |
 | RFC 1035 | Domain Names: Implementation and Specification | Partially Compliant | DNS wire format, RR format, authoritative response, TCP framing, bounded CHAOS handling | Full retained release traceability remains open | Formal SRS acceptance | SRS v0.9.1 | `scripts/check.sh`; `scripts/interop-chaos-queries.sh` |
-| RFC 5936 | DNS Zone Transfer Protocol (AXFR) | Partially Compliant | AXFR client-side clauses | Broader fault-injection and retained real-primary artifacts remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-axfr.sh`; `docs/appendix-a-traceability-matrix.md` |
+| RFC 5936 | DNS Zone Transfer Protocol (AXFR) | Partially Compliant | AXFR client-side clauses | Broader fault-injection, multi-primary, and production-depth artifacts remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-axfr.sh`; `docs/primary-interop-matrix-v0.2.0.md`; `docs/appendix-a-traceability-matrix.md` |
 | RFC 1995 | Incremental Zone Transfer in DNS | Partially Compliant | IXFR client-side clauses | Additional real-primary IXFR matrix remains open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-ixfr-refresh.sh`; `scripts/interop-knot-ixfr-refresh-docker.sh` |
 | RFC 1996 | DNS NOTIFY | Partially Compliant | NOTIFY receiver-side clauses | Signed-NOTIFY fault matrix and retained refresh-trigger artifacts remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-notify-negative.sh` |
 | RFC 8945 | Secret Key Transaction Authentication for DNS | Partially Compliant | TSIG request/response, transfer, and NOTIFY authentication | Full TSIG truncation and transfer-stream release evidence remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-tsig-axfr.sh`; `docs/verification-ledger.md` |
