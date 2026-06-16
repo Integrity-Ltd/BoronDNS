@@ -22,7 +22,7 @@ Status vocabulary used below:
 | Category | Representative scope | Status | Evidence pointer |
 | --- | --- | --- | --- |
 | ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates, selected current-primary matrix, and selected local XoT release breadth and failure-class evidence; Deferred for production-depth and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `docs/xot-release-evidence-v0.2.0.md`; `target/evidence/20260616T171657Z/`; `target/evidence/primary-matrix-20260614T010049Z/`; `target/evidence/xot-release-20260614T014700Z/`; `target/evidence/xot-failure-20260616T170617Z/` |
-| ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, resource evidence handoff, and release security posture | Verified for local gates and static-binary reproducibility; Deferred for production reference benchmark, package/image reproducibility, artifact signing, and long soak | `target/evidence/20260616T171657Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260616T171657Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md` |
+| ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, package/Docker smoke, resource evidence handoff, and release security posture | Verified for local gates, static-binary reproducibility, package checksums, installer smoke, and read-only Docker image smoke; Deferred for production reference benchmark, package/image reproducibility beyond smoke, artifact signing, and long soak | `target/evidence/20260616T171657Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260616T171657Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md`; `docs/package-docker-smoke-v0.2.0.md` |
 | ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260616T171657Z/cli-evidence/`; `target/evidence/20260616T171657Z/interface-compatibility/current-interface-baseline.tsv` |
 | ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260616T171657Z/logs/` |
 | ODS-NEG | Explicitly excluded surfaces, including inbound ordinary DoT/DoH/DoQ and unsupported config aliases | Verified by docs/source alignment checks | `docs/implemented-feature-scope.md`; `docs/operator-deployment-guide.md` |
@@ -43,9 +43,17 @@ Reproducible-build handoff or completed bit-identical comparison: Verified for
 the static musl binaries. `docs/reproducible-build-v0.2.0.md` records
 `target/evidence/reproducible-build-20260614T013236Z`, where two clean release
 builds in separate target directories produced matching `x86_64-unknown-linux-musl`
-`oxidedns` and `oxide-gun` binaries. Installer/archive normalization, Docker
-image archive reproducibility, artifact signing, and external independent-builder
-sign-off remain separate release-governance work.
+`oxidedns` and `oxide-gun` binaries.
+
+Package and Docker smoke evidence: Verified for the selected
+`x86_64-unknown-linux-musl` v0.2.0 artifacts.
+`docs/package-docker-smoke-v0.2.0.md` records
+`target/evidence/package-docker-smoke-20260616T173146Z`, where installer
+archive creation, standalone binary checksums, static-link reports, Ubuntu
+installer smoke, Docker image archive creation, image checksum/manifest, and
+read-only Docker runtime smoke all passed. Installer/archive reproducibility,
+Docker image archive reproducibility, artifact signing, and external
+independent-builder sign-off remain separate release-governance work.
 
 ## Regression Delta
 
@@ -62,6 +70,7 @@ classified as an initial baseline.
 | Overall line coverage | 70.000000 percent minimum | 91.384415 percent | +30.549164 | Verified | test coverage retained | accepted as above threshold | none |
 | Parser/XoT-file coverage | 85.000000 percent minimum | threshold retained by coverage evidence | 0 | Verified | release coverage policy | accepted as above threshold | none |
 | Two-host ASan fuzz campaign | no completed v0.2.0 release baseline | 75 fuzz services across five targets, 104,361,257,036 total runs, no crash/leak/OOM/timeout markers | new baseline | Verified | long-running fuzz evidence retained | accepted as initial release fuzz baseline | none |
+| Package and Docker smoke | no completed v0.2.0 release baseline | installer archive, standalone binaries, Docker image archive, checksums, Ubuntu installer smoke, and read-only Docker runtime smoke passed | new baseline | Verified | package/image smoke evidence retained | accepted as initial release packaging baseline | none |
 | Production reference benchmark | no completed v0.2.0 release baseline | handoff package only | not measured | Deferred | production-depth benchmark not run in snapshot | benchmark handoff retained for later execution | next production benchmark cycle |
 | Long soak | no completed 30-day v0.2.0 soak | handoff package only | not measured | Deferred | 30-day evidence not run in snapshot | soak handoff retained for later execution | next long-running evidence cycle |
 | Release blocker failures | none accepted | none accepted | 0 | Verified | no Failed blockers retained | release can proceed with named deferrals | none |
@@ -107,7 +116,7 @@ No Failed requirement decision is accepted for v0.2.0.
 | Decision | Status | Release action |
 | --- | --- | --- |
 | Any release blocker classified Failed | Verified absent | Do not tag if a Failed blocker appears before publication |
-| Production-depth benchmark, long soak, package/image reproducibility, artifact signing, broader formal XoT real-primary mTLS/default-port/prohibited-suite acceptance | Deferred | Named in handoff sections rather than claimed as completed |
+| Production-depth benchmark, long soak, package/image reproducibility beyond retained smoke, artifact signing, broader formal XoT real-primary mTLS/default-port/prohibited-suite acceptance | Deferred | Named in handoff sections rather than claimed as completed |
 
 ## Appendix C.5 Decision Review
 
@@ -185,9 +194,10 @@ Vulnerability disclosure policy reviewed: Verified against `SECURITY.md`.
 
 Release signing mechanism and verification instructions: Deferred to the
 signing handoff. Static binary reproducibility is verified in
-`docs/reproducible-build-v0.2.0.md`; public artifact signatures are not yet
-claimed. The preferred mechanism remains Sigstore/Cosign with detached OpenPGP
-allowed as fallback.
+`docs/reproducible-build-v0.2.0.md`, and package/image smoke plus checksum
+evidence is verified in `docs/package-docker-smoke-v0.2.0.md`; public artifact
+signatures are not yet claimed. The preferred mechanism remains
+Sigstore/Cosign with detached OpenPGP allowed as fallback.
 
 Security audit findings and remediation actions: no accepted Failed blocker is
 recorded for this release. Security review ownership is still an explicit
@@ -207,6 +217,9 @@ Info verbosity profile handoff or completed artifacts:
 
 Reference Hardware/Profile benchmark handoff or completed artifacts:
 `target/evidence/20260616T171657Z/benchmark-handoff/`.
+
+Package and Docker smoke artifacts:
+`target/evidence/package-docker-smoke-20260616T173146Z/`.
 
 Soak handoff or completed 30-day report:
 `target/evidence/20260616T171657Z/soak-handoff/`.

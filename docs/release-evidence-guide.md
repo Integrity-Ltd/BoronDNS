@@ -129,6 +129,27 @@ compiled binary. A passing comparison verifies the raw static binaries only; it
 does not sign artifacts or claim installer archive or Docker image archive
 reproducibility.
 
+## Package and Docker Smoke Evidence
+
+Use `scripts/package-installer.sh` to build the release installer archive,
+standalone `oxidedns` and `oxide-gun` binaries, package manifest, static-link
+reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the
+installer in Ubuntu, including install, update, config validation,
+`oxide-gun --self-test`, and startup.
+
+Use `scripts/package-docker-image.sh` to build and export the Docker image
+archive, image manifest, inspect JSON, and SHA-256 file. Use
+`scripts/test-docker-image.sh` to smoke the image with a read-only root
+filesystem, dropped capabilities, `no-new-privileges`, health endpoints, and
+metrics.
+
+The v0.2.0 retained package/image smoke bundle is recorded in
+`docs/package-docker-smoke-v0.2.0.md` and lives under
+`target/evidence/package-docker-smoke-20260616T173146Z`. A passing smoke bundle
+verifies package/image creation and runtime smoke behavior only; archive
+reproducibility, Docker image archive reproducibility, public artifact signing,
+and independent-builder sign-off remain separate release-governance work.
+
 For the formal SRS MVP release gate, release notes must also include the
 external operator acceptance signature, accepting operator identity, and
 accepted scope statement required by `ODS-VER-008` and `ODS-VER-015`.
