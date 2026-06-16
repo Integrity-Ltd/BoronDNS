@@ -61,6 +61,7 @@ scripts/audit-log-fields.py
 scripts/audit-log-lazy-formatting.py
 scripts/audit-unused-code.sh
 scripts/audit-xot-revocation.sh
+scripts/capture-xot-failure-evidence.sh
 scripts/audit-dnssec-passive.sh
 scripts/audit-safe-rust.sh
 scripts/check-unsafe-prone-dependencies.py
