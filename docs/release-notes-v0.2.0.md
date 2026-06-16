@@ -1,12 +1,12 @@
 # OxideDNS v0.2.0 Release Notes
 
-Release date: 2026-06-14
+Release date: 2026-06-16
 
 Release tag target: `v0.2.0`.
 
-Evidence snapshot: `target/evidence/20260613T235555Z`.
+Evidence snapshot: `target/evidence/20260616T171657Z`.
 
-Snapshot commit: `7cb6ac5fce040ad6b667381067e9e280386b0465`.
+Snapshot commit: `3e30e922ae3d3d52bc5a94c05edbf71e1b414f56`.
 
 Status vocabulary used below:
 
@@ -21,12 +21,12 @@ Status vocabulary used below:
 
 | Category | Representative scope | Status | Evidence pointer |
 | --- | --- | --- | --- |
-| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates, selected current-primary matrix, and selected local XoT release breadth and failure-class evidence; Deferred for production-depth and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `docs/xot-release-evidence-v0.2.0.md`; `target/evidence/20260613T235555Z/`; `target/evidence/primary-matrix-20260614T010049Z/`; `target/evidence/xot-release-20260614T014700Z/`; `target/evidence/xot-failure-20260616T170617Z/` |
-| ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, resource evidence handoff, and release security posture | Verified for local gates and static-binary reproducibility; Deferred for production reference benchmark, package/image reproducibility, artifact signing, and long soak | `target/evidence/20260613T235555Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260613T235555Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md` |
-| ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260613T235555Z/cli-evidence/`; `target/evidence/20260613T235555Z/interface-compatibility/current-interface-baseline.tsv` |
-| ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260613T235555Z/logs/` |
+| ODS-FR | Query, AXFR/IXFR, NOTIFY, TSIG, XoT, catalog-zone, DNSSEC serve-only, EDNS, Cookie, RRL, and CHAOS-class behavior covered by source tests and interop scripts | Verified for checked-in gates, selected current-primary matrix, and selected local XoT release breadth and failure-class evidence; Deferred for production-depth and long-running acceptance artifacts | `scripts/check.sh`; `docs/verification-ledger.md`; `docs/primary-interop-matrix-v0.2.0.md`; `docs/xot-release-evidence-v0.2.0.md`; `target/evidence/20260616T171657Z/`; `target/evidence/primary-matrix-20260614T010049Z/`; `target/evidence/xot-release-20260614T014700Z/`; `target/evidence/xot-failure-20260616T170617Z/` |
+| ODS-NFR | Maintainability, security review inputs, observability, static-binary reproducibility, resource evidence handoff, and release security posture | Verified for local gates and static-binary reproducibility; Deferred for production reference benchmark, package/image reproducibility, artifact signing, and long soak | `target/evidence/20260616T171657Z/coverage-evidence/coverage-summary.env`; `target/evidence/20260616T171657Z/unsafe-dependency-evidence/geiger-summary.env`; `docs/reproducible-build-v0.2.0.md` |
+| ODS-IF | CLI, config, health, metrics, logging, process, and interface compatibility baseline | Verified | `target/evidence/20260616T171657Z/cli-evidence/`; `target/evidence/20260616T171657Z/interface-compatibility/current-interface-baseline.tsv` |
+| ODS-INV | Runtime invariants, fail-closed transfer publication, no dynamic code loading, and panic discipline for untrusted input | Verified by source gates and focused regression tests | `scripts/check.sh`; `target/evidence/20260616T171657Z/logs/` |
 | ODS-NEG | Explicitly excluded surfaces, including inbound ordinary DoT/DoH/DoQ and unsupported config aliases | Verified by docs/source alignment checks | `docs/implemented-feature-scope.md`; `docs/operator-deployment-guide.md` |
-| ODS-VER | Release evidence, RFC compliance assertions, regression policy, version consistency, and role handoff | Verified for v0.2.0 release publication; Deferred for formal production acceptance rows named below | `target/evidence/20260613T235555Z/release-handoff/evidence-attachment-map.tsv` |
+| ODS-VER | Release evidence, RFC compliance assertions, regression policy, version consistency, and role handoff | Verified for v0.2.0 release publication; Deferred for formal production acceptance rows named below | `target/evidence/20260616T171657Z/release-handoff/evidence-attachment-map.tsv` |
 
 Coverage summary: overall line coverage was 91.384415 percent against a
 70.000000 percent minimum, with 37,962 covered lines of 41,541 measured lines.
@@ -93,7 +93,7 @@ formal XoT acceptance limits.
 | PowerDNS Authoritative | 5.0.5 | `powerdns/pdns-auth-50:latest`, Debian 13 container | PostgreSQL catalog zone with TSIG transfer |
 
 The original release snapshot directory
-`target/evidence/20260613T235555Z/interop-primary-versions/INDEX.tsv` still
+`target/evidence/20260616T171657Z/interop-primary-versions/INDEX.tsv` still
 contains only the snapshot header. The selected matrix above is the current
 retained local primary-version evidence for the non-XoT primary matrix. The
 selected XoT evidence above is current retained local XoT evidence, including
@@ -112,7 +112,7 @@ No Failed requirement decision is accepted for v0.2.0.
 ## Appendix C.5 Decision Review
 
 Decision for this release: resolved Appendix C.5 decisions are accepted as
-documented in `target/evidence/20260613T235555Z/release-handoff/appendix-c5-decision-register.tsv`.
+documented in `target/evidence/20260616T171657Z/release-handoff/appendix-c5-decision-register.tsv`.
 
 | Item | Decision for this release | Target release | Evidence or rationale |
 | --- | --- | --- | --- |
@@ -149,12 +149,12 @@ formal retained release evidence is complete.
 ## Interface Changes
 
 Interface compatibility evidence:
-`target/evidence/20260613T235555Z/interface-compatibility/interface-compatibility-summary.env`.
+`target/evidence/20260616T171657Z/interface-compatibility/interface-compatibility-summary.env`.
 
 Previous accepted interface baseline: none for v0.2.0.
 
 Current interface baseline:
-`target/evidence/20260613T235555Z/interface-compatibility/current-interface-baseline.tsv`.
+`target/evidence/20260616T171657Z/interface-compatibility/current-interface-baseline.tsv`.
 
 Interface additions: v0.2.0 includes `--config`/`OXIDEDNS_CONFIG` config-path
 selection and reloadable filesystem-backed secret references for TSIG/XoT
@@ -203,13 +203,13 @@ services across `dns_datagram`, `transfer_stream`, `notify_edns_datagram`,
 no sanitizer, panic, crash, leak, OOM, or timeout markers in collected logs.
 
 Info verbosity profile handoff or completed artifacts:
-`target/evidence/20260613T235555Z/info-verbosity-handoff/`.
+`target/evidence/20260616T171657Z/info-verbosity-handoff/`.
 
 Reference Hardware/Profile benchmark handoff or completed artifacts:
-`target/evidence/20260613T235555Z/benchmark-handoff/`.
+`target/evidence/20260616T171657Z/benchmark-handoff/`.
 
 Soak handoff or completed 30-day report:
-`target/evidence/20260613T235555Z/soak-handoff/`.
+`target/evidence/20260616T171657Z/soak-handoff/`.
 
 Release/operations owner for delegated long-running evidence:
 `unassigned-release-engineer` / `unassigned-external-operator` until a named
@@ -222,19 +222,19 @@ handoff package without claiming completed production acceptance.
 ## Release/Operations Handoff
 
 Release handoff artifact:
-`target/evidence/20260613T235555Z/release-handoff/evidence-attachment-map.tsv`.
+`target/evidence/20260616T171657Z/release-handoff/evidence-attachment-map.tsv`.
 
 Scheduled CI/manual-run plan:
-`target/evidence/20260613T235555Z/release-handoff/scheduled-ci-plan.md`.
+`target/evidence/20260616T171657Z/release-handoff/scheduled-ci-plan.md`.
 
 Release readiness checklist:
-`target/evidence/20260613T235555Z/release-handoff/release-readiness-checklist.md`.
+`target/evidence/20260616T171657Z/release-handoff/release-readiness-checklist.md`.
 
 External operator acceptance artifact:
-`target/evidence/20260613T235555Z/release-handoff/external-operator-acceptance.md`.
+`target/evidence/20260616T171657Z/release-handoff/external-operator-acceptance.md`.
 
 Signing runbook or completed signing manifest:
-`target/evidence/20260613T235555Z/release-handoff/signing-runbook.md`.
+`target/evidence/20260616T171657Z/release-handoff/signing-runbook.md`.
 
 ## Verification Responsibility Sign-off
 
