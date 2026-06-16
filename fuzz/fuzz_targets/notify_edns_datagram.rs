@@ -5,8 +5,8 @@ use std::{hint::black_box, sync::OnceLock};
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
-        answer_message_with_notify_hooks, AnswerOptions, DatagramAction, DomainName, Header,
-        Opcode, RecordType, Transport, DEFAULT_MAX_UDP_PAYLOAD,
+        AnswerOptions, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName, Header, Opcode,
+        RecordType, Transport, answer_message_with_notify_hooks,
     },
     zone::{Rrset, ZoneSnapshot, ZoneStore},
 };
@@ -99,7 +99,8 @@ fn answer_options(data: &[u8]) -> AnswerOptions<'_> {
         _ => 128,
     };
 
-    let mut options = AnswerOptions::udp(512 + (get_u16(data, 4) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
+    let mut options =
+        AnswerOptions::udp(512 + (get_u16(data, 4) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
     options.transport = transport;
     options.edns_padding_block_size = padding_block;
     options

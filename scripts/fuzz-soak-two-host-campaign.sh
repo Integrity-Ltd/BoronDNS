@@ -65,6 +65,7 @@ default_targets=(
     transfer_stream
     tsig_message
     zone_image_datagram
+    catalog_zone
 )
 
 shell_quote() {
@@ -459,7 +460,7 @@ while :; do
     awk_result=$(
         ps -u codex -o pid=,pcpu=,pmem=,rss=,etime=,comm=,args= |
             awk '
-                $0 ~ /(dns_datagram|notify_edns_datagram|transfer_stream|tsig_message|zone_image_datagram|cargo fuzz|llvm-cov|rustc)/ {
+                $0 ~ /(dns_datagram|notify_edns_datagram|transfer_stream|tsig_message|zone_image_datagram|catalog_zone|cargo fuzz|llvm-cov|rustc)/ {
                     count += 1;
                     cpu += $2;
                     rss += $4;
@@ -473,7 +474,7 @@ while :; do
 
     ps -u codex -o pid=,pcpu=,pmem=,rss=,etime=,comm=,args= |
         awk -v ts="$timestamp" '
-            $0 ~ /(dns_datagram|notify_edns_datagram|transfer_stream|tsig_message|zone_image_datagram|cargo fuzz|llvm-cov|rustc)/ {
+            $0 ~ /(dns_datagram|notify_edns_datagram|transfer_stream|tsig_message|zone_image_datagram|catalog_zone|cargo fuzz|llvm-cov|rustc)/ {
                 pid=$1; pcpu=$2; pmem=$3; rss=$4; etime=$5; comm=$6;
                 sub(/^ *[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, "", $0);
                 printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ts, pid, pcpu, pmem, rss, etime, comm, $0;

@@ -32,6 +32,7 @@ Current targets:
 - `tsig_message`
 - `notify_edns_datagram`
 - `zone_image_datagram`
+- `catalog_zone`
 
 Use the two-host helper to prepare a manifest:
 
@@ -65,9 +66,10 @@ scripts/fuzz-soak-two-host-campaign.sh collect --evidence-dir target/evidence/fu
 ```
 
 For CPU-saturating campaigns, repeat the target set and weight the host list.
-For example, the 2:3 host weighting below launches 75 fuzz services, which is
-about 30 instances on the 48-core `oxidedns-1` host and 45 instances on the
-72-core `oxidegun-1` host:
+With the current six-target set, the 2:3 host weighting below launches 90 fuzz
+services, which is about 36 instances on the 48-core `oxidedns-1` host and 54
+instances on the 72-core `oxidegun-1` host. That is the preferred 70%-80% CPU
+campaign shape when the servers are otherwise idle:
 
 ```sh
 scripts/fuzz-soak-two-host-campaign.sh launch \
@@ -225,6 +227,61 @@ Host metadata at final check:
 Interpretation: this is first-pass stability evidence for the listed fuzz
 targets under one 24-hour ASan-backed campaign. It does not prove parser or
 protocol correctness outside the paths and inputs exercised by the fuzz targets.
+
+### 2026-06-14 24-hour ASan fuzz campaign
+
+Campaign ID: `20260614T003811Z`
+
+Remote evidence root:
+`/home/codex/oxidedns-fuzz/target/evidence/fuzz-soak-two-host-20260614T003811Z/`
+
+Collected local evidence:
+`target/evidence/fuzz-soak-two-host-20260614T003811Z/remotes/`
+
+Result: passed. All 75 systemd fuzz services completed with `status=passed`,
+exit `0`, and `86400` seconds in their `campaign-summary.tsv` files. No
+sanitizer, panic, crash, leak, OOM, or timeout markers were found in the
+collected fuzz logs, and no crash/leak/OOM/timeout artifact files were present.
+
+Scope:
+
+| Host | Targets | Services | Result |
+| --- | --- | ---: | --- |
+| `oxidedns-1` | `dns_datagram`, `transfer_stream` | 30 | 30/30 passed |
+| `oxidegun-1` | `notify_edns_datagram`, `tsig_message`, `zone_image_datagram` | 45 | 45/45 passed |
+
+Fuzz executions:
+
+| Target | Services | Total runs |
+| --- | ---: | ---: |
+| `dns_datagram` | 15 | 52,027,636,728 |
+| `notify_edns_datagram` | 15 | 29,198,863,544 |
+| `transfer_stream` | 15 | 13,669,358,647 |
+| `zone_image_datagram` | 15 | 8,234,059,310 |
+| `tsig_message` | 15 | 1,231,338,807 |
+| **Total** | **75** | **104,361,257,036** |
+
+Tooling:
+
+- sanitizer: `address`
+- cargo toolchain: `nightly`
+- cargo: `1.98.0-nightly (fe63976b2 2026-06-11)`
+- rustc nightly: `1.98.0-nightly (b30f3df3b 2026-06-11)`
+- cargo-fuzz: `0.13.2`
+- repository commit on both hosts:
+  `1d586131cf17150a21f51a836c81b08a8492d9b9`
+
+Host metadata:
+
+| Host | Kernel | CPU | CPUs | Memory | Peak active fuzz units |
+| --- | --- | --- | ---: | ---: | ---: |
+| `oxidedns-1` | `7.0.12-borondns1` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 30 |
+| `oxidegun-1` | `7.0.0-22-generic` | Intel Xeon Gold 6140 @ 2.30GHz | 72 | 123Gi | 45 |
+
+Interpretation: this post-v0.2.0-readiness campaign provides retained
+24-hour ASan evidence for the five fuzz targets that existed at campaign start.
+It remains fuzz evidence only; the 30-day production-representative soak is a
+separate release-acceptance lane.
 
 ## Scheduling Guidance
 

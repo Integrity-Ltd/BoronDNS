@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
-    dns::{answer_datagram, Header, Question},
+    dns::{Header, Question, answer_datagram},
     zone::ZoneStore,
 };
 

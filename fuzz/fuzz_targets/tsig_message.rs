@@ -6,10 +6,10 @@ use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::RecordType,
     tsig::{
-        append_unsigned_tsig_error, extract_tsig_mac, message_has_tsig, sign_request,
+        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY, TsigAlgorithm, TsigErrorResponseFields,
+        TsigKey, append_unsigned_tsig_error, extract_tsig_mac, message_has_tsig, sign_request,
         sign_response, sign_tcp_response_continuation, sign_tsig_error_response, verify_request,
-        verify_response, verify_tcp_response_stream, TsigAlgorithm, TsigErrorResponseFields,
-        TsigKey, DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY,
+        verify_response, verify_tcp_response_stream,
     },
 };
 

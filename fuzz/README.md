@@ -18,6 +18,9 @@ these targets:
   glue, answer-section additionals, basic DNSSEC augmentation, QTYPE=ANY,
   EDNS, opaque unknown records, and malformed known-name RDATA records that
   must be copied opaquely without panicking.
+- `catalog_zone`: RFC 9432 catalog-zone member parsing plus the uDNS transfer
+  extension records for member primaries, TSIG key names, XoT/TCP transfer
+  hints, and NOTIFY source overrides.
 
 Run a compile check with a nightly cargo on `PATH`, without executing a long
 fuzzing campaign:
@@ -28,6 +31,7 @@ cargo fuzz check transfer_stream
 cargo fuzz check tsig_message
 cargo fuzz check notify_edns_datagram
 cargo fuzz check zone_image_datagram
+cargo fuzz check catalog_zone
 ```
 
 Or, without a nightly toolchain or `cargo-fuzz` installed:
@@ -51,6 +55,7 @@ Select targets and duration explicitly when needed:
 scripts/fuzz-campaign.sh --duration 60 dns_datagram tsig_message
 scripts/fuzz-campaign.sh --target transfer_stream --target notify_edns_datagram
 scripts/fuzz-campaign.sh --target zone_image_datagram
+scripts/fuzz-campaign.sh --target catalog_zone
 scripts/fuzz-campaign.sh --toolchain nightly --target zone_image_datagram
 scripts/fuzz-campaign.sh --toolchain nightly --sanitizer address --target dns_datagram
 ```
@@ -92,4 +97,6 @@ ZoneImage target exercises the same datagram API with a static compiled image,
 raw fuzz input, shaped qname/qtype/EDNS queries, compression-eligible records,
 synthesized DNAME and wildcard answers, referral/glue and additional section
 composition, DNSSEC proof/signature augmentation, and malformed known-name
-RDATA that should safely fall back to opaque copying.
+RDATA that should safely fall back to opaque copying. The catalog target
+constructs catalog `ZoneSnapshot` values with shaped and malformed PTR/TXT/A/AAAA
+extension RRsets and calls the public catalog parser.

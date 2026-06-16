@@ -45,3 +45,10 @@ path = "fuzz_targets/zone_image_datagram.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "catalog_zone"
+path = "fuzz_targets/catalog_zone.rs"
+test = false
+doc = false
+bench = false

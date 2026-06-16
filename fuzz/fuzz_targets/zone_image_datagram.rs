@@ -5,9 +5,10 @@ use std::{hint::black_box, sync::OnceLock};
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
-        answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image, AnswerOptions,
-        DatagramAction, DomainName, Header, RecordType, Transport, ZoneImageProvider,
-        DEFAULT_MAX_UDP_PAYLOAD, default_zone_image_provider,
+        AnswerOptions, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName, Header, RecordType,
+        Transport, ZoneImageProvider,
+        answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
+        default_zone_image_provider,
     },
     zone::{Rrset, ZoneSnapshot, ZoneStore},
 };
@@ -25,11 +26,7 @@ fuzz_target!(|data: &[u8]| {
     exercise_packet(&packet, data, &default_zone_image_provider);
 });
 
-fn exercise_packet(
-    packet: &[u8],
-    data: &[u8],
-    provider: ZoneImageProvider<'_>,
-) {
+fn exercise_packet(packet: &[u8], data: &[u8], provider: ZoneImageProvider<'_>) {
     let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
         zones(),
@@ -203,7 +200,8 @@ fn answer_options(data: &[u8]) -> AnswerOptions<'_> {
         _ => 128,
     };
 
-    let mut options = AnswerOptions::udp(512 + (get_u16(data, 2) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
+    let mut options =
+        AnswerOptions::udp(512 + (get_u16(data, 2) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
     options.transport = transport;
     options.edns_padding_block_size = padding_block;
     options
