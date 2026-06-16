@@ -61,6 +61,7 @@ classified as an initial baseline.
 | Workspace version consistency | no v0.2.0 tag baseline | all workspace, internal, eBPF, and lockfile versions are `0.2.0` | 0 | Verified | release prep | version-consistency gate passes | none |
 | Overall line coverage | 70.000000 percent minimum | 91.384415 percent | +30.549164 | Verified | test coverage retained | accepted as above threshold | none |
 | Parser/XoT-file coverage | 85.000000 percent minimum | threshold retained by coverage evidence | 0 | Verified | release coverage policy | accepted as above threshold | none |
+| Two-host ASan fuzz campaign | no completed v0.2.0 release baseline | 75 fuzz services across five targets, 104,361,257,036 total runs, no crash/leak/OOM/timeout markers | new baseline | Verified | long-running fuzz evidence retained | accepted as initial release fuzz baseline | none |
 | Production reference benchmark | no completed v0.2.0 release baseline | handoff package only | not measured | Deferred | production-depth benchmark not run in snapshot | benchmark handoff retained for later execution | next production benchmark cycle |
 | Long soak | no completed 30-day v0.2.0 soak | handoff package only | not measured | Deferred | 30-day evidence not run in snapshot | soak handoff retained for later execution | next long-running evidence cycle |
 | Release blocker failures | none accepted | none accepted | 0 | Verified | no Failed blockers retained | release can proceed with named deferrals | none |
@@ -194,9 +195,12 @@ release handoff row.
 
 ## Long-Running Evidence Handoff
 
-Fuzz campaign handoff or completed artifacts: a first ASan-backed two-host
-24-hour fuzz record exists in `docs/two-host-fuzz-soak-campaign.md`; broader
-long-running campaign execution remains Deferred.
+Fuzz campaign handoff or completed artifacts:
+`docs/two-host-fuzz-soak-campaign.md` records completed 24-hour ASan-backed
+two-host campaigns, including campaign `20260614T003811Z`: 75 systemd fuzz
+services across `dns_datagram`, `transfer_stream`, `notify_edns_datagram`,
+`tsig_message`, and `zone_image_datagram`, with 104,361,257,036 total runs and
+no sanitizer, panic, crash, leak, OOM, or timeout markers in collected logs.
 
 Info verbosity profile handoff or completed artifacts:
 `target/evidence/20260613T235555Z/info-verbosity-handoff/`.
