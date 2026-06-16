@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/evidence-artifacts.sh
 source "$repo_root/scripts/evidence-artifacts.sh"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_root="${OXIDEDNS_EVIDENCE_DIR:-$repo_root/target/evidence}"
@@ -123,6 +124,8 @@ record_version cargo-bloat cargo bloat --version
 record_version cargo-machete cargo machete --version
 record_version cargo-geiger cargo geiger --version
 record_version cargo-llvm-cov cargo llvm-cov --version
+record_version cargo-cyclonedx cargo cyclonedx -V
+record_version syft syft version
 record_version docker docker --version
 record_version dig dig -v
 record_version curl curl --version
@@ -151,6 +154,7 @@ run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMAR
 run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
 run_and_capture reproducible-build-handoff bash -lc "cd '$repo_root' && OXIDEDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR='$snapshot_dir/reproducible-build-handoff' scripts/capture-reproducible-build-handoff.sh"
 run_and_capture release-handoff bash -lc "cd '$repo_root' && OXIDEDNS_RELEASE_HANDOFF_DIR='$snapshot_dir/release-handoff' scripts/capture-release-handoff.sh"
+run_and_capture sbom-evidence bash -lc "cd '$repo_root' && OXIDEDNS_DIST_DIR='$snapshot_dir/sbom-evidence' OXIDEDNS_SBOM_DOCKER=0 scripts/package-sbom.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"

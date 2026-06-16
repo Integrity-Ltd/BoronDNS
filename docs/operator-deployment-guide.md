@@ -98,8 +98,9 @@ sudo install -m 0755 target/release/oxidedns /usr/local/bin/oxidedns
 The tag-push release workflow publishes local-use artifacts for
 `x86_64-unknown-linux-musl`: the installer archive, the raw static `oxidedns`
 binary, the raw static XDP-enabled `oxide-gun` binary, and an Alpine-based
-Docker image archive. Each public artifact has a sibling `.sha256` file. The
-Docker image is attached as
+Docker image archive. Each public artifact has a sibling `.sha256` file, and
+the release also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
+binaries and Docker image. The Docker image is attached as
 `oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
 does not publish a registry image, so operators should load the release asset
 explicitly rather than using `docker pull`:

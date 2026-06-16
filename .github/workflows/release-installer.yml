@@ -11,6 +11,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CARGO_CYCLONEDX_VERSION: "0.5.9"
+  SYFT_VERSION: "v1.45.1"
 
 jobs:
   build-installer:
@@ -33,6 +35,22 @@ jobs:
       - name: Install Rust target
         run: rustup target add x86_64-unknown-linux-musl
 
+      - name: Install SBOM tools
+        run: |
+          cargo install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+          mkdir -p "$HOME/.local/bin"
+          syft_version="${SYFT_VERSION#v}"
+          syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/$syft_archive" \
+            -o "/tmp/$syft_archive"
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/syft_${syft_version}_checksums.txt" \
+            -o /tmp/syft-checksums.txt
+          (cd /tmp && grep "  $syft_archive$" syft-checksums.txt | sha256sum -c -)
+          tar -C "$HOME/.local/bin" -xzf "/tmp/$syft_archive" syft
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Check release tag matches Cargo version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -54,6 +72,9 @@ jobs:
 
       - name: Docker image smoke
         run: scripts/test-docker-image.sh
+
+      - name: Generate release SBOMs
+        run: OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 
       - name: Verify static binaries
         run: |
@@ -79,6 +100,13 @@ jobs:
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.inspect.json
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
+            target/dist/oxidedns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/manifest.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd.txt
             target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd-oxidedns.txt
@@ -99,6 +127,10 @@ jobs:
           oxide_gun="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
           docker_image="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
           docker_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+          oxidedns_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxidedns.cdx.json"
+          oxide_gun_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
+          docker_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
+          sbom_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
 
           cat > "$notes" <<EOF
           OxideDNS $version
@@ -108,7 +140,9 @@ jobs:
           - Static OxideDNS binary: $(basename "$binary")
           - Static XDP-enabled OxideGun binary: $(basename "$oxide_gun")
           - Docker image archive: $(basename "$docker_image")
-          - SHA256 files are attached for the installer, binaries, and Docker image archive.
+          - CycloneDX SBOMs: $(basename "$oxidedns_sbom"), $(basename "$oxide_gun_sbom"), $(basename "$docker_sbom")
+          - SHA256 files are attached for the installer, binaries, Docker image archive, and SBOMs.
+          - SBOM evidence manifest: $(basename "$sbom_manifest")
 
           Target: x86_64-unknown-linux-musl
 
@@ -129,4 +163,11 @@ jobs:
             "$oxide_gun.sha256" \
             "$docker_image" \
             "$docker_image.sha256" \
-            "$docker_manifest"
+            "$docker_manifest" \
+            "$oxidedns_sbom" \
+            "$oxidedns_sbom.sha256" \
+            "$oxide_gun_sbom" \
+            "$oxide_gun_sbom.sha256" \
+            "$docker_sbom" \
+            "$docker_sbom.sha256" \
+            "$sbom_manifest"

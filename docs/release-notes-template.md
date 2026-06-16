@@ -10,8 +10,8 @@ running `scripts/check-release-notes.sh`.
 - Release date UTC: TBD
 - Evidence snapshot: TBD
 - Release artifacts: installer `.tar.xz`, static `oxidedns` binary, static
-  XDP-enabled `oxide-gun` binary, Alpine Docker image `.tar.xz`, and SHA256
-  sidecars.
+  XDP-enabled `oxide-gun` binary, Alpine Docker image `.tar.xz`, CycloneDX
+  SBOMs for the binaries and Docker image, SBOM manifest, and SHA256 sidecars.
 
 ## Verification Summary
 
@@ -110,6 +110,7 @@ CLI, metrics, logs, health endpoints, and network behavior.
 - Vulnerability disclosure changes: TBD
 - Vulnerability disclosure policy reviewed: TBD
 - Release signing mechanism and verification instructions: TBD
+- SBOM artifacts and manifest: TBD
 - Docker image verification: TBD
 - Docker image hardening notes: non-root UID/GID 53053, read-only root
   filesystem compatible, dropped-capability runtime command, no registry

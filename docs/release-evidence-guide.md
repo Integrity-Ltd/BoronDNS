@@ -51,6 +51,7 @@ under `target/evidence/<timestamp>/`. By default it captures:
 - long-run soak setup/report files under `soak-handoff/`;
 - reproducible-build setup files under `reproducible-build-handoff/`;
 - release-governance setup files under `release-handoff/`.
+- CycloneDX release SBOM evidence under `sbom-evidence/`.
 - bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts
   for negative responses, NOTIFY rejection, TCP truncation retry, EDNS behavior,
   DNS Cookies, IXFR NOTIMP fallback, passive DNSSEC/NSEC3 serving, and RRL UDP
@@ -142,6 +143,20 @@ archive, image manifest, inspect JSON, and SHA-256 file. Use
 `scripts/test-docker-image.sh` to smoke the image with a read-only root
 filesystem, dropped capabilities, `no-new-privileges`, health endpoints, and
 metrics.
+
+Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
+files for the two shipped release binaries. The Cargo SBOM pass uses
+`cargo-cyclonedx` against the workspace lockfile, the musl release target, and
+the shipped feature set `oxidedns-cli/af-xdp,oxide-gun/xdp`. It also writes
+`target/dist/oxidedns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
+with the source, feature set, tool version, path, and hash for each SBOM.
+
+Set `OXIDEDNS_SBOM_DOCKER=1` after `scripts/package-docker-image.sh` to require
+Syft and add a CycloneDX JSON SBOM for the release Docker image. Tagged GitHub
+release builds run this required Docker SBOM mode and attach the binary SBOMs,
+Docker image SBOM, their SHA-256 files, and the SBOM manifest to the release.
+Local release snapshots use `OXIDEDNS_SBOM_DOCKER=0` by default so they retain
+binary SBOM evidence without requiring a local Docker daemon.
 
 The v0.2.0 retained package/image smoke bundle is recorded in
 `docs/package-docker-smoke-v0.2.0.md` and lives under

@@ -135,11 +135,14 @@ smoke-test the same artifact locally with:
 ```bash
 scripts/package-docker-image.sh
 scripts/test-docker-image.sh
+OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 ```
 
 The output is written under `target/dist/` as
 `oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
-matching `.sha256` file. Load it into a local Docker daemon with:
+matching `.sha256` file. The SBOM command also writes CycloneDX JSON SBOMs,
+SHA-256 sidecars, and an SBOM manifest for the release binaries and Docker
+image. Load the image into a local Docker daemon with:
 
 ```bash
 xz -dc target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
