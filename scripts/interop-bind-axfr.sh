@@ -20,7 +20,10 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 source "$repo_root/scripts/axfr-traceability.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named.conf.template"
-workdir="$repo_root/target/interop/bind-axfr-$$"
+work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+mkdir -p "$work_parent"
+chmod 1777 "$work_parent"
+workdir="$work_parent/bind-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
@@ -62,6 +65,7 @@ PY
 )
 
 named_conf="$workdir/named.conf"
+bind_zone_file="$workdir/alpha.test.zone"
 oxidedns_conf="$workdir/oxidedns.toml"
 primary_soa_out="$workdir/primary-soa.out"
 primary_axfr_out="$workdir/primary-axfr.out"
@@ -72,8 +76,10 @@ tcp_soa_out="$workdir/tcp-soa.out"
 metrics_out="$workdir/metrics.txt"
 traceability_tsv="$workdir/axfr-traceability.tsv"
 
-named-checkzone alpha.test. "$zone_file" >/dev/null
-python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$zone_file" <<'PY'
+cp "$zone_file" "$bind_zone_file"
+chmod 0644 "$bind_zone_file"
+named-checkzone alpha.test. "$bind_zone_file" >/dev/null
+python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$bind_zone_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -84,8 +90,9 @@ text = text.replace("__PORT__", port)
 text = text.replace("__ZONEFILE__", zonefile)
 Path(output).write_text(text)
 PY
+chmod 0644 "$named_conf"
 named-checkconf -z "$named_conf" >/dev/null
-record_bind_primary_version "$workdir" "bind-axfr" "tcp-axfr" "none" "$named_conf" "$zone_file"
+record_bind_primary_version "$workdir" "bind-axfr" "tcp-axfr" "none" "$named_conf" "$bind_zone_file"
 
 cat >"$oxidedns_conf" <<EOF
 [server]

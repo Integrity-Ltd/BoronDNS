@@ -17,7 +17,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-ixfr.conf.template"
-workdir="$repo_root/target/interop/bind-ixfr-refresh-$$"
+work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+mkdir -p "$work_parent"
+chmod 1777 "$work_parent"
+workdir="$work_parent/bind-ixfr-refresh-$$"
 artifact_dir="${OXIDEDNS_BIND_IXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
@@ -113,6 +116,7 @@ alias IN CNAME www.alpha.test.
 txt IN TXT "$txt_value"
 _sip._tcp IN SRV 10 20 5060 www.alpha.test.
 EOF
+    chmod 0644 "$zone_file"
     named-checkzone alpha.test. "$zone_file" >/dev/null
 }
 
@@ -134,6 +138,7 @@ text = text.replace("__OXIDEDNS_PORT__", oxidedns_port)
 text = text.replace("__RNDC_SECRET__", secret)
 Path(output).write_text(text)
 PY
+chmod 0644 "$named_conf"
 
 cat >"$transfer_proxy" <<'PY'
 #!/usr/bin/env python3

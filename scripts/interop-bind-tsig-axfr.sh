@@ -18,7 +18,10 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
-workdir="$repo_root/target/interop/bind-tsig-axfr-$$"
+work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+mkdir -p "$work_parent"
+chmod 1777 "$work_parent"
+workdir="$work_parent/bind-tsig-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
@@ -68,10 +71,13 @@ PY
 )
 
 named_conf="$workdir/named.conf"
+bind_zone_file="$workdir/alpha.test.zone"
 oxidedns_conf="$workdir/oxidedns.toml"
 
-named-checkzone alpha.test. "$zone_file" >/dev/null
-python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$zone_file" "$tsig_secret" <<'PY'
+cp "$zone_file" "$bind_zone_file"
+chmod 0644 "$bind_zone_file"
+named-checkzone alpha.test. "$bind_zone_file" >/dev/null
+python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$bind_zone_file" "$tsig_secret" <<'PY'
 from pathlib import Path
 import sys
 
@@ -83,8 +89,9 @@ text = text.replace("__ZONEFILE__", zonefile)
 text = text.replace("__TSIG_SECRET__", secret)
 Path(output).write_text(text)
 PY
+chmod 0644 "$named_conf"
 named-checkconf -z "$named_conf" >/dev/null
-record_bind_primary_version "$workdir" "bind-tsig-axfr" "tcp-axfr" "tsig-hmac-sha256" "$named_conf" "$zone_file"
+record_bind_primary_version "$workdir" "bind-tsig-axfr" "tcp-axfr" "tsig-hmac-sha256" "$named_conf" "$bind_zone_file"
 
 cat >"$oxidedns_conf" <<EOF
 [server]
