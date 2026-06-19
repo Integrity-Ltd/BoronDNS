@@ -241,6 +241,7 @@ if [[ "$install_prereqs" == "1" ]]; then
 	sudo systemctl enable --now docker
 	sudo systemctl disable --now named >/dev/null 2>&1 || true
 	sudo systemctl disable --now bind9 >/dev/null 2>&1 || true
+	sudo install -d -m 1777 -o codex -g codex /var/cache/bind/oxidedns-interop
 	sudo usermod -aG docker codex || true
 fi
 

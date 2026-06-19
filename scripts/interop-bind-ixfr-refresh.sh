@@ -17,7 +17,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-ixfr.conf.template"
-work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+bind_cache_parent="/var/cache/bind/oxidedns-interop"
+if [[ -d "$bind_cache_parent" && -w "$bind_cache_parent" ]]; then
+    work_parent="$bind_cache_parent"
+else
+    work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+fi
 mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-ixfr-refresh-$$"

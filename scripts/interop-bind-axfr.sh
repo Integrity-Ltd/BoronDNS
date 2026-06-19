@@ -20,7 +20,12 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 source "$repo_root/scripts/axfr-traceability.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named.conf.template"
-work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+bind_cache_parent="/var/cache/bind/oxidedns-interop"
+if [[ -d "$bind_cache_parent" && -w "$bind_cache_parent" ]]; then
+    work_parent="$bind_cache_parent"
+else
+    work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+fi
 mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-axfr-$$"
