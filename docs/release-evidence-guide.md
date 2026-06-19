@@ -115,6 +115,24 @@ one evidence package instead of a full snapshot.
 | Soak | `scripts/capture-soak-handoff.sh` | Creates the 30-day soak report template, RSS/file-descriptor/metrics/event TSV schemas, weekly summary template, requirement traceability map, and operator sign-off template. |
 | Release governance | `scripts/capture-release-handoff.sh` | Creates the evidence attachment map, role ownership TSV, scheduled CI/manual-run plan, signing runbook, release-note fill plan, external-operator acceptance template, and release-readiness checklist. |
 
+## Large-Surface Soak Evidence
+
+Use `scripts/large-surface-soak-campaign.sh` to run the broad scenario-cycle
+soak on the two SSH hosts. The runner repeatedly executes retained BIND, NSD,
+Knot, PowerDNS/PostgreSQL, XoT, TSIG, catalog-zone, extended-catalog,
+DNSSEC/EDNS/DNS-Cookie/RRL, bad-transfer, and negative-query scenarios while
+sampling host resources and retaining per-scenario artifacts.
+
+The default release-campaign duration is `2592000` seconds, matching a 30-day
+wall-clock soak window. Its evidence complements the single resident-process
+RSS/file-descriptor soak represented by `scripts/capture-soak-handoff.sh`: the
+large-surface soak maximizes protocol and primary-interop churn, while the
+resident-process soak remains the stricter memory-growth lane for
+ODS-NFR-REL-003.
+
+See `docs/large-surface-soak.md` for launch, status, collection, and evidence
+schema details.
+
 ## Reproducible Build Evidence
 
 Use `scripts/reproducible-build-compare.sh` to run the local static-binary

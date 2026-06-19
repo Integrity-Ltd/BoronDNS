@@ -59,6 +59,7 @@ scripts/package-docker-image.sh
 scripts/test-docker-image.sh
 scripts/package-sbom.sh
 scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400
+scripts/large-surface-soak-campaign.sh plan --duration 2592000
 scripts/capture-release-handoff.sh
 scripts/audit-invariants.sh
 scripts/audit-readonly-runtime.sh
