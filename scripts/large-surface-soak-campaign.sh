@@ -189,6 +189,7 @@ scenario_args_string() {
     for scenario in "${scenarios[@]}"; do
         args+=(--scenario "$scenario")
     done
+    ((${#args[@]} > 0)) || return 0
     printf '%q ' "${args[@]}"
 }
 
@@ -271,8 +272,7 @@ exec scripts/large-surface-soak.sh \\
   --scenario-timeout $(printf '%q' "$scenario_timeout") \\
   --cycle-sleep $(printf '%q' "$cycle_sleep") \\
   --sample-interval $(printf '%q' "$sample_interval") \\
-  $allow_arg \\
-  $scenario_args
+  $allow_arg $scenario_args
 RUNNER
 chmod +x "$host_evidence/run-soak.sh"
 
