@@ -333,6 +333,9 @@ member_primaries = ["127.0.0.1:$bind_port"]
 catalog_tsig_key = "$tsig_name"
 serve_catalog_zone = false
 
+[catalog_zones.member_transfer_policy]
+unsigned_axfr = "allow-legacy-private"
+
 [[catalog_zones]]
 name = "catalog-knot.example."
 class = "IN"
@@ -341,6 +344,9 @@ member_primaries = ["127.0.0.1:$knot_port"]
 catalog_tsig_key = "$tsig_name"
 serve_catalog_zone = false
 
+[catalog_zones.member_transfer_policy]
+unsigned_axfr = "allow-legacy-private"
+
 [[catalog_zones]]
 name = "catalog-nsd.example."
 class = "IN"
@@ -348,6 +354,9 @@ catalog_primaries = ["127.0.0.1:$pdns_port"]
 member_primaries = ["127.0.0.1:$nsd_port"]
 catalog_tsig_key = "$tsig_name"
 serve_catalog_zone = false
+
+[catalog_zones.member_transfer_policy]
+unsigned_axfr = "allow-legacy-private"
 
 [[tsig_keys]]
 name = "$tsig_name"
