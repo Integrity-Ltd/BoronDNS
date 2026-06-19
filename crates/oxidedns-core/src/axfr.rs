@@ -510,13 +510,8 @@ pub fn parse_soa_response(
             serial = Some(soa_serial(&record.rdata).map_err(|_| SoaQueryError::MalformedMessage)?);
         }
     }
-    ensure_no_authority_additional_or_trailing_bytes(
-        message,
-        offset,
-        header.nscount,
-        header.arcount,
-    )
-    .map_err(|_| SoaQueryError::MalformedMessage)?;
+    skip_authority_additional_and_ensure_end(message, offset, header.nscount, header.arcount)
+        .map_err(|_| SoaQueryError::MalformedMessage)?;
 
     serial.ok_or(SoaQueryError::MissingSoa)
 }
@@ -1028,6 +1023,22 @@ fn ensure_no_authority_additional_or_trailing_bytes(
     arcount: u16,
 ) -> Result<(), DnsParseError> {
     if nscount != 0 || arcount != 0 || offset != message.len() {
+        return Err(DnsParseError::FormErr);
+    }
+    Ok(())
+}
+
+fn skip_authority_additional_and_ensure_end(
+    message: &[u8],
+    mut offset: usize,
+    nscount: u16,
+    arcount: u16,
+) -> Result<(), DnsParseError> {
+    for _ in 0..usize::from(nscount) + usize::from(arcount) {
+        let (_, consumed) = parse_record(message, offset)?;
+        offset += consumed;
+    }
+    if offset != message.len() {
         return Err(DnsParseError::FormErr);
     }
     Ok(())
@@ -2388,16 +2399,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_soa_response_with_additional_or_trailing_bytes() {
+    fn accepts_soa_response_with_authority_and_additional_records() {
         let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let soa = record("example.test.", RecordType::Soa as u16, soa_rdata());
         let mut response = soa_message(0x1234, vec![soa]);
+        append_authority_record(&mut response, &apex_ns());
         append_additional_record(&mut response, &apex_ns());
 
-        let error = parse_soa_response(0x1234, &apex, 1, &response)
-            .expect_err("SOA response additional section must be rejected");
-        assert_eq!(error, SoaQueryError::MalformedMessage);
+        let serial = parse_soa_response(0x1234, &apex, 1, &response).expect("SOA extra sections");
 
+        assert_eq!(serial, 1);
+    }
+
+    #[test]
+    fn rejects_soa_response_with_trailing_bytes() {
+        let apex = DomainName::from_absolute_str("example.test.").unwrap();
         let mut response = soa_message(
             0x1234,
             vec![record("example.test.", RecordType::Soa as u16, soa_rdata())],
