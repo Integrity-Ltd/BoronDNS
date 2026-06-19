@@ -416,7 +416,7 @@ collect_plan() {
             scp -r "$host:$host_evidence/." "$evidence_dir/remotes/$safe_host/"
         fi
         mkdir -p "$evidence_dir/remotes/$safe_host/journal"
-        ssh -o BatchMode=yes "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
+        ssh -n -o BatchMode=yes "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
             >"$evidence_dir/remotes/$safe_host/journal/$systemd_unit.log" 2>&1 || true
     done
 }
