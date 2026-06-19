@@ -12,6 +12,7 @@ if ((${#missing[@]} > 0)); then
     printf 'skipping BIND interop: missing %s\n' "${missing[*]}" >&2
     exit 0
 fi
+ulimit -n 65536 2>/dev/null || true
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
