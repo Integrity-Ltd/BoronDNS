@@ -24,7 +24,7 @@ Options:
   --scenario-timeout SECS  Per-scenario timeout. Default: 1800.
   --cycle-sleep SECS       Sleep between full cycles. Default: 5.
   --sample-interval SECS   Resource sample interval. Default: 60.
-  --install-prereqs        Install Docker/dnsutils/curl/openssl with apt before launch.
+  --install-prereqs        Install Docker, BIND, dnsutils, curl, and OpenSSL before launch.
   --fail-on-skip           Make scenario self-skips fail the soak service.
   -h, --help               Show this help.
 
@@ -237,8 +237,10 @@ write_plan() {
 
 if [[ "$install_prereqs" == "1" ]]; then
 	sudo apt-get update
-	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io dnsutils curl openssl ca-certificates rsync
+	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io bind9 bind9-utils dnsutils curl openssl ca-certificates rsync
 	sudo systemctl enable --now docker
+	sudo systemctl disable --now named >/dev/null 2>&1 || true
+	sudo systemctl disable --now bind9 >/dev/null 2>&1 || true
 	sudo usermod -aG docker codex || true
 fi
 
