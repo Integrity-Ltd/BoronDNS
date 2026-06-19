@@ -19,6 +19,7 @@ template_file="$repo_root/tests/interop/bind/named-notify.conf.template"
 workdir="$repo_root/target/interop/bind-notify-refresh-$$"
 artifact_dir="${OXIDEDNS_BIND_NOTIFY_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

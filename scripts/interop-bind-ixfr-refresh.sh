@@ -20,6 +20,7 @@ template_file="$repo_root/tests/interop/bind/named-ixfr.conf.template"
 workdir="$repo_root/target/interop/bind-ixfr-refresh-$$"
 artifact_dir="${OXIDEDNS_BIND_IXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

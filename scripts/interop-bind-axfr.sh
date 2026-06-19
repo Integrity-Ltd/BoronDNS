@@ -23,6 +23,7 @@ template_file="$repo_root/tests/interop/bind/named.conf.template"
 workdir="$repo_root/target/interop/bind-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

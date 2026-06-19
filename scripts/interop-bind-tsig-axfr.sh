@@ -21,6 +21,7 @@ tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/bind-tsig-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
