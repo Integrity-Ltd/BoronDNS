@@ -34,7 +34,7 @@ pdns_image="${OXIDEDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
 postgres_image="${OXIDEDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
 artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
-chmod 755 "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

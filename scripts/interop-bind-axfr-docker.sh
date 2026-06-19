@@ -30,6 +30,7 @@ workdir="$repo_root/target/interop/bind-axfr-docker-$$"
 container="oxidedns-bind-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

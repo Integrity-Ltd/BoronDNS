@@ -26,6 +26,7 @@ oxide_container="oxidedns-oxide-torture-$$"
 client_container="oxidedns-dumpcap-client-$$"
 oxide_image_ref="${OXIDEDNS_BIND_PACKET_TORTURE_IMAGE_REF:-oxidedns:bind-packet-torture}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

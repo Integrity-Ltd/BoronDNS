@@ -31,6 +31,7 @@ tsig_name="transfer-key."
 tsig_secret="dG9wc2VjcmV0"
 rndc_secret="YmluZC14b3QtY2F0YWxvZw=="
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?

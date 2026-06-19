@@ -26,6 +26,7 @@ workdir="$repo_root/target/interop/bind-catalog-zone-docker-$$"
 container="oxidedns-bind-catalog-$$"
 artifact_dir="${OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
+chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
