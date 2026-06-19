@@ -171,6 +171,9 @@ openssl x509 \
 
 chmod 0644 "$workdir/ca.crt" "$workdir/server.crt"
 chmod 0600 "$workdir/ca.key" "$workdir/server.key"
+# Alpine BIND drops privileges before opening TLS material; the generated
+# test-only server key must be readable by the daemon user inside the container.
+chmod 0644 "$workdir/server.key"
 
 cat >"$named_conf" <<EOF
 key "rndc-key" {
