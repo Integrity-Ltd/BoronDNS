@@ -289,6 +289,7 @@ WorkingDirectory=$remote_repo
 Environment=PATH=/home/codex/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=CARGO_HOME=/home/codex/.cargo
 Environment=RUSTUP_HOME=/home/codex/.rustup
+LimitNOFILE=1048576
 ExecStart=$host_evidence/run-soak.sh
 Restart=no
 StandardOutput=journal
