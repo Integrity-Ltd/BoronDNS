@@ -333,6 +333,9 @@ catalog_tsig_key = "$tsig_name"
 serve_catalog_zone = false
 member_transfer_extensions = true
 
+[catalog_zones.member_transfer_policy]
+unsigned_axfr = "allow-legacy-private"
+
 [[tsig_keys]]
 name = "$tsig_name"
 algorithm = "hmac-sha256"
