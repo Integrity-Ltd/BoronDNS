@@ -21,6 +21,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/bind-xot-catalog-zone-docker-$run_id"
@@ -76,6 +78,7 @@ rndc_conf_redacted="$workdir/rndc.conf.redacted"
 oxidedns_conf_redacted="$workdir/oxidedns.toml.redacted"
 traceability_tsv="$workdir/bind-xot-catalog-zone-traceability.tsv"
 summary_tsv="$workdir/bind-xot-catalog-zone-summary.tsv"
+bind_image="$(ensure_alpine_bind_image)"
 
 redact_config() {
     local src="$1"
@@ -243,8 +246,8 @@ set +e
 bind_probe="$(
     docker run --rm \
         -v "$workdir:/work:rw" \
-        alpine:latest \
-        sh -c 'apk add --no-cache bind bind-tools >/dev/null && named -V && named-checkconf -z /work/named.conf' \
+        "$bind_image" \
+        sh -c 'named -V && named-checkconf -z /work/named.conf' \
         2>&1
 )"
 bind_probe_status=$?
@@ -265,8 +268,8 @@ if ! docker run -d --name "$container" \
     -p "127.0.0.1:$bind_plain_port:5353/udp" \
     -p "127.0.0.1:$bind_tls_port:853/tcp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
+    "$bind_image" \
+    sh -c 'named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
     >/dev/null; then
     echo "skipping BIND XoT catalog-zone Docker interop: failed to start Alpine/BIND container" >&2
     exit 0
@@ -276,7 +279,7 @@ record_docker_primary_version \
     "$workdir" \
     "$container" \
     "BIND 9" \
-    "alpine:latest" \
+    "$bind_image" \
     "bind" \
     "bind-xot-catalog-zone" \
     "tls-xot-catalog-refresh" \

@@ -19,10 +19,13 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 artifact_dir="${OXIDEDNS_LARGE_BENCH_DIR:-$repo_root/target/evidence/large-catalog-benchmark-$timestamp}"
 workdir="${OXIDEDNS_LARGE_BENCH_WORKDIR:-/tmp/oxidedns-large-catalog-bench-$timestamp}"
 bind_container="oxidedns-large-bench-bind-$$"
+bind_image="$(ensure_alpine_bind_image)"
 
 target_rss_mib="${OXIDEDNS_LARGE_BENCH_TARGET_RSS_MIB:-$((8 * 1024))}"
 zone_count="${OXIDEDNS_LARGE_BENCH_ZONES:-128}"
@@ -445,8 +448,8 @@ cp "$workdir/oxidedns.toml" "$artifact_dir/oxidedns.toml"
 docker run -d --name "$bind_container" \
     -p "127.0.0.1:$bind_port:5353/tcp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache bind >/dev/null && named-checkconf -z /work/named.conf >/work/named-checkconf.out 2>&1 && named -g -c /work/named.conf -n 1' \
+    "$bind_image" \
+    sh -c 'named-checkconf -z /work/named.conf >/work/named-checkconf.out 2>&1 && named -g -c /work/named.conf -n 1' \
     >/dev/null
 
 expected_bind_loaded_zones=$((zone_count + 1))

@@ -20,6 +20,8 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/knot-xot-tsig-$$"
@@ -28,6 +30,7 @@ server_name="primary.alpha.test"
 artifact_dir="${OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
 traceability_tsv="$workdir/knot-xot-tsig-traceability.tsv"
 knot_conf_redacted="$workdir/knot.conf.redacted"
+knot_image="$(ensure_alpine_knot_image)"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -142,8 +145,8 @@ set +e
 knot_probe="$(
     docker run --rm \
         -v "$workdir:/work:ro" \
-        alpine:latest \
-        sh -c 'apk add --no-cache knot >/dev/null && knotd -V && knotc -c /work/knot.conf conf-check' \
+        "$knot_image" \
+        sh -c 'knotd -V && knotc -c /work/knot.conf conf-check' \
         2>&1
 )"
 knot_probe_status=$?
@@ -163,13 +166,13 @@ fi
 if ! docker run -d --name "$container" \
     -p "127.0.0.1:$knot_tls_port:853/tcp" \
     -v "$workdir:/work:ro" \
-    alpine:latest \
-    sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
+    "$knot_image" \
+    sh -c 'mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
     >/dev/null; then
     echo "skipping Knot XoT+TSIG Docker interop: failed to start Alpine/Knot container" >&2
     exit 0
 fi
-record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-xot-tsig" "tls-xot-axfr" "tls-alpn-dot+tsig-hmac-sha256" "knotd -V" "$knot_conf_redacted" "$zone_file"
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "$knot_image" "knot" "knot-xot-tsig" "tls-xot-axfr" "tls-alpn-dot+tsig-hmac-sha256" "knotd -V" "$knot_conf_redacted" "$zone_file"
 
 alpn_probe=""
 for _ in {1..120}; do

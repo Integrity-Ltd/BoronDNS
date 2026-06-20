@@ -21,6 +21,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/powerdns-catalog-split-primaries-$run_id"
@@ -33,6 +35,9 @@ nsd_container="oxidedns-split-nsd-$run_id"
 pdns_image="${OXIDEDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
 postgres_image="${OXIDEDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
 artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR:-}"
+bind_image="$(ensure_alpine_bind_image)"
+knot_image="$(ensure_alpine_knot_image)"
+nsd_image="$(ensure_alpine_nsd_image)"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
@@ -254,30 +259,30 @@ docker run -d --name "$bind_container" \
     -p "127.0.0.1:$bind_port:5353/tcp" \
     -p "127.0.0.1:$bind_port:5353/udp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
+    "$bind_image" \
+    sh -c 'named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
     >/dev/null
 
 docker run -d --name "$knot_container" \
     -p "127.0.0.1:$knot_port:5353/tcp" \
     -p "127.0.0.1:$knot_port:5353/udp" \
     -v "$workdir:/work:ro" \
-    alpine:latest \
-    sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
+    "$knot_image" \
+    sh -c 'mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
     >/dev/null
 
 docker run -d --name "$nsd_container" \
     -p "127.0.0.1:$nsd_port:5353/tcp" \
     -p "127.0.0.1:$nsd_port:5353/udp" \
     -v "$workdir:/work:ro" \
-    alpine:latest \
-    sh -c 'apk add --no-cache nsd >/dev/null && nsd-checkconf /work/nsd.conf && nsd -d -c /work/nsd.conf' \
+    "$nsd_image" \
+    sh -c 'nsd-checkconf /work/nsd.conf && nsd -d -c /work/nsd.conf' \
     >/dev/null
 
 record_docker_primary_version "$workdir" "$pdns_container" "PowerDNS Authoritative" "$pdns_image" "pdns-auth" "powerdns-catalog-split-primaries" "catalog-axfr-tsig" "tsig-hmac-sha256" "pdns_server --version" "$pdns_conf" "$workdir/catalog-bind.example.zone" "$workdir/catalog-knot.example.zone" "$workdir/catalog-nsd.example.zone"
-record_docker_primary_version "$workdir" "$bind_container" "BIND 9" "alpine:latest" "bind" "powerdns-catalog-split-primaries-bind-member" "member-axfr" "none" "named -V" "$workdir/named.conf" "$workdir/bind-member.example.zone"
-record_docker_primary_version "$workdir" "$knot_container" "Knot DNS" "alpine:latest" "knot" "powerdns-catalog-split-primaries-knot-member" "member-axfr" "none" "knotd -V" "$workdir/knot.conf" "$workdir/knot-member.example.zone"
-record_docker_primary_version "$workdir" "$nsd_container" "NSD" "alpine:latest" "nsd" "powerdns-catalog-split-primaries-nsd-member" "member-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/nsd-member.example.zone"
+record_docker_primary_version "$workdir" "$bind_container" "BIND 9" "$bind_image" "bind" "powerdns-catalog-split-primaries-bind-member" "member-axfr" "none" "named -V" "$workdir/named.conf" "$workdir/bind-member.example.zone"
+record_docker_primary_version "$workdir" "$knot_container" "Knot DNS" "$knot_image" "knot" "powerdns-catalog-split-primaries-knot-member" "member-axfr" "none" "knotd -V" "$workdir/knot.conf" "$workdir/knot-member.example.zone"
+record_docker_primary_version "$workdir" "$nsd_container" "NSD" "$nsd_image" "nsd" "powerdns-catalog-split-primaries-nsd-member" "member-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/nsd-member.example.zone"
 
 for name_port in \
     "catalog-bind.example. $pdns_port" \

@@ -254,6 +254,16 @@ fi
 git pull --ff-only
 mkdir -p "$host_evidence"
 
+# Build reusable Alpine primary images once before the long-running service
+# starts. Individual scenarios then avoid live apk network fetches in every
+# cycle; transient mirror/DNS failures stay isolated to launch-time retries.
+# shellcheck source=/dev/null
+source "$remote_repo/scripts/interop-docker-images.sh"
+ensure_alpine_bind_image >/dev/null
+ensure_alpine_knot_image >/dev/null
+ensure_alpine_nsd_image >/dev/null
+ensure_alpine_nsd_notify_image >/dev/null
+
 runner="$remote_repo/scripts/large-surface-soak.sh"
 [[ -x "$runner" ]] || {
 	printf 'missing executable runner: %s\n' "$runner" >&2

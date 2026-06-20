@@ -21,6 +21,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 
 workdir="$repo_root/target/interop/bind-catalog-zone-docker-$$"
 container="oxidedns-bind-catalog-$$"
@@ -76,6 +78,7 @@ member_added_out="$workdir/member-added.out"
 member_removed_out="$workdir/member-removed.out"
 metrics_after_add_out="$workdir/metrics-after-add.txt"
 metrics_after_remove_out="$workdir/metrics-after-remove.txt"
+bind_image="$(ensure_alpine_bind_image)"
 
 write_catalog_zone() {
     local serial="$1"
@@ -185,8 +188,8 @@ if ! docker run -d --name "$container" \
     -p "127.0.0.1:$bind_port:5353/tcp" \
     -p "127.0.0.1:$bind_port:5353/udp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
+    "$bind_image" \
+    sh -c 'named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
     >/dev/null; then
     echo "skipping BIND catalog-zone Docker interop: failed to start Alpine/BIND container" >&2
     exit 0
@@ -196,7 +199,7 @@ record_docker_primary_version \
     "$workdir" \
     "$container" \
     "BIND 9" \
-    "alpine:latest" \
+    "$bind_image" \
     "bind" \
     "bind-docker-catalog-zone" \
     "tcp-axfr+catalog-refresh" \

@@ -21,6 +21,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 # shellcheck source=scripts/axfr-traceability.sh
 source "$repo_root/scripts/axfr-traceability.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
@@ -28,6 +30,7 @@ template_file="$repo_root/tests/interop/knot/knot.conf.template"
 workdir="$repo_root/target/interop/knot-axfr-$$"
 container="oxidedns-knot-axfr-$$"
 artifact_dir="${OXIDEDNS_KNOT_AXFR_ARTIFACT_DIR:-}"
+knot_image="$(ensure_alpine_knot_image)"
 mkdir -p "$workdir"
 
 cleanup() {
@@ -75,13 +78,13 @@ if ! docker run -d --name "$container" \
     -p "127.0.0.1:$knot_port:5353/tcp" \
     -p "127.0.0.1:$knot_port:5353/udp" \
     -v "$workdir:/work:ro" \
-    alpine:latest \
-    sh -c 'apk add --no-cache knot >/dev/null && mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
+    "$knot_image" \
+    sh -c 'mkdir -p /tmp/knot-db && knotc -c /work/knot.conf conf-check && knotd -c /work/knot.conf -v' \
     >/dev/null; then
     echo "skipping Knot Docker interop: failed to start Alpine/Knot container" >&2
     exit 0
 fi
-record_docker_primary_version "$workdir" "$container" "Knot DNS" "alpine:latest" "knot" "knot-axfr" "tcp-axfr" "none" "knotd -V" "$workdir/knot.conf" "$workdir/alpha.test.zone"
+record_docker_primary_version "$workdir" "$container" "Knot DNS" "$knot_image" "knot" "knot-axfr" "tcp-axfr" "none" "knotd -V" "$workdir/knot.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..120}; do
     if dig "@127.0.0.1" -p "$knot_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then

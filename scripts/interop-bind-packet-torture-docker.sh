@@ -19,12 +19,16 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/bind-packet-torture-$$"
 artifact_dir="${OXIDEDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR:-}"
 bind_container="oxidedns-bind-torture-$$"
 oxide_container="oxidedns-oxide-torture-$$"
 client_container="oxidedns-dumpcap-client-$$"
 oxide_image_ref="${OXIDEDNS_BIND_PACKET_TORTURE_IMAGE_REF:-oxidedns:bind-packet-torture}"
+bind_image="$(ensure_alpine_bind_image)"
+packet_torture_image="$(ensure_alpine_packet_torture_image)"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
@@ -552,8 +556,8 @@ if ! docker run -d --name "$bind_container" \
     -p "127.0.0.1:$bind_port:5353/tcp" \
     -p "127.0.0.1:$bind_port:5353/udp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache bind bind-tools >/dev/null && named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
+    "$bind_image" \
+    sh -c 'named-checkconf -z /work/named.conf && named -g -c /work/named.conf -n 1' \
     >/dev/null; then
     echo "skipping BIND packet torture interop: failed to start Alpine/BIND container" >&2
     exit 0
@@ -648,9 +652,8 @@ docker run --rm \
     --cap-add NET_RAW \
     --cap-add NET_ADMIN \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c "apk add --no-cache python3 wireshark-common >/dev/null; \
-        dumpcap -i lo -f 'udp and (port $bind_port or port $oxidedns_dns_port)' -w /work/dns-torture.pcapng -q >/work/dumpcap.log 2>&1 & \
+    "$packet_torture_image" \
+    sh -c "dumpcap -i lo -f 'udp and (port $bind_port or port $oxidedns_dns_port)' -w /work/dns-torture.pcapng -q >/work/dumpcap.log 2>&1 & \
         cap_pid=\$!; sleep 0.4; \
         python3 /work/client.py '$bind_port' '$oxidedns_dns_port' /work/summary.tsv /work/diff.txt /work/client.log; \
         sleep 0.4; kill \$cap_pid >/dev/null 2>&1 || true; wait \$cap_pid >/dev/null 2>&1 || true"

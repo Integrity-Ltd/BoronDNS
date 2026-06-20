@@ -21,9 +21,12 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-docker-images.sh
+source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
 container="oxidedns-nsd-notify-refresh-$$"
 artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
+nsd_image="$(ensure_alpine_nsd_notify_image)"
 mkdir -p "$workdir"
 
 copy_failure_artifacts() {
@@ -213,13 +216,13 @@ if ! docker run -d --name "$container" \
     -p "127.0.0.1:$nsd_port:5353/tcp" \
     -p "127.0.0.1:$nsd_port:5353/udp" \
     -v "$workdir:/work:rw" \
-    alpine:latest \
-    sh -c 'apk add --no-cache gcompat libgcc nsd python3 >/dev/null && nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && exec nsd -d -c /work/nsd.conf' \
+    "$nsd_image" \
+    sh -c 'nsd-checkzone alpha.test. /work/alpha.test.zone >/dev/null && nsd-checkconf /work/nsd.conf && exec nsd -d -c /work/nsd.conf' \
     >/dev/null; then
     echo "skipping NSD NOTIFY Docker interop: failed to start Alpine/NSD container" >&2
     exit 0
 fi
-record_docker_primary_version "$workdir" "$container" "NSD" "alpine:latest" "nsd" "nsd-notify-refresh" "udp-notify+tcp-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/alpha.test.zone"
+record_docker_primary_version "$workdir" "$container" "NSD" "$nsd_image" "nsd" "nsd-notify-refresh" "udp-notify+tcp-axfr" "none" "nsd -v" "$workdir/nsd.conf" "$workdir/alpha.test.zone"
 
 for _ in {1..120}; do
     if dig "@127.0.0.1" -p "$nsd_port" alpha.test. SOA +time=1 +tries=1 +short >/dev/null 2>&1; then
