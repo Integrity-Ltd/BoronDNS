@@ -173,6 +173,9 @@ struct Cli {
     /// Query selection strategy when a pool has more than one entry.
     #[arg(long, value_enum)]
     query_select: Option<QuerySelect>,
+    /// Raw DNS payload as hexadecimal bytes; first two bytes are rewritten per packet as query ID.
+    #[arg(long)]
+    query_payload_hex: Option<String>,
     /// Maximum packet count. The first reached run limit wins.
     #[arg(long)]
     max_packets: Option<u64>,
@@ -397,6 +400,8 @@ struct QueryConfig {
     qname: String,
     qtype: String,
     #[serde(default)]
+    payload_hex: Option<String>,
+    #[serde(default)]
     list_file: Option<PathBuf>,
     #[serde(default)]
     qname_template: Option<String>,
@@ -415,6 +420,7 @@ impl Default for QueryConfig {
         Self {
             qname: DEFAULT_QNAME.to_owned(),
             qtype: DEFAULT_QTYPE.to_owned(),
+            payload_hex: None,
             list_file: None,
             qname_template: None,
             qname_count: None,
@@ -748,6 +754,7 @@ struct QueryTemplate {
     encoded_qname: Vec<u8>,
     qtype_name: String,
     qtype: u16,
+    raw_payload: Option<Vec<u8>>,
     edns_enabled: bool,
     edns_payload_size: u16,
     dnssec_ok: bool,
@@ -1201,6 +1208,9 @@ fn apply_cli_overrides(config: &mut FileConfig, cli: &Cli) {
     if let Some(query_select) = cli.query_select {
         config.query.select = query_select;
     }
+    if let Some(query_payload_hex) = &cli.query_payload_hex {
+        config.query.payload_hex = Some(query_payload_hex.clone());
+    }
     if let Some(max_packets) = cli.max_packets {
         config.run.max_packets = max_packets;
     }
@@ -1262,9 +1272,12 @@ fn validate_config(config: &FileConfig) -> Result<()> {
 
 fn validate_query_config(config: &QueryConfig) -> Result<()> {
     let pool_modes = usize::from(config.list_file.is_some())
-        + usize::from(config.qname_template.is_some() || config.qname_count.is_some());
+        + usize::from(config.qname_template.is_some() || config.qname_count.is_some())
+        + usize::from(config.payload_hex.is_some());
     if pool_modes > 1 {
-        bail!("configure only one query pool mode: list_file or qname_template/qname_count");
+        bail!(
+            "configure only one query pool mode: list_file, qname_template/qname_count, or payload_hex"
+        );
     }
     if config.qname_template.is_some() || config.qname_count.is_some() {
         let Some(template) = &config.qname_template else {
@@ -1277,8 +1290,15 @@ fn validate_query_config(config: &QueryConfig) -> Result<()> {
             bail!("query.qname_count must be non-zero with query.qname_template");
         }
     }
-    parse_qtype(&config.qtype)?;
-    encode_qname(&config.qname)?;
+    if let Some(payload_hex) = &config.payload_hex {
+        let payload = parse_hex_payload(payload_hex)?;
+        if payload.len() < 2 {
+            bail!("query.payload_hex must contain at least two bytes for query-id rewriting");
+        }
+    } else {
+        parse_qtype(&config.qtype)?;
+        encode_qname(&config.qname)?;
+    }
     Ok(())
 }
 
@@ -1846,6 +1866,9 @@ fn serde_plain_drop_implementation(value: DropImplementation) -> &'static str {
 }
 
 fn query_template(config: &FileConfig) -> Result<QueryTemplate> {
+    if let Some(payload_hex) = &config.query.payload_hex {
+        return raw_payload_template(payload_hex);
+    }
     template_from_parts(&config.query.qname, &config.query.qtype, &config.query)
 }
 
@@ -1916,10 +1939,25 @@ fn template_from_parts(qname: &str, qtype: &str, config: &QueryConfig) -> Result
         encoded_qname,
         qtype_name: qtype.to_ascii_uppercase(),
         qtype: parse_qtype(qtype)?,
+        raw_payload: None,
         edns_enabled: config.edns_enabled,
         edns_payload_size: config.edns_payload_size,
         dnssec_ok: config.dnssec_ok,
         recursion_desired: config.recursion_desired,
+    })
+}
+
+fn raw_payload_template(payload_hex: &str) -> Result<QueryTemplate> {
+    Ok(QueryTemplate {
+        qname: "raw-payload.".to_owned(),
+        encoded_qname: Vec::new(),
+        qtype_name: "RAW".to_owned(),
+        qtype: 0,
+        raw_payload: Some(parse_hex_payload(payload_hex)?),
+        edns_enabled: false,
+        edns_payload_size: 0,
+        dnssec_ok: false,
+        recursion_desired: false,
     })
 }
 
@@ -1945,6 +1983,14 @@ fn build_dns_query(query: &QueryTemplate, id: u16) -> Result<Vec<u8>> {
 
 fn build_dns_query_into(packet: &mut Vec<u8>, query: &QueryTemplate, id: u16) -> Result<()> {
     packet.clear();
+    if let Some(raw_payload) = &query.raw_payload {
+        if raw_payload.len() < 2 {
+            bail!("raw query payload must contain at least two bytes");
+        }
+        packet.extend_from_slice(raw_payload);
+        packet[..2].copy_from_slice(&id.to_be_bytes());
+        return Ok(());
+    }
     packet.extend_from_slice(&id.to_be_bytes());
     let flags = if query.recursion_desired {
         0x0100_u16
@@ -1969,6 +2015,24 @@ fn build_dns_query_into(packet: &mut Vec<u8>, query: &QueryTemplate, id: u16) ->
         packet.extend_from_slice(&0_u16.to_be_bytes());
     }
     Ok(())
+}
+
+fn parse_hex_payload(value: &str) -> Result<Vec<u8>> {
+    let normalized: String = value
+        .chars()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    if normalized.is_empty() || normalized.len() % 2 != 0 {
+        bail!("query.payload_hex must contain an even number of hex digits");
+    }
+    let mut payload = Vec::with_capacity(normalized.len() / 2);
+    for index in (0..normalized.len()).step_by(2) {
+        let byte = u8::from_str_radix(&normalized[index..index + 2], 16).with_context(|| {
+            format!("query.payload_hex contains invalid byte at offset {index}")
+        })?;
+        payload.push(byte);
+    }
+    Ok(payload)
 }
 
 fn encode_qname(qname: &str) -> Result<Vec<u8>> {
@@ -2125,6 +2189,7 @@ mod tests {
             encoded_qname: encode_qname("www.example.test.").expect("qname encodes"),
             qtype_name: "AAAA".to_owned(),
             qtype: 28,
+            raw_payload: None,
             edns_enabled: true,
             edns_payload_size: 1232,
             dnssec_ok: true,
@@ -2144,6 +2209,7 @@ mod tests {
                 encoded_qname: encode_qname("example.test.").expect("qname encodes"),
                 qtype_name: "A".to_owned(),
                 qtype: 1,
+                raw_payload: None,
                 edns_enabled: false,
                 edns_payload_size: 1232,
                 dnssec_ok: false,
@@ -2155,6 +2221,13 @@ mod tests {
         let response = build_self_test_response(&query).expect("response builds");
         assert_eq!(classify_response(&response, 7), ResponseClass::Positive);
         assert_eq!(classify_response(&response, 8), ResponseClass::Unmatched);
+    }
+
+    #[test]
+    fn raw_query_payload_rewrites_query_id() {
+        let query = raw_payload_template("12340100").expect("raw payload parses");
+        let packet = build_dns_query(&query, 0xbeef).expect("raw query builds");
+        assert_eq!(packet, vec![0xbe, 0xef, 0x01, 0x00]);
     }
 
     #[test]

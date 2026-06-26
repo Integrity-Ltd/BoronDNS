@@ -66,6 +66,22 @@ fn self_test_outputs_summary_json() {
 }
 
 #[test]
+fn print_config_accepts_raw_query_payload() {
+    let output = oxide_gun()
+        .args(["--print-config", "--query-payload-hex", "12340100"])
+        .output()
+        .expect("oxide-gun print-config runs");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+    assert!(stdout.contains("payload_hex = \"12340100\""));
+}
+
+#[test]
 fn print_config_accepts_cli_overrides() {
     let output = oxide_gun()
         .args([
