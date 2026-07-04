@@ -413,6 +413,28 @@ primaries = ["127.0.0.1:$proxy_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
+cargo build -p oxidedns-cli >/dev/null
+"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
+oxidedns_pid=$!
+
+live=0
+for _ in {1..100}; do
+    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+        live=1
+        break
+    fi
+    if ! kill -0 "$oxidedns_pid" 2>/dev/null; then
+        wait "$oxidedns_pid" 2>/dev/null || true
+        echo "OxideDNS exited before BIND IXFR primary startup" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+if ((live != 1)); then
+    echo "OxideDNS did not become live before starting BIND IXFR primary" >&2
+    exit 1
+fi
+
 named -g -c "$named_conf" -n 1 >"$workdir/named.log" 2>&1 &
 named_pid=$!
 
@@ -429,10 +451,6 @@ if [[ "$primary_soa" != *"2026052401"* ]]; then
     echo "BIND IXFR primary did not answer initial SOA serial" >&2
     exit 1
 fi
-
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
 
 ready=""
 for _ in {1..100}; do

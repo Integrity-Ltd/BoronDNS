@@ -71,12 +71,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r nsd_port notify_port oxidedns_dns_port oxidedns_health_port < <(
+read -r nsd_port oxidedns_dns_port oxidedns_health_port < <(
     python3 - <<'PY'
 import socket
 
 sockets = []
-for _ in range(4):
+for _ in range(3):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     sockets.append(sock)
@@ -111,6 +111,8 @@ zone_file="$workdir/alpha.test.zone"
 nsd_conf="$workdir/nsd.conf"
 notify_proxy="$workdir/notify-proxy.py"
 notify_proxy_log="$workdir/notify-proxy.log"
+notify_proxy_ready="$workdir/notify-proxy.ready"
+notify_proxy_stderr="$workdir/notify-proxy.stderr"
 oxidedns_conf="$workdir/oxidedns.toml"
 metrics_out="$workdir/metrics.txt"
 summary_tsv="$workdir/nsd-notify-refresh-summary.tsv"
@@ -161,7 +163,7 @@ remote-control:
 zone:
     name: "alpha.test."
     zonefile: "/work/alpha.test.zone"
-    notify: $host_notify_address@$notify_port NOKEY
+    notify: $host_notify_address@__NOTIFY_PORT__ NOKEY
     notify-retry: 1
     provide-xfr: 0.0.0.0/0 NOKEY
 EOF
@@ -175,6 +177,7 @@ import sys
 listen_port = int(sys.argv[1])
 target_port = int(sys.argv[2])
 log_path = sys.argv[3]
+ready_path = sys.argv[4]
 
 
 def log(message):
@@ -184,6 +187,8 @@ def log(message):
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("0.0.0.0", listen_port))
+with open(ready_path, "w", encoding="utf-8") as handle:
+    print(sock.getsockname()[1], file=handle, flush=True)
 
 while True:
     packet, peer = sock.recvfrom(4096)
@@ -209,6 +214,36 @@ while True:
             log(f"short_response_from_oxidedns bytes={len(response)}")
     except TimeoutError:
         log("response_from_oxidedns timeout")
+PY
+
+python3 "$notify_proxy" 0 "$oxidedns_dns_port" "$notify_proxy_log" "$notify_proxy_ready" >"$notify_proxy_stderr" 2>&1 &
+notify_proxy_pid=$!
+
+notify_port=""
+for _ in {1..100}; do
+    if [[ -s "$notify_proxy_ready" ]]; then
+        notify_port="$(<"$notify_proxy_ready")"
+        break
+    fi
+    if ! kill -0 "$notify_proxy_pid" 2>/dev/null; then
+        wait "$notify_proxy_pid" 2>/dev/null || true
+        echo "NSD NOTIFY proxy failed to start" >&2
+        cat "$notify_proxy_stderr" >&2 || true
+        exit 1
+    fi
+    sleep 0.05
+done
+if [[ -z "$notify_port" ]]; then
+    echo "NSD NOTIFY proxy did not report a listening port" >&2
+    cat "$notify_proxy_stderr" >&2 || true
+    exit 1
+fi
+python3 - "$nsd_conf" "$notify_port" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("__NOTIFY_PORT__", sys.argv[2]))
 PY
 
 cargo build -p oxidedns-cli >/dev/null
@@ -263,8 +298,6 @@ primaries = ["127.0.0.1:$nsd_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-python3 "$notify_proxy" "$notify_port" "$oxidedns_dns_port" "$notify_proxy_log" >"$workdir/notify-proxy.stderr" 2>&1 &
-notify_proxy_pid=$!
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
 oxidedns_pid=$!
 

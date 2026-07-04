@@ -49,11 +49,11 @@ cleanup() {
                 tail -180 "$workdir/oxidedns.log" >&2
             }
         fi
-        docker rm -f "$pdns_container" >/dev/null 2>&1 || true
+        docker rm -f -v "$pdns_container" >/dev/null 2>&1 || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$postgres_container" >/dev/null 2>&1; then
         docker logs "$postgres_container" >"$workdir/postgres.log" 2>&1 || true
-        docker rm -f "$postgres_container" >/dev/null 2>&1 || true
+        docker rm -f -v "$postgres_container" >/dev/null 2>&1 || true
     fi
     if docker network ls --format '{{.Name}}' | grep -Fx "$network" >/dev/null 2>&1; then
         docker network rm "$network" >/dev/null 2>&1 || true
@@ -131,6 +131,8 @@ chmod 644 "$pdns_conf"
 docker network create "$network" >/dev/null
 docker run -d --name "$postgres_container" \
     --network "$network" \
+    --tmpfs /var/lib/postgresql/data:rw,nosuid,size=256m \
+    -e PGDATA=/var/lib/postgresql/data/pgdata \
     -e POSTGRES_PASSWORD=pdns \
     -e POSTGRES_USER=pdns \
     -e POSTGRES_DB=pdns \

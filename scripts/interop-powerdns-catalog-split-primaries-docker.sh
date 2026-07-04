@@ -54,7 +54,7 @@ cleanup() {
                 echo "---- $container logs ----" >&2
                 tail -160 "$workdir/$container.log" >&2 || true
             fi
-            docker rm -f "$container" >/dev/null 2>&1 || true
+            docker rm -f -v "$container" >/dev/null 2>&1 || true
         fi
     done
     if ((status != 0)) && [[ -f "$workdir/oxidedns.log" ]]; then
@@ -206,6 +206,8 @@ chmod 644 "$workdir"/*.zone "$workdir"/*.conf
 docker network create "$network" >/dev/null
 docker run -d --name "$postgres_container" \
     --network "$network" \
+    --tmpfs /var/lib/postgresql/data:rw,nosuid,size=256m \
+    -e PGDATA=/var/lib/postgresql/data/pgdata \
     -e POSTGRES_PASSWORD=pdns \
     -e POSTGRES_USER=pdns \
     -e POSTGRES_DB=pdns \

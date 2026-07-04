@@ -18,6 +18,8 @@ Options:
   --sample-interval SECS   Resource sample interval. Default: 60.
   --allow-skip             Treat scenario self-skip as skipped instead of failed. Default.
   --fail-on-skip           Treat scenario self-skip as failed.
+  --resume                 Append to an existing evidence directory and continue
+                           at the next cycle number.
   --dry-run                Print selected scenarios and exit.
   -h, --help               Show this help.
 EOF
@@ -36,6 +38,7 @@ scenario_timeout="${OXIDEDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
 cycle_sleep="${OXIDEDNS_LARGE_SOAK_CYCLE_SLEEP_SECONDS:-5}"
 sample_interval="${OXIDEDNS_LARGE_SOAK_SAMPLE_INTERVAL_SECONDS:-60}"
 allow_skip="${OXIDEDNS_LARGE_SOAK_ALLOW_SKIP:-1}"
+resume=0
 dry_run=0
 selected_scenarios=()
 scenario_names=()
@@ -129,6 +132,10 @@ parse_args() {
             allow_skip=0
             shift
             ;;
+        --resume)
+            resume=1
+            shift
+            ;;
         --dry-run)
             dry_run=1
             shift
@@ -171,7 +178,7 @@ selected_indices() {
 }
 
 record_tool_versions() {
-    local output="$evidence_dir/tool-versions.txt"
+    local output="${1:-$evidence_dir/tool-versions.txt}"
     {
         printf 'created_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf '$ git rev-parse HEAD\n'
@@ -195,7 +202,7 @@ record_tool_versions() {
 }
 
 record_host_info() {
-    local output="$evidence_dir/host-info.txt"
+    local output="${1:-$evidence_dir/host-info.txt}"
     {
         printf 'created_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         if command -v hostname >/dev/null 2>&1; then
@@ -222,8 +229,16 @@ sample_resources() {
     local samples="$evidence_dir/resource-samples.tsv"
     local process_samples="$evidence_dir/process-samples.tsv"
     local end_epoch="$1"
-    printf 'timestamp_utc\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\toxidedns_processes\ttotal_oxidedns_rss_kib\n' >"$samples"
-    printf 'timestamp_utc\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm\targs\n' >"$process_samples"
+    if ((resume)) && [[ -s "$samples" ]]; then
+        :
+    else
+        printf 'timestamp_utc\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\toxidedns_processes\ttotal_oxidedns_rss_kib\n' >"$samples"
+    fi
+    if ((resume)) && [[ -s "$process_samples" ]]; then
+        :
+    else
+        printf 'timestamp_utc\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm\targs\n' >"$process_samples"
+    fi
     while :; do
         local now timestamp load_values mem_available docker_containers ps_summary
         now="$(date +%s)"
@@ -290,6 +305,18 @@ if failed:
 PY
 }
 
+next_cycle() {
+    local results="$evidence_dir/scenario-results.tsv"
+    if ! ((resume)) || [[ ! -s "$results" ]]; then
+        printf '1'
+        return 0
+    fi
+    awk -F '\t' '
+		NR > 1 && $1 ~ /^[0-9]+$/ && $1 > max { max = $1 }
+		END { print max + 1 }
+	' "$results"
+}
+
 run_scenario() {
     local cycle="$1"
     local index="$2"
@@ -354,6 +381,13 @@ main() {
     fi
 
     mkdir -p "$evidence_dir/scenarios"
+    if ((resume)) && [[ ! -f "$evidence_dir/scenario-results.tsv" ]]; then
+        die "--resume requires existing scenario results: $evidence_dir/scenario-results.tsv"
+    fi
+    local run_metadata="$evidence_dir/soak.env"
+    if ((resume)); then
+        run_metadata="$evidence_dir/soak-resume-$timestamp.env"
+    fi
     {
         printf 'created_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf 'repo_root=%s\n' "$repo_root"
@@ -362,6 +396,7 @@ main() {
         printf 'cycle_sleep_seconds=%s\n' "$cycle_sleep"
         printf 'sample_interval_seconds=%s\n' "$sample_interval"
         printf 'allow_skip=%s\n' "$allow_skip"
+        printf 'resume=%s\n' "$resume"
         printf 'scenarios='
         local first=1 index
         for index in "${indices[@]}"; do
@@ -370,10 +405,15 @@ main() {
             printf '%s' "${scenario_names[$index]}"
         done
         printf '\n'
-    } >"$evidence_dir/soak.env"
-    printf 'cycle\tscenario\tstatus\texit_status\tstarted_utc\tended_utc\tscenario_artifact_dir\tlog_path\n' >"$evidence_dir/scenario-results.tsv"
-    record_host_info
-    record_tool_versions
+    } >"$run_metadata"
+    if ! ((resume)); then
+        printf 'cycle\tscenario\tstatus\texit_status\tstarted_utc\tended_utc\tscenario_artifact_dir\tlog_path\n' >"$evidence_dir/scenario-results.tsv"
+        record_host_info
+        record_tool_versions
+    else
+        record_host_info "$evidence_dir/host-info-resume-$timestamp.txt"
+        record_tool_versions "$evidence_dir/tool-versions-resume-$timestamp.txt"
+    fi
 
     local end_epoch cycle index
     end_epoch=$(($(date +%s) + duration))
@@ -381,9 +421,8 @@ main() {
     sampler_pid=$!
     trap 'if [[ -n "${sampler_pid:-}" ]]; then kill "$sampler_pid" 2>/dev/null || true; wait "$sampler_pid" 2>/dev/null || true; fi; write_summary' EXIT
 
-    cycle=0
+    cycle="$(next_cycle)"
     while (($(date +%s) < end_epoch)); do
-        cycle=$((cycle + 1))
         for index in "${indices[@]}"; do
             if ! run_scenario "$cycle" "$index"; then
                 exit 1
@@ -396,6 +435,7 @@ main() {
         if (($(date +%s) < end_epoch)); then
             sleep "$cycle_sleep"
         fi
+        cycle=$((cycle + 1))
     done
 }
 

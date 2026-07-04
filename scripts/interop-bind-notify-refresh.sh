@@ -148,7 +148,6 @@ def log(message):
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("127.0.0.1", listen_port))
-seen_qids = set()
 
 
 def question_end(packet):
@@ -178,11 +177,6 @@ while True:
         f"peer={peer[0]}:{peer[1]} qid={qid} opcode={opcode} "
         f"qd={qdcount} an={ancount} ns={nscount} ar={arcount}"
     )
-    if qid in seen_qids:
-        sock.sendto(notify_response(packet, qid), peer)
-        log(f"duplicate_notify_answered_without_forward qid={qid}")
-        continue
-    seen_qids.add(qid)
     forward = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     forward.settimeout(2)
     forward.sendto(packet, ("127.0.0.1", target_port))
@@ -290,6 +284,12 @@ if [[ "$initial_soa" != *"2026052401"* ]]; then
     echo "OxideDNS did not serve initial SOA serial" >&2
     exit 1
 fi
+
+# BIND can keep the initial NOTIFY retry queued for a few seconds even after
+# OxideDNS has refreshed. Let that stale retry and the server dedup window drain
+# before reloading the zone, otherwise the updated NOTIFY may be deduplicated
+# behind the stale serial in tight soak loops.
+sleep 6
 
 write_zone 2026052402 192.0.2.42
 rndc -c "$rndc_conf" reload alpha.test >/dev/null
