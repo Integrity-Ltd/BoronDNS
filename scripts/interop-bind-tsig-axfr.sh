@@ -29,6 +29,7 @@ mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-tsig-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 

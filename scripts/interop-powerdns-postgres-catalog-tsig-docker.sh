@@ -30,6 +30,7 @@ pdns_container="oxidedns-pdns-auth-$run_id"
 pdns_image="${OXIDEDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
 postgres_image="${OXIDEDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
 artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 755 "$workdir"
 

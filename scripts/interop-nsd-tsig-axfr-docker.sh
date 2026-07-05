@@ -30,6 +30,7 @@ workdir="$repo_root/target/interop/nsd-tsig-axfr-$$"
 container="oxidedns-nsd-tsig-axfr-$$"
 artifact_dir="${OXIDEDNS_NSD_TSIG_AXFR_ARTIFACT_DIR:-}"
 nsd_image="$(ensure_alpine_nsd_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

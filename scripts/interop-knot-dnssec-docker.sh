@@ -27,6 +27,7 @@ template_file="$repo_root/tests/interop/knot/knot-dnssec.conf.template"
 workdir="$repo_root/target/interop/knot-dnssec-$$"
 container="oxidedns-knot-dnssec-$$"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

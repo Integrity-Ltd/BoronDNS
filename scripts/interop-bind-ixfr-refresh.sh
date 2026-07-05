@@ -28,6 +28,7 @@ mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-ixfr-refresh-$$"
 artifact_dir="${OXIDEDNS_BIND_IXFR_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 

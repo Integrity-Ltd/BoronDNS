@@ -31,6 +31,7 @@ artifact_dir="${OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
 traceability_tsv="$workdir/knot-xot-tsig-traceability.tsv"
 knot_conf_redacted="$workdir/knot.conf.redacted"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

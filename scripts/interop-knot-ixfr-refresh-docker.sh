@@ -27,6 +27,7 @@ workdir="$repo_root/target/interop/knot-ixfr-refresh-$$"
 container="oxidedns-knot-ixfr-refresh-$$"
 artifact_dir="${OXIDEDNS_KNOT_IXFR_ARTIFACT_DIR:-}"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

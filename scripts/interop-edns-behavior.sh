@@ -16,6 +16,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/edns-behavior-$$"
 artifact_dir="${OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

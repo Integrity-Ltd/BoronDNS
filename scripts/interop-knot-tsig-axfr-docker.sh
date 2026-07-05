@@ -30,6 +30,7 @@ workdir="$repo_root/target/interop/knot-tsig-axfr-$$"
 container="oxidedns-knot-tsig-axfr-$$"
 artifact_dir="${OXIDEDNS_KNOT_TSIG_AXFR_ARTIFACT_DIR:-}"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

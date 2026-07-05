@@ -31,6 +31,7 @@ workdir="$repo_root/target/interop/nsd-axfr-$$"
 container="oxidedns-nsd-axfr-$$"
 artifact_dir="${OXIDEDNS_NSD_AXFR_ARTIFACT_DIR:-}"
 nsd_image="$(ensure_alpine_nsd_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

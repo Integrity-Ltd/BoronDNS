@@ -16,6 +16,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/tcp-truncation-retry-$$"
 artifact_dir="${OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

@@ -26,6 +26,7 @@ workdir="$repo_root/target/interop/knot-notify-refresh-$$"
 container="oxidedns-knot-notify-refresh-$$"
 artifact_dir="${OXIDEDNS_KNOT_NOTIFY_ARTIFACT_DIR:-}"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 host_notify_ip="$(

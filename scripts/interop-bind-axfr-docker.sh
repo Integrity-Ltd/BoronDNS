@@ -32,6 +32,7 @@ workdir="$repo_root/target/interop/bind-axfr-docker-$$"
 container="oxidedns-bind-axfr-$$"
 artifact_dir="${OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR:-}"
 bind_image="$(ensure_alpine_bind_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 

@@ -38,6 +38,7 @@ artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_MEMBER_EXTENSION_ARTIFACT_DIR:-}"
 bind_image="$(ensure_alpine_bind_image)"
 knot_image="$(ensure_alpine_knot_image)"
 nsd_image="$(ensure_alpine_nsd_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 

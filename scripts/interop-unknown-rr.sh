@@ -16,6 +16,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/unknown-rr-$$"
 artifact_dir="${OXIDEDNS_UNKNOWN_RR_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

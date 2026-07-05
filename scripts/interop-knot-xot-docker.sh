@@ -29,6 +29,7 @@ server_name="primary.alpha.test"
 artifact_dir="${OXIDEDNS_KNOT_XOT_ARTIFACT_DIR:-}"
 traceability_tsv="$workdir/knot-xot-traceability.tsv"
 knot_image="$(ensure_alpine_knot_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {

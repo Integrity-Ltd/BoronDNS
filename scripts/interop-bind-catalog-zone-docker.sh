@@ -27,6 +27,7 @@ source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/bind-catalog-zone-docker-$$"
 container="oxidedns-bind-catalog-$$"
 artifact_dir="${OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR:-}"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 

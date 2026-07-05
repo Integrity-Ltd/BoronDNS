@@ -27,6 +27,7 @@ workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
 container="oxidedns-nsd-notify-refresh-$$"
 artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
 nsd_image="$(ensure_alpine_nsd_notify_image)"
+rm -rf "$workdir"
 mkdir -p "$workdir"
 
 copy_failure_artifacts() {
