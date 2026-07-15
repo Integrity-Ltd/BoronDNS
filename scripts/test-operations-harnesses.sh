@@ -9824,7 +9824,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     "fixture_isolated_log_a=$(printf '%q' "$workdir/package-isolated-a.log")" \
     "fixture_isolated_log_b=$(printf '%q' "$workdir/package-isolated-b.log")" \
     "fixture_main_cargo_log=$(printf '%q' "$workdir/package-cargo.log")" \
-    "fixture_main_manifest=$(printf '%q' "$repo_root/Cargo.toml")" \
+    "fixture_main_manifest=$(printf '%q' "$workdir/package-dirty-repo/Cargo.toml")" \
     "fixture_mutated_docker_dist=$(printf '%q' "$workdir/package-mutated-docker-dist")" \
     "fixture_mutated_installer_dist=$(printf '%q' "$workdir/package-mutated-installer-dist")" \
     "fixture_source_root=$(printf '%q' "$workdir/package-dirty-repo")" \
@@ -11656,15 +11656,15 @@ printf 'preserved clean Docker archive\n' \
         CARGO_TARGET_DIR="$package_fake_target" BORONDNS_DIST_DIR="$package_fake_dist" \
         BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
         BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
-        EXPECTED_PACKAGE_ROOT="$repo_root" EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" \
-        "$repo_root/scripts/package-installer.sh"
+        EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
+        "$package_dirty_repo/scripts/package-installer.sh"
     set +e
     PATH="$package_fake_bin:$PATH" \
         CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
         BORONDNS_DIST_DIR="$package_fake_dist" BORONDNS_SBOM_DOCKER=0 \
         BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
-        PACKAGE_CARGO_LOG="$package_cargo_log" EXPECTED_PACKAGE_ROOT="$repo_root" \
-        EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" "$repo_root/scripts/package-sbom.sh"
+        PACKAGE_CARGO_LOG="$package_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
+        EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" "$package_dirty_repo/scripts/package-sbom.sh"
     sbom_status=$?
     set -e
     [[ "$sbom_status" == 2 ]]
@@ -11678,8 +11678,8 @@ printf 'preserved clean Docker archive\n' \
         BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_docker_input" \
         BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
         BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
-        EXPECTED_PACKAGE_ROOT="$repo_root" EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" \
-        "$repo_root/scripts/package-docker-image.sh"
+        EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
+        "$package_dirty_repo/scripts/package-docker-image.sh"
 )
 [[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.tar.xz" ]]
 [[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-borondns.cdx.json" ]]
@@ -11693,7 +11693,7 @@ grep -Fqx 'preserved clean Docker archive' \
 [[ "$("$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-context/borondns")" == "borondns fake" ]]
 package_docker_manifest="$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty/manifest.txt"
 package_docker_binary_sha256="$(sha256sum "$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin" | awk '{ print $1 }')"
-grep -Fqx "commit=$(git -C "$repo_root" rev-parse --short=12 HEAD)" "$package_docker_manifest"
+grep -Fqx "commit=$(git -C "$package_dirty_repo" rev-parse --short=12 HEAD)" "$package_docker_manifest"
 grep -Fqx 'source_clean=0' "$package_docker_manifest"
 grep -Fqx 'release_eligible=0' "$package_docker_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_docker_manifest"
@@ -11704,7 +11704,7 @@ grep -Fqx 'release_eligible=0' "$package_image_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_image_manifest"
 grep -Fqx 'image_ref=borondns:0.9.0-nonrelease-dirty' "$package_image_manifest"
 [[ -z "$(find "$package_fake_dist" -maxdepth 1 -name 'borondns-9.9.9-*' -print -quit)" ]]
-if grep -F 'metadata' "$package_cargo_log" | grep -Fv -- "--manifest-path $repo_root/Cargo.toml"; then
+if grep -F 'metadata' "$package_cargo_log" | grep -Fv -- "--manifest-path $package_dirty_repo/Cargo.toml"; then
     printf 'packaging metadata escaped to the foreign caller workspace\n' >&2
     exit 1
 fi
