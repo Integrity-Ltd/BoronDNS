@@ -2,7 +2,6 @@
 
 use std::{hint::black_box, sync::OnceLock};
 
-use libfuzzer_sys::fuzz_target;
 use borondns_core::{
     dns::{
         AnswerOptions, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName, Header, Opcode,
@@ -10,6 +9,7 @@ use borondns_core::{
     },
     zone::{Rrset, ZoneSnapshot, ZoneStore},
 };
+use libfuzzer_sys::fuzz_target;
 
 const QID: u16 = 0x5151;
 const QCLASS_IN: u16 = 1;

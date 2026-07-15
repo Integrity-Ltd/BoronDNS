@@ -1,10 +1,10 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use borondns_core::{
     dns::DomainName,
     zone::{ZoneSnapshot, ZoneState, ZoneStore},
 };
+use libfuzzer_sys::fuzz_target;
 
 const ZONE_COUNT: usize = 8;
 const MAX_OPERATIONS: usize = 512;

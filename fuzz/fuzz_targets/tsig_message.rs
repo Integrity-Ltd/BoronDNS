@@ -2,7 +2,6 @@
 
 use std::sync::OnceLock;
 
-use libfuzzer_sys::fuzz_target;
 use borondns_core::{
     dns::RecordType,
     tsig::{
@@ -13,6 +12,7 @@ use borondns_core::{
         verify_tcp_response_stream_owned, verify_tcp_response_stream_owned_at_times,
     },
 };
+use libfuzzer_sys::fuzz_target;
 
 const NOW_UNIX: u64 = 1_700_000_000;
 const QID: u16 = 0x1234;

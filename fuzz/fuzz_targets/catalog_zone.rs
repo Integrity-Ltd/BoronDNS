@@ -2,12 +2,12 @@
 
 use std::hint::black_box;
 
-use libfuzzer_sys::fuzz_target;
 use borondns_core::{
     catalog::parse_catalog_members,
     dns::{DomainName, RecordType},
     zone::{Rrset, ZoneSnapshot},
 };
+use libfuzzer_sys::fuzz_target;
 
 const QCLASS_IN: u16 = 1;
 

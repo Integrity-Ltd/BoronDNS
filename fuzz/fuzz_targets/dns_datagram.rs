@@ -1,10 +1,10 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use borondns_core::{
     dns::{Header, Question, answer_datagram},
     zone::ZoneStore,
 };
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(header) = Header::parse(data)
