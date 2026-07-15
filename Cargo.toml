@@ -1,18 +1,18 @@
 [workspace]
 resolver = "3"
 members = [
-  "crates/oxidedns-core",
-  "crates/oxidedns-server",
-  "crates/oxidedns-cli",
+  "crates/borondns-core",
+  "crates/borondns-server",
+  "crates/borondns-cli",
   "crates/oxide-gun",
 ]
-exclude = ["fuzz", "crates/oxide-gun-ebpf", "crates/oxidedns-server-ebpf"]
+exclude = ["fuzz", "crates/oxide-gun-ebpf", "crates/borondns-server-ebpf"]
 
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-version = "0.2.0"
+version = "0.9.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

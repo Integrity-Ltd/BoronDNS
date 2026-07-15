@@ -28,8 +28,8 @@ source "$repo_root/scripts/interop-dns-assertions.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/bind-xot-catalog-zone-docker-$run_id"
-container="oxidedns-bind-xot-catalog-$run_id"
-artifact_dir="${OXIDEDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR:-}"
+container="borondns-bind-xot-catalog-$run_id"
+artifact_dir="${BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR:-}"
 server_name="primary.catalog.example"
 tsig_name="transfer-key."
 tsig_secret="dG9wc2VjcmV0"
@@ -40,17 +40,17 @@ chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
             echo "---- BIND container logs ----" >&2
             docker logs "$container" >&2 || true
-            [[ -f "$workdir/oxidedns.log" ]] && {
-                echo "---- oxidedns.log ----" >&2
-                tail -180 "$workdir/oxidedns.log" >&2
+            [[ -f "$workdir/borondns.log" ]] && {
+                echo "---- borondns.log ----" >&2
+                tail -180 "$workdir/borondns.log" >&2
             }
         fi
         docker rm -f "$container" >/dev/null 2>&1 || true
@@ -58,7 +58,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_plain_port bind_tls_port rndc_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_plain_port bind_tls_port rndc_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -75,10 +75,10 @@ catalog_zone="$workdir/catalog.example.zone"
 member_zone="$workdir/member.example.zone"
 named_conf="$workdir/named.conf"
 rndc_conf="$workdir/rndc.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 named_conf_redacted="$workdir/named.conf.redacted"
 rndc_conf_redacted="$workdir/rndc.conf.redacted"
-oxidedns_conf_redacted="$workdir/oxidedns.toml.redacted"
+borondns_conf_redacted="$workdir/borondns.toml.redacted"
 traceability_tsv="$workdir/bind-xot-catalog-zone-traceability.tsv"
 summary_tsv="$workdir/bind-xot-catalog-zone-summary.tsv"
 bind_image="$(ensure_alpine_bind_image)"
@@ -146,7 +146,7 @@ openssl req \
     -newkey rsa:2048 \
     -nodes \
     -days 2 \
-    -subj "/CN=OxideDNS test CA" \
+    -subj "/CN=BoronDNS test CA" \
     -keyout "$workdir/ca.key" \
     -out "$workdir/ca.crt" \
     >/dev/null 2>&1
@@ -350,11 +350,11 @@ if [[ "$tls_catalog_axfr" != *"version.catalog.example."* ]] || [[ "$tls_catalog
 fi
 sed -i "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/tls-signed-catalog-axfr.out"
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -387,49 +387,49 @@ transport = "xot"
 server_name = "$server_name"
 trust_anchors = ["$workdir/ca.crt"]
 EOF
-redact_config "$oxidedns_conf" "$oxidedns_conf_redacted"
+redact_config "$borondns_conf" "$borondns_conf_redacted"
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 catalog_acquired=false
 for _ in {1..120}; do
-    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/borondns.log" >/dev/null 2>&1; then
         catalog_acquired=true
         break
     fi
     sleep 0.1
 done
 if [[ "$catalog_acquired" != "true" ]]; then
-    echo "OxideDNS did not acquire the initial hidden BIND XoT catalog zone" >&2
+    echo "BoronDNS did not acquire the initial hidden BIND XoT catalog zone" >&2
     exit 1
 fi
 
-metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_initial="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_initial" >"$workdir/metrics-initial.txt"
-if [[ "$metrics_initial" != *'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052601'* ]] ||
-    [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS initial XoT metrics did not retain the hidden catalog without counting it active" >&2
+if [[ "$metrics_initial" != *'borondns_zone_soa_serial{zone="catalog.example."} 2026052601'* ]] ||
+    [[ "$metrics_initial" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS initial XoT metrics did not retain the hidden catalog without counting it active" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$workdir/readyz-initial.json" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$workdir/readyz-initial.json" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$workdir/readyz-initial.json")"
 if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
-    echo "OxideDNS became ready before the BIND XoT catalog produced an active member zone" >&2
+    echo "BoronDNS became ready before the BIND XoT catalog produced an active member zone" >&2
     exit 1
 fi
 
 if ! dig_until_rcode "$workdir/catalog-hidden.out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the hidden BIND XoT catalog zone query" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the hidden BIND XoT catalog zone query" >&2
     exit 1
 fi
 
 if ! dig_until_rcode "$workdir/member-before.out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE member.example before BIND XoT catalog assignment" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE member.example before BIND XoT catalog assignment" >&2
     exit 1
 fi
 
@@ -440,7 +440,7 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_added=""
 for _ in {1..100}; do
-    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+    if member_added="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
         if [[ "$member_added" == "192.0.2.88" ]]; then
             break
         fi
@@ -449,21 +449,21 @@ for _ in {1..100}; do
 done
 printf '%s\n' "$member_added" >"$workdir/member-added.out"
 if [[ "$member_added" != "192.0.2.88" ]]; then
-    echo "OxideDNS did not serve the BIND XoT catalog-added member zone" >&2
+    echo "BoronDNS did not serve the BIND XoT catalog-added member zone" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$workdir/readyz-after-add.json" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$workdir/readyz-after-add.json" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$workdir/readyz-after-add.json")"
 if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after the first BIND XoT catalog member became active" >&2
+    echo "BoronDNS did not become ready after the first BIND XoT catalog member became active" >&2
     exit 1
 fi
 
-metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_add="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$workdir/metrics-after-add.txt"
-if [[ "$metrics_after_add" != *'oxidedns_zones_active 1'* ]]; then
-    echo "OxideDNS XoT metrics did not count exactly one published active member after catalog add" >&2
+if [[ "$metrics_after_add" != *'borondns_zones_active 1'* ]]; then
+    echo "BoronDNS XoT metrics did not count exactly one published active member after catalog add" >&2
     exit 1
 fi
 
@@ -473,16 +473,16 @@ docker exec "$container" named-checkzone catalog.example. /work/catalog.example.
 docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/null
 
 if ! dig_until_rcode "$workdir/member-removed.out" REFUSED 100 0.25 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the BIND XoT catalog member after removal" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the BIND XoT catalog member after removal" >&2
     exit 1
 fi
 member_removed="REFUSED"
 
-metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_remove="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$workdir/metrics-after-remove.txt"
-if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS XoT metrics after catalog removal did not return to zero published active zones" >&2
+if [[ "$metrics_after_remove" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS XoT metrics after catalog removal did not return to zero published active zones" >&2
     exit 1
 fi
 docker logs "$container" >"$workdir/named.log" 2>&1 || true
@@ -494,15 +494,15 @@ docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
-ODS-VER-003	retained-real-primary	bind_xot_catalog_zone	alpn-probe.txt; tls-signed-catalog-axfr.out; bind-xot-catalog-zone-summary.tsv	BIND 9 serves an RFC 9432 catalog over XoT with ALPN dot and TSIG, and OxideDNS consumes it as a secondary.
-ODS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; oxidedns.toml.redacted	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and OxideDNS configures both protections.
-ODS-FR-PROV-006	retained-real-primary	bind_xot_catalog_live_update	catalog-added.zone; catalog-removed.zone; member-added.out; member-removed.out	Live catalog updates from BIND are reconciled while OxideDNS remains running.
+ODS-VER-003	retained-real-primary	bind_xot_catalog_zone	alpn-probe.txt; tls-signed-catalog-axfr.out; bind-xot-catalog-zone-summary.tsv	BIND 9 serves an RFC 9432 catalog over XoT with ALPN dot and TSIG, and BoronDNS consumes it as a secondary.
+ODS-FR-XOT-008	retained-real-primary	bind_xot_catalog_tsig	plain-signed-axfr.out; tls-signed-catalog-axfr.out; borondns.toml.redacted	BIND denies plain TCP transfer while XoT+TSIG transfer succeeds and BoronDNS configures both protections.
+ODS-FR-PROV-006	retained-real-primary	bind_xot_catalog_live_update	catalog-added.zone; catalog-removed.zone; member-added.out; member-removed.out	Live catalog updates from BIND are reconciled while BoronDNS remains running.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     for artifact in \
-        named.conf.redacted rndc.conf.redacted oxidedns.toml.redacted named.log oxidedns.log primary-version.txt \
+        named.conf.redacted rndc.conf.redacted borondns.toml.redacted named.log borondns.log primary-version.txt \
         alpn-probe.txt server-certificate.txt plain-signed-axfr.out tls-signed-catalog-axfr.out \
         catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
         catalog-hidden.out member-before.out member-added.out member-removed.out metrics-initial.txt metrics-after-add.txt metrics-after-remove.txt \

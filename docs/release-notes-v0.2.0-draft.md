@@ -1,4 +1,4 @@
-# OxideDNS v0.2.0 Release Notes Draft
+# BoronDNS v0.2.0 Release Notes Draft
 
 Status: draft release material for the v0.2.0 preparation branch. This is not
 the final release-acceptance note and does not claim that the formal SRS
@@ -11,7 +11,7 @@ the final release-acceptance note and does not claim that the formal SRS
 - The workspace package version, internal crate-dependency versions, eBPF
   support-crate versions, and package entries across all four checked-in
   lockfiles have been bumped to `0.2.0`: `./Cargo.lock`, `./fuzz/Cargo.lock`,
-  `./crates/oxidedns-server-ebpf/Cargo.lock`, and
+  `./crates/borondns-server-ebpf/Cargo.lock`, and
   `./crates/oxide-gun-ebpf/Cargo.lock`.
 - SRS document version remains `v0.9.1`; the v0.2.0 work is source-alignment,
   documentation, evidence, and release-readiness cleanup against that SRS.
@@ -21,7 +21,7 @@ the final release-acceptance note and does not claim that the formal SRS
 The v0.2.0 preparation branch is intended to publish the cleaner
 release-candidate shape now present in source and docs:
 
-- top-level `--config` and `OXIDEDNS_CONFIG` config-path handling across
+- top-level `--config` and `BORONDNS_CONFIG` config-path handling across
   validation, dump, `check-config`, and `serve` modes;
 - reloadable plaintext filesystem-backed `SecretStore` snapshots for TSIG keys
   and named XoT profiles, with atomic snapshot replacement and fail-closed
@@ -67,5 +67,5 @@ release-candidate shape now present in source and docs:
 - Verify release artifact checksums and either Sigstore/Cosign or detached
   OpenPGP signature instructions.
 - Decide whether any BoronDNS benchmark notes belong in the separate BoronDNS
-  repository; they are out of scope for the OxideDNS v0.2.0 public docs unless
+  repository; they are out of scope for the BoronDNS v0.2.0 public docs unless
   they are reframed as external comparison material.

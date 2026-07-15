@@ -2,111 +2,111 @@
 # shellcheck disable=SC2029
 set -euo pipefail
 
-server_ssh="${OXIDEDNS_PHYSICAL_SERVER_SSH:-oxidedns-1}"
-player_ssh="${OXIDEDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
-server_root="${OXIDEDNS_PHYSICAL_SERVER_ROOT:-~/oxidedns}"
-server_bin="${OXIDEDNS_PHYSICAL_SERVER_BIN:-}"
-server_prefix="${OXIDEDNS_PHYSICAL_SERVER_PREFIX:-}"
-player_workdir="${OXIDEDNS_PHYSICAL_PLAYER_WORKDIR:-~/oxidedns-tools/bench}"
-target_ip="${OXIDEDNS_PHYSICAL_TARGET_IP:-198.18.0.1}"
-source_ip="${OXIDEDNS_PHYSICAL_SOURCE_IP:-198.18.0.2}"
-interface="${OXIDEDNS_PHYSICAL_INTERFACE:-eno1np0}"
-oxidedns_port="${OXIDEDNS_PHYSICAL_OXIDEDNS_PORT:-5300}"
-knot_port="${OXIDEDNS_PHYSICAL_KNOT_PORT:-5301}"
-duration="${OXIDEDNS_PHYSICAL_DURATION:-5}"
-batch="${OXIDEDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
-kxdpgun_mode="${OXIDEDNS_PHYSICAL_KXDPGUN_MODE:-auto}"
-player_mtu="${OXIDEDNS_PHYSICAL_PLAYER_MTU:-${OXIDEDNS_PHYSICAL_KXDPGUN_MTU:-}}"
-player_tool="${OXIDEDNS_PHYSICAL_PLAYER_TOOL:-kxdpgun}"
-oxide_gun_bin="${OXIDEDNS_PHYSICAL_OXIDE_GUN_BIN:-__default__}"
-oxide_gun_xdp_redirect_object="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT:-__default__}"
-oxide_gun_xdp_mode="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_MODE:-drv}"
-oxide_gun_xdp_zerocopy="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-auto}"
-oxide_gun_xdp_batch_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-64}"
-oxide_gun_xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
-oxide_gun_xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
-oxide_gun_xdp_pace_wait_fraction="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION:-__omit__}"
-oxide_gun_xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
-oxide_gun_xdp_ring_size="${OXIDEDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
-oxide_gun_queue_count="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
-oxide_gun_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
-oxide_gun_knot_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST:-$oxide_gun_queue_list}"
-oxide_gun_oxidedns_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_QUEUE_LIST:-$oxide_gun_queue_list}"
-oxide_gun_nsd_queue_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_NSD_QUEUE_LIST:-$oxide_gun_knot_queue_list}"
-oxide_gun_source_port="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
-oxide_gun_source_port_range="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
-oxide_gun_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
-oxide_gun_knot_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
-oxide_gun_oxidedns_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_OXIDEDNS_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
-oxide_gun_nsd_source_port_list="${OXIDEDNS_PHYSICAL_OXIDE_GUN_NSD_SOURCE_PORT_LIST:-$oxide_gun_knot_source_port_list}"
-oxide_gun_source_port_select="${OXIDEDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
-oxide_gun_response_timeout_ms="${OXIDEDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS:-1000}"
-oxide_gun_source_mac="${OXIDEDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
-oxide_gun_target_mac="${OXIDEDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
-perf_record="${OXIDEDNS_PHYSICAL_PERF_RECORD:-false}"
-perf_scope="${OXIDEDNS_PHYSICAL_PERF_SCOPE:-process}"
-perf_event="${OXIDEDNS_PHYSICAL_PERF_EVENT:-__default__}"
-perf_frequency="${OXIDEDNS_PHYSICAL_PERF_FREQUENCY:-999}"
-perf_report_timeout="${OXIDEDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
-perf_report_children="${OXIDEDNS_PHYSICAL_PERF_REPORT_CHILDREN:-true}"
-socket_sample="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
-socket_sample_interval="${OXIDEDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
-include_oxidedns="${OXIDEDNS_PHYSICAL_INCLUDE_OXIDEDNS:-true}"
-include_knot="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT:-false}"
-include_knot_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_KNOT_XDP:-false}"
-include_nsd="${OXIDEDNS_PHYSICAL_INCLUDE_NSD:-false}"
-include_nsd_xdp="${OXIDEDNS_PHYSICAL_INCLUDE_NSD_XDP:-false}"
-comparison_run_order="${OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER:-knot-first}"
-oxidedns_udp_backends="${OXIDEDNS_PHYSICAL_OXIDEDNS_UDP_BACKENDS:-std}"
-knot_bin="${OXIDEDNS_PHYSICAL_KNOT_BIN:-knotd}"
-nsd_bin="${OXIDEDNS_PHYSICAL_NSD_BIN:-/home/codex/nsd-xdp-master/sbin/nsd}"
-nsd_checkconf="${OXIDEDNS_PHYSICAL_NSD_CHECKCONF:-}"
-nsd_checkzone="${OXIDEDNS_PHYSICAL_NSD_CHECKZONE:-}"
-nsd_port="${OXIDEDNS_PHYSICAL_NSD_PORT:-5302}"
-nsd_xdp_port="${OXIDEDNS_PHYSICAL_NSD_XDP_PORT:-53}"
-nsd_xdp_program="${OXIDEDNS_PHYSICAL_NSD_XDP_PROGRAM:-__default__}"
-nsd_server_count="${OXIDEDNS_PHYSICAL_NSD_SERVER_COUNT:-48}"
-nsd_run_as_user="${OXIDEDNS_PHYSICAL_NSD_RUN_AS_USER:-codex}"
-workers_list="${OXIDEDNS_PHYSICAL_WORKERS:-24}"
-rates_list="${OXIDEDNS_PHYSICAL_RATES:-2000000}"
-hot_path_list="${OXIDEDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
-idle_strategy_list="${OXIDEDNS_PHYSICAL_IDLE_STRATEGIES:-park spin}"
-socket_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_BUFFER_BYTES:-}"
-socket_receive_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES:-$socket_buffer_bytes}"
-socket_send_buffer_bytes="${OXIDEDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_buffer_bytes}"
-socket_max_pacing_rates_bytes_per_second="${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATES_BYTES_PER_SECOND:-${OXIDEDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND:-__none__}}"
-worker_cpus="${OXIDEDNS_PHYSICAL_WORKER_CPUS:-}"
-udp_batch_sizes="${OXIDEDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
-server_txqueuelen="${OXIDEDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
-server_tx_qdisc="${OXIDEDNS_PHYSICAL_SERVER_TX_QDISC:-}"
-server_tx_fq_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_LIMIT:-10000}"
-server_tx_fq_flow_limit="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT:-}"
-server_tx_fq_quantum="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_QUANTUM:-}"
-server_tx_fq_initial_quantum="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_INITIAL_QUANTUM:-}"
-server_tx_fq_pacing="${OXIDEDNS_PHYSICAL_SERVER_TX_FQ_PACING:-}"
-server_tx_ring="${OXIDEDNS_PHYSICAL_SERVER_TX_RING:-}"
-server_rmem_max="${OXIDEDNS_PHYSICAL_SERVER_RMEM_MAX:-}"
-server_wmem_max="${OXIDEDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
-stage_override="${OXIDEDNS_PHYSICAL_STAGE:-}"
-xdp_redirect_object="${OXIDEDNS_PHYSICAL_XDP_REDIRECT_OBJECT:-}"
-xdp_mode="${OXIDEDNS_PHYSICAL_XDP_MODE:-drv}"
-xdp_zero_copy="${OXIDEDNS_PHYSICAL_XDP_ZERO_COPY:-require}"
-xdp_rx_drain_passes="${OXIDEDNS_PHYSICAL_XDP_RX_DRAIN_PASSES:-1}"
-xdp_tx_wakeup_interval="${OXIDEDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL:-1}"
-xdp_queue_id="${OXIDEDNS_PHYSICAL_XDP_QUEUE_ID:-0}"
-xdp_queue_ids="${OXIDEDNS_PHYSICAL_XDP_QUEUE_IDS:-}"
-xdp_ring_size="${OXIDEDNS_PHYSICAL_XDP_RING_SIZE:-8192}"
-xdp_umem_frame_count="${OXIDEDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-32768}"
-xdp_batch_size="${OXIDEDNS_PHYSICAL_XDP_BATCH_SIZE:-1024}"
-xdp_run_as_user="${OXIDEDNS_PHYSICAL_XDP_RUN_AS_USER:-codex}"
-xdp_mtu="${OXIDEDNS_PHYSICAL_XDP_MTU:-}"
-knot_xdp_run_as_user="${OXIDEDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER:-codex:codex}"
-knot_xdp_zero_copy="${OXIDEDNS_PHYSICAL_KNOT_XDP_ZERO_COPY:-__omit__}"
-knot_xdp_ring_size="${OXIDEDNS_PHYSICAL_KNOT_XDP_RING_SIZE:-2048}"
-knot_xdp_busypoll_budget="${OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_BUDGET:-__omit__}"
-knot_xdp_busypoll_timeout="${OXIDEDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_TIMEOUT:-__omit__}"
-server_napi_defer_hard_irqs="${OXIDEDNS_PHYSICAL_SERVER_NAPI_DEFER_HARD_IRQS:-__omit__}"
-server_gro_flush_timeout="${OXIDEDNS_PHYSICAL_SERVER_GRO_FLUSH_TIMEOUT:-__omit__}"
+server_ssh="${BORONDNS_PHYSICAL_SERVER_SSH:-borondns-1}"
+player_ssh="${BORONDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
+server_root="${BORONDNS_PHYSICAL_SERVER_ROOT:-~/borondns}"
+server_bin="${BORONDNS_PHYSICAL_SERVER_BIN:-}"
+server_prefix="${BORONDNS_PHYSICAL_SERVER_PREFIX:-}"
+player_workdir="${BORONDNS_PHYSICAL_PLAYER_WORKDIR:-~/borondns-tools/bench}"
+target_ip="${BORONDNS_PHYSICAL_TARGET_IP:-198.18.0.1}"
+source_ip="${BORONDNS_PHYSICAL_SOURCE_IP:-198.18.0.2}"
+interface="${BORONDNS_PHYSICAL_INTERFACE:-eno1np0}"
+borondns_port="${BORONDNS_PHYSICAL_BORONDNS_PORT:-5300}"
+knot_port="${BORONDNS_PHYSICAL_KNOT_PORT:-5301}"
+duration="${BORONDNS_PHYSICAL_DURATION:-5}"
+batch="${BORONDNS_PHYSICAL_KXDPGUN_BATCH:-10}"
+kxdpgun_mode="${BORONDNS_PHYSICAL_KXDPGUN_MODE:-auto}"
+player_mtu="${BORONDNS_PHYSICAL_PLAYER_MTU:-${BORONDNS_PHYSICAL_KXDPGUN_MTU:-}}"
+player_tool="${BORONDNS_PHYSICAL_PLAYER_TOOL:-kxdpgun}"
+oxide_gun_bin="${BORONDNS_PHYSICAL_OXIDE_GUN_BIN:-__default__}"
+oxide_gun_xdp_redirect_object="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_REDIRECT_OBJECT:-__default__}"
+oxide_gun_xdp_mode="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_MODE:-drv}"
+oxide_gun_xdp_zerocopy="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_ZERO_COPY:-auto}"
+oxide_gun_xdp_batch_size="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_BATCH_SIZE:-64}"
+oxide_gun_xdp_rx_drain_passes="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_RX_DRAIN_PASSES:-4}"
+oxide_gun_xdp_tx_wakeup_interval="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_TX_WAKEUP_INTERVAL:-1}"
+oxide_gun_xdp_pace_wait_fraction="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_PACE_WAIT_FRACTION:-__omit__}"
+oxide_gun_xdp_umem_frame_count="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_UMEM_FRAME_COUNT:-16384}"
+oxide_gun_xdp_ring_size="${BORONDNS_PHYSICAL_OXIDE_GUN_XDP_RING_SIZE:-4096}"
+oxide_gun_queue_count="${BORONDNS_PHYSICAL_OXIDE_GUN_QUEUE_COUNT:-__auto__}"
+oxide_gun_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_QUEUE_LIST:-__none__}"
+oxide_gun_knot_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_QUEUE_LIST:-$oxide_gun_queue_list}"
+oxide_gun_borondns_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_QUEUE_LIST:-$oxide_gun_queue_list}"
+oxide_gun_nsd_queue_list="${BORONDNS_PHYSICAL_OXIDE_GUN_NSD_QUEUE_LIST:-$oxide_gun_knot_queue_list}"
+oxide_gun_source_port="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT:-53000}"
+oxide_gun_source_port_range="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_RANGE:-__auto__}"
+oxide_gun_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_LIST:-__none__}"
+oxide_gun_knot_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_KNOT_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
+oxide_gun_borondns_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_BORONDNS_SOURCE_PORT_LIST:-$oxide_gun_source_port_list}"
+oxide_gun_nsd_source_port_list="${BORONDNS_PHYSICAL_OXIDE_GUN_NSD_SOURCE_PORT_LIST:-$oxide_gun_knot_source_port_list}"
+oxide_gun_source_port_select="${BORONDNS_PHYSICAL_OXIDE_GUN_SOURCE_PORT_SELECT:-sequential}"
+oxide_gun_response_timeout_ms="${BORONDNS_PHYSICAL_OXIDE_GUN_RESPONSE_TIMEOUT_MS:-1000}"
+oxide_gun_source_mac="${BORONDNS_PHYSICAL_SOURCE_MAC:-b8:59:9f:4b:73:2c}"
+oxide_gun_target_mac="${BORONDNS_PHYSICAL_TARGET_MAC:-1c:34:da:60:67:00}"
+perf_record="${BORONDNS_PHYSICAL_PERF_RECORD:-false}"
+perf_scope="${BORONDNS_PHYSICAL_PERF_SCOPE:-process}"
+perf_event="${BORONDNS_PHYSICAL_PERF_EVENT:-__default__}"
+perf_frequency="${BORONDNS_PHYSICAL_PERF_FREQUENCY:-999}"
+perf_report_timeout="${BORONDNS_PHYSICAL_PERF_REPORT_TIMEOUT:-30s}"
+perf_report_children="${BORONDNS_PHYSICAL_PERF_REPORT_CHILDREN:-true}"
+socket_sample="${BORONDNS_PHYSICAL_SOCKET_SAMPLE:-false}"
+socket_sample_interval="${BORONDNS_PHYSICAL_SOCKET_SAMPLE_INTERVAL:-0.25}"
+include_borondns="${BORONDNS_PHYSICAL_INCLUDE_BORONDNS:-true}"
+include_knot="${BORONDNS_PHYSICAL_INCLUDE_KNOT:-false}"
+include_knot_xdp="${BORONDNS_PHYSICAL_INCLUDE_KNOT_XDP:-false}"
+include_nsd="${BORONDNS_PHYSICAL_INCLUDE_NSD:-false}"
+include_nsd_xdp="${BORONDNS_PHYSICAL_INCLUDE_NSD_XDP:-false}"
+comparison_run_order="${BORONDNS_PHYSICAL_COMPARISON_RUN_ORDER:-knot-first}"
+borondns_udp_backends="${BORONDNS_PHYSICAL_BORONDNS_UDP_BACKENDS:-std}"
+knot_bin="${BORONDNS_PHYSICAL_KNOT_BIN:-knotd}"
+nsd_bin="${BORONDNS_PHYSICAL_NSD_BIN:-/home/codex/nsd-xdp-master/sbin/nsd}"
+nsd_checkconf="${BORONDNS_PHYSICAL_NSD_CHECKCONF:-}"
+nsd_checkzone="${BORONDNS_PHYSICAL_NSD_CHECKZONE:-}"
+nsd_port="${BORONDNS_PHYSICAL_NSD_PORT:-5302}"
+nsd_xdp_port="${BORONDNS_PHYSICAL_NSD_XDP_PORT:-53}"
+nsd_xdp_program="${BORONDNS_PHYSICAL_NSD_XDP_PROGRAM:-__default__}"
+nsd_server_count="${BORONDNS_PHYSICAL_NSD_SERVER_COUNT:-48}"
+nsd_run_as_user="${BORONDNS_PHYSICAL_NSD_RUN_AS_USER:-codex}"
+workers_list="${BORONDNS_PHYSICAL_WORKERS:-24}"
+rates_list="${BORONDNS_PHYSICAL_RATES:-2000000}"
+hot_path_list="${BORONDNS_PHYSICAL_HOT_PATH_DETAILS:-reduced off}"
+idle_strategy_list="${BORONDNS_PHYSICAL_IDLE_STRATEGIES:-park spin}"
+socket_buffer_bytes="${BORONDNS_PHYSICAL_SOCKET_BUFFER_BYTES:-}"
+socket_receive_buffer_bytes="${BORONDNS_PHYSICAL_SOCKET_RECEIVE_BUFFER_BYTES:-$socket_buffer_bytes}"
+socket_send_buffer_bytes="${BORONDNS_PHYSICAL_SOCKET_SEND_BUFFER_BYTES:-$socket_buffer_bytes}"
+socket_max_pacing_rates_bytes_per_second="${BORONDNS_PHYSICAL_SOCKET_MAX_PACING_RATES_BYTES_PER_SECOND:-${BORONDNS_PHYSICAL_SOCKET_MAX_PACING_RATE_BYTES_PER_SECOND:-__none__}}"
+worker_cpus="${BORONDNS_PHYSICAL_WORKER_CPUS:-}"
+udp_batch_sizes="${BORONDNS_PHYSICAL_UDP_BATCH_SIZES:-staged}"
+server_txqueuelen="${BORONDNS_PHYSICAL_SERVER_TXQUEUELEN:-}"
+server_tx_qdisc="${BORONDNS_PHYSICAL_SERVER_TX_QDISC:-}"
+server_tx_fq_limit="${BORONDNS_PHYSICAL_SERVER_TX_FQ_LIMIT:-10000}"
+server_tx_fq_flow_limit="${BORONDNS_PHYSICAL_SERVER_TX_FQ_FLOW_LIMIT:-}"
+server_tx_fq_quantum="${BORONDNS_PHYSICAL_SERVER_TX_FQ_QUANTUM:-}"
+server_tx_fq_initial_quantum="${BORONDNS_PHYSICAL_SERVER_TX_FQ_INITIAL_QUANTUM:-}"
+server_tx_fq_pacing="${BORONDNS_PHYSICAL_SERVER_TX_FQ_PACING:-}"
+server_tx_ring="${BORONDNS_PHYSICAL_SERVER_TX_RING:-}"
+server_rmem_max="${BORONDNS_PHYSICAL_SERVER_RMEM_MAX:-}"
+server_wmem_max="${BORONDNS_PHYSICAL_SERVER_WMEM_MAX:-}"
+stage_override="${BORONDNS_PHYSICAL_STAGE:-}"
+xdp_redirect_object="${BORONDNS_PHYSICAL_XDP_REDIRECT_OBJECT:-}"
+xdp_mode="${BORONDNS_PHYSICAL_XDP_MODE:-drv}"
+xdp_zero_copy="${BORONDNS_PHYSICAL_XDP_ZERO_COPY:-require}"
+xdp_rx_drain_passes="${BORONDNS_PHYSICAL_XDP_RX_DRAIN_PASSES:-1}"
+xdp_tx_wakeup_interval="${BORONDNS_PHYSICAL_XDP_TX_WAKEUP_INTERVAL:-1}"
+xdp_queue_id="${BORONDNS_PHYSICAL_XDP_QUEUE_ID:-0}"
+xdp_queue_ids="${BORONDNS_PHYSICAL_XDP_QUEUE_IDS:-}"
+xdp_ring_size="${BORONDNS_PHYSICAL_XDP_RING_SIZE:-8192}"
+xdp_umem_frame_count="${BORONDNS_PHYSICAL_XDP_UMEM_FRAME_COUNT:-32768}"
+xdp_batch_size="${BORONDNS_PHYSICAL_XDP_BATCH_SIZE:-1024}"
+xdp_run_as_user="${BORONDNS_PHYSICAL_XDP_RUN_AS_USER:-codex}"
+xdp_mtu="${BORONDNS_PHYSICAL_XDP_MTU:-}"
+knot_xdp_run_as_user="${BORONDNS_PHYSICAL_KNOT_XDP_RUN_AS_USER:-codex:codex}"
+knot_xdp_zero_copy="${BORONDNS_PHYSICAL_KNOT_XDP_ZERO_COPY:-__omit__}"
+knot_xdp_ring_size="${BORONDNS_PHYSICAL_KNOT_XDP_RING_SIZE:-2048}"
+knot_xdp_busypoll_budget="${BORONDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_BUDGET:-__omit__}"
+knot_xdp_busypoll_timeout="${BORONDNS_PHYSICAL_KNOT_XDP_BUSYPOLL_TIMEOUT:-__omit__}"
+server_napi_defer_hard_irqs="${BORONDNS_PHYSICAL_SERVER_NAPI_DEFER_HARD_IRQS:-__omit__}"
+server_gro_flush_timeout="${BORONDNS_PHYSICAL_SERVER_GRO_FLUSH_TIMEOUT:-__omit__}"
 original_server_txqueuelen=""
 original_server_tx_ring=""
 original_server_rmem_max=""
@@ -126,7 +126,7 @@ require_tool() {
 require_tool ssh
 require_tool base64
 
-ssh_control_dir="$(mktemp -d "${TMPDIR:-/tmp}/oxidedns-physical-ssh.XXXXXX")"
+ssh_control_dir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-physical-ssh.XXXXXX")"
 ssh_control_options=(
     -o ControlMaster=auto
     -o ControlPersist=180
@@ -153,7 +153,7 @@ resolve_stage() {
     if [[ -n "$stage_override" ]]; then
         ssh_control "$server_ssh" "cd $server_root && realpath '$stage_override'"
     else
-        ssh_control "$server_ssh" "cd $server_root && stage=\$(cat ~/oxidedns-last-benchmark-stage.txt 2>/dev/null || ls -td target/physical-knot-comparison-*/staged | head -1) && realpath \"\$stage\""
+        ssh_control "$server_ssh" "cd $server_root && stage=\$(cat ~/borondns-last-benchmark-stage.txt 2>/dev/null || ls -td target/physical-knot-comparison-*/staged | head -1) && realpath \"\$stage\""
     fi
 }
 
@@ -183,11 +183,11 @@ if [[ -d "$out_abs" ]]; then
 fi
 REMOTE
     fi
-    ssh_control "$server_ssh" "pkill -u codex -x oxidedns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true; pkill -u codex -x nsd 2>/dev/null || true" >/dev/null 2>&1 || true
-    ssh_control "$server_ssh" "sudo pkill -x oxidedns 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "pkill -u codex -x borondns 2>/dev/null || true; pkill -u codex -x knotd 2>/dev/null || true; pkill -u codex -x nsd 2>/dev/null || true" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "sudo pkill -x borondns 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x knotd 2>/dev/null || true" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo pkill -x nsd 2>/dev/null || true" >/dev/null 2>&1 || true
-    ssh_control "$server_ssh" "for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill \"\$pid\" 2>/dev/null || true; done; sleep 0.2; for pid in \$(pgrep -x oxidedns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill -9 \"\$pid\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" "for pid in \$(pgrep -x borondns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill \"\$pid\" 2>/dev/null || true; done; sleep 0.2; for pid in \$(pgrep -x borondns 2>/dev/null) \$(pgrep -x knotd 2>/dev/null) \$(pgrep -x nsd 2>/dev/null); do sudo kill -9 \"\$pid\" 2>/dev/null || true; done" >/dev/null 2>&1 || true
     ssh_control "$server_ssh" "sudo ip link set dev '$interface' xdp off 2>/dev/null || true; sudo ip link set dev '$interface' xdpgeneric off 2>/dev/null || true" >/dev/null 2>&1 || true
     if [[ -n "$server_tx_qdisc" && -n "${out_abs:-}" ]]; then
         ssh_control "$server_ssh" bash -s -- "$interface" "$out_abs/host/server-tx-qdisc-restore.tsv" <<'REMOTE' >/dev/null 2>&1 || true
@@ -291,27 +291,27 @@ select_run_id() {
 }
 
 cleanup_server_row_state() {
-    ssh_control "$server_ssh" bash -s -- "$interface" "$oxidedns_port" "$knot_port" "$nsd_port" "$nsd_xdp_port" <<'REMOTE' >/dev/null 2>&1 || true
+    ssh_control "$server_ssh" bash -s -- "$interface" "$borondns_port" "$knot_port" "$nsd_port" "$nsd_xdp_port" <<'REMOTE' >/dev/null 2>&1 || true
 set -euo pipefail
 server_interface="$1"
-oxidedns_port="$2"
+borondns_port="$2"
 knot_port="$3"
 nsd_port="$4"
 nsd_xdp_port="$5"
 
-pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x borondns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
 pkill -u codex -x nsd 2>/dev/null || true
-sudo pkill -x oxidedns 2>/dev/null || true
+sudo pkill -x borondns 2>/dev/null || true
 sudo pkill -x knotd 2>/dev/null || true
 sudo pkill -x nsd 2>/dev/null || true
 
 for _ in $(seq 1 80); do
-    if pgrep -x oxidedns >/dev/null 2>&1 || pgrep -x knotd >/dev/null 2>&1 || pgrep -x nsd >/dev/null 2>&1; then
+    if pgrep -x borondns >/dev/null 2>&1 || pgrep -x knotd >/dev/null 2>&1 || pgrep -x nsd >/dev/null 2>&1; then
         sleep 0.1
         continue
     fi
-    if ss -Hlnptu 2>/dev/null | awk -v oxi=":$oxidedns_port" -v knot=":$knot_port" -v nsd=":$nsd_port" -v nsdxdp=":$nsd_xdp_port" '
+    if ss -Hlnptu 2>/dev/null | awk -v oxi=":$borondns_port" -v knot=":$knot_port" -v nsd=":$nsd_port" -v nsdxdp=":$nsd_xdp_port" '
         $5 ~ oxi "$" || $5 ~ knot "$" || $5 ~ nsd "$" || $5 ~ nsdxdp "$" { found = 1 }
         END { exit found ? 0 : 1 }
     '; then
@@ -321,7 +321,7 @@ for _ in $(seq 1 80); do
     break
 done
 
-for pid in $(pgrep -x oxidedns 2>/dev/null) $(pgrep -x knotd 2>/dev/null) $(pgrep -x nsd 2>/dev/null); do
+for pid in $(pgrep -x borondns 2>/dev/null) $(pgrep -x knotd 2>/dev/null) $(pgrep -x nsd 2>/dev/null); do
     sudo kill -9 "$pid" 2>/dev/null || true
 done
 sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
@@ -436,14 +436,14 @@ configure_server_link_tuning() {
         case "$server_tx_qdisc" in
         fq | fq_codel | pfifo_fast) ;;
         *)
-            printf 'unsupported OXIDEDNS_PHYSICAL_SERVER_TX_QDISC: %s\n' "$server_tx_qdisc" >&2
+            printf 'unsupported BORONDNS_PHYSICAL_SERVER_TX_QDISC: %s\n' "$server_tx_qdisc" >&2
             exit 64
             ;;
         esac
         case "$server_tx_fq_pacing" in
         "" | pacing | nopacing) ;;
         *)
-            printf 'unsupported OXIDEDNS_PHYSICAL_SERVER_TX_FQ_PACING: %s\n' "$server_tx_fq_pacing" >&2
+            printf 'unsupported BORONDNS_PHYSICAL_SERVER_TX_FQ_PACING: %s\n' "$server_tx_fq_pacing" >&2
             exit 64
             ;;
         esac
@@ -821,7 +821,7 @@ knot_xdp_busypoll_budget="${11}"
 knot_xdp_busypoll_timeout="${12}"
 
 mkdir -p "$run_abs"
-pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x borondns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
 sudo pkill -x knotd 2>/dev/null || true
 sleep 0.2
@@ -954,7 +954,7 @@ nsd_server_count="$3"
 nsd_run_as_user="$4"
 
 mkdir -p "$run_abs"
-pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x borondns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
 pkill -u codex -x nsd 2>/dev/null || true
 sudo pkill -x nsd 2>/dev/null || true
@@ -1149,12 +1149,12 @@ if [[ "$cpus" == "__none__" ]]; then
     cpus=""
 fi
 if [[ "$server_bin" == "__default__" ]]; then
-    server_bin="$server_root/target/release/oxidedns"
+    server_bin="$server_root/target/release/borondns"
 elif [[ "$server_bin" != /* ]]; then
     server_bin="$server_root/$server_bin"
 fi
 if [[ "$xdp_redirect_object" == "__default__" ]]; then
-    xdp_redirect_object="$server_root/crates/oxidedns-server-ebpf/target/bpfel-unknown-none/release/oxidedns-xdp-redirect.bpf.o"
+    xdp_redirect_object="$server_root/crates/borondns-server-ebpf/target/bpfel-unknown-none/release/borondns-xdp-redirect.bpf.o"
 elif [[ "$xdp_redirect_object" != /* ]]; then
     xdp_redirect_object="$server_root/$xdp_redirect_object"
 fi
@@ -1176,14 +1176,14 @@ if [[ "$udp_backend" == "af_xdp" ]]; then
 fi
 
 mkdir -p "$run_abs"
-pkill -u codex -x oxidedns 2>/dev/null || true
+pkill -u codex -x borondns 2>/dev/null || true
 pkill -u codex -x knotd 2>/dev/null || true
-sudo pkill -x oxidedns 2>/dev/null || true
+sudo pkill -x borondns 2>/dev/null || true
 sudo pkill -x knotd 2>/dev/null || true
 sleep 0.2
 
-cp "$stage_abs/oxidedns.toml" "$run_abs/oxidedns.toml"
-python3 - "$run_abs/oxidedns.toml" "$workers" "$hot_path" "$idle_strategy" <<'PY'
+cp "$stage_abs/borondns.toml" "$run_abs/borondns.toml"
+python3 - "$run_abs/borondns.toml" "$workers" "$hot_path" "$idle_strategy" <<'PY'
 import re
 import sys
 
@@ -1201,7 +1201,7 @@ else:
 open(path, "w", encoding="utf-8").write(text)
 PY
 if [[ "$udp_backend" == "af_xdp" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" "$xdp_run_as_user" "$workers" <<'PY'
+    python3 - "$run_abs/borondns.toml" "$server_interface" "$xdp_redirect_object" "$xdp_mode" "$xdp_zero_copy" "$xdp_rx_drain_passes" "$xdp_tx_wakeup_interval" "$xdp_queue_id" "$xdp_queue_ids" "$xdp_ring_size" "$xdp_umem_frame_count" "$xdp_batch_size" "$xdp_run_as_user" "$workers" <<'PY'
 import re
 import sys
 
@@ -1260,7 +1260,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 fi
 if [[ -n "$socket_receive_buffer" || -n "$socket_send_buffer" || -n "$socket_max_pacing_rate" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" <<'PY'
+    python3 - "$run_abs/borondns.toml" "$socket_receive_buffer" "$socket_send_buffer" "$socket_max_pacing_rate" <<'PY'
 import re
 import sys
 
@@ -1281,7 +1281,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 fi
 if [[ "$udp_batch_size" != "staged" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$udp_batch_size" <<'PY'
+    python3 - "$run_abs/borondns.toml" "$udp_batch_size" <<'PY'
 import re
 import sys
 
@@ -1295,7 +1295,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 fi
 if [[ -n "$cpus" && "$udp_backend" != "af_xdp" ]]; then
-    python3 - "$run_abs/oxidedns.toml" "$cpus" <<'PY'
+    python3 - "$run_abs/borondns.toml" "$cpus" <<'PY'
 import re
 import sys
 
@@ -1314,7 +1314,7 @@ open(path, "w", encoding="utf-8").write(text)
 PY
 fi
 
-"${server_cmd[@]}" --validate-config "$run_abs/oxidedns.toml" >"$run_abs/validate.out" 2>&1
+"${server_cmd[@]}" --validate-config "$run_abs/borondns.toml" >"$run_abs/validate.out" 2>&1
 
 cd "$stage_abs"
 knotd -c knot.conf -v >"$run_abs/knot.log" 2>&1 &
@@ -1328,8 +1328,8 @@ done
 
 ulimit -n 65536
 ulimit -l unlimited 2>/dev/null || true
-"${serve_cmd[@]}" serve --config "$run_abs/oxidedns.toml" >"$run_abs/oxidedns.log" 2>&1 &
-echo $! >"$run_abs/oxidedns.pid"
+"${serve_cmd[@]}" serve --config "$run_abs/borondns.toml" >"$run_abs/borondns.log" 2>&1 &
+echo $! >"$run_abs/borondns.pid"
 
 ready=""
 for _ in $(seq 1 180); do
@@ -1340,7 +1340,7 @@ for _ in $(seq 1 180); do
     sleep 0.25
 done
 if ! ([[ "$ready" == ready ]] || printf '%s' "$ready" | grep -q ready); then
-    tail -80 "$run_abs/oxidedns.log" >&2
+    tail -80 "$run_abs/borondns.log" >&2
     exit 1
 fi
 
@@ -1670,10 +1670,10 @@ player_ethtool_before = parse_ethtool(f"{run_abs}/player-ethtool-stats-before.tx
 player_ethtool_after = parse_ethtool(f"{run_abs}/player-ethtool-stats-after.txt")
 prom = parse_prom_metrics(f"{run_abs}/metrics-after.prom")
 af_xdp_worker_active, af_xdp_worker_received_min, af_xdp_worker_received_max = (
-    prom_series_summary(prom, "oxidedns_af_xdp_worker_received_packets_total")
+    prom_series_summary(prom, "borondns_af_xdp_worker_received_packets_total")
 )
 _, af_xdp_worker_sent_min, af_xdp_worker_sent_max = prom_series_summary(
-    prom, "oxidedns_af_xdp_worker_sent_packets_total"
+    prom, "borondns_af_xdp_worker_sent_packets_total"
 )
 
 print("\t".join([
@@ -1729,25 +1729,25 @@ print("\t".join([
     delta(udp_before, udp_after, "InErrors"),
     delta(udp_before, udp_after, "RcvbufErrors"),
     delta(udp_before, udp_after, "SndbufErrors"),
-    prom.get("oxidedns_udp_mmsg_send_syscalls_total", "0"),
-    prom.get("oxidedns_udp_mmsg_sent_datagrams_total", "0"),
-    prom.get("oxidedns_udp_mmsg_send_partial_syscalls_total", "0"),
-    prom.get("oxidedns_udp_mmsg_send_wouldblock_retries_total", "0"),
-    prom.get("oxidedns_udp_mmsg_receive_syscalls_total", "0"),
-    prom.get("oxidedns_udp_mmsg_receive_wouldblock_syscalls_total", "0"),
-    prom.get("oxidedns_udp_mmsg_received_datagrams_total", "0"),
-    prom.get("oxidedns_af_xdp_rx_recv_calls_total", "0"),
-    prom.get("oxidedns_af_xdp_rx_empty_recv_calls_total", "0"),
-    prom.get("oxidedns_af_xdp_rx_received_packets_total", "0"),
-    prom.get("oxidedns_af_xdp_rx_parse_errors_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_send_calls_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_queued_packets_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_empty_send_calls_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_wakeups_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_poll_write_calls_total", "0"),
-    prom.get("oxidedns_af_xdp_tx_poll_write_ready_total", "0"),
-    prom.get("oxidedns_af_xdp_completion_dequeues_total", "0"),
-    prom.get("oxidedns_af_xdp_completed_packets_total", "0"),
+    prom.get("borondns_udp_mmsg_send_syscalls_total", "0"),
+    prom.get("borondns_udp_mmsg_sent_datagrams_total", "0"),
+    prom.get("borondns_udp_mmsg_send_partial_syscalls_total", "0"),
+    prom.get("borondns_udp_mmsg_send_wouldblock_retries_total", "0"),
+    prom.get("borondns_udp_mmsg_receive_syscalls_total", "0"),
+    prom.get("borondns_udp_mmsg_receive_wouldblock_syscalls_total", "0"),
+    prom.get("borondns_udp_mmsg_received_datagrams_total", "0"),
+    prom.get("borondns_af_xdp_rx_recv_calls_total", "0"),
+    prom.get("borondns_af_xdp_rx_empty_recv_calls_total", "0"),
+    prom.get("borondns_af_xdp_rx_received_packets_total", "0"),
+    prom.get("borondns_af_xdp_rx_parse_errors_total", "0"),
+    prom.get("borondns_af_xdp_tx_send_calls_total", "0"),
+    prom.get("borondns_af_xdp_tx_queued_packets_total", "0"),
+    prom.get("borondns_af_xdp_tx_empty_send_calls_total", "0"),
+    prom.get("borondns_af_xdp_tx_wakeups_total", "0"),
+    prom.get("borondns_af_xdp_tx_poll_write_calls_total", "0"),
+    prom.get("borondns_af_xdp_tx_poll_write_ready_total", "0"),
+    prom.get("borondns_af_xdp_completion_dequeues_total", "0"),
+    prom.get("borondns_af_xdp_completed_packets_total", "0"),
     af_xdp_worker_active,
     af_xdp_worker_received_min,
     af_xdp_worker_received_max,
@@ -1759,25 +1759,25 @@ print("\t".join([
 ]))
 PY
 
-if [[ -f "$run_abs/oxidedns.pid" ]]; then
-    oxidedns_pid="$(cat "$run_abs/oxidedns.pid")"
-    kill "$oxidedns_pid" 2>/dev/null || true
-    sudo kill "$oxidedns_pid" 2>/dev/null || true
+if [[ -f "$run_abs/borondns.pid" ]]; then
+    borondns_pid="$(cat "$run_abs/borondns.pid")"
+    kill "$borondns_pid" 2>/dev/null || true
+    sudo kill "$borondns_pid" 2>/dev/null || true
     for _ in $(seq 1 80); do
-        if ! ps -p "$oxidedns_pid" >/dev/null 2>&1; then
+        if ! ps -p "$borondns_pid" >/dev/null 2>&1; then
             break
         fi
         sleep 0.1
     done
-    if ps -p "$oxidedns_pid" >/dev/null 2>&1; then
-        sudo kill -9 "$oxidedns_pid" 2>/dev/null || true
+    if ps -p "$borondns_pid" >/dev/null 2>&1; then
+        sudo kill -9 "$borondns_pid" 2>/dev/null || true
     fi
 fi
-for pid in $(pgrep -x oxidedns 2>/dev/null); do
+for pid in $(pgrep -x borondns 2>/dev/null); do
     sudo kill "$pid" 2>/dev/null || true
 done
 sleep 0.2
-for pid in $(pgrep -x oxidedns 2>/dev/null); do
+for pid in $(pgrep -x borondns 2>/dev/null); do
     sudo kill -9 "$pid" 2>/dev/null || true
 done
 sudo ip link set dev "$server_interface" xdp off 2>/dev/null || true
@@ -1792,7 +1792,7 @@ run_server_perf_start() {
     local seconds="$4"
     local scope="$5"
     local event="$6"
-    local pid_file="${7:-oxidedns.pid}"
+    local pid_file="${7:-borondns.pid}"
 
     if [[ "$record" != true ]]; then
         return 0
@@ -1819,7 +1819,7 @@ system)
     perf_args+=(-a)
     ;;
 *)
-    printf 'unsupported OXIDEDNS_PHYSICAL_PERF_SCOPE %q; expected process or system\n' "$scope" >&2
+    printf 'unsupported BORONDNS_PHYSICAL_PERF_SCOPE %q; expected process or system\n' "$scope" >&2
     exit 64
     ;;
 esac
@@ -1912,7 +1912,7 @@ PY
     do
         {
             date -u +%Y-%m-%dT%H:%M:%S.%NZ
-            printf 'oxidedns_udp_port=%s\n' "$port"
+            printf 'borondns_udp_port=%s\n' "$port"
             ss -H -u -a -n -m 2>&1 || true
         } >>"$run_abs/udp-socket-samples.txt"
         sleep "$interval"
@@ -1958,7 +1958,7 @@ run_player_kxdpgun() {
     local status="255"
     local done="false"
 
-    player_run_dir=".oxidedns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    player_run_dir=".borondns-physical-${id}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     remote_run_dir="$player_workdir_abs/$player_run_dir"
 
     capture_player_row_state "$run_abs" before
@@ -2063,7 +2063,7 @@ mkdir -p "$workdir/$run_dir"
                 --response-timeout-ms "$oxide_gun_response_timeout_ms"
             ;;
         *)
-            printf 'unsupported OXIDEDNS_PHYSICAL_PLAYER_TOOL: %s\n' "$player_tool" >&2
+            printf 'unsupported BORONDNS_PHYSICAL_PLAYER_TOOL: %s\n' "$player_tool" >&2
             false
             ;;
     esac
@@ -2102,8 +2102,8 @@ REMOTE
     [[ "$status" == "0" ]]
 }
 
-if [[ "$comparison_run_order" != "knot-first" && "$comparison_run_order" != "oxidedns-first" ]]; then
-    printf 'OXIDEDNS_PHYSICAL_COMPARISON_RUN_ORDER must be knot-first or oxidedns-first, got %q\n' "$comparison_run_order" >&2
+if [[ "$comparison_run_order" != "knot-first" && "$comparison_run_order" != "borondns-first" ]]; then
+    printf 'BORONDNS_PHYSICAL_COMPARISON_RUN_ORDER must be knot-first or borondns-first, got %q\n' "$comparison_run_order" >&2
     exit 69
 fi
 
@@ -2167,8 +2167,8 @@ if [[ "$comparison_run_order" == "knot-first" && "$include_nsd_xdp" == true ]]; 
     done
 fi
 
-if [[ "$include_oxidedns" == true ]]; then
-    for udp_backend in $oxidedns_udp_backends; do
+if [[ "$include_borondns" == true ]]; then
+    for udp_backend in $borondns_udp_backends; do
         for workers in $workers_list; do
             for rate in $rates_list; do
                 for udp_batch_size in $udp_batch_sizes; do
@@ -2199,17 +2199,17 @@ if [[ "$include_oxidedns" == true ]]; then
                                     row_xdp_rx_drain_passes="$xdp_rx_drain_passes"
                                     row_xdp_tx_wakeup_interval="$xdp_tx_wakeup_interval"
                                 fi
-                                select_run_id "oxidedns-${udp_backend}-w${effective_workers}-q${rate}-batch-${effective_udp_batch_size}-metrics-${hot_path}-idle-${effective_idle_strategy}${pacing_run_suffix}"
+                                select_run_id "borondns-${udp_backend}-w${effective_workers}-q${rate}-batch-${effective_udp_batch_size}-metrics-${hot_path}-idle-${effective_idle_strategy}${pacing_run_suffix}"
                                 run_abs="$out_abs/$run_id"
                                 printf 'running %s\n' "$run_id"
                                 cleanup_server_row_state
                                 run_server_start "$run_abs" "$udp_backend" "$effective_workers" "$hot_path" "$effective_idle_strategy" "$target_ip" "$knot_port" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_bin_arg" "$server_prefix_arg" "$interface" "$effective_udp_batch_size"
                                 run_server_perf_start "$run_abs" "$perf_record" "$perf_frequency" "$duration" "$perf_scope" "$perf_event"
-                                run_server_socket_sample_start "$run_abs" "$socket_sample" "$oxidedns_port" "$duration" "$socket_sample_interval"
-                                run_player_kxdpgun "$run_abs" "$run_id" "$oxidedns_port" "$rate" "$oxide_gun_oxidedns_source_port_list" "$oxide_gun_oxidedns_queue_list"
+                                run_server_socket_sample_start "$run_abs" "$socket_sample" "$borondns_port" "$duration" "$socket_sample_interval"
+                                run_player_kxdpgun "$run_abs" "$run_id" "$borondns_port" "$rate" "$oxide_gun_borondns_source_port_list" "$oxide_gun_borondns_queue_list"
                                 run_server_socket_sample_finish "$run_abs" "$socket_sample"
                                 run_server_perf_finish "$run_abs" "$perf_record" "$perf_report_timeout" "$perf_report_children"
-                                run_server_finish "$run_abs" "oxidedns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
+                                run_server_finish "$run_abs" "borondns" "$udp_backend" "$row_xdp_mode" "$row_xdp_zero_copy" "$row_xdp_rx_drain_passes" "$row_xdp_tx_wakeup_interval" "$effective_workers" "$rate" "$batch" "$kxdpgun_mode" "$effective_udp_batch_size" "$hot_path" "$effective_idle_strategy" "$socket_receive_buffer_bytes" "$socket_send_buffer_bytes" "$socket_max_pacing_rate_arg" "$effective_worker_cpus" "$server_prefix_arg" "$interface"
                             done
                         done
                     done
@@ -2219,7 +2219,7 @@ if [[ "$include_oxidedns" == true ]]; then
     done
 fi
 
-if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]]; then
+if [[ "$comparison_run_order" == "borondns-first" && "$include_knot" == true ]]; then
     for rate in $rates_list; do
         select_run_id "knot-q${rate}"
         run_abs="$out_abs/$run_id"
@@ -2234,7 +2234,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot" == true ]];
     done
 fi
 
-if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true ]]; then
+if [[ "$comparison_run_order" == "borondns-first" && "$include_knot_xdp" == true ]]; then
     for rate in $rates_list; do
         select_run_id "knot-xdp-q${rate}"
         run_abs="$out_abs/$run_id"
@@ -2249,7 +2249,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_knot_xdp" == true
     done
 fi
 
-if [[ "$comparison_run_order" == "oxidedns-first" && "$include_nsd" == true ]]; then
+if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd" == true ]]; then
     for rate in $rates_list; do
         select_run_id "nsd-q${rate}"
         run_abs="$out_abs/$run_id"
@@ -2264,7 +2264,7 @@ if [[ "$comparison_run_order" == "oxidedns-first" && "$include_nsd" == true ]]; 
     done
 fi
 
-if [[ "$comparison_run_order" == "oxidedns-first" && "$include_nsd_xdp" == true ]]; then
+if [[ "$comparison_run_order" == "borondns-first" && "$include_nsd_xdp" == true ]]; then
     for rate in $rates_list; do
         select_run_id "nsd-xdp-q${rate}"
         run_abs="$out_abs/$run_id"

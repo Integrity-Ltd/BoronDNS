@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/perf-smoke/$$"
-metrics_out="${OXIDEDNS_PERF_SMOKE_METRICS_OUT:-}"
-artifact_dir="${OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR:-}"
+metrics_out="${BORONDNS_PERF_SMOKE_METRICS_OUT:-}"
+artifact_dir="${BORONDNS_PERF_SMOKE_ARTIFACT_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,16 +38,16 @@ cleanup() {
             echo "---- perf-client.log ----" >&2
             tail -120 "$workdir/perf-client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -64,7 +64,7 @@ fake_primary="$workdir/fake-primary.py"
 perf_client="$workdir/perf-client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/perf-client.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -301,11 +301,11 @@ log(summary)
 print(summary)
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "warn"
 log_format = "plain"
 
@@ -327,7 +327,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -350,19 +350,19 @@ print(time.perf_counter_ns())
 PY
 )"
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready during performance smoke" >&2
+    echo "BoronDNS did not become ready during performance smoke" >&2
     exit 1
 fi
 
@@ -379,18 +379,18 @@ print(f"{($ready_ns - $start_ns) / 1_000_000:.1f}")
 PY
 )"
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="perf.test."} 2026052401' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="perf.test."} 2026052401' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected performance smoke line: $expected" >&2
         exit 1
     fi
 done
 
-client_summary="$(python3 "$perf_client" 127.0.0.1 "$oxidedns_dns_port" "$client_log")"
+client_summary="$(python3 "$perf_client" 127.0.0.1 "$borondns_dns_port" "$client_log")"
 summary_metric() {
     local key="$1"
     tr ' ' '\n' <<<"$client_summary" | awk -F= -v key="$key" '$1 == key { print $2; exit }'
@@ -416,17 +416,17 @@ print(f"{records / startup_seconds:.0f}" if startup_seconds > 0 else "inf")
 PY
 )"
 
-metrics_after_client="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
-if [[ "$metrics_after_client" != *'oxidedns_secondary_build_info{version="'* ]]; then
-    echo "metrics missing oxidedns_secondary_build_info evidence" >&2
+metrics_after_client="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
+if [[ "$metrics_after_client" != *'borondns_secondary_build_info{version="'* ]]; then
+    echo "metrics missing borondns_secondary_build_info evidence" >&2
     exit 1
 fi
-if [[ "$metrics_after_client" != *'oxidedns_secondary_query_duration_seconds_bucket{query_category="udp_direct"'* ]]; then
+if [[ "$metrics_after_client" != *'borondns_secondary_query_duration_seconds_bucket{query_category="udp_direct"'* ]]; then
     echo "metrics missing udp_direct query latency histogram buckets" >&2
     exit 1
 fi
 udp_direct_histogram_count="$(
-    awk '$1 == "oxidedns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"}" { print $2; exit }' \
+    awk '$1 == "borondns_secondary_query_duration_seconds_count{query_category=\"udp_direct\"}" { print $2; exit }' \
         <<<"$metrics_after_client"
 )"
 if [[ -z "$udp_direct_histogram_count" || "$udp_direct_histogram_count" == "0" ]]; then
@@ -456,14 +456,14 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     printf '%s\n' "$metrics" >"$artifact_dir/metrics-before-client.prom"
     printf '%s\n' "$metrics_after_client" >"$artifact_dir/metrics-after-client.prom"
-    curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >"$artifact_dir/readyz.json"
+    curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >"$artifact_dir/readyz.json"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/perf-client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cat >"$artifact_dir/metrics-evidence.env" <<EOF
 build_info_present=true
-latency_histogram_metric=oxidedns_secondary_query_duration_seconds
+latency_histogram_metric=borondns_secondary_query_duration_seconds
 udp_direct_histogram_count=$udp_direct_histogram_count
 metrics_before_client=metrics-before-client.prom
 metrics_after_client=metrics-after-client.prom

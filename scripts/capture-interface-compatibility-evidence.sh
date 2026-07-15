@@ -3,8 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_INTERFACE_COMPATIBILITY_DIR:-$repo_root/target/evidence/interface-compatibility-$timestamp}"
-previous_baseline="${OXIDEDNS_PREVIOUS_INTERFACE_BASELINE:-}"
+evidence_dir="${BORONDNS_INTERFACE_COMPATIBILITY_DIR:-$repo_root/target/evidence/interface-compatibility-$timestamp}"
+previous_baseline="${BORONDNS_PREVIOUS_INTERFACE_BASELINE:-}"
 
 mkdir -p "$evidence_dir"
 
@@ -23,10 +23,10 @@ else
 fi
 
 cat >"$evidence_dir/interface-compatibility-summary.env" <<EOF
-OXIDEDNS_INTERFACE_COMPATIBILITY_CREATED_UTC=$timestamp
-OXIDEDNS_INTERFACE_COMPATIBILITY_STATUS=$diff_status
-OXIDEDNS_INTERFACE_COMPATIBILITY_PREVIOUS_BASELINE=$previous_baseline
-OXIDEDNS_INTERFACE_COMPATIBILITY_CURRENT_BASELINE=current-interface-baseline.tsv
+BORONDNS_INTERFACE_COMPATIBILITY_CREATED_UTC=$timestamp
+BORONDNS_INTERFACE_COMPATIBILITY_STATUS=$diff_status
+BORONDNS_INTERFACE_COMPATIBILITY_PREVIOUS_BASELINE=$previous_baseline
+BORONDNS_INTERFACE_COMPATIBILITY_CURRENT_BASELINE=current-interface-baseline.tsv
 EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
@@ -52,7 +52,7 @@ cat >"$evidence_dir/release-notes-snippet.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/release-engineer-signoff.md" <<'EOF'
-# OxideDNS Interface Compatibility Sign-off
+# BoronDNS Interface Compatibility Sign-off
 
 - Release:
 - Evidence snapshot:
@@ -70,15 +70,15 @@ cat >"$evidence_dir/release-engineer-signoff.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Interface Compatibility Evidence
+# BoronDNS Interface Compatibility Evidence
 
 Created UTC: $timestamp
 
 This directory records the Engineering MVP setup artifact for ODS-NFR-MAINT-006.
 Without a previous accepted release baseline, it establishes the current
-baseline and policy shape. When \`OXIDEDNS_PREVIOUS_INTERFACE_BASELINE\` is set, the
+baseline and policy shape. When \`BORONDNS_PREVIOUS_INTERFACE_BASELINE\` is set, the
 checker compares the current baseline against that file and blocks removals
-unless \`OXIDEDNS_INTERFACE_MAJOR_RELEASE=1\` is set.
+unless \`BORONDNS_INTERFACE_MAJOR_RELEASE=1\` is set.
 
 Status: $diff_status
 

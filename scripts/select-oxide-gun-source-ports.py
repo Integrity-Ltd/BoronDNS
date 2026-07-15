@@ -12,7 +12,7 @@ import sys
 
 
 SERVER_PORT_METRIC = re.compile(
-    r'^oxidedns_udp_worker_source_port_datagrams_total\{worker="(\d+)",source_port="(\d+)"\} (\d+)$'
+    r'^borondns_udp_worker_source_port_datagrams_total\{worker="(\d+)",source_port="(\d+)"\} (\d+)$'
 )
 
 

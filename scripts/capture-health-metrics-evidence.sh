@@ -13,30 +13,30 @@ if ((${#missing[@]} > 0)); then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-evidence_dir="${OXIDEDNS_HEALTH_METRICS_EVIDENCE_DIR:-$repo_root/target/health-metrics-evidence}"
-burst_requests="${OXIDEDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS:-60}"
+evidence_dir="${BORONDNS_HEALTH_METRICS_EVIDENCE_DIR:-$repo_root/target/health-metrics-evidence}"
+burst_requests="${BORONDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS:-60}"
 if ! [[ "$burst_requests" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'OXIDEDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS must be a positive integer\n' >&2
+    printf 'BORONDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS must be a positive integer\n' >&2
     exit 1
 fi
 burst_width="${#burst_requests}"
-profile_seconds="${OXIDEDNS_HEALTH_METRICS_PROFILE_SECONDS:-5}"
+profile_seconds="${BORONDNS_HEALTH_METRICS_PROFILE_SECONDS:-5}"
 if ! [[ "$profile_seconds" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'OXIDEDNS_HEALTH_METRICS_PROFILE_SECONDS must be a positive integer\n' >&2
+    printf 'BORONDNS_HEALTH_METRICS_PROFILE_SECONDS must be a positive integer\n' >&2
     exit 1
 fi
-profile_interval_ms="${OXIDEDNS_HEALTH_METRICS_PROFILE_INTERVAL_MS:-200}"
+profile_interval_ms="${BORONDNS_HEALTH_METRICS_PROFILE_INTERVAL_MS:-200}"
 if ! [[ "$profile_interval_ms" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'OXIDEDNS_HEALTH_METRICS_PROFILE_INTERVAL_MS must be a positive integer\n' >&2
+    printf 'BORONDNS_HEALTH_METRICS_PROFILE_INTERVAL_MS must be a positive integer\n' >&2
     exit 1
 fi
 profile_interval_seconds="$(awk -v ms="$profile_interval_ms" 'BEGIN { printf "%.3f", ms / 1000 }')"
 mkdir -p "$evidence_dir"
 
 cleanup() {
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
-        kill -TERM "$oxidedns_pid" >/dev/null 2>&1 || true
-        wait "$oxidedns_pid" >/dev/null 2>&1 || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" >/dev/null 2>&1; then
+        kill -TERM "$borondns_pid" >/dev/null 2>&1 || true
+        wait "$borondns_pid" >/dev/null 2>&1 || true
     fi
 }
 trap cleanup EXIT
@@ -96,7 +96,7 @@ capture_request() {
 }
 
 cd "$repo_root"
-cargo build -q -p oxidedns-cli
+cargo build -q -p borondns-cli
 
 read -r dns_port health_port < <(
     python3 - <<'PY'
@@ -110,7 +110,7 @@ print(" ".join(str(sock.getsockname()[1]) for sock in sockets))
 PY
 )
 
-cat >"$evidence_dir/oxidedns.toml" <<EOF
+cat >"$evidence_dir/borondns.toml" <<EOF
 [server]
 log_level = "info"
 log_format = "logfmt"
@@ -133,23 +133,23 @@ name = "example.test."
 primaries = ["127.0.0.1:9"]
 EOF
 
-"$repo_root/target/debug/oxidedns" serve --config "$evidence_dir/oxidedns.toml" \
-    >"$evidence_dir/oxidedns.stdout" \
-    2>"$evidence_dir/oxidedns.stderr" &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$evidence_dir/borondns.toml" \
+    >"$evidence_dir/borondns.stdout" \
+    2>"$evidence_dir/borondns.stderr" &
+borondns_pid=$!
 
 for _ in $(seq 1 100); do
-    if grep -F -- "health listener bound" "$evidence_dir/oxidedns.stderr" >/dev/null 2>&1; then
+    if grep -F -- "health listener bound" "$evidence_dir/borondns.stderr" >/dev/null 2>&1; then
         break
     fi
-    if ! kill -0 "$oxidedns_pid" >/dev/null 2>&1; then
-        printf 'OxideDNS exited before health listener bound\n' >&2
-        sed -n '1,120p' "$evidence_dir/oxidedns.stderr" >&2 || true
+    if ! kill -0 "$borondns_pid" >/dev/null 2>&1; then
+        printf 'BoronDNS exited before health listener bound\n' >&2
+        sed -n '1,120p' "$evidence_dir/borondns.stderr" >&2 || true
         exit 1
     fi
     sleep 0.05
 done
-require_text "$evidence_dir/oxidedns.stderr" "health listener bound"
+require_text "$evidence_dir/borondns.stderr" "health listener bound"
 
 capture_request livez /livez
 capture_request readyz /readyz
@@ -192,8 +192,8 @@ require_text "$evidence_dir/livez.body" '"status":"alive"'
 require_text "$evidence_dir/readyz.body" '"status":"not-ready"'
 require_text "$evidence_dir/readyz.body" '"reason":"loading"'
 require_text "$evidence_dir/healthz.body" '"status":"not-ready"'
-require_text "$evidence_dir/metrics-plain.body" 'oxidedns_secondary_build_info{version="'
-require_text "$evidence_dir/metrics-plain.body" 'oxidedns_zones_total 1'
+require_text "$evidence_dir/metrics-plain.body" 'borondns_secondary_build_info{version="'
+require_text "$evidence_dir/metrics-plain.body" 'borondns_zones_total 1'
 require_text "$evidence_dir/metrics-gzip.headers" 'content-encoding: gzip'
 require_text "$evidence_dir/metrics-gzip.headers" 'vary: accept-encoding'
 require_text "$evidence_dir/metrics-rate-limited.headers" 'retry-after:'
@@ -222,10 +222,10 @@ require_text "$evidence_dir/readyz-after-metrics-limit.body" '"status":"not-read
     done
 } >"$evidence_dir/metrics-rate-limit-burst.tsv"
 
-cp "/proc/$oxidedns_pid/status" "$evidence_dir/metrics-rate-limit-profile-proc-status-before.txt"
+cp "/proc/$borondns_pid/status" "$evidence_dir/metrics-rate-limit-profile-proc-status-before.txt"
 if command -v perf >/dev/null 2>&1; then
     set +e
-    perf stat -p "$oxidedns_pid" -o "$evidence_dir/metrics-rate-limit-profile-perf-stat.txt" -- sleep "$profile_seconds" &
+    perf stat -p "$borondns_pid" -o "$evidence_dir/metrics-rate-limit-profile-perf-stat.txt" -- sleep "$profile_seconds" &
     perf_pid=$!
     set -e
 else
@@ -264,7 +264,7 @@ if [[ -n "$perf_pid" ]]; then
             >>"$evidence_dir/metrics-rate-limit-profile-perf.skipped"
     fi
 fi
-cp "/proc/$oxidedns_pid/status" "$evidence_dir/metrics-rate-limit-profile-proc-status-after.txt"
+cp "/proc/$borondns_pid/status" "$evidence_dir/metrics-rate-limit-profile-proc-status-after.txt"
 
 profile_samples="$(awk 'NR > 1 { count++ } END { print count + 0 }' "$evidence_dir/metrics-rate-limit-profile-time.txt")"
 profile_http_429="$(awk -F'\t' 'NR > 1 && $2 == "429" { count++ } END { print count + 0 }' "$evidence_dir/metrics-rate-limit-profile-time.txt")"
@@ -309,7 +309,7 @@ fi
 
 {
     cat <<'EOF'
-# OxideDNS Health and Metrics Evidence
+# BoronDNS Health and Metrics Evidence
 
 Captured retained HTTP evidence for SRS health and metrics requirements:
 
@@ -328,7 +328,7 @@ EOF
     printf '  values for %s additional over-limit /metrics requests from the same\n' "$burst_requests"
     cat <<'EOF'
   source for this run. The default is 60; set
-  `OXIDEDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS` to
+  `BORONDNS_HEALTH_METRICS_RATE_LIMIT_BURST_REQUESTS` to
   choose a different positive count for a release campaign.
 - A retained info-verbosity profile records timed `/metrics` scrape samples,
   process status before/after the profile window, and `perf stat` output when

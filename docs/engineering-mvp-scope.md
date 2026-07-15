@@ -1,6 +1,6 @@
 # Release Candidate Scope
 
-This document defines the current release-candidate scope for OxideDNS. It is
+This document defines the current release-candidate scope for BoronDNS. It is
 not the SRS `ODS-VER-008` release-acceptance gate.
 
 ## In Scope

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${OXIDEDNS_PORTABILITY_EVIDENCE_DIR:-$repo_root/target/evidence/portability-$$}"
+artifact_dir="${BORONDNS_PORTABILITY_EVIDENCE_DIR:-$repo_root/target/evidence/portability-$$}"
 mkdir -p "$artifact_dir"
 
 write_command() {
@@ -30,12 +30,12 @@ require_command rustc
 require_command python3
 require_command rg
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 write_command uname uname -a
 write_command rustc rustc -vV
 write_command cargo cargo --version
-write_command oxidedns-version "$repo_root/target/debug/oxidedns" --version
+write_command borondns-version "$repo_root/target/debug/borondns" --version
 
 if [[ -r /etc/os-release ]]; then
     cp /etc/os-release "$artifact_dir/os-release.txt"
@@ -45,10 +45,10 @@ fi
 
 if command -v ldd >/dev/null 2>&1; then
     write_command ldd-version ldd --version
-    write_command oxidedns-ldd ldd "$repo_root/target/debug/oxidedns"
+    write_command borondns-ldd ldd "$repo_root/target/debug/borondns"
 else
     printf 'missing ldd\n' >"$artifact_dir/ldd-version.txt"
-    printf 'missing ldd\n' >"$artifact_dir/oxidedns-ldd.txt"
+    printf 'missing ldd\n' >"$artifact_dir/borondns-ldd.txt"
 fi
 
 {
@@ -131,9 +131,9 @@ if rg -n \
     -e '\bdnf\b' \
     -e '\bapk\b' \
     -e '/etc/(debian|redhat|alpine|systemd)' \
-    "$repo_root/crates/oxidedns-cli/src" \
-    "$repo_root/crates/oxidedns-core/src" \
-    "$repo_root/crates/oxidedns-server/src" \
+    "$repo_root/crates/borondns-cli/src" \
+    "$repo_root/crates/borondns-core/src" \
+    "$repo_root/crates/borondns-server/src" \
     "$repo_root/config" >"$runtime_scan"; then
     printf 'runtime portability scan found distribution/init coupling; see %s\n' "$runtime_scan" >&2
     exit 1
@@ -143,8 +143,8 @@ fi
 
 {
     printf 'requirement_id\tevidence_state\tartifact\treview_note\n'
-    printf 'ODS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; oxidedns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
-    printf 'ODS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; oxidedns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
+    printf 'ODS-NFR-PORT-001\tcurrent-host-runtime\tos-release.txt; uname.txt; rustc.txt; cargo.txt; borondns-version.txt\tCurrent Linux host build/run facts captured; full per-distribution CI matrix remains release-gate work.\n'
+    printf 'ODS-NFR-PORT-002\tcurrent-host-runtime\tuname.txt; rustc.txt; borondns-version.txt\tCurrent host architecture and Rust host target captured; full x86_64/aarch64 CI matrix remains release-gate work.\n'
     printf 'ODS-NFR-PORT-003\tinventory\tcontainer-runtime-inventory.tsv\tOCI runtime availability is inventoried for the release host; runtime/container deployment tests remain separate artifacts.\n'
     printf 'ODS-NFR-PORT-004\tcurrent-host-runtime\tnetwork-probes.tsv\tCurrent host IPv4/IPv6 TCP and UDP loopback capability is probed; full per-operation dual-stack tests remain acceptance work.\n'
     printf 'ODS-NFR-PORT-005\tstatic-audit\tinit-package-runtime-scan.txt\tFirst-party runtime/config source is scanned for init-system, package-manager, and distribution-layout coupling.\n'

@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/tcp-truncation-retry-$$"
-artifact_dir="${OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_TCP_TRUNCATION_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,16 +38,16 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -65,7 +65,7 @@ client="$workdir/client.py"
 drain_client="$workdir/drain-client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 limit_summary_path="$workdir/tcp-limit-summary.env"
 pipeline_summary_path="$workdir/tcp-pipeline-summary.env"
 timeout_summary_path="$workdir/tcp-timeout-summary.env"
@@ -451,7 +451,7 @@ import urllib.request
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1])
 HEALTH_PORT = int(sys.argv[2])
-OXIDEDNS_PID = int(sys.argv[3])
+BORONDNS_PID = int(sys.argv[3])
 DRAIN_SUMMARY_PATH = sys.argv[4]
 READYZ_DRAINING_PATH = sys.argv[5]
 QNAME = "large.tcp.test."
@@ -502,7 +502,7 @@ drain_query = query(0x6004)
 drain_socket.sendall(struct.pack("!H", len(drain_query)) + drain_query)
 
 start = time.monotonic()
-os.kill(OXIDEDNS_PID, signal.SIGTERM)
+os.kill(BORONDNS_PID, signal.SIGTERM)
 draining_status = None
 draining_body = ""
 while time.monotonic() - start < 2.0:
@@ -547,11 +547,11 @@ with open(DRAIN_SUMMARY_PATH, "w", encoding="utf-8") as handle:
 print(summary)
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "logfmt"
 
@@ -578,7 +578,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -594,45 +594,45 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready during TCP truncation retry interop" >&2
+    echo "BoronDNS did not become ready during TCP truncation retry interop" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$limit_summary_path" "$pipeline_summary_path" "$timeout_summary_path")"
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+client_summary="$(python3 "$client" "$borondns_dns_port" "$client_log" "$limit_summary_path" "$pipeline_summary_path" "$timeout_summary_path")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_secondary_queries_total{zone="tcp.test."} 5' \
-    'oxidedns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 5' \
-    'oxidedns_queries_truncated_total 1'; do
+    'borondns_zones_active 1' \
+    'borondns_secondary_queries_total{zone="tcp.test."} 5' \
+    'borondns_secondary_query_responses_total{zone="tcp.test.",rcode="NOERROR"} 5' \
+    'borondns_queries_truncated_total 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected TCP truncation retry line: $expected" >&2
         exit 1
     fi
 done
 
-drain_summary="$(python3 "$drain_client" "$oxidedns_dns_port" "$oxidedns_health_port" "$oxidedns_pid" "$drain_summary_path" "$readyz_draining_path")"
-wait "$oxidedns_pid"
-oxidedns_pid=""
+drain_summary="$(python3 "$drain_client" "$borondns_dns_port" "$borondns_health_port" "$borondns_pid" "$drain_summary_path" "$readyz_draining_path")"
+wait "$borondns_pid"
+borondns_pid=""
 
 for expected in \
     'TCP connection limit reached; closing accepted connection' \
     'shutdown signal received; draining runtime' \
     'TCP connection drain completed'; do
-    if ! grep -q "$expected" "$workdir/oxidedns.log"; then
-        echo "OxideDNS log missing expected TCP evidence line: $expected" >&2
+    if ! grep -q "$expected" "$workdir/borondns.log"; then
+        echo "BoronDNS log missing expected TCP evidence line: $expected" >&2
         exit 1
     fi
 done
@@ -640,24 +640,24 @@ done
 cat >"$traceability_path" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
 ODS-FR-TCP-001	retained-runtime	tcp_framing_and_multi_message_exchange	client-summary.env; tcp-pipeline-summary.env; fake-primary.log	TCP client and fake primary exchange DNS messages using the two-octet length prefix; one connection carries multiple independently framed queries.
-ODS-FR-TCP-002	retained-runtime	tcp_persistence_until_shutdown	tcp-pipeline-summary.env; graceful-drain-summary.env; readyz-draining.txt; oxidedns.log	The pipelined connection remains open for subsequent queries, and an accepted TCP query completes after SIGTERM while new TCP traffic is rejected or closed.
-ODS-FR-TCP-003	retained-runtime	idle_timeout_close	tcp-timeout-summary.env; oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout	The retained config applies a one-second idle timeout, and the harness records server-side closure of a TCP connection that sends no data.
-ODS-FR-TCP-004	retained-runtime-plus-support	partial_frame_read_timeout_close	tcp-timeout-summary.env; oxidedns.toml; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/oxidedns-server/src/lib.rs::tcp_write_times_out_when_backpressured	The runtime harness records closure of a connection stalled after the two-octet length prefix; focused unit tests cover both read-timeout and write-timeout failure paths.
-ODS-FR-TCP-005	retained-runtime	over_limit_connection_close	tcp-limit-summary.env; oxidedns.toml; oxidedns.log	The retained config sets max_tcp_connections=1; a second accepted connection is promptly closed and the expected warning log is present.
-ODS-FR-TCP-006	supporting-unit	optional_per_source_cap	crates/oxidedns-core/src/config.rs::parses_custom_tcp_connection_limit; crates/oxidedns-core/src/config.rs::rejects_zero_tcp_connection_limit; crates/oxidedns-server/src/lib.rs::tcp_listener_closes_connections_over_per_source_limit; docs/engineering-mvp-scope.md; config/oxidedns.example.toml	The SRS makes per-source TCP connection limits optional with default no per-source cap; focused config and listener tests cover the configured per-source cap path and prompt close behavior.
+ODS-FR-TCP-002	retained-runtime	tcp_persistence_until_shutdown	tcp-pipeline-summary.env; graceful-drain-summary.env; readyz-draining.txt; borondns.log	The pipelined connection remains open for subsequent queries, and an accepted TCP query completes after SIGTERM while new TCP traffic is rejected or closed.
+ODS-FR-TCP-003	retained-runtime	idle_timeout_close	tcp-timeout-summary.env; borondns.toml; crates/borondns-server/src/lib.rs::tcp_connection_closes_after_idle_timeout	The retained config applies a one-second idle timeout, and the harness records server-side closure of a TCP connection that sends no data.
+ODS-FR-TCP-004	retained-runtime-plus-support	partial_frame_read_timeout_close	tcp-timeout-summary.env; borondns.toml; crates/borondns-server/src/lib.rs::tcp_connection_closes_after_read_timeout_mid_frame; crates/borondns-server/src/lib.rs::tcp_write_times_out_when_backpressured	The runtime harness records closure of a connection stalled after the two-octet length prefix; focused unit tests cover both read-timeout and write-timeout failure paths.
+ODS-FR-TCP-005	retained-runtime	over_limit_connection_close	tcp-limit-summary.env; borondns.toml; borondns.log	The retained config sets max_tcp_connections=1; a second accepted connection is promptly closed and the expected warning log is present.
+ODS-FR-TCP-006	supporting-unit	optional_per_source_cap	crates/borondns-core/src/config.rs::parses_custom_tcp_connection_limit; crates/borondns-core/src/config.rs::rejects_zero_tcp_connection_limit; crates/borondns-server/src/lib.rs::tcp_listener_closes_connections_over_per_source_limit; docs/engineering-mvp-scope.md; config/borondns.example.toml	The SRS makes per-source TCP connection limits optional with default no per-source cap; focused config and listener tests cover the configured per-source cap path and prompt close behavior.
 ODS-FR-TCP-007	retained-runtime	pipelined_large_then_small_out_of_order	tcp-pipeline-summary.env; client.log	Two in-flight queries on one TCP connection return matching QIDs, and the intentionally smaller second query is answered before the larger first query.
 ODS-FR-TCP-008	retained-runtime	udp_truncation_tcp_complete_retry	client-summary.env; metrics.txt	For the same large answer, UDP returns TC=1 at the 512-octet ceiling while TCP returns an untruncated response with the complete A RRset.
-ODS-FR-TCP-009	retained-runtime	outbound_axfr_tcp_framing	fake-primary.log; oxidedns.log; client-summary.env	The fake primary accepts only length-framed TCP AXFR; successful load plus served large RRset proves the outbound transfer path used TCP framing.
-ODS-FR-TCP-010	supporting-unit-plus-runtime	successful_outbound_tcp_connect_with_configured_timeout	oxidedns.toml; crates/oxidedns-core/src/config.rs::parses_custom_tcp_idle_timeout; crates/oxidedns-core/src/config.rs::rejects_zero_tcp_read_or_write_timeout; crates/oxidedns-server/src/lib.rs::tcp_connect_timeout_abandons_pending_connect_attempt; docs/engineering-mvp-scope.md	The retained config records tcp_connect_timeout_secs=10 for outbound TCP transfer paths; focused config tests cover parsing/rejection and the pending-connect unit test proves abandoned connect attempts return a transfer timeout.
-ODS-FR-TCP-011	supporting-unit-plus-runtime	pipelining_under_configured_cap	oxidedns.toml; tcp-pipeline-summary.env; crates/oxidedns-server/src/lib.rs::tcp_connection_closes_when_inflight_limit_stays_saturated; crates/oxidedns-core/src/config.rs::parses_custom_tcp_connection_limit	The retained config records max_tcp_inflight_queries_per_connection=64 and the harness verifies two concurrent in-flight queries below the cap; the focused saturation test holds the only per-connection permit, lets the configured timeout elapse, and proves the second query is not answered before closure.
+ODS-FR-TCP-009	retained-runtime	outbound_axfr_tcp_framing	fake-primary.log; borondns.log; client-summary.env	The fake primary accepts only length-framed TCP AXFR; successful load plus served large RRset proves the outbound transfer path used TCP framing.
+ODS-FR-TCP-010	supporting-unit-plus-runtime	successful_outbound_tcp_connect_with_configured_timeout	borondns.toml; crates/borondns-core/src/config.rs::parses_custom_tcp_idle_timeout; crates/borondns-core/src/config.rs::rejects_zero_tcp_read_or_write_timeout; crates/borondns-server/src/lib.rs::tcp_connect_timeout_abandons_pending_connect_attempt; docs/engineering-mvp-scope.md	The retained config records tcp_connect_timeout_secs=10 for outbound TCP transfer paths; focused config tests cover parsing/rejection and the pending-connect unit test proves abandoned connect attempts return a transfer timeout.
+ODS-FR-TCP-011	supporting-unit-plus-runtime	pipelining_under_configured_cap	borondns.toml; tcp-pipeline-summary.env; crates/borondns-server/src/lib.rs::tcp_connection_closes_when_inflight_limit_stays_saturated; crates/borondns-core/src/config.rs::parses_custom_tcp_connection_limit	The retained config records max_tcp_inflight_queries_per_connection=64 and the harness verifies two concurrent in-flight queries below the cap; the focused saturation test holds the only per-connection permit, lets the configured timeout elapse, and proves the second query is not answered before closure.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     printf '%s\n' "$client_summary" >"$artifact_dir/client-summary.env"
     cp "$limit_summary_path" "$artifact_dir/tcp-limit-summary.env"
     cp "$pipeline_summary_path" "$artifact_dir/tcp-pipeline-summary.env"

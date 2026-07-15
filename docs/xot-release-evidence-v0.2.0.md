@@ -94,7 +94,7 @@ The evidence directory retains:
 - ALPN probe output
 - server certificate summaries
 - redacted XoT/TSIG configuration artifacts where TSIG or RNDC secrets are used
-- OxideDNS readiness, metrics, transfer-answer, and session logs
+- BoronDNS readiness, metrics, transfer-answer, and session logs
 - catalog add/remove zone files and member query outputs for the BIND catalog case
 - per-case traceability TSVs
 - `xot-failure-env.env`

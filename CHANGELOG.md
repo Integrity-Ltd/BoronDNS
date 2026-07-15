@@ -8,6 +8,11 @@ full evidence pointers and sign-off.
 
 ### Changed
 
+- Adopted the BoronDNS product name across crates, binaries, configuration,
+  environment variables, metrics, packaging, deployment assets,
+  documentation, and repository metadata.
+- Advanced the pre-1.0 workspace and eBPF support crates from `0.2.0` to
+  `0.9.0` for the breaking BoronDNS release-candidate identity.
 - Updated public-release preparation docs to align with current source-owned
   behavior for top-level `--config`, reloadable filesystem-backed TSIG/XoT
   secret snapshots, opt-in catalog member transfer extensions, legacy private
@@ -40,7 +45,7 @@ full evidence pointers and sign-off.
   comparison documentation, including rejected prototype notes where evidence
   did not justify keeping an approach.
 - Bumped the workspace and eBPF support crates to version `0.1.5`.
-- Built release-packaged `oxidedns` binaries with the server `af-xdp` feature
+- Built release-packaged `borondns` binaries with the server `af-xdp` feature
   enabled, matching the XDP-enabled `oxide-gun` release asset.
 
 ### Notes
@@ -54,7 +59,7 @@ full evidence pointers and sign-off.
 
 ### Changed
 
-- Split the large `oxidedns-server` runtime file into focused modules for UDP,
+- Split the large `borondns-server` runtime file into focused modules for UDP,
   TCP, health/metrics, transfer I/O, transfer planning, rate limiting, DNS
   Cookies, configuration validation, runtime status, shutdown, errors, and
   tests without changing runtime ownership or packet-serving behavior.
@@ -137,7 +142,7 @@ full evidence pointers and sign-off.
 - Added BIND packet-torture interop coverage that transfers a broad valid RR
   corpus and compares served packet content against BIND behavior.
 - Added PowerDNS Authoritative plus PostgreSQL catalog TSIG interop coverage,
-  including live member add/remove and member-zone record update while OxideDNS
+  including live member add/remove and member-zone record update while BoronDNS
   remains running.
 - Added Debian 12 beta VM container-operator notes for the release Docker image
   archive, including host-network, three-interface deployment guidance.
@@ -174,7 +179,7 @@ full evidence pointers and sign-off.
 
 ### Changed
 
-- Updated the SRS alignment to v0.9 while preserving the OxideDNS naming and
+- Updated the SRS alignment to v0.9 while preserving the BoronDNS naming and
   configuration model.
 - Clarified health endpoint and configuration wording in the SRS.
 - Restored canonical MIT and Apache-2.0 license texts.
@@ -184,7 +189,7 @@ full evidence pointers and sign-off.
 
 ### Added
 
-- Initial Engineering MVP release of OxideDNS as a secondary-only authoritative
+- Initial Engineering MVP release of BoronDNS as a secondary-only authoritative
   DNS server.
 - Included AXFR/IXFR acquisition, NOTIFY handling, TSIG, XoT transfer support,
   DNS-over-UDP/TCP serving, health/metrics endpoints, RRL, DNS Cookies, passive

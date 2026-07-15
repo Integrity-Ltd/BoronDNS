@@ -6,7 +6,7 @@ use std::{
 };
 
 use libfuzzer_sys::fuzz_target;
-use oxidedns_core::{
+use borondns_core::{
     dns::{
         AnswerOptions, AnyResponseMode, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName,
         Header, LookupResult, Question, RecordType, Transport,
@@ -71,7 +71,7 @@ fn exercise_shaped_query(data: &[u8]) -> Header {
     if !edns_well_formed {
         assert_eq!(
             response_header.flags & 0x000f,
-            oxidedns_core::dns::Rcode::FormErr as u16,
+            borondns_core::dns::Rcode::FormErr as u16,
             "malformed EDNS must be rejected before QCLASS and zone lookup"
         );
         assert_eq!(response_header.flags & 0x0400, 0);
@@ -87,7 +87,7 @@ fn exercise_shaped_query(data: &[u8]) -> Header {
     } else {
         assert_eq!(
             response_header.flags & 0x000f,
-            oxidedns_core::dns::Rcode::Refused as u16,
+            borondns_core::dns::Rcode::Refused as u16,
             "fixture names are not CHAOS diagnostics and unsupported QCLASS must be refused"
         );
         assert_eq!(response_header.flags & 0x0400, 0);

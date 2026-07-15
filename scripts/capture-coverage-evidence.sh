@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${OXIDEDNS_COVERAGE_EVIDENCE_DIR:-$repo_root/target/evidence/coverage-$$}"
+artifact_dir="${BORONDNS_COVERAGE_EVIDENCE_DIR:-$repo_root/target/evidence/coverage-$$}"
 mkdir -p "$artifact_dir"
 
 for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin" /cache/cargo/bin; do
@@ -80,10 +80,10 @@ overall_percent = float(total_lines.get("percent", 0.0))
 overall_min = 70.0
 parser_min = 85.0
 parser_files = {
-    "crates/oxidedns-core/src/dns.rs": "DNS message parser, EDNS options, RR-type decoders, and DNS Cookie computation",
-    "crates/oxidedns-core/src/axfr.rs": "AXFR/IXFR transfer stream parser",
-    "crates/oxidedns-core/src/tsig.rs": "TSIG verifier",
-    "crates/oxidedns-server/src/lib.rs": "XoT TLS/X.509 handling",
+    "crates/borondns-core/src/dns.rs": "DNS message parser, EDNS options, RR-type decoders, and DNS Cookie computation",
+    "crates/borondns-core/src/axfr.rs": "AXFR/IXFR transfer stream parser",
+    "crates/borondns-core/src/tsig.rs": "TSIG verifier",
+    "crates/borondns-server/src/lib.rs": "XoT TLS/X.509 handling",
 }
 
 files = {}

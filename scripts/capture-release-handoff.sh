@@ -3,20 +3,20 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_RELEASE_HANDOFF_DIR:-$repo_root/target/evidence/release-handoff-$timestamp}"
+evidence_dir="${BORONDNS_RELEASE_HANDOFF_DIR:-$repo_root/target/evidence/release-handoff-$timestamp}"
 
-release_name="${OXIDEDNS_RELEASE_NAME:-unassigned-release}"
-release_owner="${OXIDEDNS_RELEASE_OWNER:-unassigned-release-engineer}"
-architecture_owner="${OXIDEDNS_ARCHITECTURE_OWNER:-DT}"
-external_operator="${OXIDEDNS_EXTERNAL_OPERATOR:-unassigned-external-operator}"
+release_name="${BORONDNS_RELEASE_NAME:-unassigned-release}"
+release_owner="${BORONDNS_RELEASE_OWNER:-unassigned-release-engineer}"
+architecture_owner="${BORONDNS_ARCHITECTURE_OWNER:-DT}"
+external_operator="${BORONDNS_EXTERNAL_OPERATOR:-unassigned-external-operator}"
 
 mkdir -p "$evidence_dir"
 
 cat >"$evidence_dir/release-handoff-env.env" <<EOF
-OXIDEDNS_RELEASE_NAME=$release_name
-OXIDEDNS_RELEASE_OWNER=$release_owner
-OXIDEDNS_ARCHITECTURE_OWNER=$architecture_owner
-OXIDEDNS_EXTERNAL_OPERATOR=$external_operator
+BORONDNS_RELEASE_NAME=$release_name
+BORONDNS_RELEASE_OWNER=$release_owner
+BORONDNS_ARCHITECTURE_OWNER=$architecture_owner
+BORONDNS_EXTERNAL_OPERATOR=$external_operator
 EOF
 
 cat >"$evidence_dir/evidence-attachment-map.tsv" <<'EOF'
@@ -85,7 +85,7 @@ Security reviewer	unassigned-security-reviewer	Security policy review, dependenc
 EOF
 
 cat >"$evidence_dir/scheduled-ci-plan.md" <<'EOF'
-# OxideDNS Scheduled CI and Manual Release Run Plan
+# BoronDNS Scheduled CI and Manual Release Run Plan
 
 This is the release-candidate handoff for ODS-VER-011. It is not proof that hosted CI or
 scheduled jobs have run.
@@ -117,17 +117,17 @@ scheduled jobs have run.
 - Owner: release engineer.
 - Required command: `scripts/release-evidence-snapshot.sh`
 - Optional gate environment:
-  - `OXIDEDNS_EVIDENCE_RUN_INTEROP=1`
-  - `OXIDEDNS_EVIDENCE_RUN_FUZZ=1`
-  - `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`
-  - `OXIDEDNS_RELEASE_NOTES=<completed release notes>`
+  - `BORONDNS_EVIDENCE_RUN_INTEROP=1`
+  - `BORONDNS_EVIDENCE_RUN_FUZZ=1`
+  - `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`
+  - `BORONDNS_RELEASE_NOTES=<completed release notes>`
 - Blocking rule: skipped long-running or external-operator evidence may be
   delegated only when release notes record owner, rationale, and evidence
   attachment path; skipped evidence is not passing SRS acceptance evidence.
 EOF
 
 cat >"$evidence_dir/signing-runbook.md" <<'EOF'
-# OxideDNS Release Signing Runbook
+# BoronDNS Release Signing Runbook
 
 This is the release-candidate handoff for ODS-NFR-MAINT-008. It does not sign artifacts.
 
@@ -156,7 +156,7 @@ as an MVP or public release artifact.
 EOF
 
 cat >"$evidence_dir/release-notes-fill-plan.md" <<'EOF'
-# OxideDNS Release Notes Fill Plan
+# BoronDNS Release Notes Fill Plan
 
 Use `docs/release-notes-template.md` as the source structure. Before running
 `scripts/check-release-notes.sh`, replace every placeholder and attach evidence
@@ -190,7 +190,7 @@ scanner caveats retained in `geiger-warnings.tsv` or `geiger-not-scanned.tsv`.
 EOF
 
 cat >"$evidence_dir/external-operator-acceptance.md" <<EOF
-# OxideDNS External Operator Acceptance
+# BoronDNS External Operator Acceptance
 
 - Release: $release_name
 - Evidence snapshot:
@@ -213,7 +213,7 @@ cat >"$evidence_dir/external-operator-acceptance.md" <<EOF
 EOF
 
 cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
-# OxideDNS Release Readiness Checklist
+# BoronDNS Release Readiness Checklist
 
 - [ ] `./scripts/check.sh` passed on the release candidate commit.
 - [ ] `scripts/release-evidence-snapshot.sh` captured the candidate evidence.
@@ -246,7 +246,7 @@ cat >"$evidence_dir/release-readiness-checklist.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Release/Operations Handoff
+# BoronDNS Release/Operations Handoff
 
 Created UTC: $timestamp
 
@@ -259,10 +259,10 @@ checklist needed to complete later SRS acceptance evidence.
 Release defaults:
 
 \`\`\`
-OXIDEDNS_RELEASE_NAME=$release_name
-OXIDEDNS_RELEASE_OWNER=$release_owner
-OXIDEDNS_ARCHITECTURE_OWNER=$architecture_owner
-OXIDEDNS_EXTERNAL_OPERATOR=$external_operator
+BORONDNS_RELEASE_NAME=$release_name
+BORONDNS_RELEASE_OWNER=$release_owner
+BORONDNS_ARCHITECTURE_OWNER=$architecture_owner
+BORONDNS_EXTERNAL_OPERATOR=$external_operator
 \`\`\`
 
 Artifacts:

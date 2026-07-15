@@ -106,7 +106,7 @@ def assignment_errors(
 def check_generated_assignments(
     source_names: list[str], hosts: list[str], repeat: int
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="oxidedns-fuzz-parity-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="borondns-fuzz-parity-") as temporary:
         plan = Path(temporary) / "plan"
         command = [
             str(TWO_HOST),
@@ -125,7 +125,7 @@ def check_generated_assignments(
         for target in source_names:
             command.extend(("--target", target))
         environment = os.environ.copy()
-        environment["OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY"] = "1"
+        environment["BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY"] = "1"
         result = subprocess.run(
             command,
             cwd=ROOT,
@@ -209,9 +209,9 @@ def runbook_errors(runbook: str, source_names: list[str]) -> list[str]:
         launch_hosts[index % len(launch_hosts)]
         for index in range(expected_repeated_services)
     )
-    expected_first_host_services = distribution.get("oxidedns-1", 0)
+    expected_first_host_services = distribution.get("borondns-1", 0)
     expected_second_host_services = distribution.get("oxidegun-1", 0)
-    if set(distribution) != {"oxidedns-1", "oxidegun-1"}:
+    if set(distribution) != {"borondns-1", "oxidegun-1"}:
         errors.append(f"weighted fuzz launch has unexpected hosts: {sorted(distribution)!r}")
     if f"current {len(source_names)}-target set" not in runbook.replace("nine", "9"):
         errors.append("two-host runbook target-count prose is stale")

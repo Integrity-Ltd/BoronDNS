@@ -61,13 +61,13 @@ def bounded_environment(name: str, default: int, maximum: int) -> int:
 
 def collection_deadline() -> int:
     timeout = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_TIMEOUT_SECONDS",
+        "BORONDNS_DOCKER_ARCHIVE_TIMEOUT_SECONDS",
         DEFAULT_TIMEOUT_SECONDS,
         MAX_TIMEOUT_SECONDS,
     )
     now = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
     derived = now + timeout * 1_000_000_000
-    raw_absolute = os.environ.get("OXIDEDNS_DOCKER_ARCHIVE_DEADLINE_NS", "")
+    raw_absolute = os.environ.get("BORONDNS_DOCKER_ARCHIVE_DEADLINE_NS", "")
     if not raw_absolute:
         return derived
     if (
@@ -76,7 +76,7 @@ def collection_deadline() -> int:
         or raw_absolute.startswith("0")
         or int(raw_absolute) > SIGNED_64_MAX
     ):
-        fail("OXIDEDNS_DOCKER_ARCHIVE_DEADLINE_NS must be a signed-64 positive integer")
+        fail("BORONDNS_DOCKER_ARCHIVE_DEADLINE_NS must be a signed-64 positive integer")
     # A caller may shorten the verifier's lifetime, never extend the hard cap.
     return min(derived, int(raw_absolute))
 
@@ -212,7 +212,7 @@ def open_archive(path: str, max_compressed_bytes: int) -> tuple[int, os.stat_res
 def stage_archive(
     source_fd: int, source_stat: os.stat_result, deadline: int
 ) -> BinaryIO:
-    staged = tempfile.TemporaryFile(prefix="oxidedns-verified-docker-archive-")
+    staged = tempfile.TemporaryFile(prefix="borondns-verified-docker-archive-")
     os.fchmod(staged.fileno(), 0)
     offset = 0
     try:
@@ -235,8 +235,8 @@ def stage_archive(
 
 
 def test_pause_after_stage(deadline: int) -> None:
-    marker = os.environ.get("OXIDEDNS_DOCKER_ARCHIVE_TEST_STAGE_MARKER", "")
-    continuation = os.environ.get("OXIDEDNS_DOCKER_ARCHIVE_TEST_CONTINUE", "")
+    marker = os.environ.get("BORONDNS_DOCKER_ARCHIVE_TEST_STAGE_MARKER", "")
+    continuation = os.environ.get("BORONDNS_DOCKER_ARCHIVE_TEST_CONTINUE", "")
     if not marker and not continuation:
         return
     if not marker or not continuation:
@@ -290,30 +290,30 @@ def main() -> None:
     archive_path = arguments.archive
     deadline = collection_deadline()
     max_members = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_MAX_MEMBERS", DEFAULT_MAX_MEMBERS, MAX_MEMBERS
+        "BORONDNS_DOCKER_ARCHIVE_MAX_MEMBERS", DEFAULT_MAX_MEMBERS, MAX_MEMBERS
     )
     max_member_bytes = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_MAX_MEMBER_BYTES",
+        "BORONDNS_DOCKER_ARCHIVE_MAX_MEMBER_BYTES",
         DEFAULT_MAX_MEMBER_BYTES,
         MAX_MEMBER_BYTES,
     )
     max_total_bytes = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_MAX_TOTAL_BYTES",
+        "BORONDNS_DOCKER_ARCHIVE_MAX_TOTAL_BYTES",
         DEFAULT_MAX_TOTAL_BYTES,
         MAX_TOTAL_BYTES,
     )
     max_retained_json_bytes = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_MAX_RETAINED_JSON_BYTES",
+        "BORONDNS_DOCKER_ARCHIVE_MAX_RETAINED_JSON_BYTES",
         DEFAULT_MAX_RETAINED_JSON_BYTES,
         MAX_RETAINED_JSON_BYTES,
     )
     max_compressed_bytes = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_MAX_COMPRESSED_BYTES",
+        "BORONDNS_DOCKER_ARCHIVE_MAX_COMPRESSED_BYTES",
         DEFAULT_MAX_COMPRESSED_BYTES,
         MAX_COMPRESSED_BYTES,
     )
     xz_memory_limit = bounded_environment(
-        "OXIDEDNS_DOCKER_ARCHIVE_XZ_MEMORY_LIMIT_BYTES",
+        "BORONDNS_DOCKER_ARCHIVE_XZ_MEMORY_LIMIT_BYTES",
         DEFAULT_XZ_MEMORY_LIMIT_BYTES,
         MAX_XZ_MEMORY_LIMIT_BYTES,
     )

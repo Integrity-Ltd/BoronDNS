@@ -26,15 +26,15 @@ source "$repo_root/scripts/interop-docker-images.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/powerdns-catalog-split-primaries-$run_id"
-network="oxidedns-pdns-split-$run_id"
-postgres_container="oxidedns-split-postgres-$run_id"
-pdns_container="oxidedns-split-pdns-$run_id"
-bind_container="oxidedns-split-bind-$run_id"
-knot_container="oxidedns-split-knot-$run_id"
-nsd_container="oxidedns-split-nsd-$run_id"
-pdns_image="${OXIDEDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
-postgres_image="${OXIDEDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
-artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR:-}"
+network="borondns-pdns-split-$run_id"
+postgres_container="borondns-split-postgres-$run_id"
+pdns_container="borondns-split-pdns-$run_id"
+bind_container="borondns-split-bind-$run_id"
+knot_container="borondns-split-knot-$run_id"
+nsd_container="borondns-split-nsd-$run_id"
+pdns_image="${BORONDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
+postgres_image="${BORONDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
+artifact_dir="${BORONDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR:-}"
 bind_image="$(ensure_alpine_bind_image)"
 knot_image="$(ensure_alpine_knot_image)"
 nsd_image="$(ensure_alpine_nsd_image)"
@@ -44,9 +44,9 @@ chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     for container in "$pdns_container" "$bind_container" "$knot_container" "$nsd_container" "$postgres_container"; do
         if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
@@ -58,9 +58,9 @@ cleanup() {
             docker rm -f -v "$container" >/dev/null 2>&1 || true
         fi
     done
-    if ((status != 0)) && [[ -f "$workdir/oxidedns.log" ]]; then
-        echo "---- oxidedns.log ----" >&2
-        tail -180 "$workdir/oxidedns.log" >&2 || true
+    if ((status != 0)) && [[ -f "$workdir/borondns.log" ]]; then
+        echo "---- borondns.log ----" >&2
+        tail -180 "$workdir/borondns.log" >&2 || true
     fi
     if docker network ls --format '{{.Name}}' | grep -Fx "$network" >/dev/null 2>&1; then
         docker network rm "$network" >/dev/null 2>&1 || true
@@ -68,7 +68,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r pdns_port bind_port knot_port nsd_port oxidedns_dns_port oxidedns_health_port < <(
+read -r pdns_port bind_port knot_port nsd_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -84,7 +84,7 @@ PY
 tsig_name="catalog-transfer-key."
 tsig_secret="c2VjcmV0LWNhdGFsb2ctdHJhbnNmZXI="
 pdns_conf="$workdir/pdns.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 summary_tsv="$workdir/powerdns-catalog-split-primaries-summary.tsv"
 traceability_tsv="$workdir/powerdns-catalog-split-primaries-traceability.tsv"
 metrics_out="$workdir/metrics.txt"
@@ -315,11 +315,11 @@ for catalog in catalog-bind.example catalog-knot.example catalog-nsd.example; do
     fi
 done
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -372,19 +372,19 @@ algorithm = "hmac-sha256"
 secret = "$tsig_secret"
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..160}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.2
 done
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after split catalog/member transfers" >&2
+    echo "BoronDNS did not become ready after split catalog/member transfers" >&2
     exit 1
 fi
 
@@ -393,23 +393,23 @@ for expectation in \
     "knot-member.example. 192.0.2.20" \
     "nsd-member.example. 192.0.2.30"; do
     read -r zone address <<<"$expectation"
-    answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" "www.$zone" A +norecurse +noall +answer)"
+    answer="$(dig "@127.0.0.1" -p "$borondns_dns_port" "www.$zone" A +norecurse +noall +answer)"
     printf '%s\n' "$answer" >"$workdir/$zone-answer.out"
     if [[ "$answer" != *"www.$zone"* ]] || [[ "$answer" != *"$address"* ]]; then
-        echo "OxideDNS did not serve expected answer for $zone from split catalog/member transfer" >&2
+        echo "BoronDNS did not serve expected answer for $zone from split catalog/member transfer" >&2
         exit 1
     fi
 done
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
-    'oxidedns_zones_active 6' \
-    'oxidedns_catalog_member_info{catalog_zone="catalog-bind.example.",zone="bind-member.example.",managed="true"} 1' \
-    'oxidedns_catalog_member_info{catalog_zone="catalog-knot.example.",zone="knot-member.example.",managed="true"} 1' \
-    'oxidedns_catalog_member_info{catalog_zone="catalog-nsd.example.",zone="nsd-member.example.",managed="true"} 1'; do
+    'borondns_zones_active 6' \
+    'borondns_catalog_member_info{catalog_zone="catalog-bind.example.",zone="bind-member.example.",managed="true"} 1' \
+    'borondns_catalog_member_info{catalog_zone="catalog-knot.example.",zone="knot-member.example.",managed="true"} 1' \
+    'borondns_catalog_member_info{catalog_zone="catalog-nsd.example.",zone="nsd-member.example.",managed="true"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected split-primary line: $expected" >&2
+        echo "BoronDNS metrics missing expected split-primary line: $expected" >&2
         exit 1
     fi
 done
@@ -422,14 +422,14 @@ done
 } >"$summary_tsv"
 
 cat >"$traceability_tsv" <<EOF
-ODS-VER-SPLIT-001	retained-real-primary	powerdns_catalog_bind_member	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while OxideDNS transfers the member zone from BIND.
-ODS-VER-SPLIT-002	retained-real-primary	powerdns_catalog_knot_member	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while OxideDNS transfers the member zone from Knot.
-ODS-VER-SPLIT-003	retained-real-primary	powerdns_catalog_nsd_member	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while OxideDNS transfers the member zone from NSD.
+ODS-VER-SPLIT-001	retained-real-primary	powerdns_catalog_bind_member	$summary_tsv; bind-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from BIND.
+ODS-VER-SPLIT-002	retained-real-primary	powerdns_catalog_knot_member	$summary_tsv; knot-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from Knot.
+ODS-VER-SPLIT-003	retained-real-primary	powerdns_catalog_nsd_member	$summary_tsv; nsd-member.example.-answer.out	PowerDNS/PostgreSQL serves the RFC 9432 catalog while BoronDNS transfers the member zone from NSD.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
-    cp "$summary_tsv" "$traceability_tsv" "$metrics_out" "$oxidedns_conf" "$artifact_dir"/
+    cp "$summary_tsv" "$traceability_tsv" "$metrics_out" "$borondns_conf" "$artifact_dir"/
 fi
 
 echo "PowerDNS catalog split-primaries Docker interop passed"

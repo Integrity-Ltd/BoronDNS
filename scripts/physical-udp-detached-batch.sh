@@ -2,13 +2,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runs_root="${OXIDEDNS_PHYSICAL_DETACHED_ROOT:-$repo_root/target/physical-detached-runs}"
-harness="${OXIDEDNS_PHYSICAL_DETACHED_HARNESS:-$repo_root/scripts/physical-udp-knot-comparison.sh}"
-server_ssh="${OXIDEDNS_PHYSICAL_SERVER_SSH:-oxidedns-1}"
-player_ssh="${OXIDEDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
-server_root="${OXIDEDNS_PHYSICAL_SERVER_ROOT:-~/oxidedns}"
-player_workdir="${OXIDEDNS_PHYSICAL_PLAYER_WORKDIR:-~/oxidedns-tools/bench}"
-interface="${OXIDEDNS_PHYSICAL_INTERFACE:-eno1np0}"
+runs_root="${BORONDNS_PHYSICAL_DETACHED_ROOT:-$repo_root/target/physical-detached-runs}"
+harness="${BORONDNS_PHYSICAL_DETACHED_HARNESS:-$repo_root/scripts/physical-udp-knot-comparison.sh}"
+server_ssh="${BORONDNS_PHYSICAL_SERVER_SSH:-borondns-1}"
+player_ssh="${BORONDNS_PHYSICAL_PLAYER_SSH:-oxidegun-1}"
+server_root="${BORONDNS_PHYSICAL_SERVER_ROOT:-~/borondns}"
+player_workdir="${BORONDNS_PHYSICAL_PLAYER_WORKDIR:-~/borondns-tools/bench}"
+interface="${BORONDNS_PHYSICAL_INTERFACE:-eno1np0}"
 
 usage() {
     cat >&2 <<EOF
@@ -17,9 +17,9 @@ Usage:
   $0 status RUN_DIR
 
 Environment:
-  OXIDEDNS_PHYSICAL_* variables are passed through to the detached harness.
+  BORONDNS_PHYSICAL_* variables are passed through to the detached harness.
   SSH_AUTH_SOCK is passed through when set so systemd-launched monitors can SSH.
-  OXIDEDNS_PHYSICAL_DETACHED_ROOT overrides the local run directory root.
+  BORONDNS_PHYSICAL_DETACHED_ROOT overrides the local run directory root.
 EOF
 }
 
@@ -53,9 +53,9 @@ record_command() {
             printf 'EOF\n'
         fi
     } >"$run_dir/command.txt"
-    env | LC_ALL=C sort | awk -F= '$1 ~ /^OXIDEDNS_PHYSICAL_/ || $1 == "SSH_AUTH_SOCK" || $1 == "SSH_AGENT_PID" { print }' >"$run_dir/environment.txt"
+    env | LC_ALL=C sort | awk -F= '$1 ~ /^BORONDNS_PHYSICAL_/ || $1 == "SSH_AUTH_SOCK" || $1 == "SSH_AGENT_PID" { print }' >"$run_dir/environment.txt"
     while IFS='=' read -r name value; do
-        if [[ "$name" =~ ^OXIDEDNS_PHYSICAL_ || "$name" == "SSH_AUTH_SOCK" || "$name" == "SSH_AGENT_PID" ]]; then
+        if [[ "$name" =~ ^BORONDNS_PHYSICAL_ || "$name" == "SSH_AUTH_SOCK" || "$name" == "SSH_AGENT_PID" ]]; then
             printf 'export %s=%q\n' "$name" "$value"
         fi
     done < <(env | LC_ALL=C sort) >"$run_dir/environment.sh"
@@ -68,7 +68,7 @@ start_run() {
     require_tool ssh
 
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    run_dir="${OXIDEDNS_PHYSICAL_DETACHED_RUN_DIR:-$runs_root/$timestamp}"
+    run_dir="${BORONDNS_PHYSICAL_DETACHED_RUN_DIR:-$runs_root/$timestamp}"
     if [[ -e "$run_dir" ]]; then
         printf 'detached run directory already exists: %s\n' "$run_dir" >&2
         exit 73
@@ -148,7 +148,7 @@ printf 'net.core.rmem_max='
 sysctl -n net.core.rmem_max
 ip -o link show dev "$iface" || true
 tc qdisc show dev "$iface" || true
-pgrep -a oxidedns || true
+pgrep -a borondns || true
 pgrep -a knotd || true
 pgrep -a nsd || true
 pgrep -a perf || true
@@ -160,7 +160,7 @@ REMOTE
 	ssh "${ssh_options[@]}" "$player_ssh" bash -s <<'REMOTE'
 set -euo pipefail
 pgrep -a kxdpgun || true
-find ~/oxidedns-tools/bench -maxdepth 1 -type d -name ".oxidedns-physical-*" -print | head
+find ~/borondns-tools/bench -maxdepth 1 -type d -name ".borondns-physical-*" -print | head
 REMOTE
 } >"$run_dir/player-cleanup-check.txt" 2>&1 || true
 
@@ -172,9 +172,9 @@ fi
 exit "$harness_status"
 MONITOR
     chmod +x "$run_dir/monitor.sh"
-    launcher="${OXIDEDNS_PHYSICAL_DETACHED_LAUNCHER:-auto}"
+    launcher="${BORONDNS_PHYSICAL_DETACHED_LAUNCHER:-auto}"
     if [[ "$launcher" != "nohup" ]] && command -v systemd-run >/dev/null 2>&1; then
-        unit="oxidedns-physical-${timestamp}-$$"
+        unit="borondns-physical-${timestamp}-$$"
         if systemd-run --user --quiet --unit "$unit" --collect "$run_dir/monitor.sh" "$repo_root" "$run_dir" "$harness" "$server_ssh" "$player_ssh" "$interface" "$@" >"$run_dir/launcher.log" 2>&1; then
             printf 'systemd-run\n' >"$run_dir/launcher"
             printf '%s\n' "$unit" >"$run_dir/systemd-unit"

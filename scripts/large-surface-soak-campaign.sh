@@ -22,8 +22,8 @@ Commands:
 Options:
   --evidence-dir DIR       Local plan/evidence dir.
   --campaign-id ID         Campaign id used in local and remote paths.
-  --host HOST              SSH target; repeatable. Defaults to oxidedns-1 oxidegun-1.
-  --remote-repo DIR        Remote repo root. Default: /home/codex/oxidedns-fuzz.
+  --host HOST              SSH target; repeatable. Defaults to borondns-1 oxidegun-1.
+  --remote-repo DIR        Remote repo root. Default: /home/codex/borondns-fuzz.
   --remote-evidence DIR    Remote evidence root. Default: REMOTE_REPO/target/evidence/large-surface-soak-ID.
   --duration SECONDS       Soak duration. Default: 2592000 (30 days).
   --scenario NAME          Scenario to include; repeatable. Defaults to runner default set.
@@ -39,11 +39,11 @@ Options:
   -h, --help               Show this help.
 
 Environment:
-  OXIDEDNS_LARGE_SOAK_HOSTS
-  OXIDEDNS_LARGE_SOAK_REMOTE_REPO
-  OXIDEDNS_LARGE_SOAK_REMOTE_EVIDENCE
-  OXIDEDNS_LARGE_SOAK_DURATION_SECONDS
-  OXIDEDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS
+  BORONDNS_LARGE_SOAK_HOSTS
+  BORONDNS_LARGE_SOAK_REMOTE_REPO
+  BORONDNS_LARGE_SOAK_REMOTE_EVIDENCE
+  BORONDNS_LARGE_SOAK_DURATION_SECONDS
+  BORONDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS
 EOF
 }
 
@@ -53,8 +53,8 @@ die() {
 }
 
 large_soak_bounded_probe() {
-    local probe_timeout="${OXIDEDNS_LARGE_SOAK_PREFLIGHT_TIMEOUT_SECONDS:-30}"
-    local probe_kill_after="${OXIDEDNS_LARGE_SOAK_PREFLIGHT_KILL_AFTER_SECONDS:-5}"
+    local probe_timeout="${BORONDNS_LARGE_SOAK_PREFLIGHT_TIMEOUT_SECONDS:-30}"
+    local probe_kill_after="${BORONDNS_LARGE_SOAK_PREFLIGHT_KILL_AFTER_SECONDS:-5}"
     [[ "$probe_timeout" =~ ^[1-9][0-9]*$ && "$probe_kill_after" =~ ^[1-9][0-9]*$ ]] || {
         printf 'invalid large-soak preflight timeout configuration\n' >&2
         return 1
@@ -70,15 +70,15 @@ timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 command=""
 campaign_id="$timestamp"
 evidence_dir=""
-remote_repo="${OXIDEDNS_LARGE_SOAK_REMOTE_REPO:-/home/codex/oxidedns-fuzz}"
-remote_evidence="${OXIDEDNS_LARGE_SOAK_REMOTE_EVIDENCE:-}"
-duration="${OXIDEDNS_LARGE_SOAK_DURATION_SECONDS:-2592000}"
+remote_repo="${BORONDNS_LARGE_SOAK_REMOTE_REPO:-/home/codex/borondns-fuzz}"
+remote_evidence="${BORONDNS_LARGE_SOAK_REMOTE_EVIDENCE:-}"
+duration="${BORONDNS_LARGE_SOAK_DURATION_SECONDS:-2592000}"
 duration_seconds=""
-scenario_timeout="${OXIDEDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
+scenario_timeout="${BORONDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
 scenario_timeout_seconds=""
-scenario_kill_after="${OXIDEDNS_LARGE_SOAK_SCENARIO_KILL_AFTER_SECONDS:-30}"
+scenario_kill_after="${BORONDNS_LARGE_SOAK_SCENARIO_KILL_AFTER_SECONDS:-30}"
 scenario_kill_after_seconds=""
-docker_cleanup_timeout="${OXIDEDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS:-30}"
+docker_cleanup_timeout="${BORONDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS:-30}"
 docker_cleanup_timeout_seconds=""
 docker_cleanup_operation_count=6
 docker_cleanup_kill_after_seconds=5
@@ -87,9 +87,9 @@ service_stop_overhead_seconds=30
 docker_cleanup_total_budget_seconds=""
 service_runtime_max_seconds=""
 service_stop_timeout_seconds=""
-cycle_sleep="${OXIDEDNS_LARGE_SOAK_CYCLE_SLEEP_SECONDS:-5}"
+cycle_sleep="${BORONDNS_LARGE_SOAK_CYCLE_SLEEP_SECONDS:-5}"
 cycle_sleep_seconds=""
-sample_interval="${OXIDEDNS_LARGE_SOAK_SAMPLE_INTERVAL_SECONDS:-60}"
+sample_interval="${BORONDNS_LARGE_SOAK_SAMPLE_INTERVAL_SECONDS:-60}"
 sample_interval_seconds=""
 install_prereqs=0
 allow_skip=1
@@ -223,7 +223,7 @@ prevalidate_plan_source() {
     preflight_source_clean=1
     if [[ -n "$preflight_source_status" ]]; then
         preflight_source_clean=0
-        [[ "${OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] || {
+        [[ "${BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] || {
             printf 'local repository is dirty; refusing campaign plan from %s\n%s\n' \
                 "$repo_root" "$preflight_source_status" >&2
             exit 1
@@ -375,11 +375,11 @@ set_defaults() {
     validate_plan_fields
 
     if ((${#hosts[@]} == 0)); then
-        if [[ -n "${OXIDEDNS_LARGE_SOAK_HOSTS:-}" ]]; then
+        if [[ -n "${BORONDNS_LARGE_SOAK_HOSTS:-}" ]]; then
             # shellcheck disable=SC2206
-            hosts=(${OXIDEDNS_LARGE_SOAK_HOSTS})
+            hosts=(${BORONDNS_LARGE_SOAK_HOSTS})
         else
-            hosts=(oxidedns-1 oxidegun-1)
+            hosts=(borondns-1 oxidegun-1)
         fi
     fi
     ((${#hosts[@]} > 0)) || die "at least one host is required"
@@ -482,7 +482,7 @@ write_plan() {
     local source_clean="$preflight_source_clean"
     local final_evidence="$evidence_dir"
     plan_staging_cleanup_root="$plan_parent"
-    campaign_prepare_private_temporary_tree "$plan_parent" oxidedns-large-plan-staging \
+    campaign_prepare_private_temporary_tree "$plan_parent" borondns-large-plan-staging \
         large_plan_staging plan_staging_dir || die "could not create private large-surface plan staging"
     local staging="$plan_staging_dir"
     mkdir -p "$staging/commands"
@@ -517,9 +517,9 @@ write_plan() {
     for host in "${hosts[@]}"; do
         safe_host="$(systemd_escape_fragment "$host")"
         host_evidence="$remote_evidence/host/$safe_host"
-        systemd_unit="oxidedns-soak-$safe_campaign-$safe_host.service"
+        systemd_unit="borondns-soak-$safe_campaign-$safe_host.service"
         remote_runner="$remote_evidence/launch/${systemd_unit%.service}-run.sh"
-        remote_build_root="/var/tmp/oxidedns-large-$safe_campaign/$safe_host"
+        remote_build_root="/var/tmp/borondns-large-$safe_campaign/$safe_host"
         command_file="$final_evidence/commands/$host-launch.sh"
         {
             printf '#!/usr/bin/env bash\n'
@@ -552,8 +552,8 @@ write_plan() {
             printf ')\n'
             cat <<'REMOTE'
 
-require_resume="${OXIDEDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+require_resume="${BORONDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 require_owned_real_dir() {
 	local path="$1" label="$2" lexical real
 	[[ -d "$path" && ! -L "$path" ]] || { printf 'unsafe %s (not a real directory): %s\n' "$label" "$path" >&2; return 1; }
@@ -618,7 +618,7 @@ soak_evidence_is_complete() {
 	done
 	"${validator[@]}" >/dev/null 2>&1
 }
-remote_lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+remote_lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 if [[ -e "$remote_lock_root" || -L "$remote_lock_root" ]]; then
 	require_owned_real_dir "$remote_lock_root" "remote campaign lock directory" || exit 1
 else
@@ -677,10 +677,10 @@ exec {campaign_env_fd}<&-
 exec {campaign_lock_helper_fd}<&-
 # shellcheck source=/dev/null
 source <(printf '%s' "$campaign_env_snapshot_b64" | base64 --decode)
-OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
-export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
+export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
 campaign_acquire_private_lock "$remote_lock_root" "$systemd_unit:campaign" "remote large-soak campaign lock" || exit 1
-runner_prefix="/var/tmp/oxidedns-campaign-runners/${systemd_unit%.service}/attempt."
+runner_prefix="/var/tmp/borondns-campaign-runners/${systemd_unit%.service}/attempt."
 unit_probe_status=0
 unit_is_exactly_active "$systemd_unit" "$unit_root/$systemd_unit" "$runner_prefix" || unit_probe_status=$?
 if ((unit_probe_status == 0)); then
@@ -806,10 +806,10 @@ cat >"$docker_wrapper_candidate" <<'DOCKER_WRAPPER'
 #!/usr/bin/bash
 set -euo pipefail
 docker_command=(/usr/bin/docker)
-if [[ "${OXIDEDNS_SOAK_DOCKER_USE_SUDO:-0}" == 1 ]]; then
+if [[ "${BORONDNS_SOAK_DOCKER_USE_SUDO:-0}" == 1 ]]; then
     docker_command=(sudo /usr/bin/docker)
 fi
-resource_label="${OXIDEDNS_SOAK_DOCKER_LABEL:-}"
+resource_label="${BORONDNS_SOAK_DOCKER_LABEL:-}"
 case "${1:-}" in
 run | create)
     [[ -z "$resource_label" ]] || {
@@ -861,7 +861,7 @@ if [[ "$install_prereqs" == "1" ]]; then
 	timeout --preserve-status --kill-after=10 120 sudo systemctl enable --now docker
 	timeout --preserve-status --kill-after=10 120 sudo systemctl disable --now named >/dev/null 2>&1 || true
 	timeout --preserve-status --kill-after=10 120 sudo systemctl disable --now bind9 >/dev/null 2>&1 || true
-	timeout --preserve-status --kill-after=5 30 sudo install -d -m 1777 -o codex -g codex /var/cache/bind/oxidedns-interop
+	timeout --preserve-status --kill-after=5 30 sudo install -d -m 1777 -o codex -g codex /var/cache/bind/borondns-interop
 fi
 
 # Build reusable Alpine primary images once before the long-running service
@@ -870,14 +870,14 @@ fi
 # shellcheck source=/dev/null
 source "$source_snapshot/scripts/interop-docker-images.sh"
 if [[ "$install_prereqs" == "1" ]]; then
-	export OXIDEDNS_SOAK_DOCKER_USE_SUDO=1
+	export BORONDNS_SOAK_DOCKER_USE_SUDO=1
 fi
 export PATH="$authenticated_tool_dir:$PATH"
 ensure_alpine_bind_image >/dev/null
 ensure_alpine_knot_image >/dev/null
 ensure_alpine_nsd_image >/dev/null
 ensure_alpine_nsd_notify_image >/dev/null
-unset OXIDEDNS_SOAK_DOCKER_USE_SUDO
+unset BORONDNS_SOAK_DOCKER_USE_SUDO
 
 runner="$source_snapshot/scripts/large-surface-soak.sh"
 [[ -x "$runner" ]] || {
@@ -919,11 +919,11 @@ export PATH="\$authenticated_tool_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/
 [[ "\$(command -v cargo)" == "\$authenticated_tool_dir/cargo" ]] || exit 1
 [[ "\$(command -v docker)" == "\$authenticated_tool_dir/docker" ]] || exit 1
 [[ "\$(sha256sum "\$(command -v cargo)" | awk '{ print \$1 }')" == "\$expected_cargo_sha256" ]] || exit 1
-export OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO="\$authenticated_cargo"
-export OXIDEDNS_LARGE_SOAK_AUTHENTICATED_RUSTC="\$authenticated_rustc"
-export OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO_SHIM="\$authenticated_tool_dir/cargo"
-export OXIDEDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM="\$authenticated_tool_dir/docker"
-export OXIDEDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS=$(printf '%q' "$docker_cleanup_timeout")
+export BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO="\$authenticated_cargo"
+export BORONDNS_LARGE_SOAK_AUTHENTICATED_RUSTC="\$authenticated_rustc"
+export BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO_SHIM="\$authenticated_tool_dir/cargo"
+export BORONDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM="\$authenticated_tool_dir/docker"
+export BORONDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS=$(printf '%q' "$docker_cleanup_timeout")
 actual_commit="\$("\$git_path" rev-parse HEAD 2>/dev/null)"
 [[ "\$actual_commit" == "\$expected_commit" ]] || { printf 'soak runner commit mismatch: expected=%s actual=%s\n' "\$expected_commit" "\$actual_commit" >&2; exit 1; }
 runner_status=""
@@ -963,7 +963,7 @@ remote_runner="$campaign_published_runner"
 fragment_candidate="$(mktemp)"
 cat >"$fragment_candidate" <<UNIT
 [Unit]
-Description=OxideDNS large-surface soak campaign
+Description=BoronDNS large-surface soak campaign
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
@@ -1021,7 +1021,7 @@ EOF
 scripts/large-surface-soak-campaign.sh collect --evidence-dir $(shell_quote "$final_evidence")
 EOF
     cat >"$staging/README.md" <<EOF
-# OxideDNS Large-Surface Soak Campaign
+# BoronDNS Large-Surface Soak Campaign
 
 Created UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
@@ -1086,7 +1086,7 @@ load_plan() {
     repo_root="$executing_repo_root"
     local host_list="${hosts[*]}"
     IFS=' ' read -r -a hosts <<<"$host_list"
-    [[ "$source_clean" == 1 || "${OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] ||
+    [[ "$source_clean" == 1 || "${BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] ||
         die "saved campaign was planned from a dirty source tree"
     local assignments="$evidence_dir/assignments.tsv"
     campaign_validate_tsv "$assignments" \
@@ -1094,7 +1094,7 @@ load_plan() {
         die "invalid campaign assignments: $assignments"
     semantic_reference_cleanup_root="${TMPDIR:-/tmp}"
     campaign_prepare_private_temporary_tree "$semantic_reference_cleanup_root" \
-        oxidedns-large-plan-reference large_semantic_reference semantic_reference_dir ||
+        borondns-large-plan-reference large_semantic_reference semantic_reference_dir ||
         die "could not create private large-surface semantic reference"
     semantic_reference_cleanup_root="$(dirname "$semantic_reference_dir")"
     local reference_plan="$semantic_reference_dir/plan"
@@ -1118,7 +1118,7 @@ load_plan() {
     done
     [[ "$install_prereqs" == 0 ]] || reference_args+=(--install-prereqs)
     [[ "$allow_skip" == 1 ]] || reference_args+=(--fail-on-skip)
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 "$repo_root/scripts/large-surface-soak-campaign.sh" \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 "$repo_root/scripts/large-surface-soak-campaign.sh" \
         "${reference_args[@]}" >/dev/null || die "could not regenerate large-surface semantic reference"
     cmp -s "$evidence_dir/validate-collected-campaign.py" "$reference_plan/validate-collected-campaign.py" ||
         die "saved large-surface collection validator content drift"
@@ -1133,7 +1133,7 @@ load_plan() {
         seen_assignment_hosts[$row_host]=1
         safe_host="$(systemd_escape_fragment "$row_host")"
         [[ "$row_evidence" == "$remote_evidence/host/$safe_host" ]] || die "assignment evidence path drift for host: $row_host"
-        expected_unit="oxidedns-soak-$safe_campaign-$safe_host.service"
+        expected_unit="borondns-soak-$safe_campaign-$safe_host.service"
         [[ "$row_unit" == "$expected_unit" ]] || die "assignment systemd unit identity drift for host: $row_host"
         expected_command="$evidence_dir/commands/$row_host-launch.sh"
         [[ "$row_command" == "$expected_command" && -x "$row_command" ]] ||
@@ -1166,7 +1166,7 @@ launch_plan() {
     tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r host host_evidence systemd_unit command_file; do
         printf 'launching host=%s unit=%s evidence=%s\n' "$host" "$systemd_unit" "$host_evidence"
         validated_command="$validated_command_dir/$(basename "$command_file")"
-        campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+        campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
             -- "$host" "bash -s" <"$validated_command"
     done
 }
@@ -1179,8 +1179,8 @@ resume_plan() {
     tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r host host_evidence systemd_unit command_file; do
         printf 'classifying and resuming host=%s unit=%s evidence=%s under remote lock\n' "$host" "$systemd_unit" "$host_evidence"
         validated_command="$validated_command_dir/$(basename "$command_file")"
-        campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
-            -- "$host" "OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
+        campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+            -- "$host" "BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
     done
 }
 
@@ -1190,10 +1190,10 @@ status_plan() {
     local status_result=0
     while IFS=$'\t' read -r host host_evidence systemd_unit command_file; do
         printf '== %s ==\n' "$host"
-        runner_prefix="/var/tmp/oxidedns-campaign-runners/${systemd_unit%.service}/attempt."
+        runner_prefix="/var/tmp/borondns-campaign-runners/${systemd_unit%.service}/attempt."
         helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
         [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
-        if ! campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
+        if ! campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
             -- "$host" bash -s -- "$systemd_unit" "$host_evidence" "$remote_repo" "$source_commit" "$runner_prefix" "$helper_sha256" <<'REMOTE'; then
 set -euo pipefail
 unit="$1"
@@ -1202,7 +1202,7 @@ repo="$3"
 expected_commit="$4"
 runner_prefix="$5"
 expected_helper_sha256="$6"
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 fragment_expected="$unit_root/$unit"
 remote_probe_status=0
 source_exact=1
@@ -1336,9 +1336,9 @@ collect_plan() {
         }
         printf 'collecting host=%s remote=%s\n' "$host" "$host_evidence"
         campaign_collection_phase_timeout_seconds collection_copy_timeout "$collection_deadline" \
-            "${OXIDEDNS_CAMPAIGN_REMOTE_COPY_TIMEOUT_SECONDS:-7200}" || die "large-soak collection copy budget expired: $host"
+            "${BORONDNS_CAMPAIGN_REMOTE_COPY_TIMEOUT_SECONDS:-7200}" || die "large-soak collection copy budget expired: $host"
         if command -v rsync >/dev/null 2>&1; then
-            if ! OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+            if ! BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
                 campaign_rsync_bounded "$collection_copy_timeout" \
                 -a --delete --no-links --no-devices --no-specials -- \
                 "$transport_host:$(shell_quote "$host_evidence")/" "$staging/"; then
@@ -1354,7 +1354,7 @@ collect_plan() {
                 campaign_publish_status_text "$evidence_dir/remotes" "$status_file" $'classification\treason\ninvalid\trsync-required-for-unsafe-remote-path\n' "soak collection status" || true
                 die "rsync is required to collect a remote evidence path containing whitespace or shell metacharacters: $host_evidence"
             }
-            if ! OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+            if ! BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
                 campaign_scp_bounded "$collection_copy_timeout" \
                 -r -- "$transport_host:$host_evidence/." "$staging/"; then
                 campaign_remove_captured_cleanup_object "$staging" soak_collection_evidence_staging \
@@ -1442,9 +1442,9 @@ collect_plan() {
         campaign_capture_cleanup_identity "$journal_staging" tree soak_collection_journal_staging \
             "soak collection journal staging" || die "could not bind journal staging identity: $safe_host"
         campaign_collection_phase_timeout_seconds collection_journal_timeout "$collection_deadline" \
-            "${OXIDEDNS_CAMPAIGN_REMOTE_JOURNAL_TIMEOUT_SECONDS:-300}" ||
+            "${BORONDNS_CAMPAIGN_REMOTE_JOURNAL_TIMEOUT_SECONDS:-300}" ||
             die "large-soak collection journal budget expired: $host"
-        OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+        BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
             campaign_ssh_bounded "$collection_journal_timeout" \
             -n -- "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
             >"$journal_staging/$systemd_unit.log" 2>&1 || true
@@ -1472,7 +1472,7 @@ collect_plan() {
 
 cleanup_remote_soak() {
     local host="$1" unit="$2" runner_prefix="$3" build_root="$4" repo="$5" expected_commit="$6" expected_helper_sha256="$7" expected_lock_helper_sha256="$8"
-    campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_CLEANUP_TIMEOUT_SECONDS:-300}" \
+    campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_CLEANUP_TIMEOUT_SECONDS:-300}" \
         -- "$host" bash -s -- "$unit" "$runner_prefix" "$build_root" "$repo" "$expected_commit" "$expected_helper_sha256" "$expected_lock_helper_sha256" <<'REMOTE'
 set -euo pipefail
 unit="$1"
@@ -1482,9 +1482,9 @@ repo="$4"
 expected_commit="$5"
 expected_helper_sha256="$6"
 expected_lock_helper_sha256="$7"
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 fragment="$unit_root/$unit"
-lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 [[ -d "$lock_root" && ! -L "$lock_root" ]] || exit 1
 [[ "$(realpath -ms "$lock_root")" == "$(realpath -e "$lock_root")" && "$(stat -c %u "$lock_root")" == "$(id -u)" ]] || exit 1
 lock_mode="$(stat -c %a "$lock_root")"
@@ -1519,8 +1519,8 @@ cleanup_status="$(timeout --preserve-status --kill-after=5 30 "$git_path" -C "$r
 exec {campaign_env_fd}<&-
 exec {campaign_lock_helper_fd}<&-
 source <(printf '%s' "$campaign_env_snapshot_b64" | base64 --decode)
-OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
-export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
+export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
 campaign_acquire_private_lock "$lock_root" "${unit%.service}:campaign" "remote large-soak cleanup lock" || exit 1
 unit_property() {
     local key="$1" data="$2" count value
@@ -1604,7 +1604,7 @@ fi
 		exit 1
 	fi
 	if [[ -e "$build_root" || -L "$build_root" ]]; then
-	[[ "$build_root" == /var/tmp/oxidedns-large-* && -d "$build_root" && ! -L "$build_root" ]] || exit 1
+	[[ "$build_root" == /var/tmp/borondns-large-* && -d "$build_root" && ! -L "$build_root" ]] || exit 1
 	[[ "$(realpath -ms "$build_root")" == "$(realpath -e "$build_root")" && "$(stat -c %u "$build_root")" == 0 ]] || exit 1
 	build_root_mode="$(stat -c %a "$build_root")" || exit 1
 	(( (8#$build_root_mode & 022) == 0 )) || exit 1
@@ -1704,8 +1704,8 @@ cleanup_plan() {
     safe_campaign="$(systemd_escape_fragment "$campaign_id")"
     while IFS=$'\t' read -r host host_evidence systemd_unit command_file; do
         safe_host="$(systemd_escape_fragment "$host")"
-        build_root="/var/tmp/oxidedns-large-$safe_campaign/$safe_host"
-        runner_prefix="/var/tmp/oxidedns-campaign-runners/${systemd_unit%.service}/attempt."
+        build_root="/var/tmp/borondns-large-$safe_campaign/$safe_host"
+        runner_prefix="/var/tmp/borondns-campaign-runners/${systemd_unit%.service}/attempt."
         helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
         lock_helper_sha256="$(sed -n 's/^campaign_lock_helper_sha256=//p' "$command_file")"
         [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ && "$lock_helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"

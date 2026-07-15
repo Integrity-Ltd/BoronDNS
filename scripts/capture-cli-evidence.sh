@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-evidence_dir="${OXIDEDNS_CLI_EVIDENCE_DIR:-$repo_root/target/cli-evidence}"
+evidence_dir="${BORONDNS_CLI_EVIDENCE_DIR:-$repo_root/target/cli-evidence}"
 mkdir -p "$evidence_dir"
 
 run_capture() {
@@ -60,35 +60,35 @@ algorithm = "hmac-sha256"
 secret = "c2VjcmV0LWtleQ=="
 EOF
 redaction_config_path="$(repo_relative_path "$redaction_config")"
-expected_version="$(cargo pkgid -p oxidedns-cli | sed -E 's/^.*[#@]([^#@]+)$/\1/')"
+expected_version="$(cargo pkgid -p borondns-cli | sed -E 's/^.*[#@]([^#@]+)$/\1/')"
 if [[ -z "$expected_version" ]]; then
-    printf 'failed to determine oxidedns-cli package version\n' >&2
+    printf 'failed to determine borondns-cli package version\n' >&2
     exit 1
 fi
 
-run_capture version-long cargo run -q -p oxidedns-cli -- --version
-run_capture version-short cargo run -q -p oxidedns-cli -- -V
-run_capture help-long cargo run -q -p oxidedns-cli -- --help
-run_capture help-short cargo run -q -p oxidedns-cli -- -h
-run_capture example-config cargo run -q -p oxidedns-cli -- --example-config
-run_capture example-config-validate cargo run -q -p oxidedns-cli -- \
+run_capture version-long cargo run -q -p borondns-cli -- --version
+run_capture version-short cargo run -q -p borondns-cli -- -V
+run_capture help-long cargo run -q -p borondns-cli -- --help
+run_capture help-short cargo run -q -p borondns-cli -- -h
+run_capture example-config cargo run -q -p borondns-cli -- --example-config
+run_capture example-config-validate cargo run -q -p borondns-cli -- \
     --validate-config "$example_config_path"
-run_capture checked-in-config-validate cargo run -q -p oxidedns-cli -- \
-    --validate-config config/oxidedns.example.toml
-run_capture checked-in-config-dump cargo run -q -p oxidedns-cli -- \
-    --dump-config config/oxidedns.example.toml
-run_capture redacted-config-dump cargo run -q -p oxidedns-cli -- \
+run_capture checked-in-config-validate cargo run -q -p borondns-cli -- \
+    --validate-config config/borondns.example.toml
+run_capture checked-in-config-dump cargo run -q -p borondns-cli -- \
+    --dump-config config/borondns.example.toml
+run_capture redacted-config-dump cargo run -q -p borondns-cli -- \
     --dump-config "$redaction_config_path"
 
-require_text "$evidence_dir/version-long.stdout" "oxidedns $expected_version"
+require_text "$evidence_dir/version-long.stdout" "borondns $expected_version"
 require_text "$evidence_dir/version-long.stdout" "build commit:"
 require_text "$evidence_dir/version-long.stdout" "rustc:"
-require_text "$evidence_dir/version-short.stdout" "oxidedns $expected_version"
+require_text "$evidence_dir/version-short.stdout" "borondns $expected_version"
 
 require_text "$evidence_dir/help-long.stdout" "--version"
 require_text "$evidence_dir/help-long.stdout" "--help"
 require_text "$evidence_dir/help-long.stdout" "--example-config"
-require_text "$evidence_dir/help-long.stdout" "/etc/oxidedns-secondary/config.toml"
+require_text "$evidence_dir/help-long.stdout" "/etc/borondns-secondary/config.toml"
 require_text "$evidence_dir/help-short.stdout" "--validate-config"
 
 require_text "$evidence_dir/example-config.stdout" "[server]"
@@ -103,7 +103,7 @@ if grep -F -- "c2VjcmV0LWtleQ==" "$evidence_dir/redacted-config-dump.stdout" >/d
 fi
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS CLI Evidence
+# BoronDNS CLI Evidence
 
 Captured CLI invocation outputs for SRS process-lifecycle requirements:
 

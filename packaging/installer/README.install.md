@@ -1,24 +1,24 @@
-# OxideDNS Installer
+# BoronDNS Installer
 
-This archive installs statically linked `oxidedns` and `oxide-gun` Linux
-binaries plus a systemd or OpenRC service for `oxidedns`.
+This archive installs statically linked `borondns` and `oxide-gun` Linux
+binaries plus a systemd or OpenRC service for `borondns`.
 
 ## Quick install
 
 ```sh
-tag=v0.2.0
+tag=v0.9.0
 target_triple=x86_64-unknown-linux-musl
-asset="oxidedns-${tag#v}-$target_triple.tar.xz"
-install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"
+asset="borondns-${tag#v}-$target_triple.tar.xz"
+install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
 sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
 sudo cosign verify-blob \
   --bundle "$install_root/$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$install_root/$asset"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
-sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"
+sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
 
 Set `tag` to the exact release tag you downloaded. Do not extract or run the
@@ -47,14 +47,14 @@ update, configure, and uninstall through the actual OpenRC branch.
 
 The installer:
 
-- creates an `oxidedns` runtime user and group when missing;
-- installs the server binary to `/usr/local/bin/oxidedns`;
+- creates an `borondns` runtime user and group when missing;
+- installs the server binary to `/usr/local/bin/borondns`;
 - installs the XDP-enabled lab load-generator binary to
   `/usr/local/bin/oxide-gun`;
 - installs this operator README at
-  `/usr/share/doc/oxidedns/README.install.md`, matching the systemd unit's
+  `/usr/share/doc/borondns/README.install.md`, matching the systemd unit's
   `Documentation=` reference;
-- writes or validates `/etc/oxidedns-secondary/config.toml`;
+- writes or validates `/etc/borondns-secondary/config.toml`;
 - detects systemd or OpenRC;
 - stages and validates candidate binaries and configuration before stopping an
   existing service, then atomically replaces live files and rolls back if
@@ -78,7 +78,7 @@ and capability setup, so running the installer from a shell with a hostile
 `PATH` does not delegate privileged work to a shadow command.
 
 Systems with tools in a nonstandard protected directory may set
-`OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR` to one normalized absolute directory.
+`BORONDNS_INSTALLER_TRUSTED_TOOL_DIR` to one normalized absolute directory.
 Every component of that directory must be root-owned and non-writable by group
 or other users, and each selected tool must pass the same ownership, mode,
 canonical-path, regular-file, and executable checks. The standard protected
@@ -90,10 +90,10 @@ not replace the live binary or config. Failed service activation also restores
 the service manager's previous enabled/disabled state, not only its files and
 active state. For an already-active service, configure commits only after two
 consecutive bounded probes show both the service manager state and the new
-OxideDNS listener healthy (`/livez` when a management listener is configured,
+BoronDNS listener healthy (`/livez` when a management listener is configured,
 or a DNS TCP connect probe otherwise). The probe window defaults to 10 one-second
 attempts and can be reduced, but never raised above 60, with
-`OXIDEDNS_INSTALLER_READINESS_ATTEMPTS`.
+`BORONDNS_INSTALLER_READINESS_ATTEMPTS`.
 
 Every service-manager query and mutation is bounded. Active/enabled probes are
 tri-state: recognized inactive or disabled states are distinct from manager
@@ -101,9 +101,9 @@ errors and deadline expiry, and an indeterminate preflight aborts before managed
 files are replaced. Existing managed leaves are identity-bound before these
 queries, so a manager callback cannot substitute a new leaf for later adoption.
 The timeout defaults to 30 seconds and is bounded
-to 1-120 seconds with `OXIDEDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS`; the
+to 1-120 seconds with `BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS`; the
 post-TERM kill window defaults to 5 seconds and is bounded to 1-10 seconds with
-`OXIDEDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS`.
+`BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS`.
 
 TSIG secrets entered by the installer use canonical padded Base64. Padding is
 required whenever the encoded byte length calls for it (for example, `YQ==` is
@@ -116,7 +116,7 @@ enabled service state. A stable `flock` lock serializes install, update,
 configure, and uninstall operations. Collision-proof rollback names never
 overwrite older operator recovery files. If file or service-state restoration
 is incomplete, the installer exits with an explicit error and writes a mode
-`0600` diagnostic under `/var/lib/oxidedns/installer-recovery/` while retaining
+`0600` diagnostic under `/var/lib/borondns/installer-recovery/` while retaining
 any unconsumed backups. Before clearing the active transaction, the installer
 revalidates the captured service, configuration, documentation, and binary
 directory identities for every activated target, including a fresh target that
@@ -131,7 +131,7 @@ change cannot produce a reported-success installation that cannot later start.
 Once that proof commits, backup deletion is a separate cleanup phase and can no
 longer roll back the verified live generation. If deletion and restoration of a
 quarantined backup both fail, the installer keeps the exact hidden inode,
-reports its current `*.oxidedns-remove.*` path (never its now-obsolete rollback
+reports its current `*.borondns-remove.*` path (never its now-obsolete rollback
 path), and writes that path to the mode-`0600` recovery diagnostic. The same
 durable cleanup diagnostic is written when backup cleanup fails after a
 successful rollback. Any unrelated file that later occupies the obsolete path
@@ -147,8 +147,8 @@ A fresh-install rollback validates its restored-or-absent target state during
 rollback itself; commit-only live-generation checks are not reapplied while
 discarding rollback backups.
 
-The lock file defaults to `/run/lock/oxidedns/installer.lock`. A custom
-`OXIDEDNS_INSTALL_LOCK_FILE` is accepted only when its immediate directory is a
+The lock file defaults to `/run/lock/borondns/installer.lock`. A custom
+`BORONDNS_INSTALL_LOCK_FILE` is accepted only when its immediate directory is a
 dedicated root-owned mode-`0700` leaf (or can be created that way under an
 existing trusted parent); the installer never tightens permissions on an
 arbitrary pre-existing parent. The state and recovery directory chains must be
@@ -166,21 +166,21 @@ backups) before starting the service.
 ## Unattended static-zone install
 
 ```sh
-sudo OXIDEDNS_ZONE=example.com. \
-  OXIDEDNS_PRIMARY=10.0.0.10:53 \
-  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
+sudo BORONDNS_ZONE=example.com. \
+  BORONDNS_PRIMARY=10.0.0.10:53 \
+  BORONDNS_NOTIFY_SOURCE=10.0.0.10 \
   ./install.sh --yes
 ```
 
 ## Unattended catalog-zone install
 
 ```sh
-sudo OXIDEDNS_CONFIG_MODE=catalog \
-  OXIDEDNS_CATALOG_ZONE=catalog.example. \
-  OXIDEDNS_PRIMARY=10.0.0.10:53 \
-  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
-  OXIDEDNS_TSIG_NAME=catalog-transfer-key. \
-  OXIDEDNS_TSIG_SECRET=BASE64SECRET \
+sudo BORONDNS_CONFIG_MODE=catalog \
+  BORONDNS_CATALOG_ZONE=catalog.example. \
+  BORONDNS_PRIMARY=10.0.0.10:53 \
+  BORONDNS_NOTIFY_SOURCE=10.0.0.10 \
+  BORONDNS_TSIG_NAME=catalog-transfer-key. \
+  BORONDNS_TSIG_SECRET=BASE64SECRET \
   ./install.sh --yes
 ```
 
@@ -193,11 +193,11 @@ set.
 Add these variables for TSIG-protected AXFR/IXFR:
 
 ```sh
-sudo OXIDEDNS_ZONE=example.com. \
-  OXIDEDNS_PRIMARY=10.0.0.10:53 \
-  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
-  OXIDEDNS_TSIG_NAME=transfer-key. \
-  OXIDEDNS_TSIG_SECRET=BASE64SECRET \
+sudo BORONDNS_ZONE=example.com. \
+  BORONDNS_PRIMARY=10.0.0.10:53 \
+  BORONDNS_NOTIFY_SOURCE=10.0.0.10 \
+  BORONDNS_TSIG_NAME=transfer-key. \
+  BORONDNS_TSIG_SECRET=BASE64SECRET \
   ./install.sh --yes
 ```
 
@@ -205,7 +205,7 @@ For static zones the two TSIG variables are an atomic pair. If only the key
 name or only the secret is supplied, the installer rejects the candidate
 instead of silently generating an unsigned transfer configuration.
 
-The generated config is installed mode `0640 root:oxidedns`.
+The generated config is installed mode `0640 root:borondns`.
 An existing config is accepted only when it is a regular non-symlink file owned
 by `root`, belongs to the configured runtime group, and has mode `0640` or the
 stricter read-only mode `0440`. This keeps the group-read permission required by
@@ -227,7 +227,7 @@ an intermediate component has sticky-directory protection. They capture the
 final directories' filesystem identities during staging and recheck them
 immediately before promotion and again at the transaction commit boundary.
 
-`OXIDEDNS_SERVICE_NAME` must be a single non-option service basename and must
+`BORONDNS_SERVICE_NAME` must be a single non-option service basename and must
 not end in a systemd unit-type suffix such as `.service`, `.socket`, or
 `.target`. It must also be a canonical concrete systemd stem: escape-requiring
 characters such as `+` and template-only names ending in `@` are rejected. The
@@ -244,8 +244,8 @@ For example:
 
 ```sh
 sudo ./install.sh \
-  --bin-dir /opt/oxidedns-v2/bin \
-  --config /etc/oxidedns-v2/config.toml
+  --bin-dir /opt/borondns-v2/bin \
+  --config /etc/borondns-v2/config.toml
 ```
 
 ## Common operations

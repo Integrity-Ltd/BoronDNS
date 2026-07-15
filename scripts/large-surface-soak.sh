@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/large-surface-soak.sh [OPTIONS]
 
-Run a long large-surface OxideDNS soak by repeatedly executing retained
+Run a long large-surface BoronDNS soak by repeatedly executing retained
 real-primary and protocol scenarios, while sampling host resources and retaining
 per-scenario artifacts.
 
@@ -41,13 +41,13 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/campaign-env.sh
 source "$repo_root/scripts/campaign-env.sh"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-evidence_dir="${OXIDEDNS_LARGE_SOAK_DIR:-$repo_root/target/evidence/large-surface-soak-$timestamp}"
-duration="${OXIDEDNS_LARGE_SOAK_DURATION_SECONDS:-86400}"
-scenario_timeout="${OXIDEDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
-scenario_kill_after="${OXIDEDNS_LARGE_SOAK_SCENARIO_KILL_AFTER_SECONDS:-30}"
-cycle_sleep="${OXIDEDNS_LARGE_SOAK_CYCLE_SLEEP_SECONDS:-5}"
-sample_interval="${OXIDEDNS_LARGE_SOAK_SAMPLE_INTERVAL_SECONDS:-60}"
-allow_skip="${OXIDEDNS_LARGE_SOAK_ALLOW_SKIP:-1}"
+evidence_dir="${BORONDNS_LARGE_SOAK_DIR:-$repo_root/target/evidence/large-surface-soak-$timestamp}"
+duration="${BORONDNS_LARGE_SOAK_DURATION_SECONDS:-86400}"
+scenario_timeout="${BORONDNS_LARGE_SOAK_SCENARIO_TIMEOUT_SECONDS:-1800}"
+scenario_kill_after="${BORONDNS_LARGE_SOAK_SCENARIO_KILL_AFTER_SECONDS:-30}"
+cycle_sleep="${BORONDNS_LARGE_SOAK_CYCLE_SLEEP_SECONDS:-5}"
+sample_interval="${BORONDNS_LARGE_SOAK_SAMPLE_INTERVAL_SECONDS:-60}"
+allow_skip="${BORONDNS_LARGE_SOAK_ALLOW_SKIP:-1}"
 resume=0
 resume_cross_boot_diagnostic=0
 cross_boot_diagnostic_active=0
@@ -62,17 +62,17 @@ campaign_start_epoch=""
 campaign_deadline_epoch=""
 campaign_control_deadline_nanoseconds=""
 campaign_boot_id=""
-docker_cleanup_timeout="${OXIDEDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS:-30}"
-host_probe_timeout="${OXIDEDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS:-30}"
-host_probe_kill_after="${OXIDEDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS:-5}"
+docker_cleanup_timeout="${BORONDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS:-30}"
+host_probe_timeout="${BORONDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS:-30}"
+host_probe_kill_after="${BORONDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS:-5}"
 docker_cleanup_operation_count=6
 docker_cleanup_kill_after_seconds=5
 scenario_timestamp_tolerance_seconds=2
 cargo_target_dir="${CARGO_TARGET_DIR:-}"
 cargo_target_dir_auto=0
-expected_commit="${OXIDEDNS_LARGE_SOAK_EXPECTED_COMMIT:-}"
-expected_cargo_sha256="${OXIDEDNS_LARGE_SOAK_EXPECTED_CARGO_SHA256:-}"
-expected_rustc_sha256="${OXIDEDNS_LARGE_SOAK_EXPECTED_RUSTC_SHA256:-}"
+expected_commit="${BORONDNS_LARGE_SOAK_EXPECTED_COMMIT:-}"
+expected_cargo_sha256="${BORONDNS_LARGE_SOAK_EXPECTED_CARGO_SHA256:-}"
+expected_rustc_sha256="${BORONDNS_LARGE_SOAK_EXPECTED_RUSTC_SHA256:-}"
 selected_cargo_path=""
 selected_rustc_path=""
 authenticated_cargo_shim=""
@@ -85,36 +85,36 @@ add_scenario() {
 }
 
 init_scenarios() {
-    add_scenario bind_catalog scripts/interop-bind-catalog-zone-docker.sh OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR
-    add_scenario bind_xot_catalog scripts/interop-bind-xot-catalog-zone-docker.sh OXIDEDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR
-    add_scenario powerdns_catalog_tsig scripts/interop-powerdns-postgres-catalog-tsig-docker.sh OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR
-    add_scenario powerdns_catalog_extension scripts/interop-powerdns-catalog-member-extension-docker.sh OXIDEDNS_POWERDNS_CATALOG_MEMBER_EXTENSION_ARTIFACT_DIR
-    add_scenario powerdns_split_primaries scripts/interop-powerdns-catalog-split-primaries-docker.sh OXIDEDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR
-    add_scenario bind_axfr scripts/interop-bind-axfr.sh OXIDEDNS_BIND_AXFR_ARTIFACT_DIR
-    add_scenario bind_tsig_axfr scripts/interop-bind-tsig-axfr.sh OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR
-    add_scenario bind_notify scripts/interop-bind-notify-refresh.sh OXIDEDNS_BIND_NOTIFY_ARTIFACT_DIR
-    add_scenario bind_ixfr scripts/interop-bind-ixfr-refresh.sh OXIDEDNS_BIND_IXFR_ARTIFACT_DIR
-    add_scenario nsd_axfr scripts/interop-nsd-axfr-docker.sh OXIDEDNS_NSD_AXFR_ARTIFACT_DIR
-    add_scenario nsd_tsig_axfr scripts/interop-nsd-tsig-axfr-docker.sh OXIDEDNS_NSD_TSIG_AXFR_ARTIFACT_DIR
-    add_scenario nsd_notify scripts/interop-nsd-notify-refresh-docker.sh OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR
-    add_scenario knot_axfr scripts/interop-knot-axfr-docker.sh OXIDEDNS_KNOT_AXFR_ARTIFACT_DIR
-    add_scenario knot_tsig_axfr scripts/interop-knot-tsig-axfr-docker.sh OXIDEDNS_KNOT_TSIG_AXFR_ARTIFACT_DIR
-    add_scenario knot_notify scripts/interop-knot-notify-refresh-docker.sh OXIDEDNS_KNOT_NOTIFY_ARTIFACT_DIR
-    add_scenario knot_ixfr scripts/interop-knot-ixfr-refresh-docker.sh OXIDEDNS_KNOT_IXFR_ARTIFACT_DIR
-    add_scenario knot_xot scripts/interop-knot-xot-docker.sh OXIDEDNS_KNOT_XOT_ARTIFACT_DIR
-    add_scenario knot_xot_tsig scripts/interop-knot-xot-tsig-docker.sh OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR
-    add_scenario dnssec_serve scripts/interop-dnssec-serve.sh OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR
-    add_scenario dnssec_nsec3 scripts/interop-dnssec-nsec3-serve.sh OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR
-    add_scenario unknown_rr scripts/interop-unknown-rr.sh OXIDEDNS_UNKNOWN_RR_ARTIFACT_DIR
-    add_scenario unknown_rr_bad_transfer scripts/interop-unknown-rr-bad-transfer.sh OXIDEDNS_UNKNOWN_RR_BAD_ARTIFACT_DIR
-    add_scenario negative_responses scripts/interop-negative-responses.sh OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR
-    add_scenario notify_negative scripts/interop-notify-negative.sh OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR
-    add_scenario tcp_truncation scripts/interop-tcp-truncation-retry.sh OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR
-    add_scenario edns_behavior scripts/interop-edns-behavior.sh OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR
-    add_scenario dns_cookie scripts/interop-dns-cookie-dig.sh OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR
-    add_scenario ixfr_notimp scripts/interop-ixfr-notimp-fallback.sh OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR
-    add_scenario rrl_udp scripts/interop-rrl-udp.sh OXIDEDNS_RRL_UDP_ARTIFACT_DIR
-    add_scenario chaos_queries scripts/interop-chaos-queries.sh OXIDEDNS_CHAOS_QUERIES_ARTIFACT_DIR
+    add_scenario bind_catalog scripts/interop-bind-catalog-zone-docker.sh BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR
+    add_scenario bind_xot_catalog scripts/interop-bind-xot-catalog-zone-docker.sh BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR
+    add_scenario powerdns_catalog_tsig scripts/interop-powerdns-postgres-catalog-tsig-docker.sh BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR
+    add_scenario powerdns_catalog_extension scripts/interop-powerdns-catalog-member-extension-docker.sh BORONDNS_POWERDNS_CATALOG_MEMBER_EXTENSION_ARTIFACT_DIR
+    add_scenario powerdns_split_primaries scripts/interop-powerdns-catalog-split-primaries-docker.sh BORONDNS_POWERDNS_CATALOG_SPLIT_PRIMARIES_ARTIFACT_DIR
+    add_scenario bind_axfr scripts/interop-bind-axfr.sh BORONDNS_BIND_AXFR_ARTIFACT_DIR
+    add_scenario bind_tsig_axfr scripts/interop-bind-tsig-axfr.sh BORONDNS_BIND_TSIG_AXFR_ARTIFACT_DIR
+    add_scenario bind_notify scripts/interop-bind-notify-refresh.sh BORONDNS_BIND_NOTIFY_ARTIFACT_DIR
+    add_scenario bind_ixfr scripts/interop-bind-ixfr-refresh.sh BORONDNS_BIND_IXFR_ARTIFACT_DIR
+    add_scenario nsd_axfr scripts/interop-nsd-axfr-docker.sh BORONDNS_NSD_AXFR_ARTIFACT_DIR
+    add_scenario nsd_tsig_axfr scripts/interop-nsd-tsig-axfr-docker.sh BORONDNS_NSD_TSIG_AXFR_ARTIFACT_DIR
+    add_scenario nsd_notify scripts/interop-nsd-notify-refresh-docker.sh BORONDNS_NSD_NOTIFY_ARTIFACT_DIR
+    add_scenario knot_axfr scripts/interop-knot-axfr-docker.sh BORONDNS_KNOT_AXFR_ARTIFACT_DIR
+    add_scenario knot_tsig_axfr scripts/interop-knot-tsig-axfr-docker.sh BORONDNS_KNOT_TSIG_AXFR_ARTIFACT_DIR
+    add_scenario knot_notify scripts/interop-knot-notify-refresh-docker.sh BORONDNS_KNOT_NOTIFY_ARTIFACT_DIR
+    add_scenario knot_ixfr scripts/interop-knot-ixfr-refresh-docker.sh BORONDNS_KNOT_IXFR_ARTIFACT_DIR
+    add_scenario knot_xot scripts/interop-knot-xot-docker.sh BORONDNS_KNOT_XOT_ARTIFACT_DIR
+    add_scenario knot_xot_tsig scripts/interop-knot-xot-tsig-docker.sh BORONDNS_KNOT_XOT_TSIG_ARTIFACT_DIR
+    add_scenario dnssec_serve scripts/interop-dnssec-serve.sh BORONDNS_DNSSEC_SERVE_ARTIFACT_DIR
+    add_scenario dnssec_nsec3 scripts/interop-dnssec-nsec3-serve.sh BORONDNS_DNSSEC_NSEC3_ARTIFACT_DIR
+    add_scenario unknown_rr scripts/interop-unknown-rr.sh BORONDNS_UNKNOWN_RR_ARTIFACT_DIR
+    add_scenario unknown_rr_bad_transfer scripts/interop-unknown-rr-bad-transfer.sh BORONDNS_UNKNOWN_RR_BAD_ARTIFACT_DIR
+    add_scenario negative_responses scripts/interop-negative-responses.sh BORONDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR
+    add_scenario notify_negative scripts/interop-notify-negative.sh BORONDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR
+    add_scenario tcp_truncation scripts/interop-tcp-truncation-retry.sh BORONDNS_TCP_TRUNCATION_ARTIFACT_DIR
+    add_scenario edns_behavior scripts/interop-edns-behavior.sh BORONDNS_EDNS_BEHAVIOR_ARTIFACT_DIR
+    add_scenario dns_cookie scripts/interop-dns-cookie-dig.sh BORONDNS_DNS_COOKIE_ARTIFACT_DIR
+    add_scenario ixfr_notimp scripts/interop-ixfr-notimp-fallback.sh BORONDNS_IXFR_FALLBACK_ARTIFACT_DIR
+    add_scenario rrl_udp scripts/interop-rrl-udp.sh BORONDNS_RRL_UDP_ARTIFACT_DIR
+    add_scenario chaos_queries scripts/interop-chaos-queries.sh BORONDNS_CHAOS_QUERIES_ARTIFACT_DIR
 }
 
 require_positive_integer() {
@@ -211,9 +211,9 @@ validate_timing_bounds() {
     require_bounded_positive_integer "--scenario-kill-after" "$scenario_kill_after" "$max_epoch"
     require_bounded_positive_integer "--cycle-sleep" "$cycle_sleep" "$max_epoch"
     require_bounded_positive_integer "--sample-interval" "$sample_interval" "$max_epoch"
-    require_bounded_positive_integer "OXIDEDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS" "$docker_cleanup_timeout" "$max_epoch"
-    require_bounded_positive_integer "OXIDEDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS" "$host_probe_timeout" "$max_epoch"
-    require_bounded_positive_integer "OXIDEDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS" "$host_probe_kill_after" "$max_epoch"
+    require_bounded_positive_integer "BORONDNS_LARGE_SOAK_DOCKER_CLEANUP_TIMEOUT_SECONDS" "$docker_cleanup_timeout" "$max_epoch"
+    require_bounded_positive_integer "BORONDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS" "$host_probe_timeout" "$max_epoch"
+    require_bounded_positive_integer "BORONDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS" "$host_probe_kill_after" "$max_epoch"
 }
 
 large_soak_bounded_probe() {
@@ -392,12 +392,12 @@ record_tool_versions() {
 }
 
 resolve_rust_tools() {
-    if [[ -n "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" || -n "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_RUSTC:-}" ]]; then
-        [[ -n "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" && -n "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_RUSTC:-}" ]] ||
+    if [[ -n "${BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" || -n "${BORONDNS_LARGE_SOAK_AUTHENTICATED_RUSTC:-}" ]]; then
+        [[ -n "${BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" && -n "${BORONDNS_LARGE_SOAK_AUTHENTICATED_RUSTC:-}" ]] ||
             die "authenticated large-soak tool overrides must be supplied together"
-        selected_cargo_path="$OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO"
-        selected_rustc_path="$OXIDEDNS_LARGE_SOAK_AUTHENTICATED_RUSTC"
-        authenticated_cargo_shim="${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO_SHIM:-}"
+        selected_cargo_path="$BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO"
+        selected_rustc_path="$BORONDNS_LARGE_SOAK_AUTHENTICATED_RUSTC"
+        authenticated_cargo_shim="${BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO_SHIM:-}"
         [[ -n "$authenticated_cargo_shim" && "$(command -v cargo 2>/dev/null)" == "$authenticated_cargo_shim" &&
         -L "$authenticated_cargo_shim" && "$(readlink "$authenticated_cargo_shim")" == /proc/self/fd/7 ]] ||
             die "authenticated large-soak Cargo shim is missing or not first on PATH"
@@ -408,13 +408,13 @@ resolve_rust_tools() {
         selected_cargo_path="$(command -v cargo 2>/dev/null)" || die "cargo not found on PATH"
         selected_rustc_path="$(command -v rustc 2>/dev/null)" || die "rustc not found on PATH"
     fi
-    if [[ -z "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" ]]; then
+    if [[ -z "${BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" ]]; then
         selected_cargo_path="$(realpath -e "$selected_cargo_path")" || die "cannot canonicalize selected cargo"
         selected_rustc_path="$(realpath -e "$selected_rustc_path")" || die "cannot canonicalize selected rustc"
     fi
     [[ -x "$selected_cargo_path" && -f "$selected_cargo_path" ]] || die "selected cargo is not executable"
     [[ -x "$selected_rustc_path" && -f "$selected_rustc_path" ]] || die "selected rustc is not executable"
-    if [[ -z "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" ]]; then
+    if [[ -z "${BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO:-}" ]]; then
         local selected_tool_dir
         selected_tool_dir="$(dirname "$selected_cargo_path")"
         export PATH="$selected_tool_dir:$PATH"
@@ -446,7 +446,7 @@ verify_expected_tool_hashes() {
 
 prepare_build_directory() {
     if [[ -z "$cargo_target_dir" ]]; then
-        campaign_prepare_private_temporary_tree "${TMPDIR:-/var/tmp}" oxidedns-large-builds \
+        campaign_prepare_private_temporary_tree "${TMPDIR:-/var/tmp}" borondns-large-builds \
             large_soak_auto_build cargo_target_dir || die "cannot create private automatic CARGO_TARGET_DIR"
         cargo_target_dir_auto=1
     elif [[ -e "$cargo_target_dir" || -L "$cargo_target_dir" ]]; then
@@ -602,7 +602,7 @@ sample_resources() {
         ((fallback_remaining > 0)) || fallback_remaining=0
         control_deadline_nanoseconds=$((fallback_monotonic_now + fallback_remaining * 1000000000))
     fi
-    printf 'timestamp_utc\tepoch_seconds\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\toxidedns_processes\ttotal_oxidedns_rss_kib\n' >"$samples"
+    printf 'timestamp_utc\tepoch_seconds\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\tborondns_processes\ttotal_borondns_rss_kib\n' >"$samples"
     printf 'timestamp_utc\tepoch_seconds\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm\n' >"$process_samples"
     while :; do
         local now control_now timestamp load_values mem_available docker_containers ps_summary process_rows
@@ -813,7 +813,7 @@ root = Path(sys.argv[1])
 timestamp_pattern = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 def atomic_write(path, content):
-    fd, staged_name = tempfile.mkstemp(prefix=f".{path.name}.oxidedns-staged.", dir=path.parent)
+    fd, staged_name = tempfile.mkstemp(prefix=f".{path.name}.borondns-staged.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
@@ -874,7 +874,7 @@ def exactly_torn(path, keys):
 for attempt in sorted(root.iterdir()):
     if not attempt.is_dir() or attempt.is_symlink() or attempt.resolve() != attempt:
         raise SystemExit(f"unsafe retained resource sampler attempt: {attempt}")
-    for stale in attempt.glob(".*.oxidedns-staged.*"):
+    for stale in attempt.glob(".*.borondns-staged.*"):
         info = stale.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
             raise SystemExit(f"unsafe stale resource sampler marker: {stale}")
@@ -987,7 +987,7 @@ for number, attempt in enumerate(attempts, 1):
         raise SystemExit(f"resource sampler attempt lacks sample files: {attempt}")
     with samples.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.reader(handle, delimiter="\t"))
-    expected = ["timestamp_utc", "epoch_seconds", "load1", "load5", "load15", "mem_available_kib", "docker_containers", "oxidedns_processes", "total_oxidedns_rss_kib"]
+    expected = ["timestamp_utc", "epoch_seconds", "load1", "load5", "load15", "mem_available_kib", "docker_containers", "borondns_processes", "total_borondns_rss_kib"]
     if not rows or rows[0] != expected or len(rows) < 2:
         raise SystemExit(f"resource sampler rows are absent or malformed: {samples}")
     sample_rows = rows[1:]
@@ -1264,7 +1264,7 @@ if scenarios_root.exists():
                 attempt_dir.is_dir()
                 and not attempt_dir.is_symlink()
                 and re.fullmatch(
-                    r"\.attempt-[0-9]{4}\.oxidedns-remove\.[0-9]+\.[0-9a-f]{24}",
+                    r"\.attempt-[0-9]{4}\.borondns-remove\.[0-9]+\.[0-9a-f]{24}",
                     attempt_dir.name,
                 )
             ):
@@ -2087,7 +2087,7 @@ reconcile_retained_docker_cleanup_failures() {
         fi
         resource_label="$(awk -F= '$1 == "ownership_label" { sub(/^[^=]*=/, ""); print; found = 1; exit } END { if (!found) exit 1 }' "$source_evidence")" ||
             die "retained Docker cleanup evidence is missing ownership_label: $source_evidence"
-        [[ "$resource_label" == io.oxidedns.soak.run=* ]] ||
+        [[ "$resource_label" == io.borondns.soak.run=* ]] ||
             die "retained Docker cleanup evidence has an invalid ownership_label: $failure"
         cleanup_status=0
         if [[ -z "$real_docker" ]]; then
@@ -2136,16 +2136,16 @@ run_bounded_scenario_command() {
     local -a command_env=(env "$env_name=$env_value")
 
     if real_docker="$(command -v docker 2>/dev/null)"; then
-        resource_label="io.oxidedns.soak.run=run-$$-$(date +%s%N)"
-        command_env+=("OXIDEDNS_SOAK_DOCKER_LABEL=$resource_label")
-        if [[ "${OXIDEDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM:-}" != "$real_docker" ]]; then
-            OXIDEDNS_SOAK_REAL_DOCKER="$real_docker"
-            export OXIDEDNS_SOAK_REAL_DOCKER
+        resource_label="io.borondns.soak.run=run-$$-$(date +%s%N)"
+        command_env+=("BORONDNS_SOAK_DOCKER_LABEL=$resource_label")
+        if [[ "${BORONDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM:-}" != "$real_docker" ]]; then
+            BORONDNS_SOAK_REAL_DOCKER="$real_docker"
+            export BORONDNS_SOAK_REAL_DOCKER
             # Exported into the bounded scenario's Bash process.
             # shellcheck disable=SC2329
             docker() {
-                local resource_label="${OXIDEDNS_SOAK_DOCKER_LABEL:?}"
-                local real_docker="${OXIDEDNS_SOAK_REAL_DOCKER:?}"
+                local resource_label="${BORONDNS_SOAK_DOCKER_LABEL:?}"
+                local real_docker="${BORONDNS_SOAK_REAL_DOCKER:?}"
                 case "${1:-}" in
                 run | create)
                     local subcommand="$1"
@@ -2175,7 +2175,7 @@ run_bounded_scenario_command() {
             [[ -z "$deadline_marker" ]] || : >"$deadline_marker"
             if ((docker_proxy_function)); then
                 unset -f docker
-                unset OXIDEDNS_SOAK_REAL_DOCKER
+                unset BORONDNS_SOAK_REAL_DOCKER
             fi
             return 75
         fi
@@ -2193,7 +2193,7 @@ run_bounded_scenario_command() {
             printf 'docker ownership marker setup failed: %s/docker-cleanup-active.env\n' "$env_value" >&2
             if ((docker_proxy_function)); then
                 unset -f docker
-                unset OXIDEDNS_SOAK_REAL_DOCKER
+                unset BORONDNS_SOAK_REAL_DOCKER
             fi
             return 70
         fi
@@ -2236,7 +2236,7 @@ run_bounded_scenario_command() {
     fi
     if ((docker_proxy_function)); then
         unset -f docker
-        unset OXIDEDNS_SOAK_REAL_DOCKER
+        unset BORONDNS_SOAK_REAL_DOCKER
     fi
     if [[ -n "$deadline_marker" && -e "$deadline_marker" && "$cleanup_status" == 0 ]]; then
         return 75

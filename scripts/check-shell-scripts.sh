@@ -21,7 +21,7 @@ while IFS= read -r -d '' file; do
 done < <(
     find "$repo_root/scripts" "$repo_root/packaging" \
         -type f \
-        \( -name '*.sh' -o -path '*/openrc/oxidedns' \) \
+        \( -name '*.sh' -o -path '*/openrc/borondns' \) \
         -print0
 )
 

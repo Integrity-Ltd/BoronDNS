@@ -23,5 +23,5 @@ zone "alpha.test." IN {
     allow-query { 127.0.0.1; };
     allow-transfer { 127.0.0.1; };
     notify explicit;
-    also-notify { 127.0.0.1 port __OXIDEDNS_PORT__; };
+    also-notify { 127.0.0.1 port __BORONDNS_PORT__; };
 };

@@ -11,7 +11,7 @@ import re
 
 
 MAX_EVIDENCE_FILE_BYTES = 1024 * 1024
-ARTIFACTS = ("oxidedns", "oxide-gun")
+ARTIFACTS = ("borondns", "oxide-gun")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -77,11 +77,11 @@ def main() -> None:
     parser.add_argument("evidence_dir", type=Path)
     parser.add_argument("expected_commit")
     parser.add_argument("--require-artifacts", action="store_true")
-    parser.add_argument("--release-oxidedns", type=Path)
+    parser.add_argument("--release-borondns", type=Path)
     parser.add_argument("--release-oxide-gun", type=Path)
     arguments = parser.parse_args()
     release_paths = {
-        "oxidedns": arguments.release_oxidedns,
+        "borondns": arguments.release_borondns,
         "oxide-gun": arguments.release_oxide_gun,
     }
     if any(path is not None for path in release_paths.values()):
@@ -157,8 +157,8 @@ def main() -> None:
     for row in manifest:
         artifact, builder = row["artifact"], row["builder"]
         comparison = comparison_by_artifact[artifact]
-        features = "af-xdp" if artifact == "oxidedns" else "xdp"
-        package = "oxidedns-cli" if artifact == "oxidedns" else "oxide-gun"
+        features = "af-xdp" if artifact == "borondns" else "xdp"
+        package = "borondns-cli" if artifact == "borondns" else "oxide-gun"
         command_suffix = (
             " build --locked --release --target-dir <builder-target-dir> "
             "--target x86_64-unknown-linux-musl "

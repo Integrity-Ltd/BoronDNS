@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| Project | OxideDNS |
+| Project | BoronDNS |
 | Component | OxideGun |
 | Document | Software Requirements Specification |
 | Source draft | `~/Downloads/OxideGun-SRS-v0_1_1, May 26, 2026.md` |
-| Related documents | `docs/oxide-gun.md`, `docs/oxide-gun-mvp-plan.md`, `docs/implemented-feature-scope.md`, `docs/unsafe-boundaries.tsv`, `docs/OxideDNS-Secondary-SRS-v0.9.1.md` |
+| Related documents | `docs/oxide-gun.md`, `docs/oxide-gun-mvp-plan.md`, `docs/implemented-feature-scope.md`, `docs/unsafe-boundaries.tsv`, `docs/BoronDNS-Secondary-SRS-v0.9.1.md` |
 
 ## Revision History
 
@@ -24,9 +24,9 @@
 
 ### 1.1 Purpose
 
-OxideGun is a DNS-over-UDP load generator for OxideDNS testing. Its main value is controlled source-address and source-port generation for Response Rate Limiting (RRL) scenarios that ordinary socket-based tools cannot model accurately.
+OxideGun is a DNS-over-UDP load generator for BoronDNS testing. Its main value is controlled source-address and source-port generation for Response Rate Limiting (RRL) scenarios that ordinary socket-based tools cannot model accurately.
 
-OxideGun is support tooling. It is not an OxideDNS server component, resolver, recursive client, fuzzing engine, or production traffic generator.
+OxideGun is support tooling. It is not an BoronDNS server component, resolver, recursive client, fuzzing engine, or production traffic generator.
 
 ### 1.2 Scope
 
@@ -41,7 +41,7 @@ This SRS defines the target behaviour for the `oxide-gun` crate:
 - Receive processing, kernel-drop mode, latency, counters, and JSON evidence.
 - Unsafe-code discipline for AF_XDP, packet buffers, and future eBPF work.
 
-OxideGun evidence can inform OxideDNS engineering decisions. It does not replace OxideDNS-Secondary release verification unless the OxideDNS-Secondary SRS is changed separately.
+OxideGun evidence can inform BoronDNS engineering decisions. It does not replace BoronDNS-Secondary release verification unless the BoronDNS-Secondary SRS is changed separately.
 
 ### 1.3 Facts and Protocol References
 
@@ -56,7 +56,7 @@ This document relies on these primary references:
 | RFC 2544, https://www.rfc-editor.org/rfc/rfc2544 | Benchmark-style isolated test-network practice and use of benchmarking addresses. |
 | Linux AF_XDP documentation, https://www.kernel.org/doc/html/latest/networking/af_xdp.html | AF_XDP sockets, RX/TX rings, UMEM, copy and zero-copy modes. |
 
-RRL itself is not an IETF DNS wire-protocol standard. In this document, RRL means the OxideDNS server behaviour described by the OxideDNS-Secondary SRS.
+RRL itself is not an IETF DNS wire-protocol standard. In this document, RRL means the BoronDNS server behaviour described by the BoronDNS-Secondary SRS.
 
 ### 1.4 Relationship to `kxdpgun`
 
@@ -115,7 +115,7 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 ## 3. Architectural Invariants
 
-**OXG-INV-001.** OxideGun MUST remain support tooling only. It MUST NOT become part of the OxideDNS server runtime.
+**OXG-INV-001.** OxideGun MUST remain support tooling only. It MUST NOT become part of the BoronDNS server runtime.
 
 **OXG-INV-002.** OxideGun MUST be implemented in Rust. Unsafe code is expected for AF_XDP, packet buffers, and eBPF loader integration, but it MUST be isolated behind small safe APIs.
 
@@ -277,7 +277,7 @@ XDP mode requires Linux, a dedicated interface or lab namespace, appropriate pri
 
 ### 5.2 Performance
 
-**OXG-NFR-PERF-001.** MVP performance target: on a dedicated lab host, XDP mode must be able to drive source-varied RRL tests at rates comfortably above the OxideDNS RRL thresholds being tested. Exact PPS claims require retained hardware evidence, including OxideGun JSONL, extracted summary, and external interface counter deltas.
+**OXG-NFR-PERF-001.** MVP performance target: on a dedicated lab host, XDP mode must be able to drive source-varied RRL tests at rates comfortably above the BoronDNS RRL thresholds being tested. Exact PPS claims require retained hardware evidence, including OxideGun JSONL, extracted summary, and external interface counter deltas.
 
 **OXG-NFR-PERF-002.** Post-MVP high-rate target: kernel-drop XDP mode SHOULD show a clear sustained TX-rate advantage over process mode on the same host and queue.
 
@@ -373,7 +373,7 @@ These checks are required for the modules they can exercise. They are not substi
 
 ## 9. MVP Requirement Subset
 
-The MVP is the smallest version that is genuinely useful for OxideDNS RRL work:
+The MVP is the smallest version that is genuinely useful for BoronDNS RRL work:
 
 - Single-query mode retained.
 - Query list file and generated query template support.

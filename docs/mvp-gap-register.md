@@ -35,7 +35,7 @@ Terminology:
   notes: command logs, primary versions, configs, benchmark/fuzz summaries,
   signatures, and operator sign-off records.
 - **Current checked-in full SRS** is
-  `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
+  `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
 - **Pending project-decision rows** remain open until release review resolves
   or explicitly defers them. Resolved rows are already project decisions;
   release notes and acceptance review must not treat the pending subset as
@@ -68,7 +68,7 @@ No open product implementation decisions are currently tracked here.
 | --- | --- | --- |
 | Selected real-primary and current-version interop | `docs/primary-interop-matrix-v0.2.0.md` records a 12 of 12 local matrix pass for BIND 9.20.23, NSD 4.14.2, Knot DNS 3.5.3, and PowerDNS Authoritative 5.0.5, with retained primary-version/config artifacts under `target/evidence/primary-matrix-20260614T010049Z`. | Broader XoT acceptance, DNSSEC breadth, DNS Cookie deployment, production operator acceptance, reference-hardware performance, and long-running soak evidence are intentionally tracked as separate closeout rows. |
 | Selected XoT release breadth | `docs/xot-release-evidence-v0.2.0.md` records a 3 of 3 local retained XoT pass for Knot DNS 3.5.3 XoT AXFR, Knot DNS 3.5.3 XoT+TSIG AXFR, and BIND 9.20.23 catalog-zone transfer over XoT+TSIG, plus 10 of 10 local XoT failure-class cases, with redacted retained artifacts under `target/evidence/xot-release-20260614T014700Z` and `target/evidence/xot-failure-20260616T170617Z`. | Formal XoT acceptance still needs real-primary mTLS, default-port, prohibited-suite, and optional NSD XoT evidence. |
-| Reproducible static binaries | `docs/reproducible-build-v0.2.0.md` records a clean two-build comparison for `x86_64-unknown-linux-musl` `oxidedns` and `oxide-gun`; both builder digests matched bit-for-bit under `target/evidence/reproducible-build-20260614T013236Z`. | Installer/archive normalization, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
+| Reproducible static binaries | `docs/reproducible-build-v0.2.0.md` records a clean two-build comparison for `x86_64-unknown-linux-musl` `borondns` and `oxide-gun`; both builder digests matched bit-for-bit under `target/evidence/reproducible-build-20260614T013236Z`. | Installer/archive normalization, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
 | Package and Docker smoke | `docs/package-docker-smoke-v0.2.0.md` records a 4 of 4 retained package/image pass for installer creation, Ubuntu installer smoke, Docker image archive creation, and read-only Docker runtime smoke under `target/evidence/package-docker-smoke-20260616T173146Z`. | Archive reproducibility, Docker image archive reproducibility, artifact signing, and external independent-builder sign-off are separate release-governance work. |
 
 ## Pending Project Decision Overlay

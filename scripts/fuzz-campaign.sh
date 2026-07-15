@@ -22,7 +22,7 @@ Environment:
   CARGO                  Cargo executable to use (default: cargo)
   CARGO_TOOLCHAIN        Rustup toolchain override (default: nightly with rustup cargo)
   CARGO_FUZZ_SANITIZER   Optional cargo-fuzz sanitizer mode
-  OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE
+  BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE
                          Allow a local dirty-source diagnostic; never accepted in CI
 EOF
 }
@@ -55,19 +55,19 @@ if ((cargo_overridden == 0)) && [[ -z "$cargo_toolchain" ]] && command -v rustup
     cargo_toolchain=nightly
 fi
 sanitizer="${CARGO_FUZZ_SANITIZER:-}"
-allow_dirty_non_release="${OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE:-0}"
+allow_dirty_non_release="${BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE:-0}"
 [[ "$allow_dirty_non_release" == 0 || "$allow_dirty_non_release" == 1 ]] ||
-    die "OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE must be 0 or 1"
+    die "BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE must be 0 or 1"
 if [[ "$allow_dirty_non_release" == 1 ]] &&
     { [[ "${GITHUB_ACTIONS:-false}" == true ]] ||
         [[ -n "${CI:-}" && "${CI:-}" != false && "${CI:-}" != 0 ]] ||
         [[ "${GITHUB_REF_TYPE:-}" == tag ]] || [[ "${GITHUB_REF:-}" == refs/tags/* ]]; }; then
     die "dirty-source fuzz override is forbidden in CI and release contexts"
 fi
-fuzz_wall_clock_grace="${OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS:-1800}"
-fuzz_wall_clock_kill_after="${OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS:-10}"
-fuzz_probe_timeout="${OXIDEDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS:-30}"
-fuzz_probe_kill_after="${OXIDEDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS:-5}"
+fuzz_wall_clock_grace="${BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS:-1800}"
+fuzz_wall_clock_kill_after="${BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS:-10}"
+fuzz_probe_timeout="${BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS:-30}"
+fuzz_probe_kill_after="${BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS:-5}"
 fuzz_elapsed_tolerance_nanoseconds=250000000
 fuzz_wall_monotonic_tolerance_nanoseconds=2000000000
 max_nanosecond_seconds=9223372036
@@ -138,10 +138,10 @@ require_bounded_positive_integer() {
 
 validate_timing_bounds() {
     require_bounded_positive_integer "--duration" "$duration" "$max_nanosecond_seconds"
-    require_bounded_positive_integer "OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS" "$fuzz_wall_clock_grace" 9223372036854775807
-    require_bounded_positive_integer "OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS" "$fuzz_wall_clock_kill_after" 9223372036854775807
-    require_bounded_positive_integer "OXIDEDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS" "$fuzz_probe_timeout" 9223372036854775807
-    require_bounded_positive_integer "OXIDEDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS" "$fuzz_probe_kill_after" 9223372036854775807
+    require_bounded_positive_integer "BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS" "$fuzz_wall_clock_grace" 9223372036854775807
+    require_bounded_positive_integer "BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS" "$fuzz_wall_clock_kill_after" 9223372036854775807
+    require_bounded_positive_integer "BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS" "$fuzz_probe_timeout" 9223372036854775807
+    require_bounded_positive_integer "BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS" "$fuzz_probe_kill_after" 9223372036854775807
     ((fuzz_wall_clock_grace <= 9223372036854775807 - duration)) ||
         die "fuzz duration plus wall-clock grace exceeds signed 64-bit time"
 }
@@ -164,7 +164,7 @@ capture_source_identity() {
         source_clean=0
         if [[ "$allow_dirty_non_release" != 1 ]] && ((dry_run == 0)); then
             printf 'refusing fuzz campaign from dirty or untracked source:\n%s\n' "$initial_source_status" >&2
-            printf 'use OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 only for local non-release diagnostics\n' >&2
+            printf 'use BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 only for local non-release diagnostics\n' >&2
             exit 1
         fi
         if ((dry_run)); then
@@ -193,13 +193,13 @@ verify_source_identity() {
 }
 
 resolve_rust_tools() {
-    if [[ -n "${OXIDEDNS_FUZZ_AUTHENTICATED_CARGO:-}" || -n "${OXIDEDNS_FUZZ_AUTHENTICATED_RUSTC:-}" || -n "${OXIDEDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ:-}" ]]; then
-        [[ -n "${OXIDEDNS_FUZZ_AUTHENTICATED_CARGO:-}" && -n "${OXIDEDNS_FUZZ_AUTHENTICATED_RUSTC:-}" &&
-            -n "${OXIDEDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ:-}" ]] ||
+    if [[ -n "${BORONDNS_FUZZ_AUTHENTICATED_CARGO:-}" || -n "${BORONDNS_FUZZ_AUTHENTICATED_RUSTC:-}" || -n "${BORONDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ:-}" ]]; then
+        [[ -n "${BORONDNS_FUZZ_AUTHENTICATED_CARGO:-}" && -n "${BORONDNS_FUZZ_AUTHENTICATED_RUSTC:-}" &&
+            -n "${BORONDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ:-}" ]] ||
             die "authenticated fuzz tool overrides must be supplied together"
-        selected_cargo_path="$OXIDEDNS_FUZZ_AUTHENTICATED_CARGO"
-        selected_rustc_path="$OXIDEDNS_FUZZ_AUTHENTICATED_RUSTC"
-        selected_cargo_fuzz_path="$OXIDEDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ"
+        selected_cargo_path="$BORONDNS_FUZZ_AUTHENTICATED_CARGO"
+        selected_rustc_path="$BORONDNS_FUZZ_AUTHENTICATED_RUSTC"
+        selected_cargo_fuzz_path="$BORONDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ"
     elif ((cargo_overridden == 0)) && [[ "$cargo_bin" == cargo ]] && command -v rustup >/dev/null 2>&1; then
         if [[ -n "$cargo_toolchain" ]]; then
             selected_cargo_path="$(run_fuzz_probe rustup which --toolchain "$cargo_toolchain" cargo 2>/dev/null)" ||
@@ -214,12 +214,12 @@ resolve_rust_tools() {
         selected_cargo_path="$(command -v "$cargo_bin" 2>/dev/null)" || die "$cargo_bin not found on PATH"
         selected_rustc_path="$(command -v rustc 2>/dev/null || true)"
     fi
-    if [[ -z "${OXIDEDNS_FUZZ_AUTHENTICATED_CARGO:-}" ]]; then
+    if [[ -z "${BORONDNS_FUZZ_AUTHENTICATED_CARGO:-}" ]]; then
         selected_cargo_path="$(realpath -e "$selected_cargo_path")" || die "cannot canonicalize selected cargo"
     fi
     [[ -x "$selected_cargo_path" && -f "$selected_cargo_path" ]] || die "selected cargo is not an executable regular file"
     if [[ -n "$selected_rustc_path" ]]; then
-        if [[ -z "${OXIDEDNS_FUZZ_AUTHENTICATED_RUSTC:-}" ]]; then
+        if [[ -z "${BORONDNS_FUZZ_AUTHENTICATED_RUSTC:-}" ]]; then
             selected_rustc_path="$(realpath -e "$selected_rustc_path")" || die "cannot canonicalize selected rustc"
             if [[ "$(basename "$selected_rustc_path")" == rustup ]] && command -v rustup >/dev/null 2>&1; then
                 selected_rustc_path="$(run_fuzz_probe rustup which rustc 2>/dev/null)" ||
@@ -325,7 +325,7 @@ prepare_evidence_directory() {
 
 prepare_build_directory() {
     if [[ -z "$cargo_target_dir" ]]; then
-        campaign_prepare_private_temporary_tree "${TMPDIR:-/var/tmp}" oxidedns-fuzz-builds \
+        campaign_prepare_private_temporary_tree "${TMPDIR:-/var/tmp}" borondns-fuzz-builds \
             fuzz_auto_build cargo_target_dir || die "cannot create private automatic CARGO_TARGET_DIR"
         cargo_target_dir_auto=1
     elif [[ -e "$cargo_target_dir" || -L "$cargo_target_dir" ]]; then

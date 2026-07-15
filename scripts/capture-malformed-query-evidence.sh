@@ -15,14 +15,14 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/malformed-query-evidence/$$"
-artifact_dir="${OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR:-}"
+artifact_dir="${BORONDNS_MALFORMED_QUERY_EVIDENCE_DIR:-}"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -37,16 +37,16 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -63,7 +63,7 @@ fake_primary="$workdir/fake-primary.py"
 client="$workdir/client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 summary_env="$workdir/malformed-query-summary.env"
 results_tsv="$workdir/malformed-query-results.tsv"
 
@@ -353,11 +353,11 @@ log(f"malformed_cases={len(cases)} udp_responses={udp_responses} tcp_responses={
 print(f"malformed query evidence passed cases={len(cases)}")
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "warn"
 log_format = "plain"
 
@@ -375,7 +375,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -391,31 +391,31 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready for malformed-query evidence" >&2
+    echo "BoronDNS did not become ready for malformed-query evidence" >&2
     exit 1
 fi
 
-curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >"$workdir/livez-before.txt"
-curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >"$workdir/readyz-before.txt"
-python3 "$client" "$oxidedns_dns_port" "$client_log" "$results_tsv" "$summary_env"
-curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >"$workdir/livez-after.txt"
-curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >"$workdir/readyz-after.txt"
-curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" >"$workdir/metrics.txt"
+curl -fsS "http://127.0.0.1:$borondns_health_port/livez" >"$workdir/livez-before.txt"
+curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >"$workdir/readyz-before.txt"
+python3 "$client" "$borondns_dns_port" "$client_log" "$results_tsv" "$summary_env"
+curl -fsS "http://127.0.0.1:$borondns_health_port/livez" >"$workdir/livez-after.txt"
+curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >"$workdir/readyz-after.txt"
+curl -fsS "http://127.0.0.1:$borondns_health_port/metrics" >"$workdir/metrics.txt"
 
-if grep -Ei 'panic|panicked|thread .* panicked' "$workdir/oxidedns.log" >"$workdir/panic-scan.txt"; then
-    echo "OxideDNS log contains panic evidence after malformed query corpus" >&2
+if grep -Ei 'panic|panicked|thread .* panicked' "$workdir/borondns.log" >"$workdir/panic-scan.txt"; then
+    echo "BoronDNS log contains panic evidence after malformed query corpus" >&2
     cat "$workdir/panic-scan.txt" >&2
     exit 1
 fi
@@ -434,8 +434,8 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$results_tsv" "$artifact_dir/malformed-query-results.tsv"
     cp "$workdir/malformed-query-evidence-summary.env" "$artifact_dir/malformed-query-summary.env"
     cp "$workdir/livez-before.txt" "$artifact_dir/livez-before.txt"

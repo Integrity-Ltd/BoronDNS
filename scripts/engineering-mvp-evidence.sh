@@ -3,8 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_root="${OXIDEDNS_ENGINEERING_MVP_EVIDENCE_DIR:-$repo_root/target/evidence/engineering-mvp}"
-command_timeout_seconds="${OXIDEDNS_ENGINEERING_MVP_COMMAND_TIMEOUT_SECONDS:-300}"
+evidence_root="${BORONDNS_ENGINEERING_MVP_EVIDENCE_DIR:-$repo_root/target/evidence/engineering-mvp}"
+command_timeout_seconds="${BORONDNS_ENGINEERING_MVP_COMMAND_TIMEOUT_SECONDS:-300}"
 snapshot_dir="$evidence_root/$timestamp"
 mkdir -p "$snapshot_dir/logs"
 
@@ -27,7 +27,7 @@ run_and_capture() {
 }
 
 cat >"$snapshot_dir/README.md" <<EOF
-# OxideDNS Engineering MVP Evidence Snapshot
+# BoronDNS Engineering MVP Evidence Snapshot
 
 - Created UTC: $timestamp
 - Repository: $repo_root
@@ -99,16 +99,16 @@ scripts/interop-bind-notify-refresh.sh
 EOF
 
 run_and_capture security-policy bash -lc "cd '$repo_root' && scripts/check-security-policy.sh"
-run_and_capture cli-evidence bash -lc "cd '$repo_root' && OXIDEDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
-run_and_capture log-evidence bash -lc "cd '$repo_root' && OXIDEDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
-run_and_capture signal-evidence bash -lc "cd '$repo_root' && OXIDEDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
-run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && OXIDEDNS_HEALTH_METRICS_EVIDENCE_DIR='$snapshot_dir/health-metrics-evidence' scripts/capture-health-metrics-evidence.sh"
-run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
-run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
-run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
-run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
-run_and_capture interface-compatibility-evidence bash -lc "cd '$repo_root' && OXIDEDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility-evidence' scripts/capture-interface-compatibility-evidence.sh"
-run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
+run_and_capture cli-evidence bash -lc "cd '$repo_root' && BORONDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
+run_and_capture log-evidence bash -lc "cd '$repo_root' && BORONDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
+run_and_capture signal-evidence bash -lc "cd '$repo_root' && BORONDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
+run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && BORONDNS_HEALTH_METRICS_EVIDENCE_DIR='$snapshot_dir/health-metrics-evidence' scripts/capture-health-metrics-evidence.sh"
+run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && BORONDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
+run_and_capture portability-evidence bash -lc "cd '$repo_root' && BORONDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
+run_and_capture resource-evidence bash -lc "cd '$repo_root' && BORONDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
+run_and_capture coverage-evidence bash -lc "cd '$repo_root' && BORONDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
+run_and_capture interface-compatibility-evidence bash -lc "cd '$repo_root' && BORONDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility-evidence' scripts/capture-interface-compatibility-evidence.sh"
+run_and_capture audit-unused-code bash -lc "cd '$repo_root' && BORONDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
 run_and_capture functional-requirement-references bash -lc "cd '$repo_root' && scripts/check-functional-requirement-references.py"
 
 cat <<EOF

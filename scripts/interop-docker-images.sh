@@ -5,14 +5,14 @@ if ! declare -F campaign_acquire_private_lock >/dev/null 2>&1; then
     source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/campaign-env.sh"
 fi
 
-OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED='alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6'
+BORONDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED='alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6'
 image_setup_absolute_deadline_nanoseconds=""
 
 interop_image_private_lock_root() {
     # Docker tags are daemon-global, so the coordinating namespace must not
     # split when callers have different session runtime or temporary roots.
     local root
-    root="/tmp/oxidedns-interop-image-locks-$(id -u)"
+    root="/tmp/borondns-interop-image-locks-$(id -u)"
     if [[ ! -e "$root" ]]; then
         mkdir -m 0700 "$root" 2>/dev/null || true
     fi
@@ -51,7 +51,7 @@ interop_inspect_authenticated_image() {
     esac
     if ! campaign_run_before_deadline_capture inspected "$command_deadline" \
         docker image inspect --format \
-        '{{.Id}}{{printf "\t"}}{{index .Config.Labels "io.oxidedns.interop.recipe-sha256"}}{{printf "\t"}}{{index .Config.Labels "io.oxidedns.interop.base-image"}}{{printf "\t"}}{{index .Config.Labels "io.oxidedns.interop.packages"}}' \
+        '{{.Id}}{{printf "\t"}}{{index .Config.Labels "io.borondns.interop.recipe-sha256"}}{{printf "\t"}}{{index .Config.Labels "io.borondns.interop.base-image"}}{{printf "\t"}}{{index .Config.Labels "io.borondns.interop.packages"}}' \
         "$tag" 2>/dev/null; then
         return 1
     fi
@@ -68,18 +68,18 @@ _ensure_alpine_interop_image() {
     shift
     local packages=("$@")
     local package
-    local inspect_timeout="${OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS:-30}"
-    local build_timeout="${OXIDEDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS:-900}"
-    local setup_timeout="${OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS:-960}"
+    local inspect_timeout="${BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS:-30}"
+    local build_timeout="${BORONDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS:-900}"
+    local setup_timeout="${BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS:-960}"
     local deadline_nanoseconds absolute_deadline_nanoseconds build_dir=""
     local maximum_timeout=2147483647
-    local base_image="${OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE:-$OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED}"
+    local base_image="${BORONDNS_INTEROP_ALPINE_BASE_IMAGE:-$BORONDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED}"
 
     [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || {
         printf 'invalid Docker interop image name: %s\n' "$name" >&2
         return 1
     }
-    [[ "$base_image" == "$OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" ]] || {
+    [[ "$base_image" == "$BORONDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" ]] || {
         printf 'unsupported Docker interop Alpine base image: %s\n' "$base_image" >&2
         return 1
     }
@@ -138,7 +138,7 @@ _ensure_alpine_interop_image() {
     done
     local packages_text="${packages[*]}" recipe_sha256 tag command_timeout command_deadline image_id lock_root
     recipe_sha256="$(interop_image_recipe_sha256 "$name" "$base_image" "${packages[@]}")" || return 1
-    tag="oxidedns-interop-alpine-$name:recipe-${recipe_sha256:0:20}"
+    tag="borondns-interop-alpine-$name:recipe-${recipe_sha256:0:20}"
 
     command_deadline="$(campaign_deadline_capped "$deadline_nanoseconds" "$inspect_timeout")" || return 1
     if interop_inspect_authenticated_image image_id "$command_deadline" "$tag" "$recipe_sha256" \
@@ -161,7 +161,7 @@ _ensure_alpine_interop_image() {
         return 0
     fi
 
-    campaign_prepare_private_temporary_tree "${TMPDIR:-/tmp}" oxidedns-interop-builds \
+    campaign_prepare_private_temporary_tree "${TMPDIR:-/tmp}" borondns-interop-builds \
         interop_image_build_context build_dir "$deadline_nanoseconds" \
         "$absolute_deadline_nanoseconds" || {
         printf 'cannot create descriptor-bound Docker image build context\n' >&2
@@ -170,9 +170,9 @@ _ensure_alpine_interop_image() {
     image_setup_build_dir="$build_dir"
     {
         printf 'FROM %s\n' "$base_image"
-        printf 'LABEL io.oxidedns.interop.recipe-sha256="%s"\n' "$recipe_sha256"
-        printf 'LABEL io.oxidedns.interop.base-image="%s"\n' "$base_image"
-        printf 'LABEL io.oxidedns.interop.packages="%s"\n' "$packages_text"
+        printf 'LABEL io.borondns.interop.recipe-sha256="%s"\n' "$recipe_sha256"
+        printf 'LABEL io.borondns.interop.base-image="%s"\n' "$base_image"
+        printf 'LABEL io.borondns.interop.packages="%s"\n' "$packages_text"
         printf 'RUN set -eu; for attempt in 1 2 3 4 5; do apk add --no-cache'
         for package in "${packages[@]}"; do
             printf ' %s' "$package"

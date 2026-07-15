@@ -3,7 +3,7 @@
 use std::{hint::black_box, sync::OnceLock};
 
 use libfuzzer_sys::fuzz_target;
-use oxidedns_core::{
+use borondns_core::{
     dns::{
         AnswerOptions, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName, Header, Opcode,
         RecordType, Transport, answer_message_with_notify_hooks,

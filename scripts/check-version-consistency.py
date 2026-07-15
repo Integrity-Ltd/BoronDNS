@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check OxideDNS release-version consistency across excluded crates and locks."""
+"""Check BoronDNS release-version consistency across excluded crates and locks."""
 
 from __future__ import annotations
 
@@ -60,8 +60,8 @@ def main() -> int:
         check_equal(errors, "release tag", args.tag, expected)
 
     for manifest_path, dependencies in [
-        ("crates/oxidedns-cli/Cargo.toml", ["oxidedns-core", "oxidedns-server"]),
-        ("crates/oxidedns-server/Cargo.toml", ["oxidedns-core"]),
+        ("crates/borondns-cli/Cargo.toml", ["borondns-core", "borondns-server"]),
+        ("crates/borondns-server/Cargo.toml", ["borondns-core"]),
     ]:
         manifest = load_toml(ROOT / manifest_path)
         for dependency in dependencies:
@@ -74,7 +74,7 @@ def main() -> int:
 
     for manifest_path in [
         "crates/oxide-gun-ebpf/Cargo.toml",
-        "crates/oxidedns-server-ebpf/Cargo.toml",
+        "crates/borondns-server-ebpf/Cargo.toml",
     ]:
         manifest = load_toml(ROOT / manifest_path)
         check_equal(
@@ -84,7 +84,7 @@ def main() -> int:
             expected,
         )
 
-    for package in ["oxide-gun", "oxidedns-cli", "oxidedns-core", "oxidedns-server"]:
+    for package in ["oxide-gun", "borondns-cli", "borondns-core", "borondns-server"]:
         check_equal(
             errors,
             f"Cargo.lock package {package}",
@@ -93,9 +93,9 @@ def main() -> int:
         )
 
     for lock_path, package in [
-        ("fuzz/Cargo.lock", "oxidedns-core"),
+        ("fuzz/Cargo.lock", "borondns-core"),
         ("crates/oxide-gun-ebpf/Cargo.lock", "oxide-gun-ebpf"),
-        ("crates/oxidedns-server-ebpf/Cargo.lock", "oxidedns-server-ebpf"),
+        ("crates/borondns-server-ebpf/Cargo.lock", "borondns-server-ebpf"),
     ]:
         check_equal(
             errors,

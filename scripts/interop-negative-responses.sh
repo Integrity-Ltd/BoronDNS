@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/negative-responses-$$"
-artifact_dir="${OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,16 +38,16 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -66,7 +66,7 @@ primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/negative-response-summary.tsv"
 traceability_tsv="$workdir/negative-response-traceability.tsv"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -461,11 +461,11 @@ with open(TRACEABILITY_PATH, "w", encoding="utf-8") as handle:
 print(f"negative_response_cases={len(cases)}")
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "logfmt"
 
@@ -485,7 +485,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -501,12 +501,12 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    ready_body="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null || true)"
+    ready_body="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null || true)"
     if [[ "$ready_body" == *'"status":"ready"'* ]]; then
         ready=1
         break
@@ -514,17 +514,17 @@ for _ in {1..200}; do
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready during negative-response interop" >&2
+    echo "BoronDNS did not become ready during negative-response interop" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+client_summary="$(python3 "$client" "$borondns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_secondary_queries_total{zone="negative.test."} 7' \
-    'oxidedns_secondary_query_responses_total{zone="negative.test.",rcode="NOERROR"} 5' \
-    'oxidedns_secondary_query_responses_total{zone="negative.test.",rcode="NXDOMAIN"} 2'; do
+    'borondns_zones_active 1' \
+    'borondns_secondary_queries_total{zone="negative.test."} 7' \
+    'borondns_secondary_query_responses_total{zone="negative.test.",rcode="NOERROR"} 5' \
+    'borondns_secondary_query_responses_total{zone="negative.test.",rcode="NXDOMAIN"} 2'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected negative-response line: $expected" >&2
         exit 1
@@ -535,8 +535,8 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$summary_tsv" "$artifact_dir/negative-response-summary.tsv"
     cp "$traceability_tsv" "$artifact_dir/negative-response-traceability.tsv"
     printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"

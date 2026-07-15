@@ -36,8 +36,8 @@ REQUIRED_ELEMENTS = {
     ("health", "/readyz"),
     ("health", "/healthz"),
     ("health", "/metrics"),
-    ("metric", "oxidedns_secondary_build_info"),
-    ("metric", "oxidedns_secondary_query_duration_seconds"),
+    ("metric", "borondns_secondary_build_info"),
+    ("metric", "borondns_secondary_query_duration_seconds"),
     ("log-field", "timestamp"),
     ("log-field", "message"),
     ("network-role", "dns"),
@@ -139,7 +139,7 @@ def check_three_role_docs(repo_root: Path) -> None:
     if "accepts authorized NOTIFY on the DNS listeners" not in readme:
         fail("README.md must state that NOTIFY is accepted on DNS listeners")
 
-    srs = (repo_root / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md").read_text(
+    srs = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md").read_text(
         encoding="utf-8"
     )
     if "with `dns`, `mgmt`, `transfer`, and `notify` sub-keys" in srs:
@@ -169,7 +169,7 @@ def check_previous_diff(
     removed = sorted(set(previous) - set(current))
     if removed and not major_release:
         fail(
-            "interface elements removed without OXIDEDNS_INTERFACE_MAJOR_RELEASE=1: "
+            "interface elements removed without BORONDNS_INTERFACE_MAJOR_RELEASE=1: "
             + ", ".join(f"{category}:{element}" for category, element in removed)
         )
 
@@ -179,7 +179,7 @@ def check_previous_diff(
     if breaking and not major_release:
         fail(
             "new major-policy interface elements require explicit release-note review "
-            "or OXIDEDNS_INTERFACE_MAJOR_RELEASE=1: "
+            "or BORONDNS_INTERFACE_MAJOR_RELEASE=1: "
             + ", ".join(f"{category}:{element}" for category, element in breaking)
         )
 
@@ -214,7 +214,7 @@ def main() -> None:
     if args.previous:
         import os
 
-        major_release = os.environ.get("OXIDEDNS_INTERFACE_MAJOR_RELEASE") == "1"
+        major_release = os.environ.get("BORONDNS_INTERFACE_MAJOR_RELEASE") == "1"
         check_previous_diff(Path(args.previous), current, major_release)
 
     print(f"interface_compatibility_check=passed rows={len(current)}")

@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/ixfr-notimp-fallback-$$"
-artifact_dir="${OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_IXFR_FALLBACK_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,9 +38,9 @@ cleanup() {
             echo "---- fake-primary.stderr ----" >&2
             tail -100 "$workdir/fake-primary.stderr" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -100 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -100 "$workdir/borondns.log" >&2
         }
         [[ -f "$workdir/primary-soa.out" ]] && {
             echo "---- primary-soa.out ----" >&2
@@ -67,7 +67,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -82,7 +82,7 @@ PY
 
 fake_primary="$workdir/fake-primary.py"
 primary_log="$workdir/fake-primary.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 summary_env="$workdir/ixfr-fallback-summary.env"
 
 cat >"$fake_primary" <<'PY'
@@ -298,11 +298,11 @@ if __name__ == "__main__":
     main()
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -342,42 +342,42 @@ if [[ "$primary_soa" != *" 1 1 1 30 5"* ]]; then
     exit 1
 fi
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial fake-primary AXFR" >&2
+    echo "BoronDNS did not become ready after initial fake-primary AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer \
     >"$workdir/initial-a.out"
 initial_a="$(<"$workdir/initial-a.out")"
 if [[ "$initial_a" != *"192.0.2.11"* ]]; then
-    echo "OxideDNS did not serve initial AXFR data" >&2
+    echo "BoronDNS did not serve initial AXFR data" >&2
     exit 1
 fi
 
 final_soa=""
 metrics=""
 for _ in {1..160}; do
-    final_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short || true)"
-    metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" 2>/dev/null || true)"
+    final_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short || true)"
+    metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics" 2>/dev/null || true)"
     if [[ "$final_soa" == *" 3 1 1 30 5"* ]] &&
-        [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3'* ]] &&
-        [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3'* ]] &&
-        [[ "$metrics" == *'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1'* ]] &&
-        [[ "$metrics" == *'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0'* ]] &&
-        [[ "$metrics" == *'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'* ]] &&
+        [[ "$metrics" == *'borondns_transfer_sessions_started_total{protocol="axfr"} 3'* ]] &&
+        [[ "$metrics" == *'borondns_transfer_sessions_completed_total{protocol="axfr"} 3'* ]] &&
+        [[ "$metrics" == *'borondns_transfer_sessions_started_total{protocol="ixfr"} 1'* ]] &&
+        [[ "$metrics" == *'borondns_transfer_sessions_completed_total{protocol="ixfr"} 0'* ]] &&
+        [[ "$metrics" == *'borondns_transfer_sessions_failed_total{protocol="ixfr"} 1'* ]] &&
         grep -F "TCP AXFR serial=3" "$primary_log" >/dev/null 2>&1; then
         break
     fi
@@ -387,15 +387,15 @@ printf '%s\n' "$final_soa" >"$workdir/final-soa.out"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 
 if [[ "$final_soa" != *" 3 1 1 30 5"* ]]; then
-    echo "OxideDNS did not publish serial 3 after IXFR NOTIMP fallback/cooldown" >&2
+    echo "BoronDNS did not publish serial 3 after IXFR NOTIMP fallback/cooldown" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer \
     >"$workdir/final-a.out"
 final_a="$(<"$workdir/final-a.out")"
 if [[ "$final_a" != *"192.0.2.13"* ]]; then
-    echo "OxideDNS did not serve final fallback AXFR data" >&2
+    echo "BoronDNS did not serve final fallback AXFR data" >&2
     exit 1
 fi
 
@@ -417,13 +417,13 @@ for expected in \
 done
 
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 3' \
-    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 3' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 3' \
-    'oxidedns_transfer_sessions_started_total{protocol="ixfr"} 1' \
-    'oxidedns_transfer_sessions_completed_total{protocol="ixfr"} 0' \
-    'oxidedns_transfer_sessions_failed_total{protocol="ixfr"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 3' \
+    'borondns_transfer_sessions_started_total{protocol="axfr"} 3' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 3' \
+    'borondns_transfer_sessions_started_total{protocol="ixfr"} 1' \
+    'borondns_transfer_sessions_completed_total{protocol="ixfr"} 0' \
+    'borondns_transfer_sessions_failed_total{protocol="ixfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected line: $expected" >&2
         exit 1
@@ -449,8 +449,8 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$workdir/fake-primary.stderr" "$artifact_dir/fake-primary.stderr"
     cp "$fake_primary" "$artifact_dir/fake-primary.py"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$workdir/primary-soa.out" "$artifact_dir/primary-soa.out"
     cp "$workdir/initial-a.out" "$artifact_dir/initial-a.out"
     cp "$workdir/final-soa.out" "$artifact_dir/final-soa.out"

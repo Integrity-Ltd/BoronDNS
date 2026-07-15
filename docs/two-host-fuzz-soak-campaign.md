@@ -12,7 +12,7 @@ experiments.
 
 Default SSH targets:
 
-- `oxidedns-1`
+- `borondns-1`
 - `oxidegun-1`
 
 Both targets are expected to use the `codex` user through SSH aliases or
@@ -39,7 +39,7 @@ Current targets:
 
 For a direct local `scripts/fuzz-campaign.sh` run, an unset
 `CARGO_TARGET_DIR` selects a fresh private tree below
-`${TMPDIR:-/var/tmp}/oxidedns-fuzz-builds-<uid>/`. The runner removes only the
+`${TMPDIR:-/var/tmp}/borondns-fuzz-builds-<uid>/`. The runner removes only the
 descriptor-created and prepublication-journaled device/inode identity on every
 exit after writing retained artifact hashes; pathname replacement is retained
 and reported. Its journal is staged from an open `O_TMPFILE`, durably publishes
@@ -56,7 +56,7 @@ their parent are owned by the campaign UID, authenticated cleanup performs an
 exact whole-tree quarantine even when invoked through sudo; it never treats
 privilege as authority to recursively delete a same-UID-writable namespace.
 Before that rename, cleanup publishes an exact
-`.oxidedns-retained-cleanup-<root>.<pid>.<nonce>.env` mapping with the original path,
+`.borondns-retained-cleanup-<root>.<pid>.<nonce>.env` mapping with the original path,
 preallocated quarantine path, and parent/object device, inode, and owner. It
 advances from `prepared` to `retained` only after revalidating the quarantined
 inode and emits `cleanup_retained` in the remote log. The retained tree remains
@@ -94,8 +94,8 @@ service per fuzz target on the assigned host, with unit names recorded in
 `assignments.tsv`. This makes later inspection explicit:
 
 ```sh
-ssh oxidedns-1 'systemctl status oxidedns-fuzz-<campaign>-<n>-<target>.service'
-ssh oxidedns-1 'journalctl -u oxidedns-fuzz-<campaign>-<n>-<target>.service --no-pager -n 200'
+ssh borondns-1 'systemctl status borondns-fuzz-<campaign>-<n>-<target>.service'
+ssh borondns-1 'journalctl -u borondns-fuzz-<campaign>-<n>-<target>.service --no-pager -n 200'
 ```
 
 Check and collect later with the commands written in the manifest:
@@ -133,7 +133,7 @@ the exact recorded commit plus a clean worktree before evidence writes. Plan
 paths and ancestors must be real and owned, the immutable plan tree must not be
 group/world writable, and management commands execute a regenerated private
 command copy derived from the validated semantic plan. Local plan and runner
-locks live under a dedicated `.oxidedns-campaign-locks` mode-0700 directory;
+locks live under a dedicated `.borondns-campaign-locks` mode-0700 directory;
 their parent must be owned by the campaign user and must not be group/world
 writable. Each lock is opened without following symlinks and its live descriptor
 is checked for regular-file type, owner, link count, and mode before locking.
@@ -172,26 +172,26 @@ sample; ordinary unit exit is an empty sample, not a sampler failure.
 
 For CPU-saturating campaigns, repeat the target set and weight the host list.
 With the current nine-target set, the 2:3 host weighting below launches 135 fuzz
-services, which is about 54 instances on the 48-core `oxidedns-1` host and 81
+services, which is about 54 instances on the 48-core `borondns-1` host and 81
 instances on the 72-core `oxidegun-1` host. That is the preferred 70%-80% CPU
 campaign shape when the servers are otherwise idle:
 
 ```sh
 scripts/fuzz-soak-two-host-campaign.sh launch \
-  --remote-repo /home/codex/oxidedns-fuzz \
+  --remote-repo /home/codex/borondns-fuzz \
   --duration 86400 \
   --target-repeat 15 \
   --sampler-interval 60 \
   --sanitizer address \
-  --host oxidedns-1 \
+  --host borondns-1 \
   --host oxidegun-1 \
-  --host oxidedns-1 \
+  --host borondns-1 \
   --host oxidegun-1 \
   --host oxidegun-1
 ```
 
 The repeated `--host` values are an ordered assignment-slot schedule, not five
-distinct machines: two slots select `oxidedns-1` and three select
+distinct machines: two slots select `borondns-1` and three select
 `oxidegun-1`. Target services preserve that exact 2:3 round-robin weighting.
 Sampler installation, status, and collection derive the stable first-occurrence
 physical host list, so each actual host receives exactly one sampler and one
@@ -248,7 +248,7 @@ Remote waits and child watchdogs use one absolute `CLOCK_BOOTTIME` deadline and
 timerfd-based expiry, so host suspend consumes rather than replenishes the
 budget. After expiry they send process-group `SIGKILL` and poll pidfd/`WNOHANG`
 only through a separate bounded termination tail (five seconds by default,
-configurable with `OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS`, hard
+configurable with `BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS`, hard
 maximum 30). If an uninterruptible process cannot be reaped in that tail, the
 supervisor returns 125 promptly, reports that `SIGKILL` remains pending, and
 leaves kernel reparenting to recover the orphan rather than entering an
@@ -269,11 +269,11 @@ allowlisted unit plus five seconds of finalization reserve, so an inactive host
 deterministically records its final sample at or after the deadline. Evidence
 outside that derived terminal window is rejected. Each cargo-fuzz invocation also has an outer wall-clock deadline in
 addition to libFuzzer's `-max_total_time`; the default build/start grace is 1800
-seconds and can be narrowed with `OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS`.
-`OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` controls the final kill grace.
+seconds and can be narrowed with `BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS`.
+`BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` controls the final kill grace.
 Every rustup, Git, and tool-version preflight is independently hard bounded;
-`OXIDEDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS` and
-`OXIDEDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS` control that bound. Target and
+`BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS` and
+`BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS` control that bound. Target and
 sampler units also carry a plan-derived `RuntimeMaxSec`: target units receive
 campaign duration plus one hour, while sampler units additionally receive the
 600-second setup reserve and their derived terminal-probe reserve. Both use a
@@ -282,8 +282,8 @@ runner-level timeout path fails.
 
 All controller SSH, rsync, and scp paths set connection and keepalive bounds and
 also run under command-specific wall-clock limits. The defaults can be tuned
-with the `OXIDEDNS_CAMPAIGN_SSH_*`, `OXIDEDNS_CAMPAIGN_REMOTE_*_TIMEOUT_SECONDS`,
-and `OXIDEDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS` environment variables.
+with the `BORONDNS_CAMPAIGN_SSH_*`, `BORONDNS_CAMPAIGN_REMOTE_*_TIMEOUT_SECONDS`,
+and `BORONDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS` environment variables.
 Read-only status and collection still validate saved commands against their
 manifest-bound tool digests, but do not require the controller's current Rust
 or cargo-fuzz binaries to retain the same digest for the lifetime of a remote
@@ -295,7 +295,7 @@ but never full argv, so unrelated same-UID processes and command-line secrets
 cannot enter campaign evidence.
 
 Each target attempt also gets a freshly created, runner-owned
-`CARGO_TARGET_DIR` under `/var/tmp/oxidedns-fuzz-<campaign>/`, outside both the
+`CARGO_TARGET_DIR` under `/var/tmp/borondns-fuzz-<campaign>/`, outside both the
 checkout's ignored `target/` and `fuzz/target/` trees. The runner refuses a
 symlink, wrong owner, or non-empty build directory before invoking Cargo.
 `config.txt` and `tool-versions.txt` record the selected paths and the hashes of
@@ -384,11 +384,11 @@ identity, size, modification time, and change time must remain stable through
 each hash.
 Defaults are 10,800 seconds, 100,000 entries, depth 64, 2 GiB per file, and
 64 GiB total. Operators may lower them with
-`OXIDEDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_DEPTH`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES`, and
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES`; hard maxima are 86,400 seconds,
+`BORONDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_DEPTH`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES`, and
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES`; hard maxima are 86,400 seconds,
 1,000,000 entries, depth 128, 16 GiB per file, and 1 TiB total. Invalid,
 overflowing, exhausted, or exceeded budgets fail closed without publishing.
 The authenticated plan supplies the exact target-instance set, per-target
@@ -446,7 +446,7 @@ cargo +nightly fuzz check zone_store_state
 cargo +nightly fuzz check zone_store_concurrent
 cargo +nightly fuzz check server_lifecycle
 cargo +nightly fuzz run --sanitizer address dns_datagram -- -max_total_time=60
-cargo +nightly miri test -p oxidedns-core
+cargo +nightly miri test -p borondns-core
 ```
 
 If Miri cannot run a crate because of unsupported OS operations, record the
@@ -467,7 +467,7 @@ scripts/capture-soak-handoff.sh
 
 Prepared execution shape:
 
-- run OxideDNS as a service or supervised process on each host;
+- run BoronDNS as a service or supervised process on each host;
 - use loopback or same-host synthetic primaries by default;
 - run steady query and transfer churn locally, not over the physical NIC;
 - sample `/metrics`, `/readyz`, RSS, fd count, thread count, and process status
@@ -489,7 +489,7 @@ MTU constraints, and cleanup. Use existing local XDP smoke tools first:
 
 ```sh
 scripts/oxide-gun-xdp-pkexec-tests.sh
-scripts/oxidedns-af-xdp-veth-smoke.sh
+scripts/borondns-af-xdp-veth-smoke.sh
 ```
 
 Physical NIC XDP soak should wait until UDP/XDP tuning stabilizes. It should
@@ -521,7 +521,7 @@ minimizing or rerunning.
 Campaign ID: `20260612T090724Z`
 
 Remote evidence root:
-`/home/codex/oxidedns-fuzz/target/evidence/fuzz-soak-two-host-20260612T090724Z/`
+`/home/codex/borondns-fuzz/target/evidence/fuzz-soak-two-host-20260612T090724Z/`
 
 Result: passed. No `crash-*`, `oom-*`, or `timeout-*` artifacts were present on
 either host at final collection time.
@@ -530,7 +530,7 @@ Scope:
 
 | Host | Targets | Result |
 | --- | --- | --- |
-| `oxidedns-1` | `dns_datagram`, `transfer_stream`, `zone_image_datagram` | `passed`, exit `0`, `86400` seconds each |
+| `borondns-1` | `dns_datagram`, `transfer_stream`, `zone_image_datagram` | `passed`, exit `0`, `86400` seconds each |
 | `oxidegun-1` | `notify_edns_datagram`, `tsig_message` | `passed`, exit `0`, `86400` seconds each |
 
 Tooling:
@@ -548,7 +548,7 @@ Host metadata at final check:
 
 | Host | Kernel | CPU | CPUs | Memory | Root disk |
 | --- | --- | --- | ---: | ---: | --- |
-| `oxidedns-1` | `7.0.0-22-generic` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 438G total, 368G free |
+| `borondns-1` | `7.0.0-22-generic` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 438G total, 368G free |
 | `oxidegun-1` | `7.0.0-22-generic` | Intel Xeon Gold 6140 @ 2.30GHz | 72 | 123Gi | 878G total, 818G free |
 
 Interpretation: this is first-pass stability evidence for the listed fuzz
@@ -560,7 +560,7 @@ protocol correctness outside the paths and inputs exercised by the fuzz targets.
 Campaign ID: `20260614T003811Z`
 
 Remote evidence root:
-`/home/codex/oxidedns-fuzz/target/evidence/fuzz-soak-two-host-20260614T003811Z/`
+`/home/codex/borondns-fuzz/target/evidence/fuzz-soak-two-host-20260614T003811Z/`
 
 Collected local evidence:
 `target/evidence/fuzz-soak-two-host-20260614T003811Z/remotes/`
@@ -574,7 +574,7 @@ Scope:
 
 | Host | Targets | Services | Result |
 | --- | --- | ---: | --- |
-| `oxidedns-1` | `dns_datagram`, `transfer_stream` | 30 | 30/30 passed |
+| `borondns-1` | `dns_datagram`, `transfer_stream` | 30 | 30/30 passed |
 | `oxidegun-1` | `notify_edns_datagram`, `tsig_message`, `zone_image_datagram` | 45 | 45/45 passed |
 
 Fuzz executions:
@@ -602,7 +602,7 @@ Host metadata:
 
 | Host | Kernel | CPU | CPUs | Memory | Peak active fuzz units |
 | --- | --- | --- | ---: | ---: | ---: |
-| `oxidedns-1` | `7.0.12-borondns1` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 30 |
+| `borondns-1` | `7.0.12-borondns1` | Intel Xeon Gold 6246 @ 3.30GHz | 48 | 373Gi | 30 |
 | `oxidegun-1` | `7.0.0-22-generic` | Intel Xeon Gold 6140 @ 2.30GHz | 72 | 123Gi | 45 |
 
 Interpretation: this post-v0.2.0-readiness campaign provides retained

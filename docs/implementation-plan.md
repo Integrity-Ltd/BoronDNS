@@ -1,7 +1,7 @@
-# OxideDNS Implementation Plan
+# BoronDNS Implementation Plan
 
 This plan records implementation direction and points to the milestone
-boundaries for the current OxideDNS SRS v0.9.1. It is intentionally not the
+boundaries for the current BoronDNS SRS v0.9.1. It is intentionally not the
 detailed evidence ledger, not the operator runbook, and not a substitute for the
 normative SRS.
 
@@ -48,7 +48,7 @@ ownership, representative evidence, and nearby non-claims are owned by
 formal-acceptance gaps are owned by `docs/verification-ledger.md`,
 `docs/mvp-gap-register.md`, and `docs/appendix-a-traceability-matrix.md`.
 
-Release-candidate runtime scope excludes eBPF/XDP, OxideDNS server AF_XDP,
+Release-candidate runtime scope excludes eBPF/XDP, BoronDNS server AF_XDP,
 io_uring, NSD-style packed arena storage, and a hot response-cache backend.
 Those remain post-MVP optimization tracks. The current `oxide-gun` AF_XDP
 backend is load-generator scope only.
@@ -81,7 +81,7 @@ not the canonical inventory of every evidence script, artifact environment
 variable, release-gate command, test case, or requirement-range traceability
 row. When implementation status changes:
 
-- put normative behavior changes in `docs/OxideDNS-Secondary-SRS-v0.9.1.md`;
+- put normative behavior changes in `docs/BoronDNS-Secondary-SRS-v0.9.1.md`;
 - put implementation structure and unsafe-boundary changes in
   `docs/architecture.md`;
 - put operator commands and deployment examples in

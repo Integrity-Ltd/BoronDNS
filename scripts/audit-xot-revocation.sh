@@ -39,7 +39,7 @@ print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")
 
-xot_source = runtime_sources.get(Path("crates/oxidedns-server/src/transfer.rs"), "")
+xot_source = runtime_sources.get(Path("crates/borondns-server/src/transfer.rs"), "")
 required_fragments = [
     ("tokio-rustls client connector", "TlsConnector"),
     ("rustls client config", "ClientConfig"),
@@ -118,7 +118,7 @@ if "reqwest" in package_names:
             if "reqwest::" in line:
                 reqwest_matches.append(f"{path}:{line_number}: {line.strip()}")
     disallowed_reqwest = [
-        match for match in reqwest_matches if not match.startswith("crates/oxidedns-server/src/lib.rs:")
+        match for match in reqwest_matches if not match.startswith("crates/borondns-server/src/lib.rs:")
     ]
     if disallowed_reqwest:
         print("status=failed")

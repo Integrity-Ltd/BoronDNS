@@ -253,6 +253,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "borondns-cli"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "borondns-core",
+ "borondns-server",
+ "clap",
+ "getrandom 0.3.4",
+ "rcgen",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "borondns-core"
+version = "0.9.0"
+dependencies = [
+ "arc-swap",
+ "base64",
+ "hmac",
+ "libc",
+ "serde",
+ "sha1",
+ "sha2",
+ "siphasher",
+ "smallvec",
+ "subtle",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "borondns-server"
+version = "0.9.0"
+dependencies = [
+ "axum",
+ "aya",
+ "borondns-core",
+ "flate2",
+ "getrandom 0.3.4",
+ "http-body",
+ "libc",
+ "rcgen",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "tracing",
+ "x509-parser",
+ "xdp",
+ "zeroize",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -995,7 +1060,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxide-gun"
-version = "0.2.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "aya",
@@ -1006,71 +1071,6 @@ dependencies = [
  "time",
  "toml",
  "xdp",
-]
-
-[[package]]
-name = "oxidedns-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "clap",
- "getrandom 0.3.4",
- "oxidedns-core",
- "oxidedns-server",
- "rcgen",
- "time",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "oxidedns-core"
-version = "0.2.0"
-dependencies = [
- "arc-swap",
- "base64",
- "hmac",
- "libc",
- "serde",
- "sha1",
- "sha2",
- "siphasher",
- "smallvec",
- "subtle",
- "thiserror 2.0.18",
- "toml",
- "tracing",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "oxidedns-server"
-version = "0.2.0"
-dependencies = [
- "axum",
- "aya",
- "flate2",
- "getrandom 0.3.4",
- "http-body",
- "libc",
- "oxidedns-core",
- "rcgen",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "thiserror 2.0.18",
- "tokio",
- "tokio-rustls",
- "toml",
- "tracing",
- "x509-parser",
- "xdp",
- "zeroize",
 ]
 
 [[package]]

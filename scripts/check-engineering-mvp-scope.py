@@ -186,7 +186,7 @@ def main() -> None:
         "architectural, read-only-runtime, safe-Rust, spoofing, log-field, maintainability, XoT revocation, and passive-DNSSEC audit output",
         "bounded `perf-smoke.sh` metrics and focused local protocol smoke artifacts",
         "Those focused default smoke scripts are not the broader real-primary interop matrix",
-        "remains opt-in through `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` or `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`",
+        "remains opt-in through `BORONDNS_EVIDENCE_RUN_INTEROP=1` or `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`",
     ]:
         require(
             phrase in release_guide,

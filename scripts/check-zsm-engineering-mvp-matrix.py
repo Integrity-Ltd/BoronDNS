@@ -49,7 +49,7 @@ def require_symbol(repo_root: Path, path: str, symbol: str | None, context: str)
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     matrix_path = repo_root / "docs" / "zsm-engineering-mvp-matrix.tsv"
-    srs_text = (repo_root / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md").read_text(
+    srs_text = (repo_root / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md").read_text(
         encoding="utf-8"
     )
 

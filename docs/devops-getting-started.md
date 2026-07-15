@@ -1,14 +1,14 @@
 # DevOps Getting Started
 
-This guide is the short path from a fresh clone to a locally validated OxideDNS
+This guide is the short path from a fresh clone to a locally validated BoronDNS
 binary. Use the [Operator Deployment Guide](operator-deployment-guide.md) for the
 full production-oriented reference.
 
 ## 1. Clone
 
 ```bash
-git clone git@github.com:Integrity-Ltd/oxidedns.git
-cd oxidedns
+git clone git@github.com:Integrity-Ltd/borondns.git
+cd borondns
 ```
 
 The repository pins Rust `1.96.1` exactly in `rust-toolchain.toml`; release
@@ -66,7 +66,7 @@ For a human-operated primary-server smoke test, run the BIND interop check after
 the normal Rust tests:
 
 ```bash
-OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
+BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
   scripts/interop-bind-axfr-docker.sh
 ```
 
@@ -74,7 +74,7 @@ For broader packet-content coverage against BIND, including a generated
 multi-type torture zone and a retained `dumpcap` capture, run:
 
 ```bash
-OXIDEDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR=target/evidence/bind-packet-torture \
+BORONDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR=target/evidence/bind-packet-torture \
   scripts/interop-bind-packet-torture-docker.sh
 ```
 
@@ -85,14 +85,14 @@ large RRL source-IP rotation.
 ## 4. Build the Binary
 
 ```bash
-cargo build --locked --release -p oxidedns-cli
-./target/release/oxidedns --version
+cargo build --locked --release -p borondns-cli
+./target/release/borondns --version
 ```
 
 For a host install:
 
 ```bash
-sudo install -m 0755 target/release/oxidedns /usr/local/bin/oxidedns
+sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
 ```
 
 ## 5. Build the Installer Archive
@@ -104,21 +104,21 @@ scripts/package-installer.sh
 ```
 
 The output is written under `target/dist/` as
-`oxidedns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
-archive contains `bin/oxidedns`, an XDP-enabled `bin/oxide-gun`, `install.sh`,
+`borondns-<version>-x86_64-unknown-linux-musl.tar.xz` with a checksum file. The
+archive contains `bin/borondns`, an XDP-enabled `bin/oxide-gun`, `install.sh`,
 systemd/OpenRC service templates, the example config, licenses, and an installer
 README. On a target host:
 
 The default `x86_64-unknown-linux-musl` packaging path verifies both binaries
 with `ldd`/`file` output and fails if static linking cannot be confirmed. Use
-`OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1` only for non-release developer or distribution
+`BORONDNS_PACKAGE_ALLOW_DYNAMIC=1` only for non-release developer or distribution
 experiments. Setting it always forces `release_eligible=0`, records
 `dynamic_link_override=1`, and uses the `-nonrelease-dynamic` artifact/tag
 namespace for an otherwise clean tree; GitHub Actions rejects the override.
 Those artifacts are not the published portability baseline.
 Packaging also requires a clean Git worktree, including no untracked files, and
 rechecks its commit and source status before publishing artifacts. For a local
-diagnostic build only, `OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` permits an
+diagnostic build only, `BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` permits an
 unchanged dirty tree while marking the manifests `source_clean=0`,
 `release_eligible=0`, and `dirty_source_override=1`. GitHub Actions rejects this
 override, so these outputs cannot be release artifacts.
@@ -126,17 +126,17 @@ override, so these outputs cannot be release artifacts.
 ```bash
 tag=v0.2.0
 target_triple=x86_64-unknown-linux-musl
-asset="oxidedns-${tag#v}-$target_triple.tar.xz"
-install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"
+asset="borondns-${tag#v}-$target_triple.tar.xz"
+install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
 sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
 sudo cosign verify-blob \
   --bundle "$install_root/$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$install_root/$asset"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
-sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"
+sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
 
 Set `tag` to the exact downloaded release tag. Signature verification is a
@@ -146,10 +146,10 @@ to that tag's `release-installer.yml` workflow identity.
 For unattended static-zone setup:
 
 ```bash
-sudo OXIDEDNS_ZONE=example.com. \
-  OXIDEDNS_PRIMARY=10.0.0.10:53 \
-  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
-  "$install_root/oxidedns-${tag#v}-$target_triple/install.sh" --yes
+sudo BORONDNS_ZONE=example.com. \
+  BORONDNS_PRIMARY=10.0.0.10:53 \
+  BORONDNS_NOTIFY_SOURCE=10.0.0.10 \
+  "$install_root/borondns-${tag#v}-$target_triple/install.sh" --yes
 ```
 
 ## 6. Build the Docker Image Archive
@@ -161,11 +161,11 @@ smoke-test the same artifact locally with:
 ```bash
 scripts/package-docker-image.sh
 scripts/test-docker-image.sh
-OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
+BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 ```
 
 The output is written under `target/dist/` as
-`oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
+`borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
 matching `.sha256` file. The SBOM command also writes CycloneDX JSON SBOMs,
 SHA-256 sidecars, and an SBOM manifest for the release binaries and Docker
 image. Docker packaging applies the same clean-source requirement and records
@@ -173,12 +173,12 @@ the source-clean and release-eligibility state in both its manifest and image
 labels. Load the image into a local Docker daemon with:
 
 ```bash
-xz -dc target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
-docker run --rm oxidedns:<version> --version
+xz -dc target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
+docker run --rm borondns:<version> --version
 ```
 
 If Docker prints `WARNING: IPv4 forwarding is disabled. Networking will not
-work.`, that warning is from the Docker host, not from OxideDNS. Version output
+work.`, that warning is from the Docker host, not from BoronDNS. Version output
 still works, but bridge networking and published ports may not. Enable Docker's
 required host forwarding, or use a deliberately designed host-network profile
 with host firewall rules.
@@ -188,7 +188,7 @@ ambient Linux capabilities. Map host port 53 to the image's unprivileged 5300
 listener instead of adding `CAP_NET_BIND_SERVICE`:
 
 ```bash
-docker run -d --name oxidedns \
+docker run -d --name borondns \
   --read-only \
   --ulimit nofile=65536:65536 \
   --cap-drop ALL \
@@ -197,9 +197,9 @@ docker run -d --name oxidedns \
   -p 53:5300/udp \
   -p 53:5300/tcp \
   -p 127.0.0.1:8080:8080/tcp \
-  -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
-  oxidedns:<version> \
-  serve --config /etc/oxidedns-secondary/config.toml
+  -v /etc/borondns-secondary/config.toml:/etc/borondns-secondary/config.toml:ro \
+  borondns:<version> \
+  serve --config /etc/borondns-secondary/config.toml
 ```
 
 ## 7. Create a Config
@@ -207,11 +207,11 @@ docker run -d --name oxidedns \
 Start from the checked-in example:
 
 ```bash
-cp config/oxidedns.example.toml /tmp/oxidedns.toml
-$EDITOR /tmp/oxidedns.toml
+cp config/borondns.example.toml /tmp/borondns.toml
+$EDITOR /tmp/borondns.toml
 ```
 
-OxideDNS is a secondary-only authoritative server. It does not load BIND-style
+BoronDNS is a secondary-only authoritative server. It does not load BIND-style
 zone files directly and it does not act as the primary. For a real environment,
 first choose the primary authoritative server that will hold the zone master
 copy, then replace at least:
@@ -230,15 +230,15 @@ as an unprivileged local process. Production DNS service normally uses UDP/TCP
 Validate before starting:
 
 ```bash
-./target/release/oxidedns --validate-config /tmp/oxidedns.toml
-./target/release/oxidedns --dump-config /tmp/oxidedns.toml
-./target/release/oxidedns --config /tmp/oxidedns.toml --validate-config
+./target/release/borondns --validate-config /tmp/borondns.toml
+./target/release/borondns --dump-config /tmp/borondns.toml
+./target/release/borondns --config /tmp/borondns.toml --validate-config
 ```
 
 ## 8. Run Locally
 
 ```bash
-./target/release/oxidedns --config /tmp/oxidedns.toml serve
+./target/release/borondns --config /tmp/borondns.toml serve
 ```
 
 In another shell:
@@ -259,17 +259,17 @@ documentation/example addresses.
 The default runtime path is:
 
 ```text
-/etc/oxidedns-secondary/config.toml
+/etc/borondns-secondary/config.toml
 ```
 
 Install a starting config there with:
 
 ```bash
-sudo install -d -m 0755 /etc/oxidedns-secondary
-sudo install -m 0640 /tmp/oxidedns.toml /etc/oxidedns-secondary/config.toml
+sudo install -d -m 0755 /etc/borondns-secondary
+sudo install -m 0640 /tmp/borondns.toml /etc/borondns-secondary/config.toml
 ```
 
-Then `oxidedns serve` can run without an explicit `--config` argument.
+Then `borondns serve` can run without an explicit `--config` argument.
 
 ## 10. Service Manager Notes
 
@@ -282,7 +282,7 @@ For privileged port 53, prefer one of:
 - keep `[process].disable_core_dumps` and `[process].no_new_privileges` at their
   secure defaults unless you are doing a controlled local debugging run.
 
-OxideDNS ignores `SIGHUP`; configuration topology changes require a process
+BoronDNS ignores `SIGHUP`; configuration topology changes require a process
 restart. If `[secret_store]` is configured, TSIG keys and named XoT profiles
 inside that already configured filesystem root can be reloaded by the
 control-plane `rotate_tsig` or `republish_feed` operations. `SIGTERM` and
@@ -290,7 +290,7 @@ control-plane `rotate_tsig` or `republish_feed` operations. `SIGTERM` and
 
 Provision secret-store rotations as immutable generation directories. Keep all
 manifest paths relative, stage the complete directory, then atomically switch
-the configured `current` symlink. OxideDNS captures that root once per reload,
+the configured `current` symlink. BoronDNS captures that root once per reload,
 rejects writable or symlinked material, and commits either one complete new
 snapshot or retains the prior snapshot.
 

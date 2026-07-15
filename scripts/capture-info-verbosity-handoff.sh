@@ -3,11 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_INFO_VERBOSITY_HANDOFF_DIR:-$repo_root/target/evidence/info-verbosity-handoff-$timestamp}"
+evidence_dir="${BORONDNS_INFO_VERBOSITY_HANDOFF_DIR:-$repo_root/target/evidence/info-verbosity-handoff-$timestamp}"
 
-profile_duration_seconds="${OXIDEDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS:-3600}"
-sample_interval_seconds="${OXIDEDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS:-60}"
-log_rate_window_seconds="${OXIDEDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS:-60}"
+profile_duration_seconds="${BORONDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS:-3600}"
+sample_interval_seconds="${BORONDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS:-60}"
+log_rate_window_seconds="${BORONDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS:-60}"
 
 require_positive_integer() {
     local name="$1"
@@ -18,16 +18,16 @@ require_positive_integer() {
     }
 }
 
-require_positive_integer OXIDEDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS "$profile_duration_seconds"
-require_positive_integer OXIDEDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS "$sample_interval_seconds"
-require_positive_integer OXIDEDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS "$log_rate_window_seconds"
+require_positive_integer BORONDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS "$profile_duration_seconds"
+require_positive_integer BORONDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS "$sample_interval_seconds"
+require_positive_integer BORONDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS "$log_rate_window_seconds"
 
 mkdir -p "$evidence_dir"
 
 cat >"$evidence_dir/info-verbosity-env.env" <<EOF
-OXIDEDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS=$profile_duration_seconds
-OXIDEDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS=$sample_interval_seconds
-OXIDEDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS=$log_rate_window_seconds
+BORONDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS=$profile_duration_seconds
+BORONDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS=$sample_interval_seconds
+BORONDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS=$log_rate_window_seconds
 EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
@@ -80,7 +80,7 @@ timestamp_utc	elapsed_seconds	event_type	severity	requirement_id	description	ope
 EOF
 
 cat >"$evidence_dir/operator-signoff.md" <<'EOF'
-# OxideDNS Info Verbosity Profile Operator Sign-off
+# BoronDNS Info Verbosity Profile Operator Sign-off
 
 - Release:
 - Evidence snapshot:
@@ -112,9 +112,9 @@ cat >"$evidence_dir/release-notes-snippet.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/info-verbosity-runbook.md" <<'EOF'
-# OxideDNS Info Verbosity Profile Runbook
+# BoronDNS Info Verbosity Profile Runbook
 
-1. Start OxideDNS with `log_level = "info"` and the release-selected structured log
+1. Start BoronDNS with `log_level = "info"` and the release-selected structured log
    format, normally `json` or `logfmt`.
 2. Run production-representative DNS query, transfer, NOTIFY, health, and
    metrics traffic for the configured profile duration.
@@ -133,7 +133,7 @@ cat >"$evidence_dir/info-verbosity-runbook.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/info-verbosity-report-template.md" <<EOF
-# OxideDNS Production-Depth Info Verbosity Profile
+# BoronDNS Production-Depth Info Verbosity Profile
 
 ## Scope
 
@@ -155,7 +155,7 @@ cat >"$evidence_dir/info-verbosity-report-template.md" <<EOF
 
 ## Required Attachments
 
-- Raw OxideDNS stdout/stderr or collector export
+- Raw BoronDNS stdout/stderr or collector export
 - \`log-volume-samples.tsv\`
 - \`structured-field-samples.tsv\`
 - \`metrics-samples.tsv\`
@@ -187,7 +187,7 @@ cat >"$evidence_dir/info-verbosity-report-template.md" <<EOF
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Info Verbosity Handoff
+# BoronDNS Info Verbosity Handoff
 
 Created UTC: $timestamp
 
@@ -201,9 +201,9 @@ later acceptance profile.
 Run configuration:
 
 \`\`\`
-OXIDEDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS=$profile_duration_seconds
-OXIDEDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS=$sample_interval_seconds
-OXIDEDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS=$log_rate_window_seconds
+BORONDNS_INFO_VERBOSITY_PROFILE_DURATION_SECONDS=$profile_duration_seconds
+BORONDNS_INFO_VERBOSITY_SAMPLE_INTERVAL_SECONDS=$sample_interval_seconds
+BORONDNS_INFO_VERBOSITY_LOG_RATE_WINDOW_SECONDS=$log_rate_window_seconds
 \`\`\`
 
 Artifacts:

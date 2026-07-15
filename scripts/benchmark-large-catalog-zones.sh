@@ -22,35 +22,35 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-artifact_dir="${OXIDEDNS_LARGE_BENCH_DIR:-$repo_root/target/evidence/large-catalog-benchmark-$timestamp}"
-workdir="${OXIDEDNS_LARGE_BENCH_WORKDIR:-/tmp/oxidedns-large-catalog-bench-$timestamp}"
-bind_container="oxidedns-large-bench-bind-$$"
+artifact_dir="${BORONDNS_LARGE_BENCH_DIR:-$repo_root/target/evidence/large-catalog-benchmark-$timestamp}"
+workdir="${BORONDNS_LARGE_BENCH_WORKDIR:-/tmp/borondns-large-catalog-bench-$timestamp}"
+bind_container="borondns-large-bench-bind-$$"
 bind_image="$(ensure_alpine_bind_image)"
 
-target_rss_mib="${OXIDEDNS_LARGE_BENCH_TARGET_RSS_MIB:-$((8 * 1024))}"
-zone_count="${OXIDEDNS_LARGE_BENCH_ZONES:-128}"
-big_zone_count="${OXIDEDNS_LARGE_BENCH_BIG_ZONES:-16}"
-small_names="${OXIDEDNS_LARGE_BENCH_SMALL_NAMES:-1000}"
-names_per_gib="${OXIDEDNS_LARGE_BENCH_NAMES_PER_GIB:-700000}"
-txt_bytes="${OXIDEDNS_LARGE_BENCH_TXT_BYTES:-1024}"
-address_records_per_name="${OXIDEDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:-1}"
-duration="${OXIDEDNS_LARGE_BENCH_DURATION_SECONDS:-60}"
-warmup_duration="${OXIDEDNS_LARGE_BENCH_WARMUP_SECONDS:-10}"
-transport="${OXIDEDNS_LARGE_BENCH_TRANSPORT:-tcp}"
-server_cpus="${OXIDEDNS_LARGE_BENCH_SERVER_CPUS:-4}"
-client_threads="${OXIDEDNS_LARGE_BENCH_CLIENT_THREADS:-16}"
-client_window="${OXIDEDNS_LARGE_BENCH_CLIENT_WINDOW:-64}"
-response_timeout_ms="${OXIDEDNS_LARGE_BENCH_RESPONSE_TIMEOUT_MS:-1000}"
-pipeline_timing_enabled="${OXIDEDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED:-true}"
-perf_stat_enabled="${OXIDEDNS_LARGE_BENCH_PERF_STAT:-true}"
-perf_record_enabled="${OXIDEDNS_LARGE_BENCH_PERF_RECORD:-false}"
-perf_frequency="${OXIDEDNS_LARGE_BENCH_PERF_FREQUENCY:-99}"
-enforce_rss_target="${OXIDEDNS_LARGE_BENCH_ENFORCE_RSS_TARGET:-true}"
-keep_workdir="${OXIDEDNS_LARGE_BENCH_KEEP_WORKDIR:-false}"
-retain_zone_files="${OXIDEDNS_LARGE_BENCH_RETAIN_ZONE_FILES:-false}"
-tmp_cleanup="${OXIDEDNS_LARGE_BENCH_TMP_CLEANUP:-true}"
-tsig_name="${OXIDEDNS_LARGE_BENCH_TSIG_NAME:-bench-key.}"
-tsig_secret="${OXIDEDNS_LARGE_BENCH_TSIG_SECRET:-c2VjcmV0LWxhcmdlLWJlbmNoLWtleQ==}"
+target_rss_mib="${BORONDNS_LARGE_BENCH_TARGET_RSS_MIB:-$((8 * 1024))}"
+zone_count="${BORONDNS_LARGE_BENCH_ZONES:-128}"
+big_zone_count="${BORONDNS_LARGE_BENCH_BIG_ZONES:-16}"
+small_names="${BORONDNS_LARGE_BENCH_SMALL_NAMES:-1000}"
+names_per_gib="${BORONDNS_LARGE_BENCH_NAMES_PER_GIB:-700000}"
+txt_bytes="${BORONDNS_LARGE_BENCH_TXT_BYTES:-1024}"
+address_records_per_name="${BORONDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:-1}"
+duration="${BORONDNS_LARGE_BENCH_DURATION_SECONDS:-60}"
+warmup_duration="${BORONDNS_LARGE_BENCH_WARMUP_SECONDS:-10}"
+transport="${BORONDNS_LARGE_BENCH_TRANSPORT:-tcp}"
+server_cpus="${BORONDNS_LARGE_BENCH_SERVER_CPUS:-4}"
+client_threads="${BORONDNS_LARGE_BENCH_CLIENT_THREADS:-16}"
+client_window="${BORONDNS_LARGE_BENCH_CLIENT_WINDOW:-64}"
+response_timeout_ms="${BORONDNS_LARGE_BENCH_RESPONSE_TIMEOUT_MS:-1000}"
+pipeline_timing_enabled="${BORONDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED:-true}"
+perf_stat_enabled="${BORONDNS_LARGE_BENCH_PERF_STAT:-true}"
+perf_record_enabled="${BORONDNS_LARGE_BENCH_PERF_RECORD:-false}"
+perf_frequency="${BORONDNS_LARGE_BENCH_PERF_FREQUENCY:-99}"
+enforce_rss_target="${BORONDNS_LARGE_BENCH_ENFORCE_RSS_TARGET:-true}"
+keep_workdir="${BORONDNS_LARGE_BENCH_KEEP_WORKDIR:-false}"
+retain_zone_files="${BORONDNS_LARGE_BENCH_RETAIN_ZONE_FILES:-false}"
+tmp_cleanup="${BORONDNS_LARGE_BENCH_TMP_CLEANUP:-true}"
+tsig_name="${BORONDNS_LARGE_BENCH_TSIG_NAME:-bench-key.}"
+tsig_secret="${BORONDNS_LARGE_BENCH_TSIG_SECRET:-c2VjcmV0LWxhcmdlLWJlbmNoLWtleQ==}"
 
 require_positive_integer() {
     local name="$1"
@@ -83,49 +83,49 @@ require_boolean() {
 }
 
 for pair in \
-    "OXIDEDNS_LARGE_BENCH_TARGET_RSS_MIB:$target_rss_mib" \
-    "OXIDEDNS_LARGE_BENCH_ZONES:$zone_count" \
-    "OXIDEDNS_LARGE_BENCH_BIG_ZONES:$big_zone_count" \
-    "OXIDEDNS_LARGE_BENCH_SMALL_NAMES:$small_names" \
-    "OXIDEDNS_LARGE_BENCH_NAMES_PER_GIB:$names_per_gib" \
-    "OXIDEDNS_LARGE_BENCH_TXT_BYTES:$txt_bytes" \
-    "OXIDEDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:$address_records_per_name" \
-    "OXIDEDNS_LARGE_BENCH_DURATION_SECONDS:$duration" \
-    "OXIDEDNS_LARGE_BENCH_SERVER_CPUS:$server_cpus" \
-    "OXIDEDNS_LARGE_BENCH_CLIENT_THREADS:$client_threads" \
-    "OXIDEDNS_LARGE_BENCH_CLIENT_WINDOW:$client_window" \
-    "OXIDEDNS_LARGE_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms" \
-    "OXIDEDNS_LARGE_BENCH_PERF_FREQUENCY:$perf_frequency"; do
+    "BORONDNS_LARGE_BENCH_TARGET_RSS_MIB:$target_rss_mib" \
+    "BORONDNS_LARGE_BENCH_ZONES:$zone_count" \
+    "BORONDNS_LARGE_BENCH_BIG_ZONES:$big_zone_count" \
+    "BORONDNS_LARGE_BENCH_SMALL_NAMES:$small_names" \
+    "BORONDNS_LARGE_BENCH_NAMES_PER_GIB:$names_per_gib" \
+    "BORONDNS_LARGE_BENCH_TXT_BYTES:$txt_bytes" \
+    "BORONDNS_LARGE_BENCH_ADDRESS_RECORDS_PER_NAME:$address_records_per_name" \
+    "BORONDNS_LARGE_BENCH_DURATION_SECONDS:$duration" \
+    "BORONDNS_LARGE_BENCH_SERVER_CPUS:$server_cpus" \
+    "BORONDNS_LARGE_BENCH_CLIENT_THREADS:$client_threads" \
+    "BORONDNS_LARGE_BENCH_CLIENT_WINDOW:$client_window" \
+    "BORONDNS_LARGE_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms" \
+    "BORONDNS_LARGE_BENCH_PERF_FREQUENCY:$perf_frequency"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
-require_nonnegative_integer OXIDEDNS_LARGE_BENCH_WARMUP_SECONDS "$warmup_duration"
+require_nonnegative_integer BORONDNS_LARGE_BENCH_WARMUP_SECONDS "$warmup_duration"
 
 for pair in \
-    "OXIDEDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED:$pipeline_timing_enabled" \
-    "OXIDEDNS_LARGE_BENCH_PERF_STAT:$perf_stat_enabled" \
-    "OXIDEDNS_LARGE_BENCH_PERF_RECORD:$perf_record_enabled" \
-    "OXIDEDNS_LARGE_BENCH_ENFORCE_RSS_TARGET:$enforce_rss_target" \
-    "OXIDEDNS_LARGE_BENCH_KEEP_WORKDIR:$keep_workdir" \
-    "OXIDEDNS_LARGE_BENCH_RETAIN_ZONE_FILES:$retain_zone_files" \
-    "OXIDEDNS_LARGE_BENCH_TMP_CLEANUP:$tmp_cleanup"; do
+    "BORONDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED:$pipeline_timing_enabled" \
+    "BORONDNS_LARGE_BENCH_PERF_STAT:$perf_stat_enabled" \
+    "BORONDNS_LARGE_BENCH_PERF_RECORD:$perf_record_enabled" \
+    "BORONDNS_LARGE_BENCH_ENFORCE_RSS_TARGET:$enforce_rss_target" \
+    "BORONDNS_LARGE_BENCH_KEEP_WORKDIR:$keep_workdir" \
+    "BORONDNS_LARGE_BENCH_RETAIN_ZONE_FILES:$retain_zone_files" \
+    "BORONDNS_LARGE_BENCH_TMP_CLEANUP:$tmp_cleanup"; do
     require_boolean "${pair%%:*}" "${pair#*:}"
 done
 
 case "$transport" in
 udp | tcp) ;;
 *)
-    printf 'OXIDEDNS_LARGE_BENCH_TRANSPORT must be udp or tcp, got %q\n' "$transport" >&2
+    printf 'BORONDNS_LARGE_BENCH_TRANSPORT must be udp or tcp, got %q\n' "$transport" >&2
     exit 64
     ;;
 esac
 
 if ((big_zone_count > zone_count)); then
-    printf 'OXIDEDNS_LARGE_BENCH_BIG_ZONES must be <= OXIDEDNS_LARGE_BENCH_ZONES\n' >&2
+    printf 'BORONDNS_LARGE_BENCH_BIG_ZONES must be <= BORONDNS_LARGE_BENCH_ZONES\n' >&2
     exit 64
 fi
 
 if [[ "$tmp_cleanup" == "true" ]]; then
-    find /tmp -maxdepth 1 -user "$(id -u)" -type d -name 'oxidedns-large-catalog-bench-*' \
+    find /tmp -maxdepth 1 -user "$(id -u)" -type d -name 'borondns-large-catalog-bench-*' \
         ! -name "$(basename "$workdir")" -mtime +0 -exec rm -rf {} + 2>/dev/null || true
 fi
 
@@ -133,9 +133,9 @@ target_gib=$(((target_rss_mib + 1023) / 1024))
 target_names=$((target_gib * names_per_gib))
 small_zone_count=$((zone_count - big_zone_count))
 small_total_names=$((small_zone_count * small_names))
-if [[ -n "${OXIDEDNS_LARGE_BENCH_BIG_NAMES:-}" ]]; then
-    big_names="$OXIDEDNS_LARGE_BENCH_BIG_NAMES"
-    require_positive_integer OXIDEDNS_LARGE_BENCH_BIG_NAMES "$big_names"
+if [[ -n "${BORONDNS_LARGE_BENCH_BIG_NAMES:-}" ]]; then
+    big_names="$BORONDNS_LARGE_BENCH_BIG_NAMES"
+    require_positive_integer BORONDNS_LARGE_BENCH_BIG_NAMES "$big_names"
 elif ((big_zone_count == 0)); then
     big_names="$small_names"
 else
@@ -177,11 +177,11 @@ append_resource_sample() {
     local cpu=""
     local fd_count=""
 
-    if ! read -r rss vsz threads cpu < <(ps -o rss=,vsz=,nlwp=,pcpu= -p "$oxidedns_pid"); then
+    if ! read -r rss vsz threads cpu < <(ps -o rss=,vsz=,nlwp=,pcpu= -p "$borondns_pid"); then
         return 0
     fi
-    fd_count="$({ find "/proc/$oxidedns_pid/fd" -maxdepth 1 -type l -print 2>/dev/null || true; } | wc -l)"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$oxidedns_pid" "$rss" "$vsz" "$threads" "$fd_count" "$cpu"
+    fd_count="$({ find "/proc/$borondns_pid/fd" -maxdepth 1 -type l -print 2>/dev/null || true; } | wc -l)"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$borondns_pid" "$rss" "$vsz" "$threads" "$fd_count" "$cpu"
 }
 
 phase_metrics_file="$artifact_dir/benchmark-phases.tsv"
@@ -195,7 +195,7 @@ cleanup() {
         kill "$resource_sampler_pid" 2>/dev/null || true
         wait "$resource_sampler_pid" 2>/dev/null || true
     fi
-    for pid_var in perf_record_pid perf_stat_pid oxidedns_pid; do
+    for pid_var in perf_record_pid perf_stat_pid borondns_pid; do
         local pid="${!pid_var:-}"
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
@@ -209,11 +209,11 @@ cleanup() {
         fi
         docker rm -f "$bind_container" >/dev/null 2>&1 || true
     fi
-    if [[ -n "${oxidedns_pid:-}" ]] && ! kill -0 "$oxidedns_pid" 2>/dev/null; then
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && ! kill -0 "$borondns_pid" 2>/dev/null; then
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if ((status != 0)); then
-        for log in "$artifact_dir"/named.log "$artifact_dir"/oxidedns.log "$artifact_dir"/client.log; do
+        for log in "$artifact_dir"/named.log "$artifact_dir"/borondns.log "$artifact_dir"/client.log; do
             [[ -f "$log" ]] || continue
             echo "---- ${log##*/} ----" >&2
             tail -160 "$log" >&2
@@ -399,7 +399,7 @@ phase_finished_ns="$(now_ns)"
 record_phase "generate_zone_files" "$phase_started_ns" "$phase_finished_ns"
 phase_started_ns="$phase_finished_ns"
 
-cat >"$workdir/oxidedns.toml" <<EOF
+cat >"$workdir/borondns.toml" <<EOF
 [server]
 listen_udp = ["127.0.0.1:$dns_port"]
 listen_tcp = ["127.0.0.1:$dns_port"]
@@ -443,7 +443,7 @@ name = "$tsig_name"
 algorithm = "hmac-sha256"
 secret = "$tsig_secret"
 EOF
-cp "$workdir/oxidedns.toml" "$artifact_dir/oxidedns.toml"
+cp "$workdir/borondns.toml" "$artifact_dir/borondns.toml"
 
 docker run -d --name "$bind_container" \
     -p "127.0.0.1:$bind_port:5353/tcp" \
@@ -475,14 +475,14 @@ phase_started_ns="$phase_finished_ns"
 rustc --edition=2024 -O "$repo_root/tools/dns-load-client.rs" -o "$repo_root/target/benchmark-tools/dns-load-client"
 (
     cd "$repo_root"
-    RUSTFLAGS="${OXIDEDNS_LARGE_BENCH_RUSTFLAGS:--C force-frame-pointers=yes}" \
-        cargo build --locked --release -p oxidedns-cli
+    RUSTFLAGS="${BORONDNS_LARGE_BENCH_RUSTFLAGS:--C force-frame-pointers=yes}" \
+        cargo build --locked --release -p borondns-cli
 )
 phase_finished_ns="$(now_ns)"
 record_phase "build_binaries" "$phase_started_ns" "$phase_finished_ns"
 phase_started_ns="$phase_finished_ns"
 
-server_cmd=("$repo_root/target/release/oxidedns" serve --config "$workdir/oxidedns.toml")
+server_cmd=("$repo_root/target/release/borondns" serve --config "$workdir/borondns.toml")
 server_affinity="not-applied"
 if command -v taskset >/dev/null 2>&1; then
     server_cmd=(taskset -c "0-$((server_cpus - 1))" "${server_cmd[@]}")
@@ -493,10 +493,10 @@ printf ' %q' "${server_cmd[@]}" >>"$artifact_dir/server-command.txt"
 printf '\nserver_affinity=%s\n' "$server_affinity" >>"$artifact_dir/server-command.txt"
 printf 'server_affinity=%s\n' "$server_affinity" >>"$artifact_dir/run.env"
 
-"${server_cmd[@]}" >"$artifact_dir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"${server_cmd[@]}" >"$artifact_dir/borondns.log" 2>&1 &
+borondns_pid=$!
 
-ready_deadline="${OXIDEDNS_LARGE_BENCH_READY_TIMEOUT_SECONDS:-3600}"
+ready_deadline="${BORONDNS_LARGE_BENCH_READY_TIMEOUT_SECONDS:-3600}"
 ready=0
 for _ in $(seq 1 "$ready_deadline"); do
     if curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-first.json" 2>/dev/null; then
@@ -506,7 +506,7 @@ for _ in $(seq 1 "$ready_deadline"); do
     sleep 1
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready for large catalog benchmark" >&2
+    echo "BoronDNS did not become ready for large catalog benchmark" >&2
     exit 1
 fi
 
@@ -514,7 +514,7 @@ expected_active_zones=$((zone_count + 1))
 active_zones=0
 for _ in $(seq 1 "$ready_deadline"); do
     if curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-before.prom" 2>/dev/null; then
-        active_zones="$(metric_value oxidedns_zones_active "$artifact_dir/metrics-before.prom")"
+        active_zones="$(metric_value borondns_zones_active "$artifact_dir/metrics-before.prom")"
         active_zones="${active_zones:-0}"
         if ((active_zones >= expected_active_zones)); then
             break
@@ -523,27 +523,27 @@ for _ in $(seq 1 "$ready_deadline"); do
     sleep 1
 done
 if ((active_zones < expected_active_zones)); then
-    printf 'OxideDNS only reached %s active zones; expected %s for loaded catalog benchmark\n' \
+    printf 'BoronDNS only reached %s active zones; expected %s for loaded catalog benchmark\n' \
         "$active_zones" "$expected_active_zones" >&2
     exit 1
 fi
 printf 'active_zones_after_load=%s\n' "$active_zones" >>"$artifact_dir/run.env"
 phase_finished_ns="$(now_ns)"
-record_phase "oxidedns_startup_to_ready" "$phase_started_ns" "$phase_finished_ns"
+record_phase "borondns_startup_to_ready" "$phase_started_ns" "$phase_finished_ns"
 phase_started_ns="$phase_finished_ns"
 
 curl -fsS "http://127.0.0.1:$health_port/readyz" >"$artifact_dir/readyz-before.json"
-cp "/proc/$oxidedns_pid/status" "$artifact_dir/proc-status-before.txt"
-if [[ -e "/proc/$oxidedns_pid/smaps_rollup" ]]; then
-    cp "/proc/$oxidedns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-before.txt" \
+cp "/proc/$borondns_pid/status" "$artifact_dir/proc-status-before.txt"
+if [[ -e "/proc/$borondns_pid/smaps_rollup" ]]; then
+    cp "/proc/$borondns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-before.txt" \
         2>"$artifact_dir/smaps-rollup-before.stderr" || true
 fi
 
-rss_kib="$(awk '/VmRSS:/ { print $2; exit }' "/proc/$oxidedns_pid/status")"
+rss_kib="$(awk '/VmRSS:/ { print $2; exit }' "/proc/$borondns_pid/status")"
 rss_mib=$(((rss_kib + 1023) / 1024))
 printf 'rss_mib_after_load=%s\n' "$rss_mib" >>"$artifact_dir/run.env"
 if ((rss_mib < target_rss_mib)); then
-    message="OxideDNS RSS after catalog load was ${rss_mib} MiB, below target ${target_rss_mib} MiB"
+    message="BoronDNS RSS after catalog load was ${rss_mib} MiB, below target ${target_rss_mib} MiB"
     if [[ "$enforce_rss_target" == "true" ]]; then
         printf '%s\n' "$message" >&2
         exit 1
@@ -556,7 +556,7 @@ printf 'timestamp_unix\tpid\trss_kib\tvsz_kib\tthreads\tfd_count\tcpu_percent\n'
 append_resource_sample >>"$resource_samples_file"
 {
     while sleep 1; do
-        kill -0 "$oxidedns_pid" 2>/dev/null || break
+        kill -0 "$borondns_pid" 2>/dev/null || break
         append_resource_sample
     done
 } >>"$resource_samples_file" &
@@ -587,7 +587,7 @@ start_perf_record() {
     if [[ "$perf_record_enabled" != "true" ]] || ! command -v perf >/dev/null 2>&1; then
         return 0
     fi
-    perf record -F "$perf_frequency" -g -p "$oxidedns_pid" -o "$artifact_dir/perf.data" -- sleep "$duration" \
+    perf record -F "$perf_frequency" -g -p "$borondns_pid" -o "$artifact_dir/perf.data" -- sleep "$duration" \
         >"$artifact_dir/perf-record.stdout" 2>"$artifact_dir/perf-record.stderr" &
     # shellcheck disable=SC2034 # consumed later through indirect pid_var lookup.
     perf_record_pid=$!
@@ -597,7 +597,7 @@ start_perf_stat() {
     if [[ "$perf_stat_enabled" != "true" ]] || ! command -v perf >/dev/null 2>&1; then
         return 0
     fi
-    perf stat -x, -o "$artifact_dir/perf-stat.csv" -p "$oxidedns_pid" -- sleep "$duration" \
+    perf stat -x, -o "$artifact_dir/perf-stat.csv" -p "$borondns_pid" -- sleep "$duration" \
         >"$artifact_dir/perf-stat.stdout" 2>"$artifact_dir/perf-stat.stderr" &
     # shellcheck disable=SC2034 # consumed later through indirect pid_var lookup.
     perf_stat_pid=$!
@@ -642,11 +642,11 @@ if [[ -f "$artifact_dir/perf.data" ]] && command -v perf >/dev/null 2>&1; then
 fi
 
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
-awk '$1 ~ /^oxidedns_zone_shape_/ { print }' "$artifact_dir/metrics-after.prom" \
+awk '$1 ~ /^borondns_zone_shape_/ { print }' "$artifact_dir/metrics-after.prom" \
     >"$artifact_dir/zone-shape.prom"
-cp "/proc/$oxidedns_pid/status" "$artifact_dir/proc-status-after.txt"
-if [[ -e "/proc/$oxidedns_pid/smaps_rollup" ]]; then
-    cp "/proc/$oxidedns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-after.txt" \
+cp "/proc/$borondns_pid/status" "$artifact_dir/proc-status-after.txt"
+if [[ -e "/proc/$borondns_pid/smaps_rollup" ]]; then
+    cp "/proc/$borondns_pid/smaps_rollup" "$artifact_dir/smaps-rollup-after.txt" \
         2>"$artifact_dir/smaps-rollup-after.stderr" || true
 fi
 docker logs "$bind_container" >"$artifact_dir/named.log" 2>&1 || true
@@ -666,17 +666,17 @@ latency_us_p99="$(summary_value latency_us_p99)"
 latency_us_p999="$(summary_value latency_us_p999)"
 dropped="$(summary_value dropped)"
 errors="$(summary_value errors)"
-rss_after_kib="$(awk '/VmRSS:/ { print $2; exit }' "/proc/$oxidedns_pid/status")"
+rss_after_kib="$(awk '/VmRSS:/ { print $2; exit }' "/proc/$borondns_pid/status")"
 rss_after_mib=$(((rss_after_kib + 1023) / 1024))
-zone_shape_rrsets="$(metric_sum oxidedns_zone_shape_rrsets "$artifact_dir/metrics-after.prom")"
-zone_shape_rdata_records="$(metric_sum oxidedns_zone_shape_rdata_records "$artifact_dir/metrics-after.prom")"
-zone_shape_single_rdata_rrsets="$(metric_sum oxidedns_zone_shape_single_rdata_rrsets "$artifact_dir/metrics-after.prom")"
-zone_shape_multi_rdata_rrsets="$(metric_sum oxidedns_zone_shape_multi_rdata_rrsets "$artifact_dir/metrics-after.prom")"
-zone_shape_spilled_rdata_rrsets="$(metric_sum oxidedns_zone_shape_spilled_rdata_rrsets "$artifact_dir/metrics-after.prom")"
-zone_shape_rdata_payload_bytes="$(metric_sum oxidedns_zone_shape_rdata_payload_bytes "$artifact_dir/metrics-after.prom")"
-zone_shape_name_key_logical_bytes="$(metric_sum oxidedns_zone_shape_name_key_logical_bytes "$artifact_dir/metrics-after.prom")"
-zone_shape_name_key_unique_bytes="$(metric_sum oxidedns_zone_shape_name_key_unique_bytes "$artifact_dir/metrics-after.prom")"
-zone_shape_name_key_deduplicated_bytes="$(metric_sum oxidedns_zone_shape_name_key_deduplicated_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_rrsets="$(metric_sum borondns_zone_shape_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_rdata_records="$(metric_sum borondns_zone_shape_rdata_records "$artifact_dir/metrics-after.prom")"
+zone_shape_single_rdata_rrsets="$(metric_sum borondns_zone_shape_single_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_multi_rdata_rrsets="$(metric_sum borondns_zone_shape_multi_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_spilled_rdata_rrsets="$(metric_sum borondns_zone_shape_spilled_rdata_rrsets "$artifact_dir/metrics-after.prom")"
+zone_shape_rdata_payload_bytes="$(metric_sum borondns_zone_shape_rdata_payload_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_logical_bytes="$(metric_sum borondns_zone_shape_name_key_logical_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_unique_bytes="$(metric_sum borondns_zone_shape_name_key_unique_bytes "$artifact_dir/metrics-after.prom")"
+zone_shape_name_key_deduplicated_bytes="$(metric_sum borondns_zone_shape_name_key_deduplicated_bytes "$artifact_dir/metrics-after.prom")"
 
 cat >"$artifact_dir/benchmark-results.tsv" <<EOF
 metric	value	unit
@@ -721,19 +721,19 @@ awk -F'\t' 'NR > 1 { printf "phase_%s_duration_ms\t%s\tmilliseconds\n", $1, $4 }
     "$phase_metrics_file" >>"$artifact_dir/benchmark-results.tsv"
 
 cat >"$artifact_dir/README.md" <<EOF
-# OxideDNS Large Catalog Benchmark
+# BoronDNS Large Catalog Benchmark
 
 This artifact was generated by \`scripts/benchmark-large-catalog-zones.sh\`.
 
 The harness generates an RFC 9432 catalog zone and \`$zone_count\` catalog
 member zones, serves them from BIND with mandatory TSIG-authenticated AXFR,
-starts OxideDNS on CPU affinity \`$server_affinity\`, waits until every catalog
+starts BoronDNS on CPU affinity \`$server_affinity\`, waits until every catalog
 member is ACTIVE, then drives randomized \`$transport\` A queries across the
 large/small zone mix.
 
 Phase timings are recorded in \`benchmark-phases.tsv\` and folded into
 \`benchmark-results.tsv\` as \`phase_*_duration_ms\` rows. The important split is
-\`phase_oxidedns_startup_to_ready_duration_ms\` for catalog transfer/load time
+\`phase_borondns_startup_to_ready_duration_ms\` for catalog transfer/load time
 and \`phase_measured_serve_duration_ms\` plus \`client.log\` for query-serving
 throughput and latency.
 

@@ -3,7 +3,7 @@
 Status: implementation-supporting companion to SRS section 4.14.
 
 The normative RR type requirement is `ODS-FR-RR-001` in
-`docs/OxideDNS-Secondary-SRS-v0.9.1.md`. This document records how the current
+`docs/BoronDNS-Secondary-SRS-v0.9.1.md`. This document records how the current
 code owns that catalogue so review-driven MVP trim suggestions do not silently
 remove behavior that is already implemented and tested.
 
@@ -11,12 +11,12 @@ remove behavior that is already implemented and tested.
 
 | Concern | Current owner |
 | --- | --- |
-| Known RR type numeric constants | `crates/oxidedns-core/src/dns.rs` `RecordType` |
-| AXFR/IXFR transfer RDATA normalization | `crates/oxidedns-core/src/axfr.rs` `normalize_transfer_rdata` |
-| Known-type transfer validation | `crates/oxidedns-core/src/axfr.rs` `validate_known_rdata` |
-| Response RDATA compression policy | `crates/oxidedns-core/src/dns.rs` `encode_record_rdata` |
-| Query-time additional-section semantics | `crates/oxidedns-core/src/zone.rs` target extraction helpers |
-| Unknown RR transfer and serving | `crates/oxidedns-core/src/axfr.rs`; `crates/oxidedns-core/src/dns.rs` |
+| Known RR type numeric constants | `crates/borondns-core/src/dns.rs` `RecordType` |
+| AXFR/IXFR transfer RDATA normalization | `crates/borondns-core/src/axfr.rs` `normalize_transfer_rdata` |
+| Known-type transfer validation | `crates/borondns-core/src/axfr.rs` `validate_known_rdata` |
+| Response RDATA compression policy | `crates/borondns-core/src/dns.rs` `encode_record_rdata` |
+| Query-time additional-section semantics | `crates/borondns-core/src/zone.rs` target extraction helpers |
+| Unknown RR transfer and serving | `crates/borondns-core/src/axfr.rs`; `crates/borondns-core/src/dns.rs` |
 
 ## Current Known-Type Set
 
@@ -42,7 +42,7 @@ The current type-aware set is:
 | DNSKEY | 48 | Validates the fixed prefix and RFC 4034 protocol field value 3 while preserving algorithm/key data opaquely. |
 | NSEC3 | 50 | Validates NSEC3 salt/hash layout plus type bit maps and serves transferred denial proofs subject to the configured iteration cap. |
 | NSEC3PARAM | 51 | Validates the NSEC3 parameter layout and drives the configured NSEC3 iteration-cap decision. |
-| TLSA | 52 | Validates the fixed certificate-usage/selector/matching-type prefix and serves the association data opaquely. OxideDNS does not perform DANE validation. |
+| TLSA | 52 | Validates the fixed certificate-usage/selector/matching-type prefix and serves the association data opaquely. BoronDNS does not perform DANE validation. |
 | SVCB | 64 | Validates uncompressed TargetName, AliasMode parameter absence, and sorted SvcParam keys; drives A/AAAA additional-section lookups. |
 | HTTPS | 65 | Same wire-format validation and additional-section behavior as SVCB. |
 | URI | 256 | Validates priority, weight, and non-empty raw URI target octets. The target is not a DNS character-string. |
@@ -69,10 +69,10 @@ This is a code-aligned scope boundary:
 
 Current short evidence includes:
 
-- `crates/oxidedns-core/src/axfr.rs` unit tests for transfer normalization,
+- `crates/borondns-core/src/axfr.rs` unit tests for transfer normalization,
   prohibited transfer content, known-type validation, DNSSEC algorithm opacity,
   URI raw target handling, and SVCB/HTTPS parameter validation.
-- `crates/oxidedns-core/src/dns.rs` unit tests for response compression of
+- `crates/borondns-core/src/dns.rs` unit tests for response compression of
   permitted pre-RFC3597 RDATA names and opaque serving of unknown RDATA.
 - `scripts/interop-unknown-rr.sh` and
   `scripts/interop-unknown-rr-bad-transfer.sh` for runtime unknown-RR and

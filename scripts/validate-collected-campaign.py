@@ -21,7 +21,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
 TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 UINT = re.compile(r"^[0-9]+$")
 NUMBER = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
-FUZZ_UNIT = re.compile(r"^oxidedns-fuzz-[A-Za-z0-9_.-]+-[0-9]+-[A-Za-z0-9_.-]+\.service$")
+FUZZ_UNIT = re.compile(r"^borondns-fuzz-[A-Za-z0-9_.-]+-[0-9]+-[A-Za-z0-9_.-]+\.service$")
 FUZZ_ELAPSED_TOLERANCE_NANOSECONDS = 250_000_000
 FUZZ_WALL_MONOTONIC_TOLERANCE_NANOSECONDS = 2_000_000_000
 FUZZ_SAMPLER_PROBE_BUDGET_SECONDS = 10
@@ -146,9 +146,9 @@ def regular_tree(root: Path, *, snapshot: bool = False) -> str | None:
         identities[path] = file_identity(info)
     INVENTORY = tuple(paths)
     INVENTORY_IDENTITIES = identities
-    if snapshot and os.environ.get("OXIDEDNS_COLLECTION_SNAPSHOT_TEST_PHASE") == "after-inventory":
-        marker = os.environ.get("OXIDEDNS_COLLECTION_SNAPSHOT_TEST_MARKER", "")
-        continuation = os.environ.get("OXIDEDNS_COLLECTION_SNAPSHOT_TEST_CONTINUE", "")
+    if snapshot and os.environ.get("BORONDNS_COLLECTION_SNAPSHOT_TEST_PHASE") == "after-inventory":
+        marker = os.environ.get("BORONDNS_COLLECTION_SNAPSHOT_TEST_MARKER", "")
+        continuation = os.environ.get("BORONDNS_COLLECTION_SNAPSHOT_TEST_CONTINUE", "")
         if not marker or not continuation:
             fail("collection snapshot test hook is incomplete")
         with open(marker, "x", encoding="ascii") as output:
@@ -1068,7 +1068,7 @@ def verify_soak_sampler(root: Path, start: int, deadline: int, interval: int) ->
             fail(f"resource sampler policy mismatch: {attempt}")
         sample_rows = rows(
             attempt / "resource-samples.tsv",
-            ["timestamp_utc", "epoch_seconds", "load1", "load5", "load15", "mem_available_kib", "docker_containers", "oxidedns_processes", "total_oxidedns_rss_kib"],
+            ["timestamp_utc", "epoch_seconds", "load1", "load5", "load15", "mem_available_kib", "docker_containers", "borondns_processes", "total_borondns_rss_kib"],
         )
         if not sample_rows:
             fail(f"resource sampler attempt has no samples: {attempt}")

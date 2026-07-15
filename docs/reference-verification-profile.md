@@ -1,4 +1,4 @@
-# OxideDNS Reference Verification Profile
+# BoronDNS Reference Verification Profile
 
 This document owns the detailed reference hardware, query mix, and benchmark
 recordkeeping profile used by the SRS quantitative non-functional requirements.
@@ -34,7 +34,7 @@ hardware and workload definition.
 - **Memory:** 192 GiB DDR4-2933 ECC, populated to use all six memory channels
   per socket.
 - **NUMA topology:** Two NUMA nodes, one per socket. Formal verification runs
-  pin the OxideDNS container to one socket, leaving the other socket for the
+  pin the BoronDNS container to one socket, leaving the other socket for the
   host and management plane. The effective verification allocation is therefore
   26 physical cores and 96 GiB RAM.
 
@@ -72,7 +72,7 @@ conformance claims.
 
 ### Storage
 
-OxideDNS has no persistent runtime state and no query-path filesystem access.
+BoronDNS has no persistent runtime state and no query-path filesystem access.
 Local storage is used only for the host OS, container image storage, runtime
 logs downstream of stdout/stderr, benchmark artifacts, and release evidence.
 Use NVMe SSD for verification hosts so log and artifact persistence does not
@@ -132,7 +132,7 @@ must be recorded with the run because response size and CPU behavior differ.
 Every formal performance or resource verification run must retain:
 
 - exact hardware configuration: CPU, RAM, NIC model, NIC driver, NUMA allocation;
-- software stack: OxideDNS version, commit, kernel, distribution, container
+- software stack: BoronDNS version, commit, kernel, distribution, container
   runtime, and benchmark-tool versions;
 - benchmark tool and command line;
 - query-mix variant and generator seed;

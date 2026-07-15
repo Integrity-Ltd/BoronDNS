@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oxidedns_core::{
+use borondns_core::{
     axfr::{parse_axfr_response, parse_ixfr_response},
     dns::{DomainName, RecordType},
     zone::{Rrset, ZoneSnapshot},

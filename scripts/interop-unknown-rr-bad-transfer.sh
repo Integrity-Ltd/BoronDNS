@@ -15,7 +15,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/unknown-rr-bad-transfer-$$"
-artifact_dir="${OXIDEDNS_UNKNOWN_RR_BAD_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_UNKNOWN_RR_BAD_ARTIFACT_DIR:-}"
 fake_primary="$workdir/fake-primary.py"
 summary_tsv="$workdir/unknown-rr-bad-transfer-summary.tsv"
 traceability_tsv="$workdir/unknown-rr-bad-transfer-traceability.tsv"
@@ -185,20 +185,20 @@ wait_for_log() {
 
 printf 'case\trr_type\terror_kind\tready_status\taxfr_failed\tactive_zones\tlog_match\n' >"$summary_tsv"
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 run_case() {
     local case_name="$1"
     local rr_type="$2"
     local error_kind="$3"
     local expected_error="$4"
-    local primary_port oxidedns_dns_port oxidedns_health_port
-    read -r primary_port oxidedns_dns_port oxidedns_health_port < <(allocate_ports)
+    local primary_port borondns_dns_port borondns_health_port
+    read -r primary_port borondns_dns_port borondns_health_port < <(allocate_ports)
     local case_dir="$workdir/cases/$case_name"
     local zone="$case_name.unknown-bad.test."
     local primary_log="$case_dir/fake-primary.log"
-    local oxidedns_log="$case_dir/oxidedns.log"
-    local oxidedns_conf="$case_dir/oxidedns.toml"
+    local borondns_log="$case_dir/borondns.log"
+    local borondns_conf="$case_dir/borondns.toml"
     local readyz_out="$case_dir/readyz.txt"
     local metrics_out="$case_dir/metrics.txt"
     mkdir -p "$case_dir"
@@ -211,11 +211,11 @@ run_case() {
         return 1
     }
 
-    cat >"$oxidedns_conf" <<EOF
+    cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "logfmt"
 
@@ -237,22 +237,22 @@ primaries = ["127.0.0.1:$primary_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-    "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$oxidedns_log" 2>&1 &
-    local oxidedns_pid=$!
-    pids+=("$oxidedns_pid")
+    "$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$borondns_log" 2>&1 &
+    local borondns_pid=$!
+    pids+=("$borondns_pid")
 
-    wait_for_log "$oxidedns_log" "AXFR failed" || {
-        echo "OxideDNS did not log AXFR failure for $case_name" >&2
+    wait_for_log "$borondns_log" "AXFR failed" || {
+        echo "BoronDNS did not log AXFR failure for $case_name" >&2
         return 1
     }
-    if ! grep -F "$expected_error" "$oxidedns_log" >/dev/null 2>&1; then
-        echo "OxideDNS log for $case_name missing expected error: $expected_error" >&2
+    if ! grep -F "$expected_error" "$borondns_log" >/dev/null 2>&1; then
+        echo "BoronDNS log for $case_name missing expected error: $expected_error" >&2
         return 1
     fi
 
     local ready_body=""
     for _ in {1..50}; do
-        ready_body="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null || true)"
+        ready_body="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null || true)"
         if [[ "$ready_body" == *'"status":"not-ready"'* ]]; then
             break
         fi
@@ -260,26 +260,26 @@ EOF
     done
     printf '%s\n' "$ready_body" >"$readyz_out"
     if [[ "$ready_body" == *'"status":"ready"'* ]]; then
-        echo "OxideDNS unexpectedly became ready for prohibited type $case_name" >&2
+        echo "BoronDNS unexpectedly became ready for prohibited type $case_name" >&2
         return 1
     fi
 
     local metrics=""
-    metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+    metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
     printf '%s\n' "$metrics" >"$metrics_out"
-    if [[ "$metrics" != *'oxidedns_transfer_sessions_failed_total{protocol="axfr"} 1'* ]]; then
-        echo "OxideDNS metrics missing AXFR failure counter for $case_name" >&2
+    if [[ "$metrics" != *'borondns_transfer_sessions_failed_total{protocol="axfr"} 1'* ]]; then
+        echo "BoronDNS metrics missing AXFR failure counter for $case_name" >&2
         return 1
     fi
-    if [[ "$metrics" != *'oxidedns_zones_active 0'* ]]; then
-        echo "OxideDNS metrics unexpectedly report active zone for $case_name" >&2
+    if [[ "$metrics" != *'borondns_zones_active 0'* ]]; then
+        echo "BoronDNS metrics unexpectedly report active zone for $case_name" >&2
         return 1
     fi
 
     printf '%s\t%s\t%s\tnot-ready\t1\t0\t1\n' "$case_name" "$rr_type" "$error_kind" >>"$summary_tsv"
 
-    kill "$oxidedns_pid" 2>/dev/null || true
-    wait "$oxidedns_pid" 2>/dev/null || true
+    kill "$borondns_pid" 2>/dev/null || true
+    wait "$borondns_pid" 2>/dev/null || true
     kill "$primary_pid" 2>/dev/null || true
     wait "$primary_pid" 2>/dev/null || true
 }
@@ -300,7 +300,7 @@ run_case rrtype65535 65535 reserved "$reserved_error"
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-URR-009	retained-runtime	rrtype0; opt; tkey; tsig; ixfr; axfr; mailb; maila; any; rrtype65535	unknown-rr-bad-transfer-summary.tsv; cases/*/oxidedns.log; cases/*/metrics.txt; cases/*/readyz.txt	Each prohibited pseudo/meta/reserved RR type in SRS v0.9.1 URR-009 is injected into an initial AXFR; OxideDNS logs the AXFR validation failure, increments the AXFR failed counter, remains not-ready, and exposes zero active zones.
+ODS-FR-URR-009	retained-runtime	rrtype0; opt; tkey; tsig; ixfr; axfr; mailb; maila; any; rrtype65535	unknown-rr-bad-transfer-summary.tsv; cases/*/borondns.log; cases/*/metrics.txt; cases/*/readyz.txt	Each prohibited pseudo/meta/reserved RR type in SRS v0.9.1 URR-009 is injected into an initial AXFR; BoronDNS logs the AXFR validation failure, increments the AXFR failed counter, remains not-ready, and exposes zero active zones.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then

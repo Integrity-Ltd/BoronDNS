@@ -23,7 +23,7 @@ The campaign runner is `scripts/large-surface-soak.sh`. The two-host systemd
 wrapper is `scripts/large-surface-soak-campaign.sh`.
 
 For a direct local run, leaving `CARGO_TARGET_DIR` unset creates a private
-mode-0700 tree below `${TMPDIR:-/var/tmp}/oxidedns-large-builds-<uid>/`. Its
+mode-0700 tree below `${TMPDIR:-/var/tmp}/borondns-large-builds-<uid>/`. Its
 parent and target are created and opened descriptor-relative without following
 symlinks, their identities are journaled before the path is published, and a
 prepublication failure rolls the exact empty inode back. Only that exact
@@ -57,7 +57,7 @@ and authenticated campaign cleanup can manage them separately.
 
 Remote `cleanup` preallocates the planned build root's exact quarantine name
 and durably publishes a unique
-`.oxidedns-retained-cleanup-<root>.<pid>.<nonce>.env` in its parent
+`.borondns-retained-cleanup-<root>.<pid>.<nonce>.env` in its parent
 before the no-replace rename. The journal records `prepared` before mutation
 and `retained` only after the quarantine still matches the captured
 device/inode/owner. Cleanup output therefore says `cleanup_retained` and
@@ -101,7 +101,7 @@ Each host writes:
   counts;
 - `resource-sampler-attempts/attempt-*/resource-samples.tsv`: load, memory,
   Docker container count, and process RSS samples with wall-clock epochs;
-- `resource-sampler-attempts/attempt-*/process-samples.tsv`: sampled OxideDNS,
+- `resource-sampler-attempts/attempt-*/process-samples.tsv`: sampled BoronDNS,
   Cargo/Rust, Docker, and primary process rows, each bound to an exact resource
   sample UTC and epoch. Validation rejects orphan sample keys, duplicate PIDs
   within an epoch, and process-count or RSS aggregates that differ from the
@@ -217,7 +217,7 @@ All child-command watchdogs and protocol waits use the same absolute
 of replenishing it. On expiry, process-group `SIGKILL` and pidfd/`WNOHANG`
 polling continue only through a separate termination tail: five seconds by
 default, configurable with
-`OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS`, with a hard maximum of
+`BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS`, with a hard maximum of
 30. If an uninterruptible process cannot be reaped by then, the supervisor
 returns 125 with `SIGKILL` still pending and relies on kernel reparenting
 instead of blocking in `waitpid`. Process-group membership enumeration runs in
@@ -247,7 +247,7 @@ and non-writable by the campaign UID. Its ignored, root-owned `target` symlink
 is pinned to a fresh mode-0700 directory beneath the separate runner-owned
 `targets/` tree, so existing interop work and binary paths remain usable
 without making source writable. Each run uses that exact empty
-`CARGO_TARGET_DIR` under `/var/tmp/oxidedns-large-<campaign>/<host>/`. The
+`CARGO_TARGET_DIR` under `/var/tmp/borondns-large-<campaign>/<host>/`. The
 attempt records that exact path plus Cargo/Rust tool paths
 and hashes for the exact rustup-selected Cargo and rustc executables, not their
 proxy shims. Those two digests are authenticated in the plan, rechecked before
@@ -317,7 +317,7 @@ Planning also refuses dirty local checkouts and host names whose canonical
 evidence identifiers collide, records the exact commit, and every initial,
 resumed, and service-runner launch requires the remote checkout to be clean at
 that commit; the launcher never pulls a moving branch. Local plan and runner
-locks live under a dedicated `.oxidedns-campaign-locks` mode-0700 directory;
+locks live under a dedicated `.borondns-campaign-locks` mode-0700 directory;
 their parent must be owned by the campaign user and must not be group/world
 writable. Lock files are opened without following symlinks and verified through
 the live descriptor before locking. Remote locks use the same descriptor broker
@@ -400,11 +400,11 @@ afterward so monitoring cannot mistake an unreachable host for success.
 The same validated absolute `CLOCK_BOOTTIME` deadline covers all phases for one
 host. Local traversal defaults to 100,000 entries, depth 64, 2 GiB per file,
 64 GiB total, and a 10,800-second deadline. The
-`OXIDEDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_DEPTH`,
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES`, and
-`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES` overrides may only reduce or
+`BORONDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_DEPTH`,
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES`, and
+`BORONDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES` overrides may only reduce or
 raise those values within the documented hard maxima of 86,400 seconds,
 1,000,000 entries, depth 128, 16 GiB per file, and 1 TiB total.
 It also validates the exact fragment, root-owned runner, and identity sidecar;
@@ -423,7 +423,7 @@ This campaign is a broad scenario-cycle soak. It provides long-running evidence
 that the implemented interop and protocol surfaces continue to pass under
 repeated setup, transfer, catalog mutation, query validation, and teardown.
 
-It is intentionally not the same as a single resident OxideDNS process serving
+It is intentionally not the same as a single resident BoronDNS process serving
 one stable workload for 30 days. Treat the single-process RSS/FD growth soak as
 a companion lane when closing the strict ODS-NFR-REL-003 memory-growth target.
 

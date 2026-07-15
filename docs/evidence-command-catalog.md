@@ -6,7 +6,7 @@ evidence state and remaining gaps stay in `docs/mvp-gap-register.md`,
 `docs/verification-ledger.md`, and `docs/appendix-a-traceability-matrix.md`.
 
 `scripts/release-evidence-snapshot.sh` copies all shell blocks below into its
-snapshot manifest. When `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` is set, it executes
+snapshot manifest. When `BORONDNS_EVIDENCE_RUN_INTEROP=1` is set, it executes
 only the commands in the broader SRS acceptance block, skipping recursive
 snapshot commands.
 

@@ -26,30 +26,30 @@ source "$repo_root/scripts/interop-dns-assertions.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/powerdns-postgres-catalog-tsig-$run_id"
-network="oxidedns-pdns-catalog-$run_id"
-postgres_container="oxidedns-pdns-postgres-$run_id"
-pdns_container="oxidedns-pdns-auth-$run_id"
-pdns_image="${OXIDEDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
-postgres_image="${OXIDEDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
-artifact_dir="${OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR:-}"
+network="borondns-pdns-catalog-$run_id"
+postgres_container="borondns-pdns-postgres-$run_id"
+pdns_container="borondns-pdns-auth-$run_id"
+pdns_image="${BORONDNS_POWERDNS_AUTH_IMAGE:-powerdns/pdns-auth-50:latest}"
+postgres_image="${BORONDNS_POSTGRES_IMAGE:-postgres:16-alpine}"
+artifact_dir="${BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 755 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$pdns_container" >/dev/null 2>&1; then
         docker logs "$pdns_container" >"$workdir/pdns.log" 2>&1 || true
         if ((status != 0)); then
             echo "---- PowerDNS logs ----" >&2
             tail -180 "$workdir/pdns.log" >&2 || true
-            [[ -f "$workdir/oxidedns.log" ]] && {
-                echo "---- oxidedns.log ----" >&2
-                tail -180 "$workdir/oxidedns.log" >&2
+            [[ -f "$workdir/borondns.log" ]] && {
+                echo "---- borondns.log ----" >&2
+                tail -180 "$workdir/borondns.log" >&2
             }
         fi
         docker rm -f -v "$pdns_container" >/dev/null 2>&1 || true
@@ -64,7 +64,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r pdns_port oxidedns_dns_port oxidedns_health_port < <(
+read -r pdns_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -82,7 +82,7 @@ tsig_secret="c2VjcmV0LXRzaWcta2V5LTEyMzQ="
 catalog_zone="$workdir/catalog.example.zone"
 member_zone="$workdir/member.example.zone"
 pdns_conf="$workdir/pdns.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 catalog_unsigned_axfr_out="$workdir/catalog-unsigned-axfr.out"
 catalog_signed_axfr_out="$workdir/catalog-signed-axfr.out"
 catalog_after_add_axfr_out="$workdir/catalog-after-add-axfr.out"
@@ -225,11 +225,11 @@ if [[ "$catalog_signed_axfr" != *'version.catalog.example.'* ]] || [[ "$catalog_
     exit 1
 fi
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -258,14 +258,14 @@ algorithm = "hmac-sha256"
 secret = "$tsig_secret"
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 catalog_acquired=false
 for _ in {1..120}; do
-    if metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" 2>/dev/null)"; then
-        if [[ "$metrics_initial" == *'oxidedns_zone_soa_serial{zone="catalog.example."} '* ]]; then
+    if metrics_initial="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics" 2>/dev/null)"; then
+        if [[ "$metrics_initial" == *'borondns_zone_soa_serial{zone="catalog.example."} '* ]]; then
             catalog_acquired=true
             break
         fi
@@ -273,31 +273,31 @@ for _ in {1..120}; do
     sleep 0.1
 done
 if [[ "$catalog_acquired" != "true" ]]; then
-    echo "OxideDNS did not acquire the initial hidden PowerDNS TSIG catalog" >&2
+    echo "BoronDNS did not acquire the initial hidden PowerDNS TSIG catalog" >&2
     exit 1
 fi
 printf '%s\n' "$metrics_initial" >"$metrics_initial_out"
-if [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS counted the hidden empty PowerDNS catalog as an active zone" >&2
+if [[ "$metrics_initial" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS counted the hidden empty PowerDNS catalog as an active zone" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$readyz_initial_out")"
 if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
-    echo "OxideDNS became ready before the PowerDNS catalog produced an active member" >&2
+    echo "BoronDNS became ready before the PowerDNS catalog produced an active member" >&2
     exit 1
 fi
 
 if ! dig_until_rcode "$catalog_hidden_out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the hidden PowerDNS catalog zone query" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the hidden PowerDNS catalog zone query" >&2
     exit 1
 fi
 
 if ! dig_until_rcode "$member_before_out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE member.example before PowerDNS catalog assignment" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE member.example before PowerDNS catalog assignment" >&2
     exit 1
 fi
 
@@ -325,7 +325,7 @@ fi
 
 member_added=""
 for _ in {1..120}; do
-    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+    if member_added="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
         if [[ "$member_added" == "192.0.2.88" ]]; then
             break
         fi
@@ -334,22 +334,22 @@ for _ in {1..120}; do
 done
 printf '%s\n' "$member_added" >"$member_added_out"
 if [[ "$member_added" != "192.0.2.88" ]]; then
-    echo "OxideDNS did not serve the PowerDNS catalog-added member zone" >&2
+    echo "BoronDNS did not serve the PowerDNS catalog-added member zone" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$readyz_after_add_out")"
 if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after the first PowerDNS catalog member became active" >&2
+    echo "BoronDNS did not become ready after the first PowerDNS catalog member became active" >&2
     exit 1
 fi
 
-metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_add="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
-if [[ "$metrics_after_add" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'* ]] ||
-    [[ "$metrics_after_add" != *'oxidedns_zones_active 1'* ]]; then
-    echo "OxideDNS metrics after PowerDNS catalog add missing member SOA serial" >&2
+if [[ "$metrics_after_add" != *'borondns_zone_soa_serial{zone="member.example."} 2026052501'* ]] ||
+    [[ "$metrics_after_add" != *'borondns_zones_active 1'* ]]; then
+    echo "BoronDNS metrics after PowerDNS catalog add missing member SOA serial" >&2
     exit 1
 fi
 
@@ -363,7 +363,7 @@ fi
 
 member_updated=""
 for _ in {1..120}; do
-    if member_updated="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+    if member_updated="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
         if [[ "$member_updated" == "192.0.2.99" ]]; then
             break
         fi
@@ -372,14 +372,14 @@ for _ in {1..120}; do
 done
 printf '%s\n' "$member_updated" >"$member_updated_out"
 if [[ "$member_updated" != "192.0.2.99" ]]; then
-    echo "OxideDNS did not refresh the PowerDNS member-zone record update" >&2
+    echo "BoronDNS did not refresh the PowerDNS member-zone record update" >&2
     exit 1
 fi
 
-metrics_after_update="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_update="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_update" >"$metrics_after_update_out"
-if [[ "$metrics_after_update" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052502'* ]]; then
-    echo "OxideDNS metrics after PowerDNS member update missing incremented SOA serial" >&2
+if [[ "$metrics_after_update" != *'borondns_zone_soa_serial{zone="member.example."} 2026052502'* ]]; then
+    echo "BoronDNS metrics after PowerDNS member update missing incremented SOA serial" >&2
     exit 1
 fi
 
@@ -406,26 +406,26 @@ if [[ "$catalog_after_remove_axfr" != *'version.catalog.example.'* ]] || [[ "$ca
 fi
 
 if ! dig_until_rcode "$member_removed_out" REFUSED 120 0.25 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the PowerDNS catalog member after removal" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the PowerDNS catalog member after removal" >&2
     exit 1
 fi
 member_removed="REFUSED"
 
-metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_remove="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
-if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
-    echo "OxideDNS metrics still reported removed PowerDNS catalog member zone" >&2
+if [[ "$metrics_after_remove" == *'borondns_zone_soa_serial{zone="member.example."}'* ]]; then
+    echo "BoronDNS metrics still reported removed PowerDNS catalog member zone" >&2
     exit 1
 fi
-if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS metrics after PowerDNS catalog removal did not return to zero active zones" >&2
+if [[ "$metrics_after_remove" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS metrics after PowerDNS catalog removal did not return to zero active zones" >&2
     exit 1
 fi
-ready_status="$(curl -sS -o "$readyz_after_remove_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$readyz_after_remove_out" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$readyz_after_remove_out")"
 if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
-    echo "OxideDNS stayed ready after the last PowerDNS catalog member was removed" >&2
+    echo "BoronDNS stayed ready after the last PowerDNS catalog member was removed" >&2
     exit 1
 fi
 
@@ -441,15 +441,15 @@ cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
 RFC9432-CATALOG-MVP-010	retained-real-primary	powerdns_postgres_catalog_producer	primary-version.txt; pdnsutil-catalog-members-added.out	PowerDNS Authoritative with PostgreSQL/gpgsql generates RFC 9432 catalog membership using producer-zone metadata.
 RFC9432-CATALOG-MVP-011	retained-real-primary	powerdns_catalog_tsig	catalog-unsigned-axfr.out; catalog-signed-axfr.out; pdns.log	Unsigned catalog AXFR is denied and TSIG-signed catalog AXFR succeeds.
-RFC9432-CATALOG-MVP-012	retained-real-primary	powerdns_catalog_member_add	member-added.out; metrics-after-add.txt; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while a PowerDNS catalog assignment adds member.example. and then transfers and serves that member zone.
-RFC9432-CATALOG-MVP-013	retained-real-primary	powerdns_member_zone_update	member-updated.out; metrics-after-update.txt; pdnsutil-member-after-update.out; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while the PowerDNS PostgreSQL-backed member zone changes, detects the incremented SOA serial, refreshes the zone, and serves the updated record.
-RFC9432-CATALOG-MVP-014	retained-real-primary	powerdns_catalog_member_remove	member-removed.out; metrics-after-remove.txt; powerdns-postgres-catalog-tsig-summary.tsv	OxideDNS remains running while a PowerDNS catalog assignment is removed and then stops serving the catalog-managed member zone.
+RFC9432-CATALOG-MVP-012	retained-real-primary	powerdns_catalog_member_add	member-added.out; metrics-after-add.txt; powerdns-postgres-catalog-tsig-summary.tsv	BoronDNS remains running while a PowerDNS catalog assignment adds member.example. and then transfers and serves that member zone.
+RFC9432-CATALOG-MVP-013	retained-real-primary	powerdns_member_zone_update	member-updated.out; metrics-after-update.txt; pdnsutil-member-after-update.out; powerdns-postgres-catalog-tsig-summary.tsv	BoronDNS remains running while the PowerDNS PostgreSQL-backed member zone changes, detects the incremented SOA serial, refreshes the zone, and serves the updated record.
+RFC9432-CATALOG-MVP-014	retained-real-primary	powerdns_catalog_member_remove	member-removed.out; metrics-after-remove.txt; powerdns-postgres-catalog-tsig-summary.tsv	BoronDNS remains running while a PowerDNS catalog assignment is removed and then stops serving the catalog-managed member zone.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     for artifact in \
-        pdns.conf oxidedns.toml catalog.example.zone member.example.zone \
+        pdns.conf borondns.toml catalog.example.zone member.example.zone \
         primary-version.txt pdns.log postgres.log \
         catalog-unsigned-axfr.out catalog-signed-axfr.out catalog-after-add-axfr.out \
         catalog-after-remove-axfr.out catalog-hidden.out readyz-initial.json \

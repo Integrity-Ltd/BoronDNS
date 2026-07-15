@@ -27,17 +27,17 @@ zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/nsd/nsd-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/nsd-tsig-axfr-$$"
-container="oxidedns-nsd-tsig-axfr-$$"
-artifact_dir="${OXIDEDNS_NSD_TSIG_AXFR_ARTIFACT_DIR:-}"
+container="borondns-nsd-tsig-axfr-$$"
+artifact_dir="${BORONDNS_NSD_TSIG_AXFR_ARTIFACT_DIR:-}"
 nsd_image="$(ensure_alpine_nsd_image)"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
@@ -49,7 +49,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r nsd_port oxidedns_dns_port oxidedns_health_port < <(
+read -r nsd_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -68,8 +68,8 @@ primary_soa_out="$workdir/primary-soa.out"
 unsigned_axfr_out="$workdir/unsigned-axfr.out"
 signed_axfr_out="$workdir/signed-axfr.out"
 readyz_out="$workdir/readyz.txt"
-answer_a_out="$workdir/oxidedns-answer-a.out"
-tcp_soa_out="$workdir/oxidedns-tcp-soa.out"
+answer_a_out="$workdir/borondns-answer-a.out"
+tcp_soa_out="$workdir/borondns-tcp-soa.out"
 metrics_out="$workdir/metrics.txt"
 summary_out="$workdir/nsd-tsig-axfr-summary.env"
 nsd_log="$workdir/nsd.log"
@@ -118,12 +118,12 @@ if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.a
     exit 1
 fi
 
-oxidedns_conf="$workdir/oxidedns.toml"
-cat >"$oxidedns_conf" <<EOF
+borondns_conf="$workdir/borondns.toml"
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -150,13 +150,13 @@ notify_sources = ["127.0.0.1"]
 tsig_key = "transfer-key."
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
@@ -164,39 +164,39 @@ done
 
 printf '%s\n' "$ready" >"$readyz_out"
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after NSD TSIG AXFR" >&2
+    echo "BoronDNS did not become ready after NSD TSIG AXFR" >&2
     exit 1
 fi
 
-answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+answer_a="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
 printf '%s\n' "$answer_a" >"$answer_a_out"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected A response after NSD TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected A response after NSD TSIG AXFR" >&2
     exit 1
 fi
 
-tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+tcp_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 printf '%s\n' "$tcp_soa" >"$tcp_soa_out"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve expected TCP SOA response after NSD TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected TCP SOA response after NSD TSIG AXFR" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052401' \
+    'borondns_transfer_sessions_started_total{protocol="axfr"} 1' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected line after NSD TSIG AXFR: $expected" >&2
+        echo "BoronDNS metrics missing expected line after NSD TSIG AXFR: $expected" >&2
         exit 1
     fi
 done
 
-if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
-    echo "OxideDNS log leaked TSIG secret" >&2
+if grep -F "$tsig_secret" "$workdir/borondns.log" >/dev/null 2>&1; then
+    echo "BoronDNS log leaked TSIG secret" >&2
     exit 1
 fi
 
@@ -205,10 +205,10 @@ docker logs "$container" >"$nsd_log" 2>&1 || true
 cat >"$summary_out" <<EOF
 unsigned_axfr_rejected=1
 signed_axfr_succeeded=1
-oxidedns_ready_after_signed_axfr=1
-oxidedns_served_transferred_a=1
-oxidedns_served_transferred_tcp_soa=1
-oxidedns_transfer_metrics_checked=1
+borondns_ready_after_signed_axfr=1
+borondns_served_transferred_a=1
+borondns_served_transferred_tcp_soa=1
+borondns_transfer_metrics_checked=1
 tsig_secret_redaction_checked=1
 EOF
 
@@ -216,15 +216,15 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$workdir/nsd.conf" >"$artifact_dir/nsd.conf.redacted"
-    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$borondns_conf" >"$artifact_dir/borondns.toml.redacted"
     cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
     cp "$nsd_log" "$artifact_dir/nsd.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$primary_soa_out" "$artifact_dir/primary-soa.out"
     cp "$unsigned_axfr_out" "$artifact_dir/unsigned-axfr.out"
     cp "$signed_axfr_out" "$artifact_dir/signed-axfr.out"
-    cp "$answer_a_out" "$artifact_dir/oxidedns-answer-a.out"
-    cp "$tcp_soa_out" "$artifact_dir/oxidedns-tcp-soa.out"
+    cp "$answer_a_out" "$artifact_dir/borondns-answer-a.out"
+    cp "$tcp_soa_out" "$artifact_dir/borondns-tcp-soa.out"
     cp "$readyz_out" "$artifact_dir/readyz.txt"
     cp "$metrics_out" "$artifact_dir/metrics.txt"
     cp "$summary_out" "$artifact_dir/nsd-tsig-axfr-summary.env"

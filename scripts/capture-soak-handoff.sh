@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_SOAK_HANDOFF_DIR:-$repo_root/target/evidence/soak-handoff-$timestamp}"
+evidence_dir="${BORONDNS_SOAK_HANDOFF_DIR:-$repo_root/target/evidence/soak-handoff-$timestamp}"
 
-duration_days="${OXIDEDNS_SOAK_DURATION_DAYS:-30}"
-baseline_hour="${OXIDEDNS_SOAK_BASELINE_HOUR:-24}"
-memory_growth_threshold_pct="${OXIDEDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT:-10}"
-snapshot_cadence="${OXIDEDNS_SOAK_SNAPSHOT_CADENCE:-weekly}"
+duration_days="${BORONDNS_SOAK_DURATION_DAYS:-30}"
+baseline_hour="${BORONDNS_SOAK_BASELINE_HOUR:-24}"
+memory_growth_threshold_pct="${BORONDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT:-10}"
+snapshot_cadence="${BORONDNS_SOAK_SNAPSHOT_CADENCE:-weekly}"
 
 require_positive_integer() {
     local name="$1"
@@ -19,17 +19,17 @@ require_positive_integer() {
     }
 }
 
-require_positive_integer OXIDEDNS_SOAK_DURATION_DAYS "$duration_days"
-require_positive_integer OXIDEDNS_SOAK_BASELINE_HOUR "$baseline_hour"
-require_positive_integer OXIDEDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT "$memory_growth_threshold_pct"
+require_positive_integer BORONDNS_SOAK_DURATION_DAYS "$duration_days"
+require_positive_integer BORONDNS_SOAK_BASELINE_HOUR "$baseline_hour"
+require_positive_integer BORONDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT "$memory_growth_threshold_pct"
 
 mkdir -p "$evidence_dir"
 
 cat >"$evidence_dir/soak-env.env" <<EOF
-OXIDEDNS_SOAK_DURATION_DAYS=$duration_days
-OXIDEDNS_SOAK_BASELINE_HOUR=$baseline_hour
-OXIDEDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT=$memory_growth_threshold_pct
-OXIDEDNS_SOAK_SNAPSHOT_CADENCE=$snapshot_cadence
+BORONDNS_SOAK_DURATION_DAYS=$duration_days
+BORONDNS_SOAK_BASELINE_HOUR=$baseline_hour
+BORONDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT=$memory_growth_threshold_pct
+BORONDNS_SOAK_SNAPSHOT_CADENCE=$snapshot_cadence
 EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
@@ -60,7 +60,7 @@ timestamp_utc	elapsed_hours	event_type	severity	requirement_id	description	opera
 EOF
 
 cat >"$evidence_dir/weekly-summary-template.md" <<'EOF'
-# OxideDNS Soak Weekly Summary
+# BoronDNS Soak Weekly Summary
 
 - Soak evidence directory:
 - Week number:
@@ -81,7 +81,7 @@ cat >"$evidence_dir/weekly-summary-template.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/operator-signoff.md" <<'EOF'
-# OxideDNS Soak Operator Sign-off
+# BoronDNS Soak Operator Sign-off
 
 - Release:
 - Evidence snapshot:
@@ -104,7 +104,7 @@ cat >"$evidence_dir/operator-signoff.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/soak-report-template.md" <<EOF
-# OxideDNS 30-Day Soak Report
+# BoronDNS 30-Day Soak Report
 
 ## Scope
 
@@ -179,7 +179,7 @@ the release snapshot and publish their paths in the release notes.
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Soak Handoff
+# BoronDNS Soak Handoff
 
 Created UTC: $timestamp
 
@@ -192,10 +192,10 @@ the later ODS-VER-008 acceptance run.
 Run configuration:
 
 \`\`\`
-OXIDEDNS_SOAK_DURATION_DAYS=$duration_days
-OXIDEDNS_SOAK_BASELINE_HOUR=$baseline_hour
-OXIDEDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT=$memory_growth_threshold_pct
-OXIDEDNS_SOAK_SNAPSHOT_CADENCE=$snapshot_cadence
+BORONDNS_SOAK_DURATION_DAYS=$duration_days
+BORONDNS_SOAK_BASELINE_HOUR=$baseline_hour
+BORONDNS_SOAK_MEMORY_GROWTH_THRESHOLD_PCT=$memory_growth_threshold_pct
+BORONDNS_SOAK_SNAPSHOT_CADENCE=$snapshot_cadence
 \`\`\`
 
 Artifacts:

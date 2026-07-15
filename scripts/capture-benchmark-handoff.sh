@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_BENCHMARK_HANDOFF_DIR:-$repo_root/target/evidence/benchmark-handoff-$timestamp}"
+evidence_dir="${BORONDNS_BENCHMARK_HANDOFF_DIR:-$repo_root/target/evidence/benchmark-handoff-$timestamp}"
 
-profile="${OXIDEDNS_BENCHMARK_PROFILE:-Reference Hardware Profile}"
-query_mix="${OXIDEDNS_BENCHMARK_QUERY_MIX:-Reference Query Mix}"
-regression_threshold_pct="${OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT:-10}"
-min_duration_seconds="${OXIDEDNS_BENCHMARK_MIN_DURATION_SECONDS:-300}"
+profile="${BORONDNS_BENCHMARK_PROFILE:-Reference Hardware Profile}"
+query_mix="${BORONDNS_BENCHMARK_QUERY_MIX:-Reference Query Mix}"
+regression_threshold_pct="${BORONDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT:-10}"
+min_duration_seconds="${BORONDNS_BENCHMARK_MIN_DURATION_SECONDS:-300}"
 
 require_positive_integer() {
     local name="$1"
@@ -19,16 +19,16 @@ require_positive_integer() {
     }
 }
 
-require_positive_integer OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT "$regression_threshold_pct"
-require_positive_integer OXIDEDNS_BENCHMARK_MIN_DURATION_SECONDS "$min_duration_seconds"
+require_positive_integer BORONDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT "$regression_threshold_pct"
+require_positive_integer BORONDNS_BENCHMARK_MIN_DURATION_SECONDS "$min_duration_seconds"
 
 mkdir -p "$evidence_dir"
 
 cat >"$evidence_dir/benchmark-env.env" <<EOF
-OXIDEDNS_BENCHMARK_PROFILE=$profile
-OXIDEDNS_BENCHMARK_QUERY_MIX=$query_mix
-OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT=$regression_threshold_pct
-OXIDEDNS_BENCHMARK_MIN_DURATION_SECONDS=$min_duration_seconds
+BORONDNS_BENCHMARK_PROFILE=$profile
+BORONDNS_BENCHMARK_QUERY_MIX=$query_mix
+BORONDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT=$regression_threshold_pct
+BORONDNS_BENCHMARK_MIN_DURATION_SECONDS=$min_duration_seconds
 EOF
 
 cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
@@ -66,7 +66,7 @@ release	metric	value	unit	profile	query_mix	evidence_artifact
 EOF
 
 cat >"$evidence_dir/workload-profile-template.md" <<EOF
-# OxideDNS Benchmark Workload Profile
+# BoronDNS Benchmark Workload Profile
 
 - Profile name: $profile
 - Query mix: $query_mix
@@ -95,13 +95,13 @@ cat >"$evidence_dir/workload-profile-template.md" <<EOF
 EOF
 
 cat >"$evidence_dir/benchmark-runbook.md" <<'EOF'
-# OxideDNS Benchmark Runbook
+# BoronDNS Benchmark Runbook
 
 1. Build the release candidate with `cargo build --locked --release`.
 2. Record `git rev-parse HEAD`, `rustc --version`, `cargo --version`, kernel,
    CPU, memory, NIC, driver, and container runtime versions.
 3. Fill `workload-profile-template.md` before running load.
-4. Start OxideDNS with DNS, transfer, and management interfaces separated.
+4. Start BoronDNS with DNS, transfer, and management interfaces separated.
 5. Load the release zone corpus from real or fixture primaries.
 6. Record readiness, transfer, zone-state, query, latency, RCODE, and resource
    metrics before load, during each phase, and after load.
@@ -116,7 +116,7 @@ cat >"$evidence_dir/benchmark-runbook.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/operator-signoff.md" <<'EOF'
-# OxideDNS Benchmark Operator Sign-off
+# BoronDNS Benchmark Operator Sign-off
 
 - Release:
 - Evidence snapshot:
@@ -153,7 +153,7 @@ cat >"$evidence_dir/release-notes-snippet.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/benchmark-report-template.md" <<EOF
-# OxideDNS Reference Hardware/Profile Benchmark Report
+# BoronDNS Reference Hardware/Profile Benchmark Report
 
 ## Scope
 
@@ -177,8 +177,8 @@ cat >"$evidence_dir/benchmark-report-template.md" <<EOF
 - \`resource-results.tsv\`
 - \`baseline-history-template.tsv\` or release baseline export
 - Query-generator raw output
-- OxideDNS metrics snapshots
-- OxideDNS logs
+- BoronDNS metrics snapshots
+- BoronDNS logs
 - \`operator-signoff.md\`
 
 ## Required Metric Families
@@ -213,7 +213,7 @@ accepted rationale and remediation owner.
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Benchmark Handoff
+# BoronDNS Benchmark Handoff
 
 Created UTC: $timestamp
 
@@ -227,10 +227,10 @@ needed for later SRS acceptance.
 Run configuration:
 
 \`\`\`
-OXIDEDNS_BENCHMARK_PROFILE=$profile
-OXIDEDNS_BENCHMARK_QUERY_MIX=$query_mix
-OXIDEDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT=$regression_threshold_pct
-OXIDEDNS_BENCHMARK_MIN_DURATION_SECONDS=$min_duration_seconds
+BORONDNS_BENCHMARK_PROFILE=$profile
+BORONDNS_BENCHMARK_QUERY_MIX=$query_mix
+BORONDNS_BENCHMARK_REGRESSION_THRESHOLD_PCT=$regression_threshold_pct
+BORONDNS_BENCHMARK_MIN_DURATION_SECONDS=$min_duration_seconds
 \`\`\`
 
 Artifacts:

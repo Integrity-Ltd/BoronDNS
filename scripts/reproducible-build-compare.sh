@@ -3,11 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR:-$repo_root/target/evidence/reproducible-build-$timestamp}"
-target_triple="${OXIDEDNS_REPRODUCIBLE_BUILD_TARGET:-x86_64-unknown-linux-musl}"
-allow_dirty_non_release="${OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE:-0}"
+evidence_dir="${BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR:-$repo_root/target/evidence/reproducible-build-$timestamp}"
+target_triple="${BORONDNS_REPRODUCIBLE_BUILD_TARGET:-x86_64-unknown-linux-musl}"
+allow_dirty_non_release="${BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE:-0}"
 [[ "$allow_dirty_non_release" == 0 || "$allow_dirty_non_release" == 1 ]] || {
-    printf 'OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
+    printf 'BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
     exit 1
 }
 
@@ -48,7 +48,7 @@ if [[ -n "$dirty_status" ]]; then
     if [[ "$allow_dirty_non_release" != 1 ]]; then
         printf 'refusing reproducible-build comparison from dirty or untracked source:\n%s\n' \
             "$dirty_status" >&2
-        printf 'use OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 only for explicitly non-release diagnostics\n' >&2
+        printf 'use BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 only for explicitly non-release diagnostics\n' >&2
         exit 1
     fi
     printf 'warning: dirty-source override enabled; evidence will be non-release and non-passing\n' >&2
@@ -65,14 +65,14 @@ if ((${#missing[@]} > 0)); then
     exit 1
 fi
 
-cargo_bin="${OXIDEDNS_REPRODUCIBLE_BUILD_CARGO:-$(rustup which cargo 2>/dev/null || command -v cargo || true)}"
+cargo_bin="${BORONDNS_REPRODUCIBLE_BUILD_CARGO:-$(rustup which cargo 2>/dev/null || command -v cargo || true)}"
 if [[ -z "$cargo_bin" || ! -x "$cargo_bin" ]]; then
-    printf 'missing usable cargo binary; set OXIDEDNS_REPRODUCIBLE_BUILD_CARGO\n' >&2
+    printf 'missing usable cargo binary; set BORONDNS_REPRODUCIBLE_BUILD_CARGO\n' >&2
     exit 1
 fi
-rustc_bin="${OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC:-$(rustup which rustc 2>/dev/null || command -v rustc || true)}"
+rustc_bin="${BORONDNS_REPRODUCIBLE_BUILD_RUSTC:-$(rustup which rustc 2>/dev/null || command -v rustc || true)}"
 if [[ -z "$rustc_bin" || ! -x "$rustc_bin" ]]; then
-    printf 'missing usable rustc binary; set OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC\n' >&2
+    printf 'missing usable rustc binary; set BORONDNS_REPRODUCIBLE_BUILD_RUSTC\n' >&2
     exit 1
 fi
 cargo_bin="$(realpath -e "$cargo_bin")"
@@ -96,7 +96,7 @@ evidence_parent="$(dirname "$evidence_dir")"
 mkdir -p "$evidence_parent"
 if ! mkdir "$evidence_dir"; then
     printf 'refusing to reuse an existing reproducible-build evidence destination: %s\n' "$evidence_dir" >&2
-    printf 'choose a fresh OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR so stale success cannot survive a failed rerun\n' >&2
+    printf 'choose a fresh BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR so stale success cannot survive a failed rerun\n' >&2
     exit 1
 fi
 mkdir "$evidence_dir/artifacts" "$evidence_dir/artifacts/a" "$evidence_dir/artifacts/b"
@@ -125,9 +125,9 @@ rustc_binary=$rustc_bin
 host_triple=$host_triple
 target_triple=$target_triple
 source_date_epoch=$commit_epoch
-oxidedns_build_commit=$short_commit
-oxidedns_build_rust_version=$rust_version
-oxidedns_build_timestamp=$commit_timestamp
+borondns_build_commit=$short_commit
+borondns_build_rust_version=$rust_version
+borondns_build_timestamp=$commit_timestamp
 cargo_incremental=0
 EOF
 }
@@ -144,7 +144,7 @@ run_build() {
         printf 'builder=%s\n' "$label"
         printf 'target_dir=%s\n' "$target_dir"
         printf 'target_dir_for_cargo=%s\n' "$target_dir_for_cargo"
-        printf '%q build --locked --release --target-dir %q --target %q -p oxidedns-cli --features af-xdp\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
+        printf '%q build --locked --release --target-dir %q --target %q -p borondns-cli --features af-xdp\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
         printf '%q build --locked --release --target-dir %q --target %q -p oxide-gun --features xdp\n\n' "$cargo_bin" "$target_dir_for_cargo" "$target_triple"
     } >"$log"
 
@@ -153,17 +153,17 @@ run_build() {
         env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
             PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
             SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
-            OXIDEDNS_BUILD_COMMIT="$short_commit" \
-            OXIDEDNS_BUILD_RUST_VERSION="$rust_version" \
-            OXIDEDNS_BUILD_TIMESTAMP="$commit_timestamp" \
+            BORONDNS_BUILD_COMMIT="$short_commit" \
+            BORONDNS_BUILD_RUST_VERSION="$rust_version" \
+            BORONDNS_BUILD_TIMESTAMP="$commit_timestamp" \
             "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
-            --target "$target_triple" -p oxidedns-cli --features af-xdp
+            --target "$target_triple" -p borondns-cli --features af-xdp
         env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
             PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
             SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
-            OXIDEDNS_BUILD_COMMIT="$short_commit" \
-            OXIDEDNS_BUILD_RUST_VERSION="$rust_version" \
-            OXIDEDNS_BUILD_TIMESTAMP="$commit_timestamp" \
+            BORONDNS_BUILD_COMMIT="$short_commit" \
+            BORONDNS_BUILD_RUST_VERSION="$rust_version" \
+            BORONDNS_BUILD_TIMESTAMP="$commit_timestamp" \
             "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
             --target "$target_triple" -p oxide-gun --features xdp
     ) >>"$log" 2>&1
@@ -175,12 +175,12 @@ copy_artifacts() {
     local target_dir="$2"
     local out_dir="$evidence_dir/artifacts/$label"
 
-    install -m 0755 "$target_dir/$target_triple/release/oxidedns" "$out_dir/oxidedns"
+    install -m 0755 "$target_dir/$target_triple/release/borondns" "$out_dir/borondns"
     install -m 0755 "$target_dir/$target_triple/release/oxide-gun" "$out_dir/oxide-gun"
-    file "$out_dir/oxidedns" >"$out_dir/file-oxidedns.txt"
+    file "$out_dir/borondns" >"$out_dir/file-borondns.txt"
     file "$out_dir/oxide-gun" >"$out_dir/file-oxide-gun.txt"
     if command -v ldd >/dev/null 2>&1; then
-        ldd "$out_dir/oxidedns" >"$out_dir/ldd-oxidedns.txt" 2>&1 || true
+        ldd "$out_dir/borondns" >"$out_dir/ldd-borondns.txt" 2>&1 || true
         ldd "$out_dir/oxide-gun" >"$out_dir/ldd-oxide-gun.txt" 2>&1 || true
     fi
 }
@@ -198,12 +198,12 @@ write_manifest_and_compare() {
     local comparison="$evidence_dir/comparison.tsv"
     printf 'artifact\tbuilder\ttarget\tprofile\tfeatures\tcommit\trust_version\tbuild_command\tsha256\tsize_bytes\tevidence_path\n' >"$manifest"
     for builder in a b; do
-        for artifact in oxidedns oxide-gun; do
+        for artifact in borondns oxide-gun; do
             local features
             local command
-            if [[ "$artifact" == "oxidedns" ]]; then
+            if [[ "$artifact" == "borondns" ]]; then
                 features="af-xdp"
-                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p oxidedns-cli --features af-xdp"
+                command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p borondns-cli --features af-xdp"
             else
                 features="xdp"
                 command="$cargo_bin build --locked --release --target-dir <builder-target-dir> --target $target_triple -p oxide-gun --features xdp"
@@ -226,7 +226,7 @@ write_manifest_and_compare() {
 
     printf 'artifact\ttarget\tprofile\tbuilder_a_sha256\tbuilder_b_sha256\tbuilder_a_size_bytes\tbuilder_b_size_bytes\tmatch\tevidence_path_a\tevidence_path_b\n' >"$comparison"
     local artifact_match="true"
-    for artifact in oxidedns oxide-gun; do
+    for artifact in borondns oxide-gun; do
         local path_a="$evidence_dir/artifacts/a/$artifact"
         local path_b="$evidence_dir/artifacts/b/$artifact"
         local sha_a sha_b size_a size_b match
@@ -277,7 +277,7 @@ write_traceability() {
     cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_state	artifact	note
 ODS-NFR-MAINT-005	retained-local-comparison	artifact-manifest.tsv; comparison.tsv; reproducible-build-summary.env	Two builds in separate target directories are compared; reproducible-build-summary.env is authoritative for artifact match, source cleanliness, and release eligibility.
-ODS-NFR-OBS-006	retained-local-comparison	reproducible-build-env.env	The build fixed OXIDEDNS_BUILD_COMMIT, OXIDEDNS_BUILD_RUST_VERSION, OXIDEDNS_BUILD_TIMESTAMP, and SOURCE_DATE_EPOCH so embedded build-info labels are deterministic.
+ODS-NFR-OBS-006	retained-local-comparison	reproducible-build-env.env	The build fixed BORONDNS_BUILD_COMMIT, BORONDNS_BUILD_RUST_VERSION, BORONDNS_BUILD_TIMESTAMP, and SOURCE_DATE_EPOCH so embedded build-info labels are deterministic.
 ODS-INV-009	retained-local-comparison	cargo-metadata.locked.json; reproducible-build-env.env	The comparison used locked Cargo metadata and static source-tree inputs.
 ODS-VER-010	retained-local-comparison	README.md; reproducible-build-summary.env	The retained evidence directory records command, environment, digests, and comparison result for release-note publication.
 EOF
@@ -285,7 +285,7 @@ EOF
 
 write_readme() {
     cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Reproducible Build Evidence
+# BoronDNS Reproducible Build Evidence
 
 Created UTC: $timestamp
 
@@ -297,7 +297,7 @@ the produced static musl binaries.
 
 Verified artifacts:
 
-- \`oxidedns\`, built from package \`oxidedns-cli\` with feature \`af-xdp\`.
+- \`borondns\`, built from package \`borondns-cli\` with feature \`af-xdp\`.
 - \`oxide-gun\`, built from package \`oxide-gun\` with feature \`xdp\`.
 
 Target: \`$target_triple\`
@@ -310,9 +310,9 @@ Release eligible: \`$release_eligible\`
 The comparison fixes:
 
 - \`SOURCE_DATE_EPOCH=$commit_epoch\`
-- \`OXIDEDNS_BUILD_COMMIT=$short_commit\`
-- \`OXIDEDNS_BUILD_RUST_VERSION=$rust_version\`
-- \`OXIDEDNS_BUILD_TIMESTAMP=$commit_timestamp\`
+- \`BORONDNS_BUILD_COMMIT=$short_commit\`
+- \`BORONDNS_BUILD_RUST_VERSION=$rust_version\`
+- \`BORONDNS_BUILD_TIMESTAMP=$commit_timestamp\`
 - \`CARGO_INCREMENTAL=0\`
 
 ## Results

@@ -5,7 +5,7 @@ Status: release and operations evidence runbook for formal SRS acceptance.
 This guide owns the mechanics of `scripts/release-evidence-snapshot.sh` and the
 handoff directories used by later release/operations runs. It is separate from
 the Operator Deployment Guide so day-one deployment instructions stay focused on
-running OxideDNS.
+running BoronDNS.
 
 The release candidate does not claim completed long-running evidence unless the
 release artifacts exist. A generated handoff directory proves that the setup and
@@ -60,7 +60,7 @@ under `target/evidence/<timestamp>/`. By default it captures:
 Those focused default smoke scripts are not the broader real-primary interop
 matrix. The broad BIND, NSD, Knot, PowerDNS/PostgreSQL, packet-torture, XoT,
 and long RRL campaign command set remains opt-in through
-`OXIDEDNS_EVIDENCE_RUN_INTEROP=1` or `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`.
+`BORONDNS_EVIDENCE_RUN_INTEROP=1` or `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1`.
 
 The unsafe dependency evidence records scanner caveats and must be reviewed
 before it is treated as complete. The info-verbosity, interface-compatibility,
@@ -70,15 +70,15 @@ release-specific inputs are supplied.
 
 ## Optional Evidence Runs
 
-Set `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the
+Set `BORONDNS_EVIDENCE_RUN_FUZZ=1` to run the fuzz campaign helper inside the
 snapshot and retain its `campaign-summary.tsv`.
 
-Set `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
-campaign under the snapshot. Use `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
-`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
+Set `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` to run the retained RRL evidence
+campaign under the snapshot. Use `BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` or
+`BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` to choose iteration-count or wall-clock
 duration mode.
 
-Set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` to run the broader interop commands listed
+Set `BORONDNS_EVIDENCE_RUN_INTEROP=1` to run the broader interop commands listed
 in `docs/evidence-command-catalog.md` as part of the snapshot. Successful
 real-primary interop runs write `primary-version.txt` under their
 `target/interop/...` workdir. The snapshot copies new files into
@@ -91,16 +91,16 @@ Use `scripts/interop-primary-matrix.sh` for a retained aggregate pass across the
 selected BIND, NSD, Knot, and PowerDNS/PostgreSQL primary scenarios. It writes
 `primary-matrix-summary.tsv` and per-primary artifact subdirectories under
 `target/evidence/primary-matrix-...` by default, or under
-`OXIDEDNS_PRIMARY_MATRIX_ARTIFACT_DIR` when set.
+`BORONDNS_PRIMARY_MATRIX_ARTIFACT_DIR` when set.
 
-Set `OXIDEDNS_RELEASE_NOTES` to a completed release-notes markdown file to run
+Set `BORONDNS_RELEASE_NOTES` to a completed release-notes markdown file to run
 the release-note gate and verify that retained primary-version artifact paths
 are published in the notes.
 
-Set `OXIDEDNS_PERF_BASELINE` to a whitespace-delimited history file with rows
+Set `BORONDNS_PERF_BASELINE` to a whitespace-delimited history file with rows
 shaped as `release metric value` to compare retained `perf-smoke-metrics.env`
 values against the rolling baseline.
-`OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the default 10 percent
+`BORONDNS_PERF_REGRESSION_THRESHOLD_PCT` overrides the default 10 percent
 regression threshold.
 
 ## Handoff Directories
@@ -136,13 +136,13 @@ schema details.
 ## Reproducible Build Evidence
 
 Use `scripts/reproducible-build-compare.sh` to run the local static-binary
-comparison. The script builds `oxidedns` and `oxide-gun` twice in separate clean
+comparison. The script builds `borondns` and `oxide-gun` twice in separate clean
 target directories for `x86_64-unknown-linux-musl`, fixes the embedded
-`OXIDEDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
+`BORONDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
 `artifact-manifest.tsv`, `comparison.tsv`, and `reproducible-build-summary.env`
 under `target/evidence/reproducible-build-...`.
 The comparison refuses modified or untracked source by default. The explicit
-`OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1` escape hatch exists only
+`BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1` escape hatch exists only
 for diagnostics: such a run exits nonzero and records
 `reproducible_build_status=false` plus `release_eligible=false`, even when its two
 artifact digests match. Dirty-source output is never release evidence.
@@ -155,7 +155,7 @@ commit before preparing the signing handoff. It validates the two matching
 binary pairs with `scripts/verify-release-reproducibility.py`; a missing,
 ineligible, commit-mismatched, size-mismatched, or digest-mismatched record is a
 hard failure before the privileged signing job can start. The independently
-packaged raw `oxidedns` and `oxide-gun` binaries must then compare byte-for-byte
+packaged raw `borondns` and `oxide-gun` binaries must then compare byte-for-byte
 with both retained builds, so the result authenticates the bytes sent for
 signing rather than an unrelated successful comparison.
 
@@ -168,7 +168,7 @@ reproducibility.
 ## Package and Docker Smoke Evidence
 
 Use `scripts/package-installer.sh` to build the release installer archive,
-standalone `oxidedns` and `oxide-gun` binaries, package manifest, static-link
+standalone `borondns` and `oxide-gun` binaries, package manifest, static-link
 reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the
 installer in Ubuntu, including install, update, config validation,
 `oxide-gun --self-test`, and startup.
@@ -176,12 +176,12 @@ installer in Ubuntu, including install, update, config validation,
 Both installer and Docker packaging fail closed when Git reports any modified
 or untracked, non-ignored source. They revalidate the exact commit and complete
 worktree status across build and publication boundaries. The
-`OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` override exists only for local
+`BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` override exists only for local
 development diagnostics: affected manifests record `source_clean=0`,
 `release_eligible=0`, and `dirty_source_override=1`, and Docker images carry
 matching source-clean and release-eligibility labels. The override is rejected
 under GitHub Actions and must never appear in the tagged release workflow.
-Likewise, `OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1` is a local diagnostic override:
+Likewise, `BORONDNS_PACKAGE_ALLOW_DYNAMIC=1` is a local diagnostic override:
 even on a clean tree it forces `release_eligible=0`, records
 `dynamic_link_override=1`, and publishes only in the `-nonrelease-dynamic`
 artifact and image-tag namespace. It is also rejected under GitHub Actions.
@@ -191,7 +191,7 @@ and directory type of every private run/staging root that may later be removed
 recursively. Normal completion and failure rollback both revalidate that exact
 identity immediately before cleanup. In a packaging-UID-writable namespace,
 logical cleanup ends with an exact no-replace rename to a unique
-`*.oxidedns-remove.*` quarantine. The builder reports that retained path and
+`*.borondns-remove.*` quarantine. The builder reports that retained path and
 its captured `device:inode:owner:type`, plus the immediate parent path and parent
 identity. Recovery journals persist those four values in the indexed
 `retained_removal_quarantine_N*` fields. The journal parent directory is bound
@@ -215,7 +215,7 @@ cleanup unlink; stderr identifies the exact path, object identity, parent path,
 and parent identity when post-write revalidation succeeds, or only the
 unverified parent namespace when it does not.
 Cargo-cyclonedx's fixed worktree outputs are identity-bound renamed into unique
-`*.oxidedns-remove.*` paths under the already locked Git metadata root. This
+`*.borondns-remove.*` paths under the already locked Git metadata root. This
 keeps retained evidence outside Git source-status accounting without using a
 copy-and-unlink fallback; an unsupported cross-filesystem layout fails closed
 and retains the source pathname with the same object/parent identity evidence
@@ -248,18 +248,18 @@ Before an exported archive reaches the Docker daemon,
 `scripts/verify-docker-archive.py` streams it under a single absolute
 `CLOCK_BOOTTIME` deadline and hard upper bounds for member count, individual and
 total expanded bytes, and retained JSON. Callers may lower those bounds through
-the `OXIDEDNS_DOCKER_ARCHIVE_*` environment variables, but cannot raise the
+the `BORONDNS_DOCKER_ARCHIVE_*` environment variables, but cannot raise the
 compiled maxima. Links, special files, duplicate or non-canonical members,
 digest mismatches, and archives exceeding any bound fail closed.
 
 Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
 files for the two shipped release binaries. The Cargo SBOM pass uses
 `cargo-cyclonedx` against the workspace lockfile, the musl release target, and
-the shipped feature set `oxidedns-cli/af-xdp,oxide-gun/xdp`. It also writes
-`target/dist/oxidedns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
+the shipped feature set `borondns-cli/af-xdp,oxide-gun/xdp`. It also writes
+`target/dist/borondns-<version>-x86_64-unknown-linux-musl-sbom-manifest.tsv`
 with the source, feature set, tool version, path, and hash for each SBOM.
 
-Set `OXIDEDNS_SBOM_DOCKER=1` after `scripts/package-docker-image.sh` to require
+Set `BORONDNS_SBOM_DOCKER=1` after `scripts/package-docker-image.sh` to require
 Syft and add a CycloneDX JSON SBOM for the release Docker image. Tagged GitHub
 release builds run this required Docker SBOM mode and attach the binary SBOMs,
 Docker image SBOM, their SHA-256 files, and the SBOM manifest to the release.
@@ -312,18 +312,18 @@ For installer acceptance, run verification before extraction or privilege:
 
 ```sh
 tag=v0.2.0
-asset="oxidedns-${tag#v}-x86_64-unknown-linux-musl.tar.xz"
+asset="borondns-${tag#v}-x86_64-unknown-linux-musl.tar.xz"
 cosign verify-blob \
   --bundle "$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$asset"
 ```
 
 The recorded tag, identity, bundle, asset digest, Cosign output, and time of
 verification belong in the release evidence. A failed or cross-tag identity
 must stop acceptance before `tar` or `sudo` is run.
-Local release snapshots use `OXIDEDNS_SBOM_DOCKER=0` by default so they retain
+Local release snapshots use `BORONDNS_SBOM_DOCKER=0` by default so they retain
 binary SBOM evidence without requiring a local Docker daemon.
 
 The v0.2.0 retained package/image smoke bundle is recorded in
@@ -342,7 +342,7 @@ accepted scope statement required by `ODS-VER-008` and `ODS-VER-015`.
 The Operator Deployment Guide lists the day-one primary interoperability scripts
 operators are most likely to run directly. The full command inventory consumed
 by the release snapshot is `docs/evidence-command-catalog.md`; that file is the
-source for the broader `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` command set.
+source for the broader `BORONDNS_EVIDENCE_RUN_INTEROP=1` command set.
 
 Retain each successful real-primary run's `primary-version.txt`, redacted
 configuration, relevant packet/log artifacts, and traceability TSVs when the

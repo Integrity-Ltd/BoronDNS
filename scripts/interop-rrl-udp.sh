@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/rrl-udp-$$"
-artifact_dir="${OXIDEDNS_RRL_UDP_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_RRL_UDP_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -42,9 +42,9 @@ cleanup() {
             echo "---- rrl-client.log ----" >&2
             tail -100 "$workdir/rrl-client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -100 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -100 "$workdir/borondns.log" >&2
         }
         [[ -f "$workdir/client-summary.env" ]] && {
             echo "---- client-summary.env ----" >&2
@@ -63,7 +63,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -79,7 +79,7 @@ PY
 fake_primary="$workdir/fake-primary.py"
 rrl_client="$workdir/rrl-client.py"
 primary_log="$workdir/fake-primary.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 metrics_summary="$workdir/metrics-summary.env"
 
 cat >"$fake_primary" <<'PY'
@@ -321,11 +321,11 @@ for case_name, counts in case_totals.items():
         raise SystemExit(f"RRL emitted unexpected full {case_name} responses")
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -365,43 +365,43 @@ for _ in {1..50}; do
     sleep 0.1
 done
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after fake-primary AXFR" >&2
+    echo "BoronDNS did not become ready after fake-primary AXFR" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$rrl_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/rrl-client.log")"
+client_summary="$(python3 "$rrl_client" 127.0.0.1 "$borondns_dns_port" "$workdir/rrl-client.log")"
 echo "$client_summary"
 printf '%s\n' "$client_summary" | tr ' ' '\n' >"$workdir/client-summary.env"
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-    'oxidedns_rrl_keys_tracked 5'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052401' \
+    'borondns_rrl_keys_tracked 5'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected line: $expected" >&2
         exit 1
     fi
 done
 
-subject="$(awk '$1 == "oxidedns_rrl_responses_subject_total" { print int($2) }' <<<"$metrics")"
-dropped="$(awk '$1 == "oxidedns_rrl_responses_dropped_total" { print int($2) }' <<<"$metrics")"
-truncated="$(awk '$1 == "oxidedns_rrl_responses_truncated_total" { print int($2) }' <<<"$metrics")"
-queries_truncated="$(awk '$1 == "oxidedns_queries_truncated_total" { print int($2) }' <<<"$metrics")"
+subject="$(awk '$1 == "borondns_rrl_responses_subject_total" { print int($2) }' <<<"$metrics")"
+dropped="$(awk '$1 == "borondns_rrl_responses_dropped_total" { print int($2) }' <<<"$metrics")"
+truncated="$(awk '$1 == "borondns_rrl_responses_truncated_total" { print int($2) }' <<<"$metrics")"
+queries_truncated="$(awk '$1 == "borondns_queries_truncated_total" { print int($2) }' <<<"$metrics")"
 
 if ((subject < 40 || dropped < 15 || truncated < 15 || queries_truncated < 15)); then
     echo "RRL metrics did not show expected UDP limiting: subject=$subject dropped=$dropped truncated=$truncated query_tc=$queries_truncated" >&2
@@ -432,8 +432,8 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$workdir/client-summary.env" "$artifact_dir/client-summary.env"
     cp "$workdir/metrics-summary.env" "$artifact_dir/metrics-summary.env"
     cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
 fi
 
 echo "RRL UDP runtime interop passed"

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR:-$repo_root/target/evidence/unsafe-dependencies-$$}"
+artifact_dir="${BORONDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR:-$repo_root/target/evidence/unsafe-dependencies-$$}"
 mkdir -p "$artifact_dir"
 
 if ! cargo geiger --version >/dev/null 2>&1; then
@@ -72,7 +72,7 @@ run_geiger_json() {
     printf 'cargo_geiger=%s\n' "$(cargo geiger --version)"
 } >"$artifact_dir/tool-versions.env"
 
-root_packages="${OXIDEDNS_GEIGER_ROOT_PACKAGES:-oxidedns-cli}"
+root_packages="${BORONDNS_GEIGER_ROOT_PACKAGES:-borondns-cli}"
 printf 'root_package\tmanifest\n' >"$artifact_dir/geiger-roots.tsv"
 for package in $root_packages; do
     manifest="$(manifest_for_package "$package")"
@@ -88,8 +88,8 @@ import sys
 from pathlib import Path
 
 artifact_dir = Path(sys.argv[1])
-first_party = {"oxidedns-cli", "oxidedns-core", "oxidedns-server"}
-expected_first_party = {"oxidedns-cli": 0, "oxidedns-core": 0, "oxidedns-server": 117}
+first_party = {"borondns-cli", "borondns-core", "borondns-server"}
+expected_first_party = {"borondns-cli": 0, "borondns-core": 0, "borondns-server": 117}
 
 
 def unsafe_total(used: dict[str, dict[str, int]]) -> int:
@@ -230,7 +230,7 @@ with (artifact_dir / "unsafe-dependency-traceability.tsv").open("w", encoding="u
     )
 
 with (artifact_dir / "README.md").open("w", encoding="utf-8") as out:
-    out.write("# OxideDNS Unsafe Dependency Evidence\n\n")
+    out.write("# BoronDNS Unsafe Dependency Evidence\n\n")
     out.write(
         "This directory retains `cargo geiger` output for release review. It is "
         "not, by itself, an acceptance claim: first-party source-level unsafe "

@@ -124,12 +124,12 @@ def main() -> None:
     ).hexdigest()
     authority = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
     try:
-        authority.bind(f"\0oxidedns-campaign-{os.getuid()}-{authority_digest}")
+        authority.bind(f"\0borondns-campaign-{os.getuid()}-{authority_digest}")
     except OSError as error:
         authority.close()
         fail(f"another process holds {label} authority: {error}")
 
-    lock_root = root / ".oxidedns-campaign-locks"
+    lock_root = root / ".borondns-campaign-locks"
     try:
         os.mkdir(lock_root, 0o700)
     except FileExistsError:

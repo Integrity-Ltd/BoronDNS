@@ -1,8 +1,8 @@
-# OxideDNS Operator Deployment Guide
+# BoronDNS Operator Deployment Guide
 
 Status: Engineering MVP operator guide and formal SRS acceptance input
 
-This guide describes how to deploy and operate OxideDNS as a secondary-only
+This guide describes how to deploy and operate BoronDNS as a secondary-only
 authoritative DNS server for Engineering MVP validation and later SRS
 acceptance review. It is derived from SRS v0.9.1, the implementation plan, gap
 register, repository README, example configuration, and interoperability
@@ -14,7 +14,7 @@ configuration, service management, checks, and known limitations.
 
 ## Supported Platform Boundaries
 
-OxideDNS is currently scoped for Linux hosts and OCI-compatible containers. The SRS
+BoronDNS is currently scoped for Linux hosts and OCI-compatible containers. The SRS
 target is current Linux LTS kernels or later, with standard POSIX networking and
 signal handling. The server has no distribution-specific runtime requirement.
 
@@ -33,7 +33,7 @@ Operational network requirements:
 - UDP and TCP listener access for authoritative DNS service. The SRS default is
   UDP/53 and TCP/53; test and non-root deployments commonly use higher ports
   such as 5300.
-- Outbound TCP access from OxideDNS to each configured primary for AXFR and IXFR.
+- Outbound TCP access from BoronDNS to each configured primary for AXFR and IXFR.
 - Inbound NOTIFY access from configured primary addresses.
 - Outbound TCP access to the configured XoT port when XoT transfer transport is
   used, typically TCP/853.
@@ -44,7 +44,7 @@ Operational network requirements:
 
 Operational state boundaries:
 
-- OxideDNS is secondary-only. It does not provide primary service, recursive
+- BoronDNS is secondary-only. It does not provide primary service, recursive
   resolution, forwarding, dynamic update, DNSSEC signing, DNSSEC validation, or
   a runtime administration API.
 - Zone data lives in memory only. Every process start is a cold start and must
@@ -61,8 +61,8 @@ Operational state boundaries:
   and reconciled after successful catalog refreshes.
 - Optional external control-plane integration can report transfer telemetry and
   poll durable node operations. It does not add an inbound administrative API
-  to OxideDNS.
-- OxideDNS does not persist zone data, metrics, transfer history, or runtime state
+  to BoronDNS.
+- BoronDNS does not persist zone data, metrics, transfer history, or runtime state
   to disk.
 
 ## Install and Build
@@ -79,7 +79,7 @@ Install prerequisites for a source build:
 Build the release binary:
 
 ```sh
-cargo build --locked --release -p oxidedns-cli
+cargo build --locked --release -p borondns-cli
 ```
 
 Release builds use `--locked` so the checked-in lockfile is part of the build
@@ -92,16 +92,16 @@ evidence are release-governance work.
 Install it to a host path managed by the operator:
 
 ```sh
-sudo install -m 0755 target/release/oxidedns /usr/local/bin/oxidedns
+sudo install -m 0755 target/release/borondns /usr/local/bin/borondns
 ```
 
 The tag-push release workflow publishes local-use artifacts for
-`x86_64-unknown-linux-musl`: the installer archive, the raw static `oxidedns`
+`x86_64-unknown-linux-musl`: the installer archive, the raw static `borondns`
 binary, the raw static XDP-enabled `oxide-gun` binary, and an Alpine-based
 Docker image archive. Each public artifact has a sibling `.sha256` file, and
 the release also attaches CycloneDX SBOMs plus an SBOM manifest for the shipped
 binaries and Docker image. The Docker image is attached as
-`oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
+`borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
 does not publish a registry image, so operators should load the release asset
 explicitly rather than using `docker pull`:
 
@@ -111,17 +111,17 @@ bundle against the exact GitHub Actions issuer, repository workflow, and tag:
 ```sh
 tag=v0.2.0
 target_triple=x86_64-unknown-linux-musl
-asset="oxidedns-${tag#v}-$target_triple.tar.xz"
-install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"
+asset="borondns-${tag#v}-$target_triple.tar.xz"
+install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"
 sudo chmod 0700 "$install_root"
 sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
 sudo cosign verify-blob \
   --bundle "$install_root/$asset.sigstore.json" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  --certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/workflows/release-installer.yml@refs/tags/$tag" \
   "$install_root/$asset"
 sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
-sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"
+sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"
 ```
 
 Installer `--bin-dir` and `--config` overrides must be normalized absolute
@@ -138,13 +138,13 @@ Treat any verification failure as a release-rejection condition; do not
 extract the archive or invoke its installer.
 
 ```sh
-sha256sum -c oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
-xz -dc oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
-docker run --rm oxidedns:<version> --version
+sha256sum -c borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+xz -dc borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
+docker run --rm borondns:<version> --version
 ```
 
 If Docker prints `WARNING: IPv4 forwarding is disabled. Networking will not
-work.`, that warning is emitted by the Docker host before OxideDNS starts.
+work.`, that warning is emitted by the Docker host before BoronDNS starts.
 `--version` can still succeed, but bridge networking and `-p` port publishing
 may not. Fix the host Docker/sysctl networking setup before using bridge-mode
 service examples, or use a host-network deployment profile with explicit host
@@ -153,7 +153,7 @@ firewall policy.
 Recommended Docker runtime hardening:
 
 ```sh
-docker run -d --name oxidedns \
+docker run -d --name borondns \
   --read-only \
   --ulimit nofile=65536:65536 \
   --cap-drop ALL \
@@ -162,19 +162,19 @@ docker run -d --name oxidedns \
   -p 53:5300/udp \
   -p 53:5300/tcp \
   -p 127.0.0.1:8080:8080/tcp \
-  -v /etc/oxidedns-secondary/config.toml:/etc/oxidedns-secondary/config.toml:ro \
-  oxidedns:<version> \
-  serve --config /etc/oxidedns-secondary/config.toml
+  -v /etc/borondns-secondary/config.toml:/etc/borondns-secondary/config.toml:ro \
+  borondns:<version> \
+  serve --config /etc/borondns-secondary/config.toml
 ```
 
 The image runs as UID/GID `53053`, binds unprivileged container ports by
 default, and expects configuration at
-`/etc/oxidedns-secondary/config.toml`. Mapping host port 53 to container port
+`/etc/borondns-secondary/config.toml`. Mapping host port 53 to container port
 5300 avoids adding `CAP_NET_BIND_SERVICE`; if an operator changes the container
 configuration to bind port 53 directly, grant only that capability rather than
 running privileged. The `--ulimit nofile=65536:65536` setting is intentionally
 shown even for small test deployments because host and Docker daemon defaults
-vary; OxideDNS validates the effective file-descriptor limit at startup against
+vary; BoronDNS validates the effective file-descriptor limit at startup against
 the configured TCP and transfer limits.
 
 The dedicated [Debian 12 beta VM profile](debian12-beta-vm-profile.md) covers
@@ -185,15 +185,15 @@ configuration. The repository does not ship a VM image artifact.
 Create the default configuration directory and install a starting config:
 
 ```sh
-sudo install -d -m 0755 /etc/oxidedns-secondary
-sudo install -m 0640 config/oxidedns.example.toml /etc/oxidedns-secondary/config.toml
+sudo install -d -m 0755 /etc/borondns-secondary
+sudo install -m 0640 config/borondns.example.toml /etc/borondns-secondary/config.toml
 ```
 
 Validate the config before starting service. The SRS v0.9.1 CLI mode validates
 the same startup configuration path without binding sockets:
 
 ```sh
-oxidedns --validate-config /etc/oxidedns-secondary/config.toml
+borondns --validate-config /etc/borondns-secondary/config.toml
 ```
 
 The effective configuration can also be dumped after validation. Inline TSIG
@@ -202,32 +202,32 @@ trust anchors, client certificates, and private-key paths are preserved so
 operators can audit deployment wiring:
 
 ```sh
-oxidedns --dump-config /etc/oxidedns-secondary/config.toml
+borondns --dump-config /etc/borondns-secondary/config.toml
 ```
 
 The binary can print the maintained example configuration without reading a
 configuration file or opening network sockets:
 
 ```sh
-oxidedns --example-config
+borondns --example-config
 ```
 
 That output is valid TOML and can be validated directly after saving or
 redirecting it to a file:
 
 ```sh
-oxidedns --example-config > /tmp/oxidedns.example.toml
-oxidedns --validate-config /tmp/oxidedns.example.toml
+borondns --example-config > /tmp/borondns.example.toml
+borondns --validate-config /tmp/borondns.example.toml
 ```
 
-When `--config` is omitted, OxideDNS reads
-`/etc/oxidedns-secondary/config.toml`. Top-level `--config` or
-`OXIDEDNS_CONFIG` can override the path for `--validate-config`,
+When `--config` is omitted, BoronDNS reads
+`/etc/borondns-secondary/config.toml`. Top-level `--config` or
+`BORONDNS_CONFIG` can override the path for `--validate-config`,
 `--dump-config`, `check-config`, and `serve`. Mode-specific paths, such as
 `serve --config /path/to/config.toml`, remain supported and take precedence
 over the top-level path.
 
-OxideDNS also supports an SRS v0.9.1-style `ODS_<SECTION>_<KEY>` environment override
+BoronDNS also supports an SRS v0.9.1-style `ODS_<SECTION>_<KEY>` environment override
 subset for scalar process settings. These values take precedence over the file
 and are included in `--dump-config` output:
 
@@ -289,11 +289,11 @@ implemented warning catalogue is:
 emits static configuration warnings as structured startup logs, and emits the
 SOA timer warning when a transferred zone snapshot supplies the relevant SOA
 fields. The `/metrics` endpoint exposes the startup warning count as
-`oxidedns_secondary_configuration_warnings_total`.
+`borondns_secondary_configuration_warnings_total`.
 
 ## Configuration
 
-The example configuration in `config/oxidedns.example.toml` is the current schema
+The example configuration in `config/borondns.example.toml` is the current schema
 reference. Worked scenarios in this guide and the example configuration cover
 single-zone single-primary, multi-zone multi-primary, TSIG-protected,
 XoT-protected, and DNSSEC-served deployments. The major sections are:
@@ -334,7 +334,7 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   configured shared Server Secret material. For anycast or load-balanced
   deployments, set the same 32-hex-character `server_secret` on every instance.
   During staged rollover, deploy the new value as `server_secret` and the old
-  value as `previous_server_secret`; OxideDNS accepts cookies signed by either
+  value as `previous_server_secret`; BoronDNS accepts cookies signed by either
   value and refreshes responses with the current secret. Do not combine
   configured shared secrets with `secret_rotation_interval_secs`.
 - `[rrl]`: process-wide UDP Response Rate Limiting configuration. The current
@@ -355,10 +355,10 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   `zsm_loading_warning_threshold_secs` defaults to 3600 and controls the
   warning threshold and repeat interval for zones stuck in LOADING.
 - `[[zones]]`: served secondary zones and their primary transfer sources. When
-  multiple primaries are listed, OxideDNS chooses one random initial primary for
+  multiple primaries are listed, BoronDNS chooses one random initial primary for
   the zone at process startup and then uses the resulting stable rotation for
   later transfer attempts.
-- `[[catalog_zones]]`: RFC 9432 catalog zones. OxideDNS transfers the catalog,
+- `[[catalog_zones]]`: RFC 9432 catalog zones. BoronDNS transfers the catalog,
   reads member-zone PTR records below `zones.<catalog-zone>`, and dynamically
   transfers and serves those member zones. Catalog transfers themselves must be
   TSIG-authenticated with `tsig_key` or `catalog_tsig_key`.
@@ -369,12 +369,12 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   `member_*` fields when the catalog should be transferred from one primary but
   its member zones should be transferred from another.
 
-  `serve_catalog_zone = false` is the default. In that mode OxideDNS transfers
+  `serve_catalog_zone = false` is the default. In that mode BoronDNS transfers
   and processes the catalog but does not answer DNS queries for the catalog
   apex or its property names. `max_member_zones` defaults to 10,000 and caps the
   number of accepted member zones per catalog.
 
-  `member_transfer_extensions = true` enables the supported OxideDNS extension
+  `member_transfer_extensions = true` enables the supported BoronDNS extension
   records for catalog-driven secondary-service deployments. Extension records
   can provide member transfer addresses, TSIG key-name references, transfer
   transport/port/server-name hints, and NOTIFY sources. They cannot carry raw
@@ -385,7 +385,7 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   TSIG-authenticated by inheriting `member_tsig_key` or `tsig_key`.
   `allow-legacy-private` disables that fallback when `member_tsig_key` is unset,
   so members can AXFR from trusted private primaries that cannot yet serve
-  TSIG/XoT. OxideDNS rejects unsigned member AXFR to non-private primary
+  TSIG/XoT. BoronDNS rejects unsigned member AXFR to non-private primary
   addresses. Catalog transfers themselves still require TSIG.
 - `[[tsig_keys]]`: startup TSIG keys referenced by zones. Each key uses exactly
   one of inline `secret` or filesystem `secret_file`; a static `secret_file` is
@@ -424,7 +424,7 @@ which suppresses NSID responses even when clients request the option.
 
 ### External Control Plane
 
-When `[control_plane.operations] enabled = true`, OxideDNS polls
+When `[control_plane.operations] enabled = true`, BoronDNS polls
 `/api/v1/secondary-nodes/{node_id}/operations` with a bounded lease and
 completes each accepted operation through the matching completion endpoint.
 Each poll response is capped at 256 KiB and 20 operation items. A malformed
@@ -508,7 +508,7 @@ Production configuration notes:
   service and log aggregation. `plain` remains available for local debugging
   but is not the SRS structured non-JSON format. Warning and error entries are
   written to stderr; lower-level entries are written to stdout.
-- Before the configuration is parsed, OxideDNS emits JSON bootstrap records on
+- Before the configuration is parsed, BoronDNS emits JSON bootstrap records on
   stderr for process start, configuration read, and validation success or
   failure; those records are not reformatted by later logging settings.
 - Keep `[logging].max_entry_length_bytes` at the default unless the deployment's
@@ -545,7 +545,7 @@ Production configuration notes:
   justifies larger values.
 - Keep `xdp.tx_wakeup_interval = 1`. The current AF_XDP dependency enables
   `XDP_USE_NEED_WAKEUP` without exposing the kernel ring's needs-wakeup flag, so
-  OxideDNS rejects other values and kicks every non-empty TX enqueue. Periodic
+  BoronDNS rejects other values and kicks every non-empty TX enqueue. Periodic
   counter-based kicks can strand a low-rate or isolated DNS response until
   unrelated later traffic arrives. `xdp.rx_drain_passes` bounds receive work
   even when every redirected packet is rejected during userspace validation;
@@ -562,11 +562,11 @@ Production configuration notes:
 - Ensure the service soft file-descriptor limit satisfies the startup formula:
   twice the sum of configured TCP connections, concurrent transfers, effective
   UDP sockets/XSK workers, TCP/health listeners, and the 100-descriptor reserve.
-  OxideDNS checks this at startup and exits with an OS-startup error if the limit is
+  BoronDNS checks this at startup and exits with an OS-startup error if the limit is
   too low.
 - Keep `[limits].max_tcp_inflight_queries_per_connection` at the default 64
   unless load testing shows a need to lower per-connection memory/concurrency or
-  raise pipelined DNS-over-TCP concurrency. OxideDNS rejects values above the
+  raise pipelined DNS-over-TCP concurrency. BoronDNS rejects values above the
   platform's Tokio semaphore/channel capacity during startup validation. Omit
   `[limits].tcp_inflight_limit_timeout_secs` to close persistently saturated
   connections after the configured TCP read timeout.
@@ -585,22 +585,22 @@ Production configuration notes:
 For foreground operation:
 
 ```sh
-oxidedns serve --config /etc/oxidedns-secondary/config.toml
+borondns serve --config /etc/borondns-secondary/config.toml
 ```
 
 For systemd-managed operation, use a service unit shaped like this:
 
 ```ini
 [Unit]
-Description=OxideDNS secondary authoritative DNS server
+Description=BoronDNS secondary authoritative DNS server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/oxidedns serve --config /etc/oxidedns-secondary/config.toml
-User=oxidedns
-Group=oxidedns
+ExecStart=/usr/local/bin/borondns serve --config /etc/borondns-secondary/config.toml
+User=borondns
+Group=borondns
 Restart=on-failure
 RestartSec=5s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -628,7 +628,7 @@ Notes:
   non-cooperative task cannot extend the configured process shutdown window.
 - The process handles SIGTERM and SIGINT for graceful shutdown, ignores SIGHUP,
   and sets SIGPIPE to ignored at startup. Do not rely on SIGHUP for reload.
-- Because OxideDNS writes no operational state, read-only root filesystems and
+- Because BoronDNS writes no operational state, read-only root filesystems and
   strict service sandboxes are expected deployment shapes. Ensure configured
   config, TSIG, and TLS files remain readable by the service user. The
   `scripts/audit-readonly-runtime.sh` evidence harness runs the service with a
@@ -638,7 +638,7 @@ Notes:
 
 ## Health and Metrics
 
-When a health listener resolves, OxideDNS exposes a plain HTTP endpoint with the
+When a health listener resolves, BoronDNS exposes a plain HTTP endpoint with the
 routes below. The listener is taken from `[health].bind_address`/`bind_port` if
 set, otherwise `[server].health`, otherwise each `[interfaces].mgmt` address on
 `[health].default_port` (the example config uses `[health]`/`[interfaces].mgmt`):
@@ -673,7 +673,7 @@ Incomplete requests and stalled response readers are disconnected by fixed
 five-second management request-read and response-write deadlines, ensuring a
 client cannot retain one of those slots indefinitely.
 
-The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
+The per-zone metric `borondns_secondary_zone_loading_seconds` reports current
 process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
 zones. It is intended for alerts around long-LOADING zones that have not
 completed initial transfer after startup. The scheduler also emits repeated
@@ -726,11 +726,11 @@ health response-time evidence, and rate-limit behavior under
 production-representative scrape traffic. Treat those as pending until the gap
 register says otherwise.
 
-Alerting is external to OxideDNS. For Engineering MVP deployments, alert on at least:
+Alerting is external to BoronDNS. For Engineering MVP deployments, alert on at least:
 
 - `/readyz` remaining 503 beyond the expected initial transfer window.
 - `zone_loading_threshold_exceeded` warnings or sustained non-zero
-  `oxidedns_secondary_zone_loading_seconds` for any zone.
+  `borondns_secondary_zone_loading_seconds` for any zone.
 - Catalog membership changes through `catalog_member_added` and
   `catalog_member_removed` logs, followed by expected member-zone ACTIVE state
   and SOA serial metrics.
@@ -776,11 +776,11 @@ scripts/engineering-mvp-evidence.sh
 
 Successful real-primary interop runs write `primary-version.txt` under their
 `target/interop/...` workdir. A script skip is missing evidence, not passing
-interop evidence. Release snapshot options, `OXIDEDNS_EVIDENCE_RUN_INTEROP`,
-`OXIDEDNS_EVIDENCE_RUN_FUZZ`, `OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN`,
-`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS`,
-`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION`, `OXIDEDNS_RELEASE_NOTES`,
-`OXIDEDNS_PERF_BASELINE`, `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT`,
+interop evidence. Release snapshot options, `BORONDNS_EVIDENCE_RUN_INTEROP`,
+`BORONDNS_EVIDENCE_RUN_FUZZ`, `BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN`,
+`BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS`,
+`BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION`, `BORONDNS_RELEASE_NOTES`,
+`BORONDNS_PERF_BASELINE`, `BORONDNS_PERF_REGRESSION_THRESHOLD_PCT`,
 `info-verbosity-handoff`, `benchmark-handoff`, `soak-handoff`, and
 `release-handoff` are documented in
 [`release-evidence-guide.md`](release-evidence-guide.md).
@@ -853,7 +853,7 @@ TSIG:
 - HMAC-MD5 TSIG is intentionally rejected.
 - TSIG secrets use canonical padded Base64 (`YQ==`, not `YQ`). Configure exactly one of inline `secret` or
   `secret_file`; when using `secret_file`, the file must be readable by the
-  OxideDNS process, must be a regular file, must not be world-readable, and
+  BoronDNS process, must be a regular file, must not be world-readable, and
   must not be group- or world-writable. Final-component symlinks are rejected
   on Unix. Static TSIG secret files are capped at 64 KiB, and concurrent growth
   after metadata validation is caught by the bounded read. Secret-store
@@ -869,7 +869,7 @@ TSIG:
 
 XoT:
 
-- XoT is outbound transfer transport only. OxideDNS does not provide DNS-over-TLS
+- XoT is outbound transfer transport only. BoronDNS does not provide DNS-over-TLS
   for client queries and does not receive NOTIFY-over-TLS.
 - Use explicit `[[zones.transfer_primaries]]` entries with
   `transport = "xot"`.
@@ -889,10 +889,10 @@ XoT:
   TLS version, and cipher suite. Session close includes duration and byte
   counters. Certificate material, private keys, and TLS key material are not
   logged.
-- RFC 9103 XoT conformance requires TLS 1.3 or later. OxideDNS builds the XoT
+- RFC 9103 XoT conformance requires TLS 1.3 or later. BoronDNS builds the XoT
   transfer client with a TLS 1.3-only protocol profile and rejects TLS 1.2-only
   primaries before sending a DNS transfer query.
-- OxideDNS does not perform real-time XoT certificate revocation checks via CRL or
+- BoronDNS does not perform real-time XoT certificate revocation checks via CRL or
   OCSP requests. Operators that require stricter revocation handling should use
   short-lived primary certificates and automated trust-anchor rotation.
 
@@ -908,7 +908,7 @@ Network and process hardening:
   firewall supports it.
 - Run as a non-root user where possible. Use `CAP_NET_BIND_SERVICE`, socket
   activation, or high ports instead of a full root service. If a deployment
-  invokes OxideDNS as root, configure `[process] run_as_user = "oxidedns"` or another
+  invokes BoronDNS as root, configure `[process] run_as_user = "borondns"` or another
   unprivileged account; startup binds configured listeners, drops to that user
   irrevocably, and only then starts DNS, transfer, health, and background
   workers.
@@ -919,11 +919,11 @@ Network and process hardening:
   socket binding and any configured privilege drop.
 - Store TSIG and TLS private key material in regular, non-world-readable files.
   Keep every secret, certificate, and trust anchor free of group/world write
-  bits. On Unix, OxideDNS rejects final-component symlinks and validates
+  bits. On Unix, BoronDNS rejects final-component symlinks and validates
   permissions on the same open handle it reads; secret-store paths additionally
   reject intermediate symlinks beneath the captured generation root.
 - Prefer read-only filesystems and minimal service capabilities.
-- `ODS-FR-XOT-012` means OxideDNS does not perform real-time XoT revocation
+- `ODS-FR-XOT-012` means BoronDNS does not perform real-time XoT revocation
   checking; use short-lived certificates and automated trust-anchor rotation
   where that risk matters.
 - Report vulnerabilities to `security@integrity.hu` using the process in
@@ -934,13 +934,13 @@ Network and process hardening:
 Pre-start checks:
 
 ```sh
-oxidedns check-config --config /etc/oxidedns-secondary/config.toml
+borondns check-config --config /etc/borondns-secondary/config.toml
 dig @PRIMARY-IP example.test. SOA +tcp
 dig @PRIMARY-IP example.test. AXFR
 ```
 
 For TSIG-protected zones, validate the primary independently with the same key
-material before starting OxideDNS:
+material before starting BoronDNS:
 
 ```sh
 dig @PRIMARY-IP example.test. AXFR -y hmac-sha256:transfer-key.:BASE64SECRET
@@ -952,23 +952,23 @@ Post-start checks:
 curl -fsS http://127.0.0.1:8080/readyz
 dig @127.0.0.1 -p 5300 example.test. SOA +short
 dig @127.0.0.1 -p 5300 example.test. SOA +tcp +short
-curl -fsS http://127.0.0.1:8080/metrics | grep 'oxidedns_zone_soa_serial'
+curl -fsS http://127.0.0.1:8080/metrics | grep 'borondns_zone_soa_serial'
 ```
 
 Refresh checks:
 
 - Confirm SOA serial in `/metrics` matches the expected primary serial after
   initial transfer and after a primary update.
-- Confirm `oxidedns_transfer_sessions_completed_total` increases after successful
+- Confirm `borondns_transfer_sessions_completed_total` increases after successful
   AXFR or IXFR.
 - Confirm NOTIFY-triggered refresh by checking NOTIFY counters and SOA serial
   movement after a primary sends NOTIFY.
 - Confirm expired or loading zones return SERVFAIL rather than stale
   authoritative data.
 - Do not expect EDNS EXPIRE (RFC 7314) signalling in SOA/AXFR/IXFR exchanges.
-  OxideDNS uses the transferred SOA timers, NOTIFY, AXFR, and IXFR paths above;
+  BoronDNS uses the transferred SOA timers, NOTIFY, AXFR, and IXFR paths above;
   RFC 7314 is Experimental and intentionally outside the current SRS scope, so
-  OxideDNS does not claim RFC 7314 compliance for indirect secondary chains.
+  BoronDNS does not claim RFC 7314 compliance for indirect secondary chains.
 
 Shutdown and restart checks:
 
@@ -981,12 +981,12 @@ Shutdown and restart checks:
 
 ## Backup and Upgrade
 
-There is no OxideDNS zone-state backup. The primary server remains the source of
+There is no BoronDNS zone-state backup. The primary server remains the source of
 truth for every served zone.
 
 Back up and version-control:
 
-- OxideDNS TOML configuration.
+- BoronDNS TOML configuration.
 - TSIG key material and the procedure used to rotate it.
 - XoT trust anchors, client certificates, and client private keys.
 - Service manager units, container manifests, firewall policy, and monitoring
@@ -1003,7 +1003,7 @@ with the release record; they are not runtime state backups.
 Upgrade procedure:
 
 1. Build the candidate binary.
-2. Run `oxidedns check-config` against the production configuration.
+2. Run `borondns check-config` against the production configuration.
 3. Run `./scripts/check.sh`.
 4. Run the interop scripts relevant to the deployment's primary software and
    security mode, retaining each successful run's `primary-version.txt`.
@@ -1019,14 +1019,14 @@ Rollback procedure:
 3. Wait for cold-start transfer and `/readyz`.
 4. Verify SOA serials and query responses.
 
-Because OxideDNS has no persistent runtime state, rollback is a binary and
+Because BoronDNS has no persistent runtime state, rollback is a binary and
 configuration rollback followed by zone reacquisition from the primary.
 
 ## Campaign Cleanup Quarantines
 
 Campaign evidence/build helpers assume that another process with the campaign
 UID may rename any entry in a user-writable directory. Successful logical
-cleanup can therefore leave hidden `*.oxidedns-remove.*` trees, files,
+cleanup can therefore leave hidden `*.borondns-remove.*` trees, files,
 journals, or collection transactions. These are exact no-replace quarantines,
 not active campaign generations. Do not delete them solely by name or copy
 their metadata into a new transaction. A restarted campaign reports durable
@@ -1036,7 +1036,7 @@ authorize delete, overwrite, restore, or promotion.
 Automatic-tree recovery and stale-status staging discovery enumerate direct
 children under the operation's absolute CLOCK_BOOTTIME deadline. They retain
 all state and fail nonzero if a directory exceeds the explicit enumeration cap
-(`OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP`, default `4096`, supported range
+(`BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP`, default `4096`, supported range
 `1..65536`) or the deadline expires. Raising the cap increases only the bounded
 scan/sort memory allowance; it does not grant recovery authority. Treat either
 diagnostic as a directory-flood or unreconciled-state condition and inspect the
@@ -1083,7 +1083,7 @@ retention and a manual-reconciliation diagnostic are the intended fail-closed
 outcome.
 
 Two-host fuzz and large-surface cleanup persist this mapping as
-`.oxidedns-retained-cleanup-<root>.<pid>.<nonce>.env` before removing the canonical name. A
+`.borondns-retained-cleanup-<root>.<pid>.<nonce>.env` before removing the canonical name. A
 normal completed journal has `phase=retained`; a crash after the rename may
 leave `phase=prepared`. Both contain the original and quarantine paths and the
 exact parent and target device/inode/owner triples. Source the authenticated
@@ -1150,7 +1150,7 @@ current operator-relevant limitations are:
   campaigns per parser target are later SRS acceptance execution items; the
   Engineering MVP only needs their setup, artifact formats, and handoff path.
 - Container image size and static-binary release packaging are covered by the
-  tag-push release workflow through the installer archive, static `oxidedns`
+  tag-push release workflow through the installer archive, static `borondns`
   binary, static XDP-enabled `oxide-gun` binary, Alpine Docker image archive,
   and SHA256 sidecars. Registry publication remains intentionally out of scope
   for the current private-repository phase.

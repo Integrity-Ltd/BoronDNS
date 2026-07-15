@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/package-common.sh"
-workdir="$(mktemp -d "${TMPDIR:-/tmp}/oxidedns-docker-smoke-state.XXXXXX")"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-docker-smoke-state.XXXXXX")"
 background_pids=()
 cleanup() {
     local status=$?
@@ -23,7 +23,7 @@ fake_bin="$workdir/bin"
 archive_root="$workdir/archive"
 archive="$workdir/image.tar.xz"
 missing_blob_archive="$workdir/image-missing-blob.tar.xz"
-image_ref="oxidedns-smoke-fixture:0.2.0"
+image_ref="borondns-smoke-fixture:0.9.0"
 old_id="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 mkdir -m 0700 "$fake_bin" "$archive_root"
 
@@ -31,7 +31,7 @@ mkdir -m 0700 "$fake_bin" "$archive_root"
 printf '%s\n' '#!/usr/bin/env bash' \
     'set -euo pipefail' \
     'case "${1:-}" in' \
-    'metadata) printf "%s\n" '\''{"packages":[{"version":"0.2.0"}]}'\'' ;;' \
+    'metadata) printf "%s\n" '\''{"packages":[{"version":"0.9.0"}]}'\'' ;;' \
     '*) exit 97 ;;' \
     'esac' >"$fake_bin/cargo"
 
@@ -50,7 +50,7 @@ resolve_ref() {
     case "$1" in
     "$old_id" | "$new_id") printf '%s\n' "$1" ;;
     "$image_ref") [[ -f "$stable" ]] && cat "$stable" ;;
-    oxidedns-smoke-backup-*) [[ -f "$backup" ]] && cat "$backup" ;;
+    borondns-smoke-backup-*) [[ -f "$backup" ]] && cat "$backup" ;;
     *) return 1 ;;
     esac
 }
@@ -109,7 +109,7 @@ image)
                 pause_after_mutation restore
             fi
             ;;
-        oxidedns-smoke-backup-*)
+        borondns-smoke-backup-*)
             printf '%s\n' "$source_id" >"$backup"
             pause_after_mutation backup
             ;;
@@ -119,7 +119,7 @@ image)
     rm)
         case "$1" in
         "$image_ref") rm -f -- "$stable" ;;
-        oxidedns-smoke-backup-*) rm -f -- "$backup" ;;
+        borondns-smoke-backup-*) rm -f -- "$backup" ;;
         *) exit 94 ;;
         esac
         ;;
@@ -271,19 +271,19 @@ make_bound_archive high-dictionary "$high_dictionary_archive"
 
 expect_bound_rejection deadline "$archive" \
     "absolute verification deadline expired" \
-    OXIDEDNS_DOCKER_ARCHIVE_DEADLINE_NS=1
+    BORONDNS_DOCKER_ARCHIVE_DEADLINE_NS=1
 expect_bound_rejection member-bytes "$member_bytes_archive" \
     "archive member exceeds byte bound: compressed-bomb" \
-    OXIDEDNS_DOCKER_ARCHIVE_MAX_MEMBER_BYTES=1048576
+    BORONDNS_DOCKER_ARCHIVE_MAX_MEMBER_BYTES=1048576
 expect_bound_rejection total-bytes "$total_bytes_archive" \
     "archive decompressed bytes exceed hard bound 1000" \
-    OXIDEDNS_DOCKER_ARCHIVE_MAX_TOTAL_BYTES=1000
+    BORONDNS_DOCKER_ARCHIVE_MAX_TOTAL_BYTES=1000
 expect_bound_rejection member-count "$member_count_archive" \
     "archive member count exceeds hard bound 3" \
-    OXIDEDNS_DOCKER_ARCHIVE_MAX_MEMBERS=3
+    BORONDNS_DOCKER_ARCHIVE_MAX_MEMBERS=3
 expect_bound_rejection retained-json "$retained_json_archive" \
     "retained JSON bytes exceed hard bound 1000" \
-    OXIDEDNS_DOCKER_ARCHIVE_MAX_RETAINED_JSON_BYTES=1000
+    BORONDNS_DOCKER_ARCHIVE_MAX_RETAINED_JSON_BYTES=1000
 expect_bound_rejection pax-metadata "$pax_metadata_archive" \
     "unsupported extended tar metadata record"
 expect_bound_rejection high-dictionary "$high_dictionary_archive" \
@@ -309,8 +309,8 @@ run_staged_mutation_case() {
     cp "$archive" "$source"
     cp "$archive" "$original"
     cp "$missing_blob_archive" "$replacement"
-    OXIDEDNS_DOCKER_ARCHIVE_TEST_STAGE_MARKER="$marker" \
-        OXIDEDNS_DOCKER_ARCHIVE_TEST_CONTINUE="$continuation" \
+    BORONDNS_DOCKER_ARCHIVE_TEST_STAGE_MARKER="$marker" \
+        BORONDNS_DOCKER_ARCHIVE_TEST_CONTINUE="$continuation" \
         python3 "$repo_root/scripts/verify-docker-archive.py" \
         --stream-verified-archive "$source" >"$streamed" &
     local verifier_pid=$!
@@ -403,7 +403,7 @@ nonreader_pid=$!
 background_pids+=("$nonreader_pid")
 SECONDS=0
 set +e
-OXIDEDNS_DOCKER_ARCHIVE_TIMEOUT_SECONDS=1 \
+BORONDNS_DOCKER_ARCHIVE_TIMEOUT_SECONDS=1 \
     python3 "$repo_root/scripts/verify-docker-archive.py" \
     --stream-verified-archive "$backpressure_archive" \
     >"$backpressure_fifo" 2>"$workdir/backpressure.err"
@@ -439,7 +439,7 @@ hung_loaded_images=""
 SECONDS=0
 set +e
 PATH="$hung_bin:$PATH" HUNG_DOCKER_PID_FILE="$hung_pid_file" \
-    OXIDEDNS_DOCKER_LOAD_TIMEOUT_SECONDS=1 \
+    BORONDNS_DOCKER_LOAD_TIMEOUT_SECONDS=1 \
     package_load_verified_docker_archive "$archive" \
     "$repo_root/scripts/verify-docker-archive.py" \
     "$repo_root/scripts/release-api-supervisor.py" hung_loaded_images \
@@ -483,9 +483,9 @@ run_signal_case() {
         FAKE_SMOKE_RESTORE_FAILURE='' \
         FAKE_SMOKE_MARKER="$marker" \
         FAKE_SMOKE_FAIL_AFTER_LOAD="$([[ "$phase" == restore ]] && printf 1 || printf 0)" \
-        OXIDEDNS_DOCKER_IMAGE_ARCHIVE="$archive" \
-        OXIDEDNS_DOCKER_IMAGE_REF="$image_ref" \
-        OXIDEDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
+        BORONDNS_DOCKER_IMAGE_ARCHIVE="$archive" \
+        BORONDNS_DOCKER_IMAGE_REF="$image_ref" \
+        BORONDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
         "$repo_root/scripts/test-docker-image.sh" >"$state/run.log" 2>&1 &
     local smoke_pid=$!
     set -e
@@ -551,9 +551,9 @@ run_restore_failure_case() {
         FAKE_SMOKE_MARKER="$state/unused-marker" \
         FAKE_SMOKE_RESTORE_FAILURE="$failure_mode" \
         FAKE_SMOKE_FAIL_AFTER_LOAD=1 \
-        OXIDEDNS_DOCKER_IMAGE_ARCHIVE="$archive" \
-        OXIDEDNS_DOCKER_IMAGE_REF="$image_ref" \
-        OXIDEDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
+        BORONDNS_DOCKER_IMAGE_ARCHIVE="$archive" \
+        BORONDNS_DOCKER_IMAGE_REF="$image_ref" \
+        BORONDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
         "$repo_root/scripts/test-docker-image.sh" >"$state/run.log" 2>&1
     local status=$?
     set -e
@@ -592,9 +592,9 @@ run_missing_blob_case() {
         FAKE_SMOKE_MARKER="$state/unused-marker" \
         FAKE_SMOKE_RESTORE_FAILURE='' \
         FAKE_SMOKE_FAIL_AFTER_LOAD=0 \
-        OXIDEDNS_DOCKER_IMAGE_ARCHIVE="$missing_blob_archive" \
-        OXIDEDNS_DOCKER_IMAGE_REF="$image_ref" \
-        OXIDEDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
+        BORONDNS_DOCKER_IMAGE_ARCHIVE="$missing_blob_archive" \
+        BORONDNS_DOCKER_IMAGE_REF="$image_ref" \
+        BORONDNS_PACKAGE_TARGET=x86_64-unknown-linux-musl \
         "$repo_root/scripts/test-docker-image.sh" >"$state/run.log" 2>&1
     local status=$?
     set -e

@@ -1,0 +1,43 @@
+[package]
+name = "borondns-server"
+build = "build.rs"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+aya = { version = "0.13.1", optional = true }
+axum.workspace = true
+http-body.workspace = true
+flate2.workspace = true
+getrandom.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+toml.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+borondns-core = { path = "../borondns-core", version = "0.9.0" }
+xdp = { version = "0.7.3", optional = true }
+x509-parser.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
+[features]
+default = []
+af-xdp = ["dep:aya", "dep:xdp"]
+fuzzing = []
+
+[dev-dependencies]
+rcgen.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"

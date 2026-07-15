@@ -29,8 +29,8 @@ source "$repo_root/scripts/axfr-traceability.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named-docker.conf.template"
 workdir="$repo_root/target/interop/bind-axfr-docker-$$"
-container="oxidedns-bind-axfr-$$"
-artifact_dir="${OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR:-}"
+container="borondns-bind-axfr-$$"
+artifact_dir="${BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR:-}"
 bind_image="$(ensure_alpine_bind_image)"
 rm -rf "$workdir"
 mkdir -p "$workdir"
@@ -38,9 +38,9 @@ chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
@@ -52,7 +52,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -121,12 +121,12 @@ if [[ "$primary_axfr" != *"www.alpha.test."* ]] || [[ "$primary_axfr" != *"alias
     exit 1
 fi
 
-oxidedns_conf="$workdir/oxidedns.toml"
-cat >"$oxidedns_conf" <<EOF
+borondns_conf="$workdir/borondns.toml"
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -147,54 +147,54 @@ primaries = ["127.0.0.1:$bind_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after BIND Docker AXFR" >&2
+    echo "BoronDNS did not become ready after BIND Docker AXFR" >&2
     exit 1
 fi
 printf '%s\n' "$ready" >"$readyz_out"
 
-answer_a="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+answer_a="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
 printf '%s\n' "$answer_a" >"$answer_a_out"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected A response after BIND Docker AXFR" >&2
+    echo "BoronDNS did not serve expected A response after BIND Docker AXFR" >&2
     exit 1
 fi
 
-answer_cname="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer)"
+answer_cname="$(dig "@127.0.0.1" -p "$borondns_dns_port" alias.alpha.test. A +norecurse +noall +answer)"
 printf '%s\n' "$answer_cname" >"$answer_cname_out"
 if [[ "$answer_cname" != *"alias.alpha.test."* ]] || [[ "$answer_cname" != *"www.alpha.test."* ]] || [[ "$answer_cname" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected CNAME-chain response after BIND Docker AXFR" >&2
+    echo "BoronDNS did not serve expected CNAME-chain response after BIND Docker AXFR" >&2
     exit 1
 fi
 
-tcp_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+tcp_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 printf '%s\n' "$tcp_soa" >"$tcp_soa_out"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve expected TCP SOA response after BIND Docker AXFR" >&2
+    echo "BoronDNS did not serve expected TCP SOA response after BIND Docker AXFR" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052401' \
+    'borondns_transfer_sessions_started_total{protocol="axfr"} 1' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected line after BIND Docker AXFR: $expected" >&2
+        echo "BoronDNS metrics missing expected line after BIND Docker AXFR: $expected" >&2
         exit 1
     fi
 done
@@ -206,9 +206,9 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$workdir/named.conf" "$artifact_dir/named.conf"
     cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$bind_log" "$artifact_dir/named.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     cp "$primary_soa_out" "$artifact_dir/primary-soa.out"
     cp "$primary_axfr_out" "$artifact_dir/primary-axfr.out"

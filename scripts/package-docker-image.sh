@@ -5,19 +5,19 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/package-common.sh"
 # Release artifact modes must not depend on a caller's permissive umask.
 umask 022
-target_triple="${OXIDEDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
-dist_dir="${OXIDEDNS_DIST_DIR:-$repo_root/target/dist}"
-package_name="${OXIDEDNS_PACKAGE_NAME:-oxidedns}"
-package_require_safe_component OXIDEDNS_PACKAGE_NAME "$package_name" '^[a-z0-9][a-z0-9._-]*$'
-package_require_safe_component OXIDEDNS_PACKAGE_TARGET "$target_triple" '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-allow_dynamic="${OXIDEDNS_PACKAGE_ALLOW_DYNAMIC:-0}"
-allow_dirty_non_release="${OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"
+target_triple="${BORONDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
+dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
+package_name="${BORONDNS_PACKAGE_NAME:-borondns}"
+package_require_safe_component BORONDNS_PACKAGE_NAME "$package_name" '^[a-z0-9][a-z0-9._-]*$'
+package_require_safe_component BORONDNS_PACKAGE_TARGET "$target_triple" '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+allow_dynamic="${BORONDNS_PACKAGE_ALLOW_DYNAMIC:-0}"
+allow_dirty_non_release="${BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"
 [[ "$allow_dynamic" == 0 || "$allow_dynamic" == 1 ]] || {
-    printf 'OXIDEDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1\n' >&2
+    printf 'BORONDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1\n' >&2
     exit 1
 }
 [[ "$allow_dirty_non_release" == 0 || "$allow_dirty_non_release" == 1 ]] || {
-    printf 'OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
+    printf 'BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
     exit 1
 }
 if [[ "$allow_dynamic" == 1 && "${GITHUB_ACTIONS:-false}" == true ]]; then
@@ -86,7 +86,7 @@ verify_source_identity() {
 version="$(env RUSTC="$rustc_bin" "$cargo_bin" metadata --no-deps --locked --format-version 1 \
     --manifest-path "$repo_root/Cargo.toml" |
     python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
-build_date="${OXIDEDNS_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+build_date="${BORONDNS_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 archive_root="$package_name-$version-$target_triple"
 if [[ "$source_clean" != 1 ]]; then
     archive_root="$archive_root-nonrelease-dirty"
@@ -95,7 +95,7 @@ elif [[ "$allow_dynamic" == 1 ]]; then
 fi
 package_require_safe_component package-version "$version" '^[0-9][A-Za-z0-9.+-]*$'
 package_require_safe_component archive-root "$archive_root"
-image_ref="${OXIDEDNS_DOCKER_IMAGE_REF:-$package_name:$version}"
+image_ref="${BORONDNS_DOCKER_IMAGE_REF:-$package_name:$version}"
 if [[ "$source_clean" != 1 ]]; then
     image_ref="$(package_nonrelease_docker_image_ref "$image_ref")"
 elif [[ "$allow_dynamic" == 1 ]]; then
@@ -103,17 +103,17 @@ elif [[ "$allow_dynamic" == 1 ]]; then
 else
     package_require_clean_docker_image_ref "$image_ref"
 fi
-dist_dir="$(package_canonical_output_root OXIDEDNS_DIST_DIR "$dist_dir")"
+dist_dir="$(package_canonical_output_root BORONDNS_DIST_DIR "$dist_dir")"
 # Docker packaging performs its own fresh installer build to bind the image
 # input to the current source and toolchain. Build privately, then publish the
 # isolated input directory only with the rest of the terminal transaction.
-docker_installer_dist_dir="${OXIDEDNS_DOCKER_INSTALLER_DIST_DIR:-$repo_root/target/docker-installer-input}"
-docker_installer_dist_dir="$(package_canonical_output_root OXIDEDNS_DOCKER_INSTALLER_DIST_DIR "$docker_installer_dist_dir")"
+docker_installer_dist_dir="${BORONDNS_DOCKER_INSTALLER_DIST_DIR:-$repo_root/target/docker-installer-input}"
+docker_installer_dist_dir="$(package_canonical_output_root BORONDNS_DOCKER_INSTALLER_DIST_DIR "$docker_installer_dist_dir")"
 if [[ "$(realpath -m -- "$docker_installer_dist_dir")" == "$(realpath -m -- "$dist_dir")" ]]; then
     printf 'Docker installer input directory must be isolated from published dist: %s\n' "$dist_dir" >&2
     exit 1
 fi
-alpine_base_image="${OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE:-alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6}"
+alpine_base_image="${BORONDNS_DOCKER_ALPINE_BASE_IMAGE:-alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6}"
 docker_context="$(package_safe_child_path "$dist_dir" "$archive_root-docker-context" 'Docker build context')"
 image_archive="$(package_safe_child_path "$dist_dir" "$archive_root-docker-image.tar.xz" 'Docker image archive')"
 image_manifest="$(package_safe_child_path "$dist_dir" "$archive_root-docker-image.manifest.txt" 'Docker image manifest')"
@@ -131,7 +131,7 @@ if ((${#missing[@]} > 0)); then
 fi
 
 if [[ "$alpine_base_image" != "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6" ]]; then
-    printf 'error: OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE must equal the reviewed Alpine base image digest\n' >&2
+    printf 'error: BORONDNS_DOCKER_ALPINE_BASE_IMAGE must equal the reviewed Alpine base image digest\n' >&2
     exit 1
 fi
 alpine_base_digest="${alpine_base_image##*@}"
@@ -266,10 +266,10 @@ verify_source_identity "before installer build"
 # dist. Rebuild the installer payload in this invocation, then bind the Docker
 # input to the freshly generated package manifest and current Git commit.
 CARGO="$cargo_bin" RUSTC="$rustc_bin" \
-    OXIDEDNS_PACKAGE_TARGET="$target_triple" \
-    OXIDEDNS_PACKAGE_ALLOW_DYNAMIC="$allow_dynamic" \
-    OXIDEDNS_DIST_DIR="$private_installer_dist_dir" \
-    OXIDEDNS_PACKAGE_NAME="$package_name" \
+    BORONDNS_PACKAGE_TARGET="$target_triple" \
+    BORONDNS_PACKAGE_ALLOW_DYNAMIC="$allow_dynamic" \
+    BORONDNS_DIST_DIR="$private_installer_dist_dir" \
+    BORONDNS_PACKAGE_NAME="$package_name" \
     "$repo_root/scripts/package-installer.sh"
 
 installer_manifest="$installer_root/manifest.txt"
@@ -319,8 +319,8 @@ manifest_dynamic_override="$(manifest_value dynamic_link_override '^[01]$')"
 }
 
 mkdir -p "$run_docker_context"
-install -m 0755 "$docker_binary_asset" "$run_docker_context/oxidedns"
-install -m 0644 "$repo_root/config/oxidedns.example.toml" "$run_docker_context/oxidedns.example.toml"
+install -m 0755 "$docker_binary_asset" "$run_docker_context/borondns"
+install -m 0644 "$repo_root/config/borondns.example.toml" "$run_docker_context/borondns.example.toml"
 
 docker build \
     --iidfile "$image_iid_file" \

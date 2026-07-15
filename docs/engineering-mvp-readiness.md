@@ -21,7 +21,7 @@ candidate ready, while keeping full SRS `ODS-VER-008` acceptance separate.
   is promoted into the release claim.
 - `docs/implementation-plan.md` records milestone direction without owning
   feature or evidence status.
-- `docs/operator-deployment-guide.md` and `config/oxidedns.example.toml` remain
+- `docs/operator-deployment-guide.md` and `config/borondns.example.toml` remain
   valid operator-facing startup material.
 
 ## Evidence Profile

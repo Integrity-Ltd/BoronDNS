@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use libfuzzer_sys::fuzz_target;
-use oxidedns_core::{
+use borondns_core::{
     dns::RecordType,
     tsig::{
         DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY, TsigAlgorithm, TsigError,

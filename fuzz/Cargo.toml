@@ -1,5 +1,5 @@
 [package]
-name = "oxidedns-fuzz"
+name = "borondns-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -9,8 +9,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-oxidedns-core = { path = "../crates/oxidedns-core" }
-oxidedns-server = { path = "../crates/oxidedns-server", features = ["fuzzing"] }
+borondns-core = { path = "../crates/borondns-core" }
+borondns-server = { path = "../crates/borondns-server", features = ["fuzzing"] }
 
 [[bin]]
 name = "dns_datagram"

@@ -1,4 +1,4 @@
-# OxideDNS v0.2.0 Release Notes
+# BoronDNS v0.2.0 Release Notes
 
 Release date: 2026-06-16
 
@@ -33,7 +33,7 @@ Coverage summary: overall line coverage was 91.384415 percent against a
 Parser-related release evidence retained the 85.000000 percent minimum.
 
 First-party Rust source line count: 74,322 lines under `crates/*/src/*.rs`;
-68,700 lines for `oxidedns-core`, `oxidedns-server`, and `oxidedns-cli`.
+68,700 lines for `borondns-core`, `borondns-server`, and `borondns-cli`.
 Rationale for exceeding LOC target: v0.2.0 keeps DNS protocol, transfer,
 catalog-zone, TSIG/XoT, health/metrics, config, CLI, and evidence tooling in
 tree so release claims remain directly traceable. Further server module
@@ -43,7 +43,7 @@ Reproducible-build handoff or completed bit-identical comparison: Verified for
 the static musl binaries. `docs/reproducible-build-v0.2.0.md` records
 `target/evidence/reproducible-build-20260614T013236Z`, where two clean release
 builds in separate target directories produced matching `x86_64-unknown-linux-musl`
-`oxidedns` and `oxide-gun` binaries.
+`borondns` and `oxide-gun` binaries.
 
 Package and Docker smoke evidence: Verified for the selected
 `x86_64-unknown-linux-musl` v0.2.0 artifacts.
@@ -151,9 +151,9 @@ formal retained release evidence is complete.
 | RFC 1996 | DNS NOTIFY | Partially Compliant | NOTIFY receiver-side clauses | Signed-NOTIFY fault matrix and retained refresh-trigger artifacts remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-notify-negative.sh` |
 | RFC 8945 | Secret Key Transaction Authentication for DNS | Partially Compliant | TSIG request/response, transfer, and NOTIFY authentication | Full TSIG truncation and transfer-stream release evidence remain open | Formal SRS acceptance | SRS v0.9.1 | `scripts/interop-bind-tsig-axfr.sh`; `docs/verification-ledger.md` |
 | RFC 9103 | DNS Zone Transfer over TLS | Partially Compliant | XoT client-side transfer clauses only | Selected Knot/BIND XoT release breadth and local failure-class evidence are retained; real-primary mTLS, default-port, prohibited-suite, and optional NSD XoT evidence remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/xot-release-evidence-v0.2.0.md`; `scripts/interop-knot-xot-docker.sh`; `scripts/capture-xot-failure-evidence.sh`; `scripts/audit-xot-revocation.sh` |
-| RFC 9432 | DNS Catalog Zones | Partially Compliant | catalog consumer behavior and explicit OxideDNS member-transfer extension profile | Broader release-level catalog evidence remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/catalog-zone-rfc9432.md`; catalog interop scripts |
-| RFC 7314 | EDNS EXPIRE Option | Informative Only | excluded experimental zone-expire signalling | Not implemented by design | N/A | SRS v0.9.1 | `docs/OxideDNS-Secondary-SRS-v0.9.1.md` |
-| RFC 4033 | DNS Security Introduction and Requirements | Informative Only | DNSSEC architecture context | None; context citation only | N/A | SRS v0.9.1 | `docs/OxideDNS-Secondary-SRS-v0.9.1.md` |
+| RFC 9432 | DNS Catalog Zones | Partially Compliant | catalog consumer behavior and explicit BoronDNS member-transfer extension profile | Broader release-level catalog evidence remains open | Formal SRS acceptance | SRS v0.9.1 | `docs/catalog-zone-rfc9432.md`; catalog interop scripts |
+| RFC 7314 | EDNS EXPIRE Option | Informative Only | excluded experimental zone-expire signalling | Not implemented by design | N/A | SRS v0.9.1 | `docs/BoronDNS-Secondary-SRS-v0.9.1.md` |
+| RFC 4033 | DNS Security Introduction and Requirements | Informative Only | DNSSEC architecture context | None; context citation only | N/A | SRS v0.9.1 | `docs/BoronDNS-Secondary-SRS-v0.9.1.md` |
 
 ## Interface Changes
 
@@ -165,7 +165,7 @@ Previous accepted interface baseline: none for v0.2.0.
 Current interface baseline:
 `target/evidence/20260616T171657Z/interface-compatibility/current-interface-baseline.tsv`.
 
-Interface additions: v0.2.0 includes `--config`/`OXIDEDNS_CONFIG` config-path
+Interface additions: v0.2.0 includes `--config`/`BORONDNS_CONFIG` config-path
 selection and reloadable filesystem-backed secret references for TSIG/XoT
 material.
 

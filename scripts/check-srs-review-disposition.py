@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DISPOSITION_PATH = ROOT / "docs" / "srs-review-disposition.md"
 FEATURE_SCOPE_PATH = ROOT / "docs" / "implemented-feature-scope.md"
-SRS_CURRENT_PATH = ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
+SRS_CURRENT_PATH = ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
 MVP_SCOPE_PATH = ROOT / "docs" / "engineering-mvp-scope.md"
 IMPLEMENTATION_PLAN_PATH = ROOT / "docs" / "implementation-plan.md"
 README_PATH = ROOT / "README.md"
@@ -104,14 +104,14 @@ REQUIRED_SUPPORT_TOOLING_BOUNDARIES = [
     "OxideGun load generator",
     "Benchmark and tuning harnesses",
     "Supplemental interop harnesses",
-    "do not expand the OxideDNS server protocol surface",
+    "do not expand the BoronDNS server protocol surface",
     "not expand the secondary-server protocol requirements",
 ]
 
 REQUIRED_PRIMARY_SOURCE_BOUNDARY_TERMS = [
     "test-version capability selection only",
-    "Vendor documentation is a release-test planning input, not a normative source for OxideDNS behavior.",
-    "Current implementation and OxideDNS project policy",
+    "Vendor documentation is a release-test planning input, not a normative source for BoronDNS behavior.",
+    "Current implementation and BoronDNS project policy",
     "Vendor RRL documentation may inform later release review, but it is not a conformance target",
     "must not be used to imply vendor-equivalent semantics",
 ]
@@ -137,8 +137,8 @@ REVIEW_SUGGESTED_DEFER_ITEMS = [
 REVIEW_BASELINE_SCOPE = {
     "secondary-only authoritative": {
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-server/src/lib.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-server/src/lib.rs",
             "scripts/audit-invariants.sh",
         ],
         "evidence_paths": [
@@ -154,10 +154,10 @@ REVIEW_BASELINE_SCOPE = {
     },
     "static toml config and tsig": {
         "paths": [
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-core/src/tsig.rs",
-            "crates/oxidedns-cli/src/main.rs",
-            "config/oxidedns.example.toml",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-core/src/tsig.rs",
+            "crates/borondns-cli/src/main.rs",
+            "config/borondns.example.toml",
         ],
         "evidence_paths": [
             "docs/devops-getting-started.md",
@@ -174,10 +174,10 @@ REVIEW_BASELINE_SCOPE = {
     },
     "udp tcp edns": {
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/tcp.rs",
-            "crates/oxidedns-server/src/udp.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/tcp.rs",
+            "crates/borondns-server/src/udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
@@ -192,10 +192,10 @@ REVIEW_BASELINE_SCOPE = {
     },
     "axfr zsm notify tsig": {
         "paths": [
-            "crates/oxidedns-core/src/axfr.rs",
-            "crates/oxidedns-core/src/tsig.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/transfer.rs",
+            "crates/borondns-core/src/axfr.rs",
+            "crates/borondns-core/src/tsig.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/transfer.rs",
         ],
         "evidence_paths": [
             "scripts/interop-bind-axfr.sh",
@@ -214,9 +214,9 @@ REVIEW_BASELINE_SCOPE = {
     },
     "rr unknown dnssec": {
         "paths": [
-            "crates/oxidedns-core/src/axfr.rs",
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-core/src/zone.rs",
+            "crates/borondns-core/src/axfr.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-core/src/zone.rs",
             "docs/rr-type-catalogue.md",
         ],
         "evidence_paths": [
@@ -234,9 +234,9 @@ REVIEW_BASELINE_SCOPE = {
     },
     "health metrics structured logs": {
         "paths": [
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/health_metrics.rs",
-            "crates/oxidedns-cli/src/main.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/health_metrics.rs",
+            "crates/borondns-cli/src/main.rs",
             "docs/health-metrics-interface.md",
         ],
         "evidence_paths": [
@@ -249,7 +249,7 @@ REVIEW_BASELINE_SCOPE = {
             "async fn livez",
             "async fn readyz",
             "async fn metrics",
-            "oxidedns_secondary_build_info",
+            "borondns_secondary_build_info",
             "logfmt",
         ],
     },
@@ -323,7 +323,7 @@ REQUIRED_MVP_TRIM_ROW_TERMS = {
 REVIEW_DEFER_CODE_BACKING = {
     "Catalog zones": [
         "| RFC 9432 catalog zones |",
-        "oxidedns_catalog_member_info",
+        "borondns_catalog_member_info",
     ],
     "XoT": [
         "| XoT |",
@@ -383,13 +383,13 @@ FEATURES = {
     "IXFR": {
         "aliases": ["IXFR"],
         "paths": [
-            "crates/oxidedns-core/src/axfr.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/transfer.rs",
+            "crates/borondns-core/src/axfr.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/transfer.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/axfr.rs",
-            "crates/oxidedns-server/src/tests/transfer_protocol.rs",
+            "crates/borondns-core/src/axfr.rs",
+            "crates/borondns-server/src/tests/transfer_protocol.rs",
         ],
         "evidence_paths": [
             "scripts/interop-bind-ixfr-refresh.sh",
@@ -411,12 +411,12 @@ FEATURES = {
         "aliases": ["XoT"],
         "paths": [
             "Cargo.toml",
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/transfer.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/transfer.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests/refresh_xot_runtime.rs",
+            "crates/borondns-server/src/tests/refresh_xot_runtime.rs",
         ],
         "evidence_paths": [
             "scripts/interop-knot-xot-docker.sh",
@@ -438,12 +438,12 @@ FEATURES = {
     "passive DNSSEC": {
         "aliases": ["Passive DNSSEC", "passive DNSSEC"],
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-core/src/zone.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-core/src/zone.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/dns_tests/any_negative_dnssec.rs",
-            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+            "crates/borondns-core/src/dns_tests/any_negative_dnssec.rs",
+            "crates/borondns-core/src/dns_tests/edns_dnssec_cookie.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dnssec-serve.sh",
@@ -466,14 +466,14 @@ FEATURES = {
     "RRL": {
         "aliases": ["RRL"],
         "paths": [
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/health_metrics.rs",
-            "crates/oxidedns-server/src/rate_limit.rs",
-            "crates/oxidedns-server/src/udp.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/health_metrics.rs",
+            "crates/borondns-server/src/rate_limit.rs",
+            "crates/borondns-server/src/udp.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests/metrics_rrl_udp.rs",
+            "crates/borondns-server/src/tests/metrics_rrl_udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-rrl-udp.sh",
@@ -484,7 +484,7 @@ FEATURES = {
         "source_needles": [
             "struct RrlLimiter",
             "rrl_truncated_response",
-            "oxidedns_rrl_responses_dropped_total",
+            "borondns_rrl_responses_dropped_total",
             "cookie_validated",
         ],
         "test_needles": [
@@ -496,14 +496,14 @@ FEATURES = {
     "DNS Cookies": {
         "aliases": ["DNS Cookies"],
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/udp.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/udp.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
-            "crates/oxidedns-server/src/tests/metrics_rrl_udp.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-core/src/dns_tests/edns_dnssec_cookie.rs",
+            "crates/borondns-server/src/tests/metrics_rrl_udp.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dns-cookie-dig.sh",
@@ -522,14 +522,14 @@ FEATURES = {
     "catalog zones": {
         "aliases": ["catalog zones", "catalog-zone"],
         "paths": [
-            "crates/oxidedns-core/src/catalog.rs",
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-core/src/zone.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/health_metrics.rs",
+            "crates/borondns-core/src/catalog.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-core/src/zone.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/health_metrics.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-server/src/tests/catalog_and_plan.rs",
+            "crates/borondns-server/src/tests/catalog_and_plan.rs",
         ],
         "evidence_paths": [
             "docs/catalog-zone-rfc9432.md",
@@ -549,7 +549,7 @@ FEATURES = {
             "is_catalog",
             "catalog_member_limit_exceeded",
             "catalog_member_added",
-            "oxidedns_catalog_member_info",
+            "borondns_catalog_member_info",
         ],
         "test_needles": [
             "catalog_snapshot_adds_member_transfer_plan_and_hides_catalog",
@@ -559,12 +559,12 @@ FEATURES = {
     "EDNS response behavior": {
         "aliases": ["EDNS"],
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-server/src/lib.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-server/src/lib.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+            "crates/borondns-core/src/dns_tests/edns_dnssec_cookie.rs",
         ],
         "evidence_paths": [
             "scripts/interop-edns-behavior.sh",
@@ -593,12 +593,12 @@ FEATURES = {
     "EDE": {
         "aliases": ["EDE", "Extended DNS Errors"],
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-server/src/lib.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-server/src/lib.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/dns_tests/any_negative_dnssec.rs",
-            "crates/oxidedns-core/src/dns_tests/edns_dnssec_cookie.rs",
+            "crates/borondns-core/src/dns_tests/any_negative_dnssec.rs",
+            "crates/borondns-core/src/dns_tests/edns_dnssec_cookie.rs",
         ],
         "evidence_paths": [
             "scripts/interop-dnssec-serve.sh",
@@ -619,13 +619,13 @@ FEATURES = {
     "CHAOS": {
         "aliases": ["CHAOS"],
         "paths": [
-            "crates/oxidedns-core/src/dns.rs",
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/health_metrics.rs",
+            "crates/borondns-core/src/dns.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/health_metrics.rs",
         ],
         "test_paths": [
-            "crates/oxidedns-core/src/dns_tests/message_parse_notify.rs",
+            "crates/borondns-core/src/dns_tests/message_parse_notify.rs",
         ],
         "evidence_paths": [
             "scripts/interop-chaos-queries.sh",
@@ -639,7 +639,7 @@ FEATURES = {
             "b\"version\".as_slice(), b\"server\".as_slice()",
             "b\"hostname\".as_slice(), b\"bind\".as_slice()",
             "b\"id\".as_slice(), b\"server\".as_slice()",
-            "oxidedns_chaos_queries_total",
+            "borondns_chaos_queries_total",
         ],
         "test_needles": [
             "chaos_version_txt_defaults_to_refused",
@@ -668,8 +668,8 @@ SUPPORT_TOOLING = {
             "tar.xz",
             "sha256",
             "static_link_confirmed",
-            "OXIDEDNS_PACKAGE_ALLOW_DYNAMIC",
-            "OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE",
+            "BORONDNS_PACKAGE_ALLOW_DYNAMIC",
+            "BORONDNS_DOCKER_ALPINE_BASE_IMAGE",
             "base_image_digest",
             "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
         ],
@@ -707,9 +707,9 @@ SUPPORT_TOOLING = {
         "paths": [
             "scripts/benchmark-dns-clients.sh",
             "scripts/benchmark-large-catalog-zones.sh",
-            "crates/oxidedns-core/src/config.rs",
-            "crates/oxidedns-server/src/lib.rs",
-            "crates/oxidedns-server/src/health_metrics.rs",
+            "crates/borondns-core/src/config.rs",
+            "crates/borondns-server/src/lib.rs",
+            "crates/borondns-server/src/health_metrics.rs",
         ],
         "evidence_paths": [
             "docs/dns-client-benchmark.md",
@@ -718,8 +718,8 @@ SUPPORT_TOOLING = {
             "scripts/check-perf-regression.py",
         ],
         "source_needles": [
-            "OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED",
-            "OXIDEDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED",
+            "BORONDNS_BENCH_PIPELINE_TIMING_ENABLED",
+            "BORONDNS_LARGE_BENCH_PIPELINE_TIMING_ENABLED",
             "pipeline_timing_enabled",
             "response_cache_candidate",
         ],

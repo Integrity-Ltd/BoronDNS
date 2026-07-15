@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_XOT_FAILURE_EVIDENCE_DIR:-$repo_root/target/evidence/xot-failure-$timestamp}"
+evidence_dir="${BORONDNS_XOT_FAILURE_EVIDENCE_DIR:-$repo_root/target/evidence/xot-failure-$timestamp}"
 logs_dir="$evidence_dir/logs"
 summary_tsv="$evidence_dir/xot-failure-summary.tsv"
 env_file="$evidence_dir/xot-failure-env.env"
@@ -64,7 +64,7 @@ run_case() {
     set +e
     (
         cd "$repo_root"
-        cargo test -p oxidedns-server "$test_filter" -- --nocapture
+        cargo test -p borondns-server "$test_filter" -- --nocapture
     ) >"$log_file" 2>&1
     local status=$?
     set -e

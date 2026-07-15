@@ -142,6 +142,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "borondns-core"
+version = "0.9.0"
+dependencies = [
+ "arc-swap",
+ "base64",
+ "hmac",
+ "libc",
+ "serde",
+ "sha1",
+ "sha2",
+ "siphasher",
+ "smallvec",
+ "subtle",
+ "thiserror",
+ "toml",
+ "tracing",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "borondns-fuzz"
+version = "0.0.0"
+dependencies = [
+ "borondns-core",
+ "borondns-server",
+ "libfuzzer-sys",
+]
+
+[[package]]
+name = "borondns-server"
+version = "0.9.0"
+dependencies = [
+ "axum",
+ "borondns-core",
+ "flate2",
+ "getrandom 0.3.4",
+ "http-body",
+ "libc",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "tracing",
+ "x509-parser",
+ "zeroize",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -811,61 +866,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "oxidedns-core"
-version = "0.2.0"
-dependencies = [
- "arc-swap",
- "base64",
- "hmac",
- "libc",
- "serde",
- "sha1",
- "sha2",
- "siphasher",
- "smallvec",
- "subtle",
- "thiserror",
- "toml",
- "tracing",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "oxidedns-fuzz"
-version = "0.0.0"
-dependencies = [
- "libfuzzer-sys",
- "oxidedns-core",
- "oxidedns-server",
-]
-
-[[package]]
-name = "oxidedns-server"
-version = "0.2.0"
-dependencies = [
- "axum",
- "flate2",
- "getrandom 0.3.4",
- "http-body",
- "libc",
- "oxidedns-core",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "toml",
- "tracing",
- "x509-parser",
- "zeroize",
-]
 
 [[package]]
 name = "percent-encoding"

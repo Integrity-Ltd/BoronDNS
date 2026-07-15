@@ -13,7 +13,7 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTER = REPO_ROOT / "docs" / "rfc-compliance-assertions.md"
-SRS = REPO_ROOT / "docs" / "OxideDNS-Secondary-SRS-v0.9.1.md"
+SRS = REPO_ROOT / "docs" / "BoronDNS-Secondary-SRS-v0.9.1.md"
 RELEASE_NOTES_TEMPLATE = REPO_ROOT / "docs" / "release-notes-template.md"
 
 EXPECTED_COLUMNS = [
@@ -127,7 +127,7 @@ def parse_rows() -> list[dict[str, str]]:
 def main() -> int:
     rows = parse_rows()
     by_rfc = {row["RFC number"]: row for row in rows}
-    dns_root = REPO_ROOT / "crates" / "oxidedns-core" / "src"
+    dns_root = REPO_ROOT / "crates" / "borondns-core" / "src"
     source_text = (dns_root / "dns.rs").read_text(encoding="utf-8")
     source_text += "\n".join(
         path.read_text(encoding="utf-8") for path in sorted((dns_root / "dns_tests").glob("*.rs"))

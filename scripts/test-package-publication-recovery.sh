@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-workdir="$(mktemp -d "${TMPDIR:-/tmp}/oxidedns-package-recovery.XXXXXX")"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-package-recovery.XXXXXX")"
 cleanup() {
     local status=$?
     trap - EXIT
@@ -20,8 +20,8 @@ cat >"$fake_bin/python3" <<'WRAPPER'
 set -euo pipefail
 [[ "${1:-}" == - ]]
 shift
-source_file="$(mktemp "${TMPDIR:-/tmp}/oxidedns-package-recovery-source.XXXXXX")"
-combined_file="$(mktemp "${TMPDIR:-/tmp}/oxidedns-package-recovery-combined.XXXXXX")"
+source_file="$(mktemp "${TMPDIR:-/tmp}/borondns-package-recovery-source.XXXXXX")"
+combined_file="$(mktemp "${TMPDIR:-/tmp}/borondns-package-recovery-combined.XXXXXX")"
 cleanup_wrapper() {
     rm -f -- "$source_file" "$combined_file"
 }
@@ -352,7 +352,7 @@ run_unverified_replacement_case() {
     mapfile -t unverified_values <"$state"
     [[ -z "${unverified_values[0]}" && "${unverified_values[1]}" == 0 ]]
     grep -Fqx 'captured object' "$root/displaced"
-    grep -Fqx 'foreign replacement' "$root"/artifact.oxidedns-remove.*
+    grep -Fqx 'foreign replacement' "$root"/artifact.borondns-remove.*
     grep -Fq 'retained quarantine identity changed; preserving the namespace' "$root/run.log"
     if grep -Fq 'identity=' "$root/run.log"; then
         printf 'unverified retained quarantine was reported as an exact identity\n' >&2
@@ -547,8 +547,8 @@ run_lock_output_collision_case() {
         done
         [[ "$publication_target" == caller-publication-target-sentinel ]]
         [[ "${publication_array[*]}" == caller-publication-array-sentinel ]]
-        [[ ! -e "$publication_root/.oxidedns-package-locks" && \
-            ! -L "$publication_root/.oxidedns-package-locks" ]]
+        [[ ! -e "$publication_root/.borondns-package-locks" && \
+            ! -L "$publication_root/.borondns-package-locks" ]]
         [[ "$(declare -p PACKAGE_PUBLICATION_ROOT_IDENTITIES)" == \
             "$root_identities_before" ]]
         [[ "$(declare -p PACKAGE_PUBLICATION_ROOT_LOCK_FDS)" == \
@@ -558,8 +558,8 @@ run_lock_output_collision_case() {
 
         docker_fd=caller-docker-fd-sentinel
         canonical_ref=caller-canonical-sentinel
-        OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$docker_root" \
-            package_acquire_docker_image_lock oxidedns:test docker_fd canonical_ref && {
+        BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$docker_root" \
+            package_acquire_docker_image_lock borondns:test docker_fd canonical_ref && {
                 printf "Docker canonical output collision unexpectedly succeeded\n" >&2
                 exit 1
             }
@@ -588,8 +588,8 @@ run_lock_output_collision_case() {
             read -r descriptor_output canonical_output <<<"$outputs"
             docker_fd=caller-docker-fd-sentinel
             docker_canonical=caller-docker-canonical-sentinel
-            if OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$docker_root" \
-                package_acquire_docker_image_lock oxidedns:test \
+            if BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$docker_root" \
+                package_acquire_docker_image_lock borondns:test \
                     "$descriptor_output" "$canonical_output"; then
                 printf "Docker unassignable output unexpectedly succeeded: %s %s\n" \
                     "$descriptor_output" "$canonical_output" >&2
@@ -646,8 +646,8 @@ run_publication_root_fifo_swap_case() {
         ((lock_status != 0))
         [[ -p "$publication_root" && -d "$displaced_root" ]]
         [[ "$acquired_fd" == caller-fd-sentinel ]]
-        [[ ! -e "$displaced_root/.oxidedns-package-locks" && \
-            ! -L "$displaced_root/.oxidedns-package-locks" ]]
+        [[ ! -e "$displaced_root/.borondns-package-locks" && \
+            ! -L "$displaced_root/.borondns-package-locks" ]]
         [[ "$(declare -p PACKAGE_PUBLICATION_ROOT_IDENTITIES)" == \
             "$root_identities_before" ]]
         [[ "$(declare -p PACKAGE_PUBLICATION_ROOT_LOCK_FDS)" == \

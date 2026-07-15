@@ -1,6 +1,6 @@
 # Manual BIND Interop Smoke
 
-This runbook is the shortest human-operated check that OxideDNS can load a
+This runbook is the shortest human-operated check that BoronDNS can load a
 zone from a real BIND primary and serve it over UDP and TCP. It complements
 `cargo test --workspace`: the point is to exercise a real primary server and
 the operator-facing commands, not only in-process tests.
@@ -10,9 +10,9 @@ the operator-facing commands, not only in-process tests.
 The smoke run verifies:
 
 - BIND answers SOA and AXFR for the fixture zone.
-- OxideDNS starts with a generated config and reaches `/readyz`.
-- OxideDNS serves transferred `A`, `CNAME`, and TCP `SOA` answers.
-- OxideDNS metrics expose the active transferred zone and AXFR counters.
+- BoronDNS starts with a generated config and reaches `/readyz`.
+- BoronDNS serves transferred `A`, `CNAME`, and TCP `SOA` answers.
+- BoronDNS metrics expose the active transferred zone and AXFR counters.
 - The retained artifact directory records BIND version, generated configs,
   logs, query outputs, metrics, and AXFR traceability.
 
@@ -35,12 +35,12 @@ python3 --version
 Run:
 
 ```bash
-OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
+BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-axfr \
   scripts/interop-bind-axfr-docker.sh
 ```
 
 The script starts BIND 9 inside an Alpine container and runs the local
-debug-build OxideDNS binary on loopback. This is intentionally easy to run from
+debug-build BoronDNS binary on loopback. This is intentionally easy to run from
 a developer checkout while still using a real primary implementation.
 
 Expected final line:
@@ -53,9 +53,9 @@ Useful retained files:
 
 - `primary-version.txt`: BIND image/package/version details.
 - `named.conf` and `alpha.test.zone`: primary configuration and fixture.
-- `oxidedns.toml`: generated OxideDNS configuration.
+- `borondns.toml`: generated BoronDNS configuration.
 - `primary-soa.out` and `primary-axfr.out`: direct BIND checks.
-- `answer-a.out`, `answer-cname.out`, `tcp-soa.out`: OxideDNS query checks.
+- `answer-a.out`, `answer-cname.out`, `tcp-soa.out`: BoronDNS query checks.
 - `metrics.txt`: management endpoint output after transfer and queries.
 - `axfr-traceability.tsv`: AXFR requirement evidence map.
 
@@ -65,7 +65,7 @@ If BIND is installed directly on the host, this equivalent script avoids
 Docker:
 
 ```bash
-OXIDEDNS_BIND_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-host-axfr \
+BORONDNS_BIND_AXFR_ARTIFACT_DIR=target/evidence/manual-bind-host-axfr \
   scripts/interop-bind-axfr.sh
 ```
 
@@ -78,45 +78,45 @@ After the AXFR smoke passes, use the BIND NOTIFY refresh script to check a
 real-primary update path:
 
 ```bash
-OXIDEDNS_BIND_NOTIFY_ARTIFACT_DIR=target/evidence/manual-bind-notify \
+BORONDNS_BIND_NOTIFY_ARTIFACT_DIR=target/evidence/manual-bind-notify \
   scripts/interop-bind-notify-refresh.sh
 ```
 
-This script requires host-installed BIND and `rndc`. It starts OxideDNS before
+This script requires host-installed BIND and `rndc`. It starts BoronDNS before
 BIND, observes BIND-generated NOTIFY through a small UDP proxy, triggers a zone
-serial/data update, and confirms OxideDNS refreshes the served answer and
+serial/data update, and confirms BoronDNS refreshes the served answer and
 metrics.
 
 ## Catalog Zone Live Check
 
 Use the BIND catalog-zone Docker script to check the RFC 9432 catalog path with
-OxideDNS running throughout the test:
+BoronDNS running throughout the test:
 
 ```bash
-OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-catalog \
+BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-catalog \
   scripts/interop-bind-catalog-zone-docker.sh
 ```
 
 The script starts BIND in Docker with `catalog.example.` and `member.example.`
-as ordinary authoritative zones, restricts AXFR to TSIG, starts OxideDNS with
+as ordinary authoritative zones, restricts AXFR to TSIG, starts BoronDNS with
 only `[[catalog_zones]]`, verifies the catalog is not query-visible with
 `serve_catalog_zone = false`, then edits and reloads the BIND catalog zone while
-OxideDNS keeps running. It confirms that adding a member PTR makes OxideDNS
-transfer and serve `member.example.`, and that removing the PTR makes OxideDNS
+BoronDNS keeps running. It confirms that adding a member PTR makes BoronDNS
+transfer and serve `member.example.`, and that removing the PTR makes BoronDNS
 stop serving that catalog-managed member.
 
 For the v0.9 BIND XoT matrix row, run the XoT variant:
 
 ```bash
-OXIDEDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-xot-catalog \
+BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR=target/evidence/manual-bind-xot-catalog \
   scripts/interop-bind-xot-catalog-zone-docker.sh
 ```
 
 This script starts BIND with an XoT listener, generated local CA/server
 certificate, ALPN `dot`, and TSIG-restricted catalog/member transfers. It proves
-plain TCP transfer is denied, signed XoT catalog transfer succeeds, OxideDNS
+plain TCP transfer is denied, signed XoT catalog transfer succeeds, BoronDNS
 consumes the catalog over XoT+TSIG, and live catalog add/remove updates are
-reconciled while OxideDNS remains running.
+reconciled while BoronDNS remains running.
 
 ## PowerDNS PostgreSQL Catalog Check
 
@@ -124,17 +124,17 @@ The production-shape catalog check uses PowerDNS Authoritative with the gpgsql
 backend and a PostgreSQL container:
 
 ```bash
-OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR=target/evidence/manual-powerdns-catalog \
+BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR=target/evidence/manual-powerdns-catalog \
   scripts/interop-powerdns-postgres-catalog-tsig-docker.sh
 ```
 
 This script creates a PowerDNS RFC 9432 producer catalog with `pdnsutil`, keeps
 zone data in PostgreSQL, enables TSIG-only AXFR for both the catalog and member
-zone, starts OxideDNS with only `[[catalog_zones]]`, and then changes the
+zone, starts BoronDNS with only `[[catalog_zones]]`, and then changes the
 PowerDNS catalog assignment live. It verifies unsigned catalog AXFR is denied,
 TSIG-signed catalog transfer succeeds, catalog queries stay hidden, member add
 starts serving, an in-place PowerDNS member-zone record update refreshes into
-OxideDNS, and member removal stops serving while OxideDNS remains running.
+BoronDNS, and member removal stops serving while BoronDNS remains running.
 
 ## RRL And Source-IP Rotation
 

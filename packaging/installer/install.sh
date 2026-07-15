@@ -13,38 +13,38 @@ SCRIPT_SOURCE_DIR="${BASH_SOURCE[0]%/*}"
 SCRIPT_DIR="$(cd -- "$SCRIPT_SOURCE_DIR" && pwd -P)"
 PAYLOAD_ROOT="$SCRIPT_DIR"
 
-SERVICE_NAME="${OXIDEDNS_SERVICE_NAME:-oxidedns}"
+SERVICE_NAME="${BORONDNS_SERVICE_NAME:-borondns}"
 SYSTEMD_UNIT_NAME="${SERVICE_NAME}.service"
-RUN_USER="${OXIDEDNS_RUN_USER:-oxidedns}"
-RUN_GROUP="${OXIDEDNS_RUN_GROUP:-$RUN_USER}"
-BIN_DIR="${OXIDEDNS_BIN_DIR:-/usr/local/bin}"
-CONFIG_DIR="${OXIDEDNS_CONFIG_DIR:-/etc/oxidedns-secondary}"
-CONFIG_FILE="${OXIDEDNS_CONFIG_FILE:-$CONFIG_DIR/config.toml}"
-DOC_DIR="/usr/share/doc/oxidedns"
+RUN_USER="${BORONDNS_RUN_USER:-borondns}"
+RUN_GROUP="${BORONDNS_RUN_GROUP:-$RUN_USER}"
+BIN_DIR="${BORONDNS_BIN_DIR:-/usr/local/bin}"
+CONFIG_DIR="${BORONDNS_CONFIG_DIR:-/etc/borondns-secondary}"
+CONFIG_FILE="${BORONDNS_CONFIG_FILE:-$CONFIG_DIR/config.toml}"
+DOC_DIR="/usr/share/doc/borondns"
 DOC_FILE="$DOC_DIR/README.install.md"
-STATE_DIR="${OXIDEDNS_STATE_DIR:-/var/lib/oxidedns}"
-SYSTEMD_DIR="${OXIDEDNS_SYSTEMD_DIR:-/etc/systemd/system}"
-OPENRC_DIR="${OXIDEDNS_OPENRC_DIR:-/etc/init.d}"
-INIT_SYSTEM="${OXIDEDNS_INIT_SYSTEM:-auto}"
-INSTALL_LOCK_FILE="${OXIDEDNS_INSTALL_LOCK_FILE:-/run/lock/oxidedns/installer.lock}"
-RECOVERY_DIR="${OXIDEDNS_INSTALL_RECOVERY_DIR:-$STATE_DIR/installer-recovery}"
+STATE_DIR="${BORONDNS_STATE_DIR:-/var/lib/borondns}"
+SYSTEMD_DIR="${BORONDNS_SYSTEMD_DIR:-/etc/systemd/system}"
+OPENRC_DIR="${BORONDNS_OPENRC_DIR:-/etc/init.d}"
+INIT_SYSTEM="${BORONDNS_INIT_SYSTEM:-auto}"
+INSTALL_LOCK_FILE="${BORONDNS_INSTALL_LOCK_FILE:-/run/lock/borondns/installer.lock}"
+RECOVERY_DIR="${BORONDNS_INSTALL_RECOVERY_DIR:-$STATE_DIR/installer-recovery}"
 ASSUME_YES=0
 RECONFIGURE=0
 START_SERVICE=1
 ACTION="install"
 RUN_GROUP_SET=0
-STAGED_OXIDEDNS=""
+STAGED_BORONDNS=""
 STAGED_OXIDE_GUN=""
 STAGED_CONFIG=""
 STAGED_SERVICE=""
 STAGED_DOCUMENT=""
 SERVICE_TARGET=""
-BACKUP_OXIDEDNS=""
+BACKUP_BORONDNS=""
 BACKUP_OXIDE_GUN=""
 BACKUP_CONFIG=""
 BACKUP_SERVICE=""
 BACKUP_DOCUMENT=""
-OXIDEDNS_ACTIVATED=0
+BORONDNS_ACTIVATED=0
 OXIDE_GUN_ACTIVATED=0
 CONFIG_ACTIVATED=0
 SERVICE_ACTIVATED=0
@@ -70,10 +70,10 @@ RECOVERY_DIR_IDENTITY=""
 CONFIG_FILE_IDENTITY=""
 RUNTIME_GROUP_GID=""
 RUNTIME_USER_UID=""
-READINESS_ATTEMPTS="${OXIDEDNS_INSTALLER_READINESS_ATTEMPTS:-10}"
-READINESS_PROBE_TIMEOUT="${OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS:-2}"
-SERVICE_MANAGER_TIMEOUT="${OXIDEDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS:-30}"
-SERVICE_MANAGER_KILL_AFTER="${OXIDEDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS:-5}"
+READINESS_ATTEMPTS="${BORONDNS_INSTALLER_READINESS_ATTEMPTS:-10}"
+READINESS_PROBE_TIMEOUT="${BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS:-2}"
+SERVICE_MANAGER_TIMEOUT="${BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS:-30}"
+SERVICE_MANAGER_KILL_AFTER="${BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS:-5}"
 INSTALLER_LAST_OPERATION_COMMITTED=0
 INSTALLER_LAST_OPERATION_QUARANTINE=""
 INSTALLER_CLEANUP_RECOVERY_RECORDED=0
@@ -81,7 +81,7 @@ INSTALLER_RECOVERY_DIAGNOSTIC=""
 INSTALLER_RECOVERY_DIAGNOSTIC_IDENTITY=""
 INSTALLER_RECOVERY_DIAGNOSTIC_QUARANTINE_COUNT=0
 declare -a INSTALLER_RETAINED_REMOVAL_QUARANTINES=()
-EXPECTED_OXIDEDNS_SHA256=""
+EXPECTED_BORONDNS_SHA256=""
 EXPECTED_OXIDE_GUN_SHA256=""
 EXPECTED_SERVICE_SHA256=""
 EXPECTED_DOCUMENT_SHA256=""
@@ -96,7 +96,7 @@ TRUSTED_STAT=""
 TRUSTED_REALPATH=""
 TRUSTED_STAT_APPLET=""
 TRUSTED_REALPATH_APPLET=""
-TRUSTED_TOOL_DIR_OVERRIDE="${OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR:-}"
+TRUSTED_TOOL_DIR_OVERRIDE="${BORONDNS_INSTALLER_TRUSTED_TOOL_DIR:-}"
 
 trusted_stat_bootstrap() {
     if [[ -n "$TRUSTED_STAT_APPLET" ]]; then
@@ -406,19 +406,19 @@ Options:
       --no-start            Install/update without starting the service.
       --init auto|systemd|openrc|none
                             Service manager to install. Default: auto.
-      --user USER           Runtime user. Default: oxidedns.
+      --user USER           Runtime user. Default: borondns.
       --group GROUP         Runtime group. Default: same as user.
       --bin-dir DIR         Absolute binary install directory. Default: /usr/local/bin.
-      --config FILE         Absolute config file path. Default: /etc/oxidedns-secondary/config.toml.
+      --config FILE         Absolute config file path. Default: /etc/borondns-secondary/config.toml.
   -h, --help                Show this help.
 
 Environment shortcuts for unattended first configuration:
-  OXIDEDNS_ZONE=example.com.
-  OXIDEDNS_PRIMARY=10.0.0.10:53
-  OXIDEDNS_NOTIFY_SOURCE=10.0.0.10
-  OXIDEDNS_CATALOG_ZONE=catalog.example.
-  OXIDEDNS_TSIG_NAME=transfer-key.
-  OXIDEDNS_TSIG_SECRET=base64-secret
+  BORONDNS_ZONE=example.com.
+  BORONDNS_PRIMARY=10.0.0.10:53
+  BORONDNS_NOTIFY_SOURCE=10.0.0.10
+  BORONDNS_CATALOG_ZONE=catalog.example.
+  BORONDNS_TSIG_NAME=transfer-key.
+  BORONDNS_TSIG_SECRET=base64-secret
 EOF
 }
 
@@ -508,19 +508,19 @@ validate_installer_inputs() {
     validate_existing_directory_chain "$OPENRC_DIR" "OpenRC service directory" 0
     validate_existing_directory_chain "$DOC_DIR" "documentation directory" 0
     [[ "$READINESS_ATTEMPTS" =~ ^([1-9]|[1-9][0-9])$ ]] ||
-        die "OXIDEDNS_INSTALLER_READINESS_ATTEMPTS must be an integer of at least 2"
+        die "BORONDNS_INSTALLER_READINESS_ATTEMPTS must be an integer of at least 2"
     ((READINESS_ATTEMPTS >= 2)) ||
-        die "OXIDEDNS_INSTALLER_READINESS_ATTEMPTS must be an integer of at least 2"
+        die "BORONDNS_INSTALLER_READINESS_ATTEMPTS must be an integer of at least 2"
     ((READINESS_ATTEMPTS <= 60)) ||
-        die "OXIDEDNS_INSTALLER_READINESS_ATTEMPTS must not exceed 60"
+        die "BORONDNS_INSTALLER_READINESS_ATTEMPTS must not exceed 60"
     [[ "$READINESS_PROBE_TIMEOUT" =~ ^([1-9]|[1-9][0-9])$ ]] ||
-        die "OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS must be a positive integer"
+        die "BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS must be a positive integer"
     ((READINESS_PROBE_TIMEOUT <= 30)) ||
-        die "OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS must not exceed 30"
+        die "BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS must not exceed 30"
     [[ "$SERVICE_MANAGER_TIMEOUT" =~ ^([1-9]|[1-9][0-9]|1[0-1][0-9]|120)$ ]] ||
-        die "OXIDEDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS must be between 1 and 120"
+        die "BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS must be between 1 and 120"
     [[ "$SERVICE_MANAGER_KILL_AFTER" =~ ^([1-9]|10)$ ]] ||
-        die "OXIDEDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS must be between 1 and 10"
+        die "BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS must be between 1 and 10"
 }
 
 validate_install_lock_disjoint_from_managed_targets() {
@@ -534,7 +534,7 @@ validate_install_lock_disjoint_from_managed_targets() {
     esac
     local managed_target
     for managed_target in \
-        "$BIN_DIR/oxidedns" "$BIN_DIR/oxide-gun" "$CONFIG_FILE" "$DOC_FILE" "$service_target"; do
+        "$BIN_DIR/borondns" "$BIN_DIR/oxide-gun" "$CONFIG_FILE" "$DOC_FILE" "$service_target"; do
         [[ -z "$managed_target" || "$INSTALL_LOCK_FILE" != "$managed_target" ]] ||
             die "installer lock must be disjoint from every managed target: $INSTALL_LOCK_FILE"
     done
@@ -696,10 +696,10 @@ validate_installer_payload() {
     local key relative label expected actual entry payload_path
     local -a payload_entries=(
         'installer_sha256|install.sh|installer program'
-        'binary_sha256|bin/oxidedns|OxideDNS binary'
+        'binary_sha256|bin/borondns|BoronDNS binary'
         'tool_binary_sha256|bin/oxide-gun|OxideGun binary'
-        'systemd_template_sha256|share/oxidedns/systemd/oxidedns.service|systemd service template'
-        'openrc_template_sha256|share/oxidedns/openrc/oxidedns|OpenRC service template'
+        'systemd_template_sha256|share/borondns/systemd/borondns.service|systemd service template'
+        'openrc_template_sha256|share/borondns/openrc/borondns|OpenRC service template'
         'readme_sha256|README.install.md|installer documentation'
     )
 
@@ -1111,7 +1111,7 @@ installer_reconciled_leaf_operation() {
 }
 
 capture_install_activation_expectations() {
-    capture_installer_target_expectation "$BIN_DIR/oxidedns" "oxidedns activation target" || return 1
+    capture_installer_target_expectation "$BIN_DIR/borondns" "borondns activation target" || return 1
     if [[ -n "$STAGED_OXIDE_GUN" ]]; then
         capture_installer_target_expectation "$BIN_DIR/oxide-gun" "oxide-gun activation target" || return 1
     fi
@@ -1137,7 +1137,7 @@ remove_captured_installer_file() {
     parent="${path%/*}"
     [[ -n "$parent" ]] || parent=/
     parent_identity="$(installer_parent_identity_for_path "$path")" || return 1
-    quarantine="$(installer_unused_sibling_path "$path" oxidedns-remove)" || return 1
+    quarantine="$(installer_unused_sibling_path "$path" borondns-remove)" || return 1
     local status=0
     installer_reconciled_leaf_operation remove "$parent" "$parent_identity" \
         "${path##*/}" "$expected" "${quarantine##*/}" || status=$?
@@ -1359,7 +1359,7 @@ acquire_install_lock() {
         die "installer lock pathname or link count changed while it was opened: $INSTALL_LOCK_FILE"
     verify_trusted_directory_identity "$lock_dir" "installer lock directory" "$lock_dir_identity"
     if ! flock -n "$INSTALL_LOCK_FD"; then
-        die "another OxideDNS installer transaction holds $INSTALL_LOCK_FILE"
+        die "another BoronDNS installer transaction holds $INSTALL_LOCK_FILE"
     fi
 }
 
@@ -1560,7 +1560,7 @@ start_service() {
         ;;
     none)
         info "No supported service manager detected; start manually:"
-        info "  $BIN_DIR/oxidedns serve --config $CONFIG_FILE"
+        info "  $BIN_DIR/borondns serve --config $CONFIG_FILE"
         ;;
     esac
 }
@@ -1622,13 +1622,13 @@ verify_runtime_install_access() {
         esac
     fi
 
-    verify_installer_regular_file "$STAGED_OXIDEDNS" "runtime-access binary candidate" || return 1
+    verify_installer_regular_file "$STAGED_BORONDNS" "runtime-access binary candidate" || return 1
     if [[ "$config_candidate" == "$STAGED_CONFIG" ]]; then
         verify_installer_regular_file "$config_candidate" "runtime-access configuration candidate" || return 1
     else
         verify_config_file_identity || return 1
     fi
-    verify_runtime_file_access "$STAGED_OXIDEDNS" "$config_candidate"
+    verify_runtime_file_access "$STAGED_BORONDNS" "$config_candidate"
 }
 
 verify_runtime_file_access() {
@@ -1673,8 +1673,8 @@ verify_installed_regular_artifact() {
 verify_installed_runtime_and_content() {
     local init="$1"
     [[ "$ACTION" != uninstall ]] || return 0
-    verify_installed_regular_artifact "$BIN_DIR/oxidedns" "$EXPECTED_OXIDEDNS_SHA256" 755 \
-        "installed OxideDNS binary" || return 1
+    verify_installed_regular_artifact "$BIN_DIR/borondns" "$EXPECTED_BORONDNS_SHA256" 755 \
+        "installed BoronDNS binary" || return 1
     if [[ -n "$EXPECTED_OXIDE_GUN_SHA256" ]]; then
         verify_installed_regular_artifact "$BIN_DIR/oxide-gun" "$EXPECTED_OXIDE_GUN_SHA256" 755 \
             "installed OxideGun binary" || return 1
@@ -1690,7 +1690,7 @@ verify_installed_runtime_and_content() {
             "installed service definition" || return 1
     fi
     verify_config_file_identity || return 1
-    verify_runtime_file_access "$BIN_DIR/oxidedns" "$CONFIG_FILE" || {
+    verify_runtime_file_access "$BIN_DIR/borondns" "$CONFIG_FILE" || {
         printf 'installed paths lost runtime access before installer commit\n' >&2
         return 1
     }
@@ -1722,20 +1722,20 @@ create_runtime_user() {
 }
 
 stage_binaries() {
-    local source_bin="$PAYLOAD_ROOT/bin/oxidedns"
+    local source_bin="$PAYLOAD_ROOT/bin/borondns"
     local source_tool="$PAYLOAD_ROOT/bin/oxide-gun"
     [[ -x "$source_bin" ]] || die "missing payload binary: $source_bin"
-    verify_installer_payload_file "$source_bin" "OxideDNS binary" ||
-        die "OxideDNS payload binary changed after validation"
+    verify_installer_payload_file "$source_bin" "BoronDNS binary" ||
+        die "BoronDNS payload binary changed after validation"
     ensure_trusted_directory "$BIN_DIR" "--bin-dir" 0755
     BIN_DIR_IDENTITY="$(trusted_directory_identity "$BIN_DIR" "--bin-dir")"
-    STAGED_OXIDEDNS="$(mktemp "$BIN_DIR/.oxidedns.install.XXXXXX")"
+    STAGED_BORONDNS="$(mktemp "$BIN_DIR/.borondns.install.XXXXXX")"
     verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-    install -m 0755 "$source_bin" "$STAGED_OXIDEDNS"
-    verify_installer_payload_file "$source_bin" "OxideDNS binary" ||
-        die "OxideDNS payload binary changed while it was staged"
-    capture_installer_regular_file "$STAGED_OXIDEDNS" "staged oxidedns binary"
-    EXPECTED_OXIDEDNS_SHA256="${INSTALLER_PAYLOAD_FILE_SHA256[$source_bin]}"
+    install -m 0755 "$source_bin" "$STAGED_BORONDNS"
+    verify_installer_payload_file "$source_bin" "BoronDNS binary" ||
+        die "BoronDNS payload binary changed while it was staged"
+    capture_installer_regular_file "$STAGED_BORONDNS" "staged borondns binary"
+    EXPECTED_BORONDNS_SHA256="${INSTALLER_PAYLOAD_FILE_SHA256[$source_bin]}"
     if [[ -x "$source_tool" ]]; then
         verify_installer_payload_file "$source_tool" "OxideGun binary" ||
             die "OxideGun payload binary changed after validation"
@@ -1768,9 +1768,9 @@ file_sha256() {
 validate_staged_binaries() {
     local expected actual
     expected="$(payload_manifest_value binary_sha256)"
-    actual="$(file_sha256 "$STAGED_OXIDEDNS")"
-    [[ "$actual" == "$expected" ]] || die "staged oxidedns does not match payload manifest"
-    "$STAGED_OXIDEDNS" --version >/dev/null || die "staged oxidedns is not executable on this host"
+    actual="$(file_sha256 "$STAGED_BORONDNS")"
+    [[ "$actual" == "$expected" ]] || die "staged borondns does not match payload manifest"
+    "$STAGED_BORONDNS" --version >/dev/null || die "staged borondns is not executable on this host"
 
     [[ -n "$STAGED_OXIDE_GUN" ]] || die "payload is missing required oxide-gun binary"
     expected="$(payload_manifest_value tool_binary_sha256)"
@@ -1781,14 +1781,14 @@ validate_staged_binaries() {
 
 cleanup_staged_files() {
     local cleanup_failed=0
-    if [[ -n "$STAGED_OXIDEDNS" || -n "$STAGED_OXIDE_GUN" ]]; then
+    if [[ -n "$STAGED_BORONDNS" || -n "$STAGED_OXIDE_GUN" ]]; then
         if bin_directory_identity_is_current; then
-            [[ -z "$STAGED_OXIDEDNS" ]] || {
-                verify_direct_child_path "$BIN_DIR" "$STAGED_OXIDEDNS" "staged oxidedns cleanup"
-                if [[ -e "$STAGED_OXIDEDNS" || -L "$STAGED_OXIDEDNS" ]]; then
-                    remove_captured_installer_file "$STAGED_OXIDEDNS" "staged oxidedns cleanup" ||
+            [[ -z "$STAGED_BORONDNS" ]] || {
+                verify_direct_child_path "$BIN_DIR" "$STAGED_BORONDNS" "staged borondns cleanup"
+                if [[ -e "$STAGED_BORONDNS" || -L "$STAGED_BORONDNS" ]]; then
+                    remove_captured_installer_file "$STAGED_BORONDNS" "staged borondns cleanup" ||
                         {
-                            printf 'Warning: retained identity-mismatched staged file: %s\n' "$STAGED_OXIDEDNS" >&2
+                            printf 'Warning: retained identity-mismatched staged file: %s\n' "$STAGED_BORONDNS" >&2
                             cleanup_failed=1
                         }
                 fi
@@ -1893,7 +1893,7 @@ trap 'installer_signal_handler 143' TERM
 trap 'installer_signal_handler 129' HUP
 
 maybe_set_bind_capability() {
-    local binary="${1:-$BIN_DIR/oxidedns}"
+    local binary="${1:-$BIN_DIR/borondns}"
     if [[ -z "$TOOL_SETCAP" ]]; then
         info "setcap not found; privileged port binding relies on service-manager capabilities or root startup with process.run_as_user."
         return
@@ -2033,23 +2033,23 @@ write_config_candidate() {
     CONFIG_DIR_IDENTITY="$(trusted_directory_identity "$CONFIG_DIR" "--config directory")"
 
     local mode default_primary default_notify dns_listen mgmt_listen transfer_sources
-    mode="${OXIDEDNS_CONFIG_MODE:-$(ask "Configure a static secondary zone or RFC 9432 catalog zone? (zone/catalog)" "zone")}"
+    mode="${BORONDNS_CONFIG_MODE:-$(ask "Configure a static secondary zone or RFC 9432 catalog zone? (zone/catalog)" "zone")}"
     case "$mode" in
     zone | catalog) ;;
     *) die "configuration mode must be zone or catalog: $mode" ;;
     esac
-    dns_listen="${OXIDEDNS_DNS_LISTEN:-$(ask "DNS listeners, comma-separated" "0.0.0.0:53,[::]:53")}"
-    mgmt_listen="${OXIDEDNS_MGMT_LISTEN:-$(ask "Management listener, comma-separated" "127.0.0.1:8080")}"
-    transfer_sources="${OXIDEDNS_TRANSFER_SOURCE:-$(ask "Outbound transfer source addresses, comma-separated" "0.0.0.0:0,[::]:0")}"
-    default_primary="${OXIDEDNS_PRIMARY:-$(ask "Primary DNS server for AXFR/IXFR" "127.0.0.1:53")}"
-    default_notify="${OXIDEDNS_NOTIFY_SOURCE:-$(default_notify_source_from_primaries "$default_primary")}"
+    dns_listen="${BORONDNS_DNS_LISTEN:-$(ask "DNS listeners, comma-separated" "0.0.0.0:53,[::]:53")}"
+    mgmt_listen="${BORONDNS_MGMT_LISTEN:-$(ask "Management listener, comma-separated" "127.0.0.1:8080")}"
+    transfer_sources="${BORONDNS_TRANSFER_SOURCE:-$(ask "Outbound transfer source addresses, comma-separated" "0.0.0.0:0,[::]:0")}"
+    default_primary="${BORONDNS_PRIMARY:-$(ask "Primary DNS server for AXFR/IXFR" "127.0.0.1:53")}"
+    default_notify="${BORONDNS_NOTIFY_SOURCE:-$(default_notify_source_from_primaries "$default_primary")}"
 
     local tsig_name tsig_secret use_tsig
-    tsig_name="${OXIDEDNS_TSIG_NAME:-}"
-    tsig_secret="${OXIDEDNS_TSIG_SECRET:-}"
+    tsig_name="${BORONDNS_TSIG_NAME:-}"
+    tsig_secret="${BORONDNS_TSIG_SECRET:-}"
     if [[ "$mode" == "catalog" ]]; then
         if ((ASSUME_YES)) && [[ -z "$tsig_name" || -z "$tsig_secret" ]]; then
-            die "catalog mode requires OXIDEDNS_TSIG_NAME and OXIDEDNS_TSIG_SECRET with --yes"
+            die "catalog mode requires BORONDNS_TSIG_NAME and BORONDNS_TSIG_SECRET with --yes"
         fi
         if [[ -z "$tsig_name" ]]; then
             tsig_name="$(ask "Catalog transfer TSIG key name" "catalog-transfer-key.")"
@@ -2069,7 +2069,7 @@ write_config_candidate() {
     fi
     if [[ "$mode" == "zone" ]] &&
         { [[ -n "$tsig_name" && -z "$tsig_secret" ]] || [[ -z "$tsig_name" && -n "$tsig_secret" ]]; }; then
-        die "static-zone TSIG configuration requires both OXIDEDNS_TSIG_NAME and OXIDEDNS_TSIG_SECRET, or neither"
+        die "static-zone TSIG configuration requires both BORONDNS_TSIG_NAME and BORONDNS_TSIG_SECRET, or neither"
     fi
     use_tsig=0
     [[ -n "$tsig_name" && -n "$tsig_secret" ]] && use_tsig=1
@@ -2085,7 +2085,7 @@ write_config_candidate() {
     STAGED_CONFIG="$tmp_config"
     # Bind the inode before rendering/validation so an early validation error
     # can still remove exactly this staged file from the EXIT handler.
-    capture_installer_regular_file "$STAGED_CONFIG" "staged OxideDNS configuration"
+    capture_installer_regular_file "$STAGED_CONFIG" "staged BoronDNS configuration"
     {
         printf '[server]\n'
         printf 'log_level = %s\n' "$(toml_quote info)"
@@ -2105,7 +2105,7 @@ write_config_candidate() {
 
         if [[ "$mode" == "catalog" ]]; then
             local catalog_zone
-            catalog_zone="$(normalize_zone_name "${OXIDEDNS_CATALOG_ZONE:-$(ask "Catalog zone name" "catalog.example.")}")"
+            catalog_zone="$(normalize_zone_name "${BORONDNS_CATALOG_ZONE:-$(ask "Catalog zone name" "catalog.example.")}")"
             validate_canonical_dns_name "$catalog_zone" "catalog zone name"
             printf '[[catalog_zones]]\n'
             printf 'name = %s\n' "$(toml_quote "$catalog_zone")"
@@ -2115,7 +2115,7 @@ write_config_candidate() {
             ((use_tsig)) && printf 'tsig_key = %s\n' "$(toml_quote "$tsig_name")"
         else
             local zone_name
-            zone_name="$(normalize_zone_name "${OXIDEDNS_ZONE:-$(ask "Zone name to serve as secondary" "example.com.")}")"
+            zone_name="$(normalize_zone_name "${BORONDNS_ZONE:-$(ask "Zone name to serve as secondary" "example.com.")}")"
             validate_canonical_dns_name "$zone_name" "zone name"
             printf '[[zones]]\n'
             printf 'name = %s\n' "$(toml_quote "$zone_name")"
@@ -2195,7 +2195,7 @@ ensure_config() {
 }
 
 stage_systemd_unit() {
-    local template="$PAYLOAD_ROOT/share/oxidedns/systemd/oxidedns.service"
+    local template="$PAYLOAD_ROOT/share/borondns/systemd/borondns.service"
     verify_installer_payload_file "$template" "systemd service template" ||
         die "systemd service template changed after payload validation: $template"
     verify_service_directory_identity systemd
@@ -2205,7 +2205,7 @@ stage_systemd_unit() {
     verify_direct_child_path "$SERVICE_DIR" "$STAGED_SERVICE" "staged systemd service"
     verify_service_directory_identity systemd
     sed \
-        -e "s|@BIN@|$BIN_DIR/oxidedns|g" \
+        -e "s|@BIN@|$BIN_DIR/borondns|g" \
         -e "s|@CONFIG@|$CONFIG_FILE|g" \
         -e "s|@USER@|$RUN_USER|g" \
         -e "s|@GROUP@|$RUN_GROUP|g" \
@@ -2219,7 +2219,7 @@ stage_systemd_unit() {
 }
 
 stage_openrc_service() {
-    local template="$PAYLOAD_ROOT/share/oxidedns/openrc/oxidedns"
+    local template="$PAYLOAD_ROOT/share/borondns/openrc/borondns"
     verify_installer_payload_file "$template" "OpenRC service template" ||
         die "OpenRC service template changed after payload validation: $template"
     verify_service_directory_identity openrc
@@ -2229,7 +2229,7 @@ stage_openrc_service() {
     verify_direct_child_path "$SERVICE_DIR" "$STAGED_SERVICE" "staged OpenRC service"
     verify_service_directory_identity openrc
     sed \
-        -e "s|@BIN@|$BIN_DIR/oxidedns|g" \
+        -e "s|@BIN@|$BIN_DIR/borondns|g" \
         -e "s|@CONFIG@|$CONFIG_FILE|g" \
         -e "s|@USER@|$RUN_USER|g" \
         -e "s|@GROUP@|$RUN_GROUP|g" \
@@ -2457,18 +2457,18 @@ rollback_install_transaction() {
                 rollback_activated_file "$DOC_FILE" BACKUP_DOCUMENT DOCUMENT_ACTIVATED || file_rollback_failed=1
             fi
         fi
-        if ((OXIDE_GUN_ACTIVATED || OXIDEDNS_ACTIVATED)); then
+        if ((OXIDE_GUN_ACTIVATED || BORONDNS_ACTIVATED)); then
             if ((bin_directory_current)); then
                 verify_direct_child_path "$BIN_DIR" "$BIN_DIR/oxide-gun" "oxide-gun rollback target"
-                verify_direct_child_path "$BIN_DIR" "$BIN_DIR/oxidedns" "oxidedns rollback target"
+                verify_direct_child_path "$BIN_DIR" "$BIN_DIR/borondns" "borondns rollback target"
                 if [[ -n "$BACKUP_OXIDE_GUN" ]]; then
                     verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun rollback backup"
                 fi
-                if [[ -n "$BACKUP_OXIDEDNS" ]]; then
-                    verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDEDNS" "oxidedns rollback backup"
+                if [[ -n "$BACKUP_BORONDNS" ]]; then
+                    verify_direct_child_path "$BIN_DIR" "$BACKUP_BORONDNS" "borondns rollback backup"
                 fi
                 rollback_activated_file "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || file_rollback_failed=1
-                rollback_activated_file "$BIN_DIR/oxidedns" BACKUP_OXIDEDNS OXIDEDNS_ACTIVATED || file_rollback_failed=1
+                rollback_activated_file "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || file_rollback_failed=1
             fi
         fi
     fi
@@ -2610,7 +2610,7 @@ render_recovery_diagnostic_payload() {
     printf 'transaction_cleanup_failed=%q\n' "$cleanup_failed" || return 1
     printf 'service_was_active=%q\n' "$SERVICE_WAS_ACTIVE" || return 1
     printf 'service_was_enabled=%q\n' "$SERVICE_WAS_ENABLED" || return 1
-    printf 'backup_oxidedns=%q\n' "$BACKUP_OXIDEDNS" || return 1
+    printf 'backup_borondns=%q\n' "$BACKUP_BORONDNS" || return 1
     printf 'backup_oxide_gun=%q\n' "$BACKUP_OXIDE_GUN" || return 1
     printf 'backup_config=%q\n' "$BACKUP_CONFIG" || return 1
     printf 'backup_service=%q\n' "$BACKUP_SERVICE" || return 1
@@ -2792,7 +2792,7 @@ record_transaction_cleanup_failure() {
 }
 
 print_retained_backup_paths() {
-    printf 'retained_backup_oxidedns=%q\n' "$BACKUP_OXIDEDNS" >&2
+    printf 'retained_backup_borondns=%q\n' "$BACKUP_BORONDNS" >&2
     printf 'retained_backup_oxide_gun=%q\n' "$BACKUP_OXIDE_GUN" >&2
     printf 'retained_backup_config=%q\n' "$BACKUP_CONFIG" >&2
     printf 'retained_backup_service=%q\n' "$BACKUP_SERVICE" >&2
@@ -2861,7 +2861,7 @@ discard_transaction_backups() {
                 "$DOC_DIR" >&2
             return 1
         fi
-        if ((OXIDE_GUN_ACTIVATED || OXIDEDNS_ACTIVATED)) && ! bin_directory_identity_is_current; then
+        if ((OXIDE_GUN_ACTIVATED || BORONDNS_ACTIVATED)) && ! bin_directory_identity_is_current; then
             printf 'Refusing installer commit after binary directory identity changed: %s\n' \
                 "$BIN_DIR" >&2
             return 1
@@ -2897,11 +2897,11 @@ discard_transaction_backups() {
                 verify_installer_regular_file "$BIN_DIR/oxide-gun" "activated oxide-gun target" || return 1
             fi
         fi
-        if ((OXIDEDNS_ACTIVATED)); then
-            if installer_target_was_removed "$BIN_DIR/oxidedns"; then
-                [[ ! -e "$BIN_DIR/oxidedns" && ! -L "$BIN_DIR/oxidedns" ]] || return 1
+        if ((BORONDNS_ACTIVATED)); then
+            if installer_target_was_removed "$BIN_DIR/borondns"; then
+                [[ ! -e "$BIN_DIR/borondns" && ! -L "$BIN_DIR/borondns" ]] || return 1
             else
-                verify_installer_regular_file "$BIN_DIR/oxidedns" "activated oxidedns target" || return 1
+                verify_installer_regular_file "$BIN_DIR/borondns" "activated borondns target" || return 1
             fi
         fi
         verify_installed_runtime_and_content "$TRANSACTION_INIT" || return 1
@@ -2922,9 +2922,9 @@ discard_transaction_backups() {
         verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup"
         verify_installer_regular_file "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup" || return 1
     fi
-    if [[ -n "$BACKUP_OXIDEDNS" ]]; then
-        verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDEDNS" "oxidedns backup cleanup"
-        verify_installer_regular_file "$BACKUP_OXIDEDNS" "oxidedns backup cleanup" || return 1
+    if [[ -n "$BACKUP_BORONDNS" ]]; then
+        verify_direct_child_path "$BIN_DIR" "$BACKUP_BORONDNS" "borondns backup cleanup"
+        verify_installer_regular_file "$BACKUP_BORONDNS" "borondns backup cleanup" || return 1
     fi
     # Commit before cleanup: interruption may leave a harmless backup, but must
     # never turn a successful activation back into a partial rollback.
@@ -2998,7 +2998,7 @@ discard_transaction_backups() {
             discard_failed=1
         fi
     fi
-    if [[ -n "$BACKUP_OXIDE_GUN" || -n "$BACKUP_OXIDEDNS" ]]; then
+    if [[ -n "$BACKUP_OXIDE_GUN" || -n "$BACKUP_BORONDNS" ]]; then
         if bin_directory_identity_is_current; then
             if [[ -n "$BACKUP_OXIDE_GUN" ]]; then
                 verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDE_GUN" "oxide-gun backup cleanup"
@@ -3016,25 +3016,25 @@ discard_transaction_backups() {
                     discard_failed=1
                 fi
             fi
-            if [[ -n "$BACKUP_OXIDEDNS" ]]; then
-                verify_direct_child_path "$BIN_DIR" "$BACKUP_OXIDEDNS" "oxidedns backup cleanup"
+            if [[ -n "$BACKUP_BORONDNS" ]]; then
+                verify_direct_child_path "$BIN_DIR" "$BACKUP_BORONDNS" "borondns backup cleanup"
                 remove_status=0
                 begin_installer_mutation_critical
-                remove_captured_installer_file "$BACKUP_OXIDEDNS" "oxidedns backup cleanup" || remove_status=$?
+                remove_captured_installer_file "$BACKUP_BORONDNS" "borondns backup cleanup" || remove_status=$?
                 if ((remove_status == 0 || INSTALLER_LAST_OPERATION_COMMITTED == 1)); then
-                    BACKUP_OXIDEDNS=""
+                    BACKUP_BORONDNS=""
                 elif [[ -n "$INSTALLER_LAST_OPERATION_QUARANTINE" ]]; then
-                    BACKUP_OXIDEDNS="$INSTALLER_LAST_OPERATION_QUARANTINE"
+                    BACKUP_BORONDNS="$INSTALLER_LAST_OPERATION_QUARANTINE"
                 fi
                 end_installer_mutation_critical
                 if ((remove_status != 0)); then
-                    printf 'Warning: oxidedns backup cleanup helper failed: %s\n' "$BACKUP_OXIDEDNS" >&2
+                    printf 'Warning: borondns backup cleanup helper failed: %s\n' "$BACKUP_BORONDNS" >&2
                     discard_failed=1
                 fi
             fi
         else
             printf 'Warning: retained binary backups after directory identity changed: %s %s\n' \
-                "$BACKUP_OXIDEDNS" "$BACKUP_OXIDE_GUN" >&2
+                "$BACKUP_BORONDNS" "$BACKUP_OXIDE_GUN" >&2
             discard_failed=1
         fi
     fi
@@ -3048,7 +3048,7 @@ discard_transaction_backups() {
     # shellcheck disable=SC2034
     OXIDE_GUN_ACTIVATED=0
     # shellcheck disable=SC2034
-    OXIDEDNS_ACTIVATED=0
+    BORONDNS_ACTIVATED=0
     if ((discard_failed == 0)); then
         begin_installer_mutation_critical
         TRANSACTION_CLEANUP_PENDING=0
@@ -3066,7 +3066,7 @@ activate_install_transaction() {
         verify_direct_child_path "$SERVICE_DIR" "$SERVICE_TARGET" "service activation target"
     fi
     verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-    activate_staged_file "$STAGED_OXIDEDNS" "$BIN_DIR/oxidedns" BACKUP_OXIDEDNS OXIDEDNS_ACTIVATED || return 1
+    activate_staged_file "$STAGED_BORONDNS" "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
     if [[ -n "$STAGED_OXIDE_GUN" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
         activate_staged_file "$STAGED_OXIDE_GUN" "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
@@ -3099,7 +3099,7 @@ activate_install_transaction() {
 
 activate_configure_transaction() {
     verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-    activate_staged_file "$STAGED_OXIDEDNS" "$BIN_DIR/oxidedns" BACKUP_OXIDEDNS OXIDEDNS_ACTIVATED || return 1
+    activate_staged_file "$STAGED_BORONDNS" "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
     if [[ -n "$STAGED_OXIDE_GUN" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
         activate_staged_file "$STAGED_OXIDE_GUN" "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
@@ -3112,12 +3112,12 @@ activate_configure_transaction() {
 
 runtime_probe_endpoint() {
     local output kind host port extra first="" count=0
-    output="$("$BIN_DIR/oxidedns" readiness-endpoints --config "$CONFIG_FILE")" || return 1
+    output="$("$BIN_DIR/borondns" readiness-endpoints --config "$CONFIG_FILE")" || return 1
     while IFS=$'\t' read -r kind host port extra; do
         [[ -n "$kind" || -n "$host" || -n "$port" || -n "$extra" ]] || continue
         [[ -z "$extra" && ("$kind" == health || "$kind" == tcp) && -n "$host" &&
             "$host" != *[[:space:]]* && "$port" =~ ^[0-9]+$ ]] || {
-            printf 'invalid machine-readable readiness endpoint from installed OxideDNS\n' >&2
+            printf 'invalid machine-readable readiness endpoint from installed BoronDNS\n' >&2
             return 1
         }
         ((port >= 1 && port <= 65535)) || return 1
@@ -3151,7 +3151,7 @@ probe_runtime_listener() {
                 IFS= read -r -t "$read_timeout" status_line <&3 || true
                 [[ "$status_line" =~ ^HTTP/[0-9.]+[[:space:]]+200([[:space:]]|$) ]]
             fi
-        ' oxidedns-readiness "$kind" "$host" "$port" "$READINESS_PROBE_TIMEOUT"
+        ' borondns-readiness "$kind" "$host" "$port" "$READINESS_PROBE_TIMEOUT"
 }
 
 verify_runtime_readiness() {
@@ -3173,7 +3173,7 @@ verify_runtime_readiness() {
         fi
         ((attempt == READINESS_ATTEMPTS)) || sleep 1
     done
-    printf 'service did not remain active with a responsive OxideDNS listener for two consecutive probes\n' >&2
+    printf 'service did not remain active with a responsive BoronDNS listener for two consecutive probes\n' >&2
     return 1
 }
 
@@ -3181,7 +3181,7 @@ apply_configure_service_state() {
     local init="$1"
     if [[ "$init" == none ]]; then
         info "Configuration installed; restart required before the running service can use it."
-        info "Start manually: $BIN_DIR/oxidedns serve --config $CONFIG_FILE"
+        info "Start manually: $BIN_DIR/borondns serve --config $CONFIG_FILE"
         return 0
     fi
     local current_active_state current_enabled_state
@@ -3236,8 +3236,8 @@ do_install_or_update() {
     prepare_documentation
     stage_binaries
     validate_staged_binaries
-    maybe_set_bind_capability "$STAGED_OXIDEDNS"
-    ensure_config "$STAGED_OXIDEDNS"
+    maybe_set_bind_capability "$STAGED_BORONDNS"
+    ensure_config "$STAGED_BORONDNS"
     stage_service_file "$init"
     verify_runtime_install_access "$init"
     capture_install_activation_expectations
@@ -3248,17 +3248,17 @@ do_install_or_update() {
     fi
     if ! activate_install_transaction "$init"; then
         if rollback_install_transaction "$init"; then
-            die "OxideDNS $ACTION failed during activation; restored the previous installation"
+            die "BoronDNS $ACTION failed during activation; restored the previous installation"
         fi
-        die "OxideDNS $ACTION failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
+        die "BoronDNS $ACTION failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
     fi
     if ! discard_transaction_backups; then
         if ((TRANSACTION_CLEANUP_PENDING)); then
             record_transaction_cleanup_failure "$init" || true
         fi
-        die "OxideDNS $ACTION committed, but transaction-backup cleanup was incomplete"
+        die "BoronDNS $ACTION committed, but transaction-backup cleanup was incomplete"
     fi
-    info "OxideDNS $ACTION complete."
+    info "BoronDNS $ACTION complete."
 }
 
 do_configure() {
@@ -3272,24 +3272,24 @@ do_configure() {
     create_runtime_user
     stage_binaries
     validate_staged_binaries
-    maybe_set_bind_capability "$STAGED_OXIDEDNS"
+    maybe_set_bind_capability "$STAGED_BORONDNS"
     RECONFIGURE=1
-    write_config_candidate "$STAGED_OXIDEDNS"
+    write_config_candidate "$STAGED_BORONDNS"
     verify_runtime_install_access "$init"
     capture_install_activation_expectations
     capture_service_state "$init" || die "cannot establish service state before configure mutation"
     begin_install_transaction "$init"
     if ! activate_configure_transaction || ! apply_configure_service_state "$init"; then
         if rollback_install_transaction "$init"; then
-            die "OxideDNS configure failed during activation; restored the previous binaries and configuration"
+            die "BoronDNS configure failed during activation; restored the previous binaries and configuration"
         fi
-        die "OxideDNS configure failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
+        die "BoronDNS configure failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
     fi
     if ! discard_transaction_backups; then
         if ((TRANSACTION_CLEANUP_PENDING)); then
             record_transaction_cleanup_failure "$init" || true
         fi
-        die "OxideDNS configure committed, but transaction-backup cleanup was incomplete"
+        die "BoronDNS configure committed, but transaction-backup cleanup was incomplete"
     fi
     info "Wrote $CONFIG_FILE"
 }
@@ -3307,7 +3307,7 @@ preflight_uninstall_targets() {
     local init="$1"
     if [[ -e "$BIN_DIR" || -L "$BIN_DIR" ]]; then
         BIN_DIR_IDENTITY="$(trusted_directory_identity "$BIN_DIR" "--bin-dir")"
-        preflight_managed_regular_file "$BIN_DIR/oxidedns" "installed oxidedns binary"
+        preflight_managed_regular_file "$BIN_DIR/borondns" "installed borondns binary"
         preflight_managed_regular_file "$BIN_DIR/oxide-gun" "installed oxide-gun binary"
     else
         BIN_DIR_IDENTITY=""
@@ -3405,9 +3405,9 @@ activate_uninstall_transaction() {
     fi
     if [[ -n "$BIN_DIR_IDENTITY" ]]; then
         verify_trusted_directory_identity "$BIN_DIR" "--bin-dir" "$BIN_DIR_IDENTITY"
-        preflight_managed_regular_file "$BIN_DIR/oxidedns" "installed oxidedns binary" || return 1
+        preflight_managed_regular_file "$BIN_DIR/borondns" "installed borondns binary" || return 1
         preflight_managed_regular_file "$BIN_DIR/oxide-gun" "installed oxide-gun binary" || return 1
-        remove_managed_file_transactional "$BIN_DIR/oxidedns" BACKUP_OXIDEDNS OXIDEDNS_ACTIVATED || return 1
+        remove_managed_file_transactional "$BIN_DIR/borondns" BACKUP_BORONDNS BORONDNS_ACTIVATED || return 1
         remove_managed_file_transactional "$BIN_DIR/oxide-gun" BACKUP_OXIDE_GUN OXIDE_GUN_ACTIVATED || return 1
     fi
 }
@@ -3433,15 +3433,15 @@ do_uninstall() {
     begin_install_transaction "$init"
     if ! activate_uninstall_transaction "$init"; then
         if rollback_install_transaction "$init"; then
-            die "OxideDNS uninstall failed; restored the previous installation and service state"
+            die "BoronDNS uninstall failed; restored the previous installation and service state"
         fi
-        die "OxideDNS uninstall failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
+        die "BoronDNS uninstall failed and automatic rollback is incomplete; inspect $RECOVERY_DIR"
     fi
     if ! discard_transaction_backups; then
         if ((TRANSACTION_CLEANUP_PENDING)); then
             record_transaction_cleanup_failure "$init" || true
         fi
-        die "OxideDNS uninstall committed, but transaction-backup cleanup was incomplete"
+        die "BoronDNS uninstall committed, but transaction-backup cleanup was incomplete"
     fi
     info "Removed service, binaries, and installed documentation. Kept config directory: $CONFIG_DIR"
 }
@@ -3452,7 +3452,7 @@ do_status() {
     case "$init" in
     systemd) systemctl status "$SYSTEMD_UNIT_NAME" --no-pager ;;
     openrc) rc-service "$SERVICE_NAME" status ;;
-    none) "$BIN_DIR/oxidedns" --version ;;
+    none) "$BIN_DIR/borondns" --version ;;
     esac
 }
 

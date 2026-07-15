@@ -18,25 +18,25 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-ixfr.conf.template"
-bind_cache_parent="/var/cache/bind/oxidedns-interop"
+bind_cache_parent="/var/cache/bind/borondns-interop"
 if [[ -d "$bind_cache_parent" && -w "$bind_cache_parent" ]]; then
     work_parent="$bind_cache_parent"
 else
-    work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+    work_parent="${TMPDIR:-/tmp}/borondns-interop"
 fi
 mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-ixfr-refresh-$$"
-artifact_dir="${OXIDEDNS_BIND_IXFR_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_BIND_IXFR_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${named_pid:-}" ]] && kill -0 "$named_pid" 2>/dev/null; then
         kill "$named_pid" 2>/dev/null || true
@@ -59,9 +59,9 @@ cleanup() {
             echo "---- transfer-proxy.stderr ----" >&2
             tail -140 "$workdir/transfer-proxy.stderr" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -140 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -140 "$workdir/borondns.log" >&2
         }
     else
         rm -rf "$workdir"
@@ -69,7 +69,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_port proxy_port rndc_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port proxy_port rndc_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -86,15 +86,15 @@ zone_file="$workdir/alpha.test.zone"
 journal_file="$workdir/alpha.test.jnl"
 named_conf="$workdir/named.conf"
 rndc_conf="$workdir/rndc.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 transfer_proxy="$workdir/transfer-proxy.py"
 transfer_proxy_log="$workdir/transfer-proxy.log"
 primary_initial_soa_out="$workdir/primary-initial-soa.out"
 readyz_out="$workdir/readyz.txt"
-oxidedns_initial_soa_out="$workdir/oxidedns-initial-soa.out"
+borondns_initial_soa_out="$workdir/borondns-initial-soa.out"
 primary_updated_soa_out="$workdir/primary-updated-soa.out"
-oxidedns_updated_answer_out="$workdir/oxidedns-updated-answer-a.out"
-oxidedns_updated_soa_out="$workdir/oxidedns-updated-soa.out"
+borondns_updated_answer_out="$workdir/borondns-updated-answer-a.out"
+borondns_updated_soa_out="$workdir/borondns-updated-soa.out"
 metrics_out="$workdir/metrics.txt"
 summary_out="$workdir/bind-ixfr-refresh-summary.env"
 rndc_secret="aXhmci1yZWZyZXNoLWludGVyb3A="
@@ -130,18 +130,18 @@ EOF
 write_zone 2026052401 192.0.2.10 "bind ixfr interop v1"
 cp "$zone_file" "$workdir/alpha.test.initial.zone"
 
-python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$rndc_port" "$zone_file" "$journal_file" "$oxidedns_dns_port" "$rndc_secret" <<'PY'
+python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$rndc_port" "$zone_file" "$journal_file" "$borondns_dns_port" "$rndc_secret" <<'PY'
 from pathlib import Path
 import sys
 
-template, output, workdir, port, rndc_port, zonefile, journalfile, oxidedns_port, secret = sys.argv[1:]
+template, output, workdir, port, rndc_port, zonefile, journalfile, borondns_port, secret = sys.argv[1:]
 text = Path(template).read_text()
 text = text.replace("__WORKDIR__", workdir)
 text = text.replace("__PORT__", port)
 text = text.replace("__RNDC_PORT__", rndc_port)
 text = text.replace("__ZONEFILE__", zonefile)
 text = text.replace("__JOURNALFILE__", journalfile)
-text = text.replace("__OXIDEDNS_PORT__", oxidedns_port)
+text = text.replace("__BORONDNS_PORT__", borondns_port)
 text = text.replace("__RNDC_SECRET__", secret)
 Path(output).write_text(text)
 PY
@@ -388,11 +388,11 @@ EOF
 named-checkconf -z "$named_conf" >/dev/null
 record_bind_primary_version "$workdir" "bind-ixfr-refresh" "tcp-ixfr+tcp-axfr" "none" "$named_conf" "$workdir/alpha.test.zone" "$rndc_conf"
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -414,25 +414,25 @@ primaries = ["127.0.0.1:$proxy_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 live=0
 for _ in {1..100}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/livez" >/dev/null 2>&1; then
         live=1
         break
     fi
-    if ! kill -0 "$oxidedns_pid" 2>/dev/null; then
-        wait "$oxidedns_pid" 2>/dev/null || true
-        echo "OxideDNS exited before BIND IXFR primary startup" >&2
+    if ! kill -0 "$borondns_pid" 2>/dev/null; then
+        wait "$borondns_pid" 2>/dev/null || true
+        echo "BoronDNS exited before BIND IXFR primary startup" >&2
         exit 1
     fi
     sleep 0.1
 done
 if ((live != 1)); then
-    echo "OxideDNS did not become live before starting BIND IXFR primary" >&2
+    echo "BoronDNS did not become live before starting BIND IXFR primary" >&2
     exit 1
 fi
 
@@ -455,7 +455,7 @@ fi
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
@@ -463,14 +463,14 @@ done
 
 printf '%s\n' "$ready" >"$readyz_out"
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial BIND AXFR through transfer proxy" >&2
+    echo "BoronDNS did not become ready after initial BIND AXFR through transfer proxy" >&2
     exit 1
 fi
 
-initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
-printf '%s\n' "$initial_soa" >"$oxidedns_initial_soa_out"
+initial_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$initial_soa" >"$borondns_initial_soa_out"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve initial SOA serial" >&2
+    echo "BoronDNS did not serve initial SOA serial" >&2
     exit 1
 fi
 
@@ -497,38 +497,38 @@ rndc -c "$rndc_conf" notify alpha.test >/dev/null
 
 updated_answer=""
 for _ in {1..160}; do
-    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer || true)"
+    updated_answer="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer || true)"
     if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
         break
     fi
     sleep 0.1
 done
 
-printf '%s\n' "$updated_answer" >"$oxidedns_updated_answer_out"
+printf '%s\n' "$updated_answer" >"$borondns_updated_answer_out"
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-    echo "OxideDNS did not publish updated A response after BIND IXFR refresh" >&2
+    echo "BoronDNS did not publish updated A response after BIND IXFR refresh" >&2
     exit 1
 fi
 
-updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
-printf '%s\n' "$updated_soa" >"$oxidedns_updated_soa_out"
+updated_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$updated_soa" >"$borondns_updated_soa_out"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-    echo "OxideDNS did not publish updated SOA serial after BIND IXFR refresh" >&2
+    echo "BoronDNS did not publish updated SOA serial after BIND IXFR refresh" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
-ixfr_started="$(awk '$1 == "oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
-ixfr_succeeded="$(awk '$1 == "oxidedns_transfer_sessions_completed_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
+ixfr_started="$(awk '$1 == "borondns_transfer_sessions_started_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
+ixfr_succeeded="$(awk '$1 == "borondns_transfer_sessions_completed_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
 
 if [[ -z "$ixfr_started" ]] || ((ixfr_started < 1)); then
-    echo "OxideDNS metrics did not record a BIND IXFR attempt" >&2
+    echo "BoronDNS metrics did not record a BIND IXFR attempt" >&2
     exit 1
 fi
 
 if ! grep -q "TCP query .* qtype=251" "$transfer_proxy_log"; then
-    echo "transfer proxy did not observe a OxideDNS IXFR query to BIND" >&2
+    echo "transfer proxy did not observe a BoronDNS IXFR query to BIND" >&2
     exit 1
 fi
 
@@ -541,42 +541,42 @@ done
 
 if grep -q "TCP IXFR response_mode=incremental" "$transfer_proxy_log"; then
     if [[ -z "$ixfr_succeeded" ]] || ((ixfr_succeeded < 1)); then
-        echo "BIND provided a true incremental IXFR response, but OxideDNS rejected it instead of recording IXFR success" >&2
+        echo "BIND provided a true incremental IXFR response, but BoronDNS rejected it instead of recording IXFR success" >&2
         exit 1
     fi
-    if [[ "$metrics" != *'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
-        echo "OxideDNS metrics missing updated BIND IXFR SOA serial" >&2
+    if [[ "$metrics" != *'borondns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
+        echo "BoronDNS metrics missing updated BIND IXFR SOA serial" >&2
         exit 1
     fi
     cat >"$summary_out" <<EOF
 primary_initial_serial=2026052401
 primary_updated_serial=2026052402
-oxidedns_initial_serial=2026052401
-oxidedns_updated_serial=2026052402
+borondns_initial_serial=2026052401
+borondns_updated_serial=2026052402
 incremental_ixfr_observed=1
-oxidedns_ixfr_attempt_recorded=1
-oxidedns_ixfr_success_recorded=1
-oxidedns_served_updated_a=1
-oxidedns_metrics_checked=1
+borondns_ixfr_attempt_recorded=1
+borondns_ixfr_success_recorded=1
+borondns_served_updated_a=1
+borondns_metrics_checked=1
 EOF
     if [[ -n "$artifact_dir" ]]; then
         mkdir -p "$artifact_dir"
         cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
         sed "s/$rndc_secret/<redacted-rndc-secret>/g" "$named_conf" >"$artifact_dir/named.conf.redacted"
         sed "s/$rndc_secret/<redacted-rndc-secret>/g" "$rndc_conf" >"$artifact_dir/rndc.conf.redacted"
-        cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+        cp "$borondns_conf" "$artifact_dir/borondns.toml"
         cp "$workdir/alpha.test.initial.zone" "$artifact_dir/alpha.test.initial.zone"
         cp "$workdir/alpha.test.updated.zone" "$artifact_dir/alpha.test.updated.zone"
         cp "$workdir/named.log" "$artifact_dir/named.log"
         cp "$transfer_proxy_log" "$artifact_dir/transfer-proxy.log"
         cp "$workdir/transfer-proxy.stderr" "$artifact_dir/transfer-proxy.stderr"
-        cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+        cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
         cp "$primary_initial_soa_out" "$artifact_dir/primary-initial-soa.out"
         cp "$readyz_out" "$artifact_dir/readyz.txt"
-        cp "$oxidedns_initial_soa_out" "$artifact_dir/oxidedns-initial-soa.out"
+        cp "$borondns_initial_soa_out" "$artifact_dir/borondns-initial-soa.out"
         cp "$primary_updated_soa_out" "$artifact_dir/primary-updated-soa.out"
-        cp "$oxidedns_updated_answer_out" "$artifact_dir/oxidedns-updated-answer-a.out"
-        cp "$oxidedns_updated_soa_out" "$artifact_dir/oxidedns-updated-soa.out"
+        cp "$borondns_updated_answer_out" "$artifact_dir/borondns-updated-answer-a.out"
+        cp "$borondns_updated_soa_out" "$artifact_dir/borondns-updated-soa.out"
         cp "$metrics_out" "$artifact_dir/metrics.txt"
         cp "$summary_out" "$artifact_dir/bind-ixfr-refresh-summary.env"
     fi

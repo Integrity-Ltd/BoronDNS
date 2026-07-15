@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-evidence_dir="${OXIDEDNS_LOG_EVIDENCE_DIR:-$repo_root/target/log-evidence}"
+evidence_dir="${BORONDNS_LOG_EVIDENCE_DIR:-$repo_root/target/log-evidence}"
 mkdir -p "$evidence_dir"
 
 require_text() {
@@ -59,7 +59,7 @@ name = "example.test."
 primaries = ["127.0.0.1:9"]
 EOF
 
-    "$repo_root/target/debug/oxidedns" serve --config "$config" >"$stdout" 2>"$stderr" &
+    "$repo_root/target/debug/borondns" serve --config "$config" >"$stdout" 2>"$stderr" &
     local pid=$!
     local ready=0
     for _ in $(seq 1 100); do
@@ -74,7 +74,7 @@ EOF
     done
 
     if ((ready != 1)); then
-        printf 'OxideDNS did not emit expected runtime log for %s capture\n' "$name" >&2
+        printf 'BoronDNS did not emit expected runtime log for %s capture\n' "$name" >&2
         sed -n '1,120p' "$stderr" >&2 || true
         kill "$pid" >/dev/null 2>&1 || true
         wait "$pid" >/dev/null 2>&1 || true
@@ -88,21 +88,21 @@ EOF
     set -e
     printf '%s\n' "$status" >"$status_file"
     if ((status != 0)); then
-        printf 'OxideDNS exited with status %s during %s log capture\n' "$status" "$name" >&2
+        printf 'BoronDNS exited with status %s during %s log capture\n' "$status" "$name" >&2
         sed -n '1,120p' "$stderr" >&2 || true
         exit "$status"
     fi
 }
 
 cd "$repo_root"
-cargo build -q -p oxidedns-cli
+cargo build -q -p borondns-cli
 
 run_runtime_capture json json
 run_runtime_capture logfmt logfmt
 run_runtime_capture logfmt-limited logfmt 128 "truncated=true"
 
 require_text "$evidence_dir/runtime-json.stderr" '"category":"startup"'
-require_text "$evidence_dir/runtime-json.stderr" '"message":"OxideDNS runtime initialized"'
+require_text "$evidence_dir/runtime-json.stderr" '"message":"BoronDNS runtime initialized"'
 require_text "$evidence_dir/runtime-json.stderr" '"udp_listeners":1'
 require_text "$evidence_dir/runtime-json.stderr" '"tcp_listeners":1'
 require_text "$evidence_dir/runtime-json.stderr" '"message":"AXFR failed"'
@@ -117,7 +117,7 @@ require_text "$evidence_dir/runtime-json.stderr" '"signal":"SIGTERM"'
 
 grep '^timestamp=' "$evidence_dir/runtime-logfmt.stderr" >"$evidence_dir/runtime-logfmt.records"
 require_text "$evidence_dir/runtime-logfmt.stderr" 'category=configuration_warning'
-require_text "$evidence_dir/runtime-logfmt.stderr" 'message="OxideDNS runtime initialized"'
+require_text "$evidence_dir/runtime-logfmt.stderr" 'message="BoronDNS runtime initialized"'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'udp_listeners=1'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'tcp_listeners=1'
 require_text "$evidence_dir/runtime-logfmt.stderr" 'message="AXFR failed"'
@@ -141,7 +141,7 @@ if ! awk 'length($0) > 128 { print; failed = 1 } END { exit failed }' \
 fi
 
 cat >"$evidence_dir/README.md" <<'EOF'
-# OxideDNS Log Evidence
+# BoronDNS Log Evidence
 
 Captured short runtime sessions for SRS structured logging requirements:
 

@@ -287,7 +287,7 @@ PY
 package_unused_removal_quarantine() {
     local candidate="$1" attempt quarantine
     for ((attempt = 0; attempt < 128; attempt++)); do
-        quarantine="${candidate}.oxidedns-remove.$$.$RANDOM.$attempt"
+        quarantine="${candidate}.borondns-remove.$$.$RANDOM.$attempt"
         if [[ ! -e "$quarantine" && ! -L "$quarantine" ]]; then
             printf '%s\n' "$quarantine"
             return 0
@@ -1050,7 +1050,7 @@ try:
             or (named.st_dev, named.st_ino) != expected
         ):
             raise SystemExit(f"{label} identity changed before restore: {source!r}")
-        quarantine = f".{source_name}.oxidedns-restore.{os.getpid()}.{secrets.token_hex(12)}"
+        quarantine = f".{source_name}.borondns-restore.{os.getpid()}.{secrets.token_hex(12)}"
         rename_noreplace(directory_fd, source_name, quarantine)
         quarantined = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
         if (quarantined.st_dev, quarantined.st_ino) != expected:
@@ -1345,7 +1345,7 @@ package_acquire_publication_lock() {
         return 1
     }
 
-    local lock_root="$root/.oxidedns-package-locks"
+    local lock_root="$root/.borondns-package-locks"
     if [[ -e "$lock_root" || -L "$lock_root" ]]; then
         [[ -d "$lock_root" && ! -L "$lock_root" ]] || {
             printf 'package publication lock root is not a real directory: %q\n' "$lock_root" >&2
@@ -1535,7 +1535,7 @@ package_verify_docker_archive_bundle() {
 # stops consuming input are therefore bounded by CLOCK_BOOTTIME cleanup.
 package_load_verified_docker_archive() {
     local archive="$1" verifier="$2" supervisor="$3" output_name="$4"
-    local timeout_seconds="${OXIDEDNS_DOCKER_LOAD_TIMEOUT_SECONDS:-600}"
+    local timeout_seconds="${BORONDNS_DOCKER_LOAD_TIMEOUT_SECONDS:-600}"
     [[ "$output_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
     case "$output_name" in
     archive | verifier | supervisor | output_name | timeout_seconds | python_bin | xz_bin | docker_bin | loaded_output)
@@ -1543,11 +1543,11 @@ package_load_verified_docker_archive() {
         ;;
     esac
     [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
-        printf 'OXIDEDNS_DOCKER_LOAD_TIMEOUT_SECONDS must be a canonical positive integer\n' >&2
+        printf 'BORONDNS_DOCKER_LOAD_TIMEOUT_SECONDS must be a canonical positive integer\n' >&2
         return 1
     }
     ((${#timeout_seconds} < 4 || (${#timeout_seconds} == 4 && timeout_seconds <= 3600))) || {
-        printf 'OXIDEDNS_DOCKER_LOAD_TIMEOUT_SECONDS exceeds 3600\n' >&2
+        printf 'BORONDNS_DOCKER_LOAD_TIMEOUT_SECONDS exceeds 3600\n' >&2
         return 1
     }
     [[ -f "$archive" && ! -L "$archive" && -f "$verifier" && ! -L "$verifier" &&
@@ -1596,7 +1596,7 @@ package_acquire_docker_image_lock() {
     fi
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
 
-    lock_root="${OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT:-/tmp/oxidedns-package-docker-locks-$(id -u)}"
+    lock_root="${BORONDNS_PACKAGE_DOCKER_LOCK_ROOT:-/tmp/borondns-package-docker-locks-$(id -u)}"
     if [[ -e "$lock_root" || -L "$lock_root" ]]; then
         [[ -d "$lock_root" && ! -L "$lock_root" ]] || {
             printf 'Docker publication lock root is not a real directory: %q\n' "$lock_root" >&2

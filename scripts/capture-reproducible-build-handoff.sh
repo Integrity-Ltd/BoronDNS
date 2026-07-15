@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_dir="${OXIDEDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR:-$repo_root/target/evidence/reproducible-build-handoff-$timestamp}"
+evidence_dir="${BORONDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR:-$repo_root/target/evidence/reproducible-build-handoff-$timestamp}"
 
 commit="$(git -C "$repo_root" rev-parse HEAD)"
 short_commit="$(git -C "$repo_root" rev-parse --short=8 HEAD)"
@@ -42,23 +42,23 @@ rust_toolchain_sha256="$(file_hash rust-toolchain.toml)"
 mkdir -p "$evidence_dir"
 
 cat >"$evidence_dir/reproducible-build-env.env" <<EOF
-OXIDEDNS_REPRODUCIBLE_BUILD_CREATED_UTC=$timestamp
-OXIDEDNS_REPRODUCIBLE_BUILD_REPO_ROOT=$repo_root
-OXIDEDNS_REPRODUCIBLE_BUILD_COMMIT=$commit
-OXIDEDNS_REPRODUCIBLE_BUILD_SHORT_COMMIT=$short_commit
-OXIDEDNS_REPRODUCIBLE_BUILD_BRANCH=$branch
-OXIDEDNS_REPRODUCIBLE_BUILD_DIRTY=$dirty
-OXIDEDNS_REPRODUCIBLE_BUILD_COMMIT_EPOCH=$commit_epoch
-OXIDEDNS_REPRODUCIBLE_BUILD_COMMIT_TIMESTAMP=$commit_timestamp
-OXIDEDNS_REPRODUCIBLE_BUILD_RUST_VERSION=$rust_version
-OXIDEDNS_REPRODUCIBLE_BUILD_CARGO_VERSION=$cargo_version
-OXIDEDNS_REPRODUCIBLE_BUILD_TARGET=$target_triple
-OXIDEDNS_REPRODUCIBLE_BUILD_CARGO_LOCK_SHA256=$cargo_lock_sha256
-OXIDEDNS_REPRODUCIBLE_BUILD_RUST_TOOLCHAIN_SHA256=$rust_toolchain_sha256
+BORONDNS_REPRODUCIBLE_BUILD_CREATED_UTC=$timestamp
+BORONDNS_REPRODUCIBLE_BUILD_REPO_ROOT=$repo_root
+BORONDNS_REPRODUCIBLE_BUILD_COMMIT=$commit
+BORONDNS_REPRODUCIBLE_BUILD_SHORT_COMMIT=$short_commit
+BORONDNS_REPRODUCIBLE_BUILD_BRANCH=$branch
+BORONDNS_REPRODUCIBLE_BUILD_DIRTY=$dirty
+BORONDNS_REPRODUCIBLE_BUILD_COMMIT_EPOCH=$commit_epoch
+BORONDNS_REPRODUCIBLE_BUILD_COMMIT_TIMESTAMP=$commit_timestamp
+BORONDNS_REPRODUCIBLE_BUILD_RUST_VERSION=$rust_version
+BORONDNS_REPRODUCIBLE_BUILD_CARGO_VERSION=$cargo_version
+BORONDNS_REPRODUCIBLE_BUILD_TARGET=$target_triple
+BORONDNS_REPRODUCIBLE_BUILD_CARGO_LOCK_SHA256=$cargo_lock_sha256
+BORONDNS_REPRODUCIBLE_BUILD_RUST_TOOLCHAIN_SHA256=$rust_toolchain_sha256
 SOURCE_DATE_EPOCH=$commit_epoch
-OXIDEDNS_BUILD_COMMIT=$short_commit
-OXIDEDNS_BUILD_RUST_VERSION=$rust_version
-OXIDEDNS_BUILD_TIMESTAMP=$commit_timestamp
+BORONDNS_BUILD_COMMIT=$short_commit
+BORONDNS_BUILD_RUST_VERSION=$rust_version
+BORONDNS_BUILD_TIMESTAMP=$commit_timestamp
 EOF
 
 if command -v cargo >/dev/null 2>&1; then
@@ -72,7 +72,7 @@ cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_artifact	local_mvp_status	later_release_ops_action
 ODS-NFR-MAINT-005	reproducible-build-runbook.md; artifact-manifest-template.tsv; comparison-template.tsv	setup-ready	run at least two independent clean builds from the same commit/toolchain and record bit-identical artifact comparison
 ODS-NFR-MAINT-008	artifact-manifest-template.tsv; release-engineer-signoff.md	setup-ready	sign accepted artifacts after the reproducible-build comparison is complete
-ODS-NFR-OBS-006	reproducible-build-env.env	setup-ready	build with fixed OXIDEDNS_BUILD_* values so embedded build-info labels remain deterministic
+ODS-NFR-OBS-006	reproducible-build-env.env	setup-ready	build with fixed BORONDNS_BUILD_* values so embedded build-info labels remain deterministic
 ODS-INV-009	reproducible-build-runbook.md; cargo-metadata.locked.json	setup-ready	confirm all executable release inputs come from the static source tree, lockfile, and build workflow
 ODS-VER-002	requirements-traceability.tsv	setup-ready	retain completed build evidence against the requirement IDs in release evidence
 ODS-VER-009	requirements-traceability.tsv	setup-ready	carry completed reproducible-build artifact paths into the traceability matrix or release ledger
@@ -105,7 +105,7 @@ cat >"$evidence_dir/release-notes-snippet.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/release-engineer-signoff.md" <<'EOF'
-# OxideDNS Reproducible Build Release Engineer Sign-off
+# BoronDNS Reproducible Build Release Engineer Sign-off
 
 - Release:
 - Evidence snapshot:
@@ -125,7 +125,7 @@ cat >"$evidence_dir/release-engineer-signoff.md" <<'EOF'
 EOF
 
 cat >"$evidence_dir/reproducible-build-runbook.md" <<EOF
-# OxideDNS Reproducible Build Runbook
+# BoronDNS Reproducible Build Runbook
 
 This is the release-candidate setup artifact for ODS-NFR-MAINT-005. It does not
 claim that two independent bit-identical builds have already happened.
@@ -142,23 +142,23 @@ claim that two independent bit-identical builds have already happened.
 - Cargo metadata snapshot: \`cargo-metadata.locked.json\`
 - Target triple: \`$target_triple\`
 - SOURCE_DATE_EPOCH: \`$commit_epoch\`
-- OXIDEDNS_BUILD_COMMIT: \`$short_commit\`
-- OXIDEDNS_BUILD_RUST_VERSION: \`$rust_version\`
-- OXIDEDNS_BUILD_TIMESTAMP: \`$commit_timestamp\`
+- BORONDNS_BUILD_COMMIT: \`$short_commit\`
+- BORONDNS_BUILD_RUST_VERSION: \`$rust_version\`
+- BORONDNS_BUILD_TIMESTAMP: \`$commit_timestamp\`
 
 The server binary embeds build commit, Rust version, and build timestamp for
-\`ODS-NFR-OBS-006\`. Builders must set the \`OXIDEDNS_BUILD_*\` values above, or the
-default wall-clock build timestamp in \`crates/oxidedns-server/build.rs\` will make
+\`ODS-NFR-OBS-006\`. Builders must set the \`BORONDNS_BUILD_*\` values above, or the
+default wall-clock build timestamp in \`crates/borondns-server/build.rs\` will make
 otherwise equivalent builds differ.
 
 ## Build Command
 
 \`\`\`sh
 export SOURCE_DATE_EPOCH=$commit_epoch
-export OXIDEDNS_BUILD_COMMIT=$short_commit
-export OXIDEDNS_BUILD_RUST_VERSION='$rust_version'
-export OXIDEDNS_BUILD_TIMESTAMP=$commit_timestamp
-cargo build --locked --release -p oxidedns-cli
+export BORONDNS_BUILD_COMMIT=$short_commit
+export BORONDNS_BUILD_RUST_VERSION='$rust_version'
+export BORONDNS_BUILD_TIMESTAMP=$commit_timestamp
+cargo build --locked --release -p borondns-cli
 \`\`\`
 
 ## Independent Builder Procedure
@@ -181,7 +181,7 @@ cargo build --locked --release -p oxidedns-cli
 Suggested digest command:
 
 \`\`\`sh
-$sha256_tool target/release/oxidedns
+$sha256_tool target/release/borondns
 \`\`\`
 
 ## Non-Goals
@@ -193,7 +193,7 @@ $sha256_tool target/release/oxidedns
 EOF
 
 cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS Reproducible Build Handoff
+# BoronDNS Reproducible Build Handoff
 
 Created UTC: $timestamp
 

@@ -25,9 +25,9 @@ source "$repo_root/scripts/interop-docker-images.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 tsig_secret="dG9wc2VjcmV0"
 workdir="$repo_root/target/interop/knot-xot-tsig-$$"
-container="oxidedns-knot-xot-tsig-$$"
+container="borondns-knot-xot-tsig-$$"
 server_name="primary.alpha.test"
-artifact_dir="${OXIDEDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_KNOT_XOT_TSIG_ARTIFACT_DIR:-}"
 traceability_tsv="$workdir/knot-xot-tsig-traceability.tsv"
 knot_conf_redacted="$workdir/knot.conf.redacted"
 knot_image="$(ensure_alpine_knot_image)"
@@ -36,13 +36,13 @@ mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
-    if ((status != 0)) && [[ -f "$workdir/oxidedns.log" ]]; then
-        echo "---- oxidedns log ----" >&2
-        sed -n '1,220p' "$workdir/oxidedns.log" >&2 || true
+    if ((status != 0)) && [[ -f "$workdir/borondns.log" ]]; then
+        echo "---- borondns log ----" >&2
+        sed -n '1,220p' "$workdir/borondns.log" >&2 || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
@@ -54,7 +54,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r knot_tls_port oxidedns_dns_port oxidedns_health_port < <(
+read -r knot_tls_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -74,7 +74,7 @@ openssl req \
     -newkey rsa:2048 \
     -nodes \
     -days 2 \
-    -subj "/CN=OxideDNS test CA" \
+    -subj "/CN=BoronDNS test CA" \
     -keyout "$workdir/ca.key" \
     -out "$workdir/ca.crt" \
     >/dev/null 2>&1
@@ -232,12 +232,12 @@ if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.a
     exit 1
 fi
 
-oxidedns_conf="$workdir/oxidedns.toml"
-cat >"$oxidedns_conf" <<EOF
+borondns_conf="$workdir/borondns.toml"
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -269,13 +269,13 @@ server_name = "$server_name"
 trust_anchors = ["$workdir/ca.crt"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
@@ -283,59 +283,59 @@ done
 
 printf '%s\n' "$ready" >"$workdir/readyz.json"
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after Knot XoT+TSIG AXFR" >&2
+    echo "BoronDNS did not become ready after Knot XoT+TSIG AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
-    >"$workdir/oxidedns-answer-a.out"
-answer_a="$(cat "$workdir/oxidedns-answer-a.out")"
+dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+    >"$workdir/borondns-answer-a.out"
+answer_a="$(cat "$workdir/borondns-answer-a.out")"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected A response after Knot XoT+TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected A response after Knot XoT+TSIG AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" alias.alpha.test. A +norecurse +noall +answer \
-    >"$workdir/oxidedns-answer-cname.out"
-answer_cname="$(cat "$workdir/oxidedns-answer-cname.out")"
+dig "@127.0.0.1" -p "$borondns_dns_port" alias.alpha.test. A +norecurse +noall +answer \
+    >"$workdir/borondns-answer-cname.out"
+answer_cname="$(cat "$workdir/borondns-answer-cname.out")"
 if [[ "$answer_cname" != *"alias.alpha.test."* ]] || [[ "$answer_cname" != *"www.alpha.test."* ]] || [[ "$answer_cname" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected CNAME-chain response after Knot XoT+TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected CNAME-chain response after Knot XoT+TSIG AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
-    >"$workdir/oxidedns-tcp-soa.out"
-tcp_soa="$(cat "$workdir/oxidedns-tcp-soa.out")"
+dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
+    >"$workdir/borondns-tcp-soa.out"
+tcp_soa="$(cat "$workdir/borondns-tcp-soa.out")"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve expected TCP SOA response after Knot XoT+TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected TCP SOA response after Knot XoT+TSIG AXFR" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401' \
-    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052401' \
+    'borondns_transfer_sessions_started_total{protocol="axfr"} 1' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected line after Knot XoT+TSIG AXFR: $expected" >&2
+        echo "BoronDNS metrics missing expected line after Knot XoT+TSIG AXFR: $expected" >&2
         exit 1
     fi
 done
 
-if grep -E 'ConnectTcp|TlsHandshake|XotAlpn|did not negotiate ALPN dot' "$workdir/oxidedns.log" >/dev/null 2>&1; then
-    echo "OxideDNS log contains an XoT connection failure" >&2
+if grep -E 'ConnectTcp|TlsHandshake|XotAlpn|did not negotiate ALPN dot' "$workdir/borondns.log" >/dev/null 2>&1; then
+    echo "BoronDNS log contains an XoT connection failure" >&2
     exit 1
 fi
 
-if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
-    echo "OxideDNS log leaked TSIG secret" >&2
+if grep -F "$tsig_secret" "$workdir/borondns.log" >/dev/null 2>&1; then
+    echo "BoronDNS log leaked TSIG secret" >&2
     exit 1
 fi
 
-if grep -E 'BEGIN .*PRIVATE KEY|master secret|traffic secret|session key' "$workdir/oxidedns.log" >/dev/null 2>&1; then
-    echo "OxideDNS log leaked TLS key material" >&2
+if grep -E 'BEGIN .*PRIVATE KEY|master secret|traffic secret|session key' "$workdir/borondns.log" >/dev/null 2>&1; then
+    echo "BoronDNS log leaked TLS key material" >&2
     exit 1
 fi
 
@@ -346,8 +346,8 @@ for expected_log in \
     'xot_tls_session_closed' \
     'bytes_in' \
     'bytes_out'; do
-    if ! grep -F "$expected_log" "$workdir/oxidedns.log" >/dev/null 2>&1; then
-        echo "OxideDNS XoT+TSIG log missing expected field or event: $expected_log" >&2
+    if ! grep -F "$expected_log" "$workdir/borondns.log" >/dev/null 2>&1; then
+        echo "BoronDNS XoT+TSIG log missing expected field or event: $expected_log" >&2
         exit 1
     fi
 done
@@ -356,48 +356,48 @@ cat >"$workdir/knot-xot-tsig-summary.env" <<EOF
 alpn_dot_negotiated=1
 unsigned_xot_axfr_rejected=1
 signed_xot_axfr_succeeded=1
-oxidedns_ready_after_xot_tsig_axfr=1
-oxidedns_served_transferred_a=1
-oxidedns_served_transferred_cname=1
-oxidedns_served_transferred_tcp_soa=1
-oxidedns_transfer_metrics_checked=1
-oxidedns_xot_failure_absence_checked=1
-oxidedns_xot_established_log_checked=1
-oxidedns_xot_closed_log_checked=1
+borondns_ready_after_xot_tsig_axfr=1
+borondns_served_transferred_a=1
+borondns_served_transferred_cname=1
+borondns_served_transferred_tcp_soa=1
+borondns_transfer_metrics_checked=1
+borondns_xot_failure_absence_checked=1
+borondns_xot_established_log_checked=1
+borondns_xot_closed_log_checked=1
 tsig_secret_redaction_checked=1
-oxidedns_tls_key_material_absence_checked=1
+borondns_tls_key_material_absence_checked=1
 EOF
 
 cat >"$traceability_tsv" <<'EOF'
 requirement	status	case	artifacts	note
-ODS-FR-XOT-001	retained-real-primary	knot_xot_tsig_axfr_tls	primary-version.txt; alpn-probe.txt; oxidedns.log; knot-xot-tsig-summary.env	OxideDNS successfully transfers TSIG-authenticated AXFR over TLS from a real Knot primary; logs retain negotiated TLS version and cipher-suite fields for release review.
-ODS-FR-XOT-002	retained-real-primary	knot_xot_tsig_cipher_observed	oxidedns.log; alpn-probe.txt	The OxideDNS XoT+TSIG session log records the negotiated cipher suite; broader prohibited-suite rejection remains covered by release TLS-matrix review.
-ODS-FR-XOT-003	retained-real-primary	knot_xot_tsig_port_override	oxidedns.toml.redacted; primary-version.txt	The primary uses an explicit per-primary XoT port override in configuration rather than cleartext TCP.
-ODS-FR-XOT-004	retained-real-primary	knot_xot_tsig_alpn_dot	alpn-probe.txt; oxidedns.log; knot-xot-tsig-summary.env	Knot and OxideDNS negotiate ALPN dot; missing-ALPN abort behavior remains covered by focused tests.
-ODS-FR-XOT-005	retained-real-primary	knot_xot_tsig_certificate_validation	server-certificate.txt; ca.crt; oxidedns.toml.redacted; readyz.json	OxideDNS trusts the configured CA and validates the SAN/SNI-bound real-primary certificate before publishing the transferred zone.
-ODS-FR-XOT-006	retained-real-primary	knot_xot_tsig_no_cleartext_fallback	oxidedns.log; metrics.txt; knot-xot-tsig-summary.env	The retained log has no XoT connection or TLS failure markers and transfer metrics show the TLS AXFR completed without cleartext fallback.
-ODS-FR-XOT-008	retained-real-primary	knot_xot_tsig_required	unsigned-xot-axfr.out; signed-xot-axfr.out; knot-xot-tsig-summary.env	The real primary rejects unsigned XoT AXFR and accepts HMAC-SHA256 TSIG over XoT; retained OxideDNS artifacts prove publication from the signed transfer.
-ODS-FR-XOT-011	retained-real-primary	knot_xot_tsig_session_logging	oxidedns.log; knot-xot-tsig-summary.env	OxideDNS logs XoT TLS session establishment with version/cipher and session close with byte counters while retaining TLS key-material and TSIG-secret redaction evidence.
+ODS-FR-XOT-001	retained-real-primary	knot_xot_tsig_axfr_tls	primary-version.txt; alpn-probe.txt; borondns.log; knot-xot-tsig-summary.env	BoronDNS successfully transfers TSIG-authenticated AXFR over TLS from a real Knot primary; logs retain negotiated TLS version and cipher-suite fields for release review.
+ODS-FR-XOT-002	retained-real-primary	knot_xot_tsig_cipher_observed	borondns.log; alpn-probe.txt	The BoronDNS XoT+TSIG session log records the negotiated cipher suite; broader prohibited-suite rejection remains covered by release TLS-matrix review.
+ODS-FR-XOT-003	retained-real-primary	knot_xot_tsig_port_override	borondns.toml.redacted; primary-version.txt	The primary uses an explicit per-primary XoT port override in configuration rather than cleartext TCP.
+ODS-FR-XOT-004	retained-real-primary	knot_xot_tsig_alpn_dot	alpn-probe.txt; borondns.log; knot-xot-tsig-summary.env	Knot and BoronDNS negotiate ALPN dot; missing-ALPN abort behavior remains covered by focused tests.
+ODS-FR-XOT-005	retained-real-primary	knot_xot_tsig_certificate_validation	server-certificate.txt; ca.crt; borondns.toml.redacted; readyz.json	BoronDNS trusts the configured CA and validates the SAN/SNI-bound real-primary certificate before publishing the transferred zone.
+ODS-FR-XOT-006	retained-real-primary	knot_xot_tsig_no_cleartext_fallback	borondns.log; metrics.txt; knot-xot-tsig-summary.env	The retained log has no XoT connection or TLS failure markers and transfer metrics show the TLS AXFR completed without cleartext fallback.
+ODS-FR-XOT-008	retained-real-primary	knot_xot_tsig_required	unsigned-xot-axfr.out; signed-xot-axfr.out; knot-xot-tsig-summary.env	The real primary rejects unsigned XoT AXFR and accepts HMAC-SHA256 TSIG over XoT; retained BoronDNS artifacts prove publication from the signed transfer.
+ODS-FR-XOT-011	retained-real-primary	knot_xot_tsig_session_logging	borondns.log; knot-xot-tsig-summary.env	BoronDNS logs XoT TLS session establishment with version/cipher and session close with byte counters while retaining TLS key-material and TSIG-secret redaction evidence.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     cp "$knot_conf_redacted" "$artifact_dir/knot.conf.redacted"
-    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$borondns_conf" >"$artifact_dir/borondns.toml.redacted"
     cp "$workdir/alpha.test.zone" "$artifact_dir/alpha.test.zone"
     cp "$workdir/ca.crt" "$artifact_dir/ca.crt"
     cp "$workdir/server.crt" "$artifact_dir/server.crt"
     cp "$workdir/server-certificate.txt" "$artifact_dir/server-certificate.txt"
     cp "$workdir/alpn-probe.txt" "$artifact_dir/alpn-probe.txt"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$workdir/readyz.json" "$artifact_dir/readyz.json"
     cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
     cp "$workdir/unsigned-xot-axfr.out" "$artifact_dir/unsigned-xot-axfr.out"
     cp "$workdir/signed-xot-axfr.out" "$artifact_dir/signed-xot-axfr.out"
-    cp "$workdir/oxidedns-answer-a.out" "$artifact_dir/oxidedns-answer-a.out"
-    cp "$workdir/oxidedns-answer-cname.out" "$artifact_dir/oxidedns-answer-cname.out"
-    cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
+    cp "$workdir/borondns-answer-a.out" "$artifact_dir/borondns-answer-a.out"
+    cp "$workdir/borondns-answer-cname.out" "$artifact_dir/borondns-answer-cname.out"
+    cp "$workdir/borondns-tcp-soa.out" "$artifact_dir/borondns-tcp-soa.out"
     cp "$workdir/knot-xot-tsig-summary.env" "$artifact_dir/knot-xot-tsig-summary.env"
     cp "$traceability_tsv" "$artifact_dir/knot-xot-tsig-traceability.tsv"
 fi

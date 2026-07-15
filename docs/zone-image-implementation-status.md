@@ -14,7 +14,7 @@ of the old query-time `ZoneSnapshot` memory layout after `ZoneImage` becomes
 the complete production query data plane.
 
 This is an implementation tracker, not a normative DNS behavior source. DNS
-requirements remain owned by `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
+requirements remain owned by `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
 
 ## Current Summary
 
@@ -1121,7 +1121,7 @@ layout can be phased out.
   `xdp.interface` and `xdp.redirect_object`. The standard UDP listener now runs
   through a mutable
   private `PacketIo` batch interface. With the feature enabled, the server
-  binds an AF_XDP socket, loads the project-built `oxidedns_xdp_redirect`
+  binds an AF_XDP socket, loads the project-built `borondns_xdp_redirect`
   object, configures the redirect destination port and XSK map, and attaches in
   the configured XDP mode. The feature-gated helper module has local tests for
   Ethernet/IPv4/UDP DNS payload classification, peer/target metadata
@@ -1130,7 +1130,7 @@ layout can be phased out.
   coverage, and UMEM/ring builder preparation against the real `xdp` crate
   APIs. The eBPF object builds locally, and the root-only veth/generic smoke
   passed on 2026-06-01 with evidence retained under
-  `target/oxidedns-af-xdp-veth-smoke/`. This is local structure only, not
+  `target/borondns-af-xdp-veth-smoke/`. This is local structure only, not
   physical NIC evidence.
 - [x] Add reduced hot-path metrics mode for high-rate packet-path experiments:
   `[metrics].hot_path_detail = "full"` remains the default, while
@@ -1190,16 +1190,16 @@ layout can be phased out.
   one retained query trace, then writes both full `summary.tsv` and sorted
   `best.tsv` artifacts.
 - [x] Add optional privileged perf capture setup:
-  `scripts/install-oxidedns-perf-helper.sh` installs one root-owned helper for
+  `scripts/install-borondns-perf-helper.sh` installs one root-owned helper for
   benchmark `perf stat`/`perf record` runs on hosts where direct attach is
   blocked by kernel perf policy. Benchmark runs opt into it with
-  `OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER=true`.
+  `BORONDNS_BENCH_PERF_PRIVILEGED_HELPER=true`.
 - [x] Add Knot-aligned comparison prep:
   `docs/knot-comparison-benchmark.md` records the source-derived kxdpgun and
   Knot benchmark contract, while
   `scripts/prepare-knot-comparison-benchmark.sh` generates shared `querydb` and
-  OxideDNS trace inputs, stages a Knot-primary/OxideDNS-secondary AXFR
-  comparison runbook, and normalizes retained kxdpgun/OxideDNS outputs into a
+  BoronDNS trace inputs, stages a Knot-primary/BoronDNS-secondary AXFR
+  comparison runbook, and normalizes retained kxdpgun/BoronDNS outputs into a
   common throughput table.
 - [ ] Decide whether AF_XDP is worth implementing for the server.
 

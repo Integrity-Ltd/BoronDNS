@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${OXIDEDNS_UNUSED_CODE_AUDIT_DIR:-$repo_root/target/evidence/unused-code-$$}"
+artifact_dir="${BORONDNS_UNUSED_CODE_AUDIT_DIR:-$repo_root/target/evidence/unused-code-$$}"
 mkdir -p "$artifact_dir"
 
 run_and_capture() {
@@ -45,11 +45,11 @@ run_and_capture strict-unused-lints env \
     cargo check --workspace --all-targets
 
 run_and_capture cargo-machete cargo machete --with-metadata --skip-target-dir
-run_and_capture cargo-bloat-crates-json cargo bloat --release -p oxidedns-cli --bin oxidedns \
+run_and_capture cargo-bloat-crates-json cargo bloat --release -p borondns-cli --bin borondns \
     --crates -n 0 --message-format json
-run_and_capture cargo-bloat-crates-table cargo bloat --release -p oxidedns-cli --bin oxidedns \
+run_and_capture cargo-bloat-crates-table cargo bloat --release -p borondns-cli --bin borondns \
     --crates -n 40
-run_and_capture cargo-bloat-symbols cargo bloat --release -p oxidedns-cli --bin oxidedns \
+run_and_capture cargo-bloat-symbols cargo bloat --release -p borondns-cli --bin borondns \
     -n 80 --wide
 
 python3 - "$artifact_dir/cargo-bloat-crates-json.log" "$artifact_dir/linked-crates.tsv" <<'PY'
@@ -64,7 +64,7 @@ if start < 0:
 
 payload = json.loads(text[start:])
 crates = payload.get("crates", [])
-required = {"oxidedns", "oxidedns_core", "oxidedns_server"}
+required = {"borondns", "borondns_core", "borondns_server"}
 observed = {entry.get("name") for entry in crates}
 missing = sorted(required - observed)
 if missing:
@@ -80,7 +80,7 @@ PY
     printf 'evidence\tstatus\tartifact\tnote\n'
     printf 'compiler-unused-lints\tpass\tstrict-unused-lints.log\t-Dunused -Ddead_code -Dunreachable_pub -Dunused_crate_dependencies passed for the workspace and all targets.\n'
     printf 'unused-dependencies\tpass\tcargo-machete.log\tcargo machete did not find unused manifest dependencies.\n'
-    printf 'linked-binary-crates\tpass\tlinked-crates.tsv\tcargo bloat release-binary crate attribution includes first-party crates that reached the linked oxidedns binary.\n'
+    printf 'linked-binary-crates\tpass\tlinked-crates.tsv\tcargo bloat release-binary crate attribution includes first-party crates that reached the linked borondns binary.\n'
     printf 'linked-binary-symbols\tinformational\tcargo-bloat-symbols.log\tTop linked symbols are retained for release review and dependency-size inspection.\n'
 } >"$artifact_dir/unused-code-traceability.tsv"
 

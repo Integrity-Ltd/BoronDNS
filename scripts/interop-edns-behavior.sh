@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/edns-behavior-$$"
-artifact_dir="${OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_EDNS_BEHAVIOR_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,16 +38,16 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -160 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -160 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -160 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -66,7 +66,7 @@ primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/edns-summary.tsv"
 traceability_tsv="$workdir/edns-traceability.tsv"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -394,7 +394,7 @@ def wait_active():
         except (OSError, AssertionError):
             pass
         time.sleep(0.05)
-    raise AssertionError("OxideDNS did not publish active edns.test zone")
+    raise AssertionError("BoronDNS did not publish active edns.test zone")
 
 
 def record(rows, case, summary, detail):
@@ -549,18 +549,18 @@ ODS-FR-EDNS-002\tretained-runtime\tduplicate_opt_formerr\tedns-summary.tsv; clie
 ODS-FR-EDNS-003\tretained-runtime\tanswer_section_opt_formerr\tedns-summary.tsv; client.log\tAn OPT record outside the additional section returns FORMERR.
 ODS-FR-EDNS-004\tretained-runtime\tbadvers_version_1\tedns-summary.tsv; client.log\tEDNS VERSION=1 returns extended RCODE BADVERS with response VERSION=0.
 ODS-FR-EDNS-005\tretained-runtime\tpayload_floor_512; payload_exact_floor_512\tedns-summary.tsv; client.log\tAdvertised UDP payload sizes below or equal to 512 are bounded to the 512-octet floor and truncate the large response within that size.
-ODS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; oxidedns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
+ODS-FR-EDNS-006\tretained-runtime\tpayload_below_server_max_699; payload_exact_server_max_700; payload_above_server_max_701; payload_large_server_max_700\tedns-summary.tsv; borondns.toml\tAdvertised UDP payload sizes below, equal to, and above configured max_udp_payload=700 are bounded to min(client, configured max) and truncate within that ceiling.
 ODS-FR-EDNS-007\tretained-runtime\tvalid_edns_unknown_option; non_edns_512_no_opt\tedns-summary.tsv; client.log\tResponses include OPT only when the query contained OPT.
-ODS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; oxidedns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
-ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copies_response_do\tedns-summary.tsv; crates/oxidedns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=1 per RFC 6840 query-DO copy semantics; DNSSEC-augmented, explicit-type, error, and truncation paths remain covered by unit/runtime evidence.
+ODS-FR-EDNS-008\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv; borondns.toml\tThe response OPT owner/type are parsed, class equals configured max_udp_payload=700, VERSION=0, and Z bits are clear.
+ODS-FR-EDNS-009\tretained-runtime-plus-support\tdo_query_without_dnssec_aug_copies_response_do\tedns-summary.tsv; crates/borondns-core/src/dns.rs DNSSEC DO tests\tA DO=1 query without DNSSEC augmentation receives response DO=1 per RFC 6840 query-DO copy semantics; DNSSEC-augmented, explicit-type, error, and truncation paths remain covered by unit/runtime evidence.
 ODS-FR-EDNS-010\tretained-runtime\tbadvers_version_1\tedns-summary.tsv\tBADVERS uses the response OPT extended-RCODE field for RCODE 16.
 ODS-FR-EDNS-011\tretained-runtime\tudp_keepalive_ignored; tcp_keepalive_advertised\tedns-summary.tsv\tThe keepalive option is ignored over UDP and recognized over TCP.
-ODS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; oxidedns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.
-ODS-FR-EDNS-013\tretained-runtime\tconfigured_padding_aligns\tedns-summary.tsv; oxidedns.toml\tWith edns_padding_block_size=32 and a padding request, the response contains a padding option and the DNS message length is 32-byte aligned.
+ODS-FR-EDNS-012\tretained-runtime\ttcp_keepalive_advertised\tedns-summary.tsv; borondns.toml\tThe TCP keepalive response advertises tcp_idle_timeout_secs=5 as 50 units of 100 ms.
+ODS-FR-EDNS-013\tretained-runtime\tconfigured_padding_aligns\tedns-summary.tsv; borondns.toml\tWith edns_padding_block_size=32 and a padding request, the response contains a padding option and the DNS message length is 32-byte aligned.
 ODS-FR-EDNS-014\tretained-runtime\tvalid_edns_unknown_option\tedns-summary.tsv\tAn unknown EDNS option is ignored and not echoed while the query still succeeds.
 ODS-FR-EDNS-015\tretained-runtime\tnon_edns_512_no_opt\tedns-summary.tsv\tA non-EDNS large UDP answer is truncated to at most 512 octets and contains no response OPT.
-ODS-FR-EDNS-016\tretained-runtime\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; oxidedns.toml\tConfigured NSID is returned for both empty and non-empty NSID request data.
-ODS-FR-EDNS-017\tretained-runtime-plus-support\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; oxidedns.toml; crates/oxidedns-core/src/config.rs::parses_configured_nsid\tThe retained config sets nsid=edns-node; default-empty suppression remains covered by focused unit tests.
+ODS-FR-EDNS-016\tretained-runtime\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml\tConfigured NSID is returned for both empty and non-empty NSID request data.
+ODS-FR-EDNS-017\tretained-runtime-plus-support\tnsid_empty_request; nsid_nonempty_request\tedns-summary.tsv; borondns.toml; crates/borondns-core/src/config.rs::parses_configured_nsid\tThe retained config sets nsid=edns-node; default-empty suppression remains covered by focused unit tests.
 """
     with open(TRACEABILITY_PATH, "w", encoding="utf-8") as handle:
         handle.write(traceability)
@@ -571,11 +571,11 @@ if __name__ == "__main__":
     main()
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "logfmt"
 nsid = "edns-node"
@@ -598,7 +598,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -614,27 +614,27 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready during EDNS behavior interop" >&2
+    echo "BoronDNS did not become ready during EDNS behavior interop" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+client_summary="$(python3 "$client" "$borondns_dns_port" "$client_log" "$summary_tsv" "$traceability_tsv")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_queries_truncated_total 7'; do
+    'borondns_zones_active 1' \
+    'borondns_queries_truncated_total 7'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected EDNS behavior line: $expected" >&2
         exit 1
@@ -645,8 +645,8 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$summary_tsv" "$artifact_dir/edns-summary.tsv"
     cp "$traceability_tsv" "$artifact_dir/edns-traceability.tsv"
     printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"

@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/dnssec-serve-$$"
-artifact_dir="${OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_DNSSEC_SERVE_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -42,9 +42,9 @@ cleanup() {
             echo "---- dnssec-client.log ----" >&2
             tail -120 "$workdir/dnssec-client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
         [[ -f "$workdir/client-summary.out" ]] && {
             echo "---- client-summary.out ----" >&2
@@ -59,7 +59,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -75,7 +75,7 @@ PY
 fake_primary="$workdir/fake-primary.py"
 dnssec_client="$workdir/dnssec-client.py"
 primary_log="$workdir/fake-primary.log"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 summary_env="$workdir/dnssec-serve-summary.env"
 
 cat >"$fake_primary" <<'PY'
@@ -561,7 +561,7 @@ if OPT in non_edns_truncated["additional_types"] or non_edns_truncated["opt_ttls
 assert_ad_cd_clear("non-EDNS truncated", non_edns_truncated)
 
 nsid = exchange(0xD007, "www.alpha.test.", A, payload=4096, edns_options=struct.pack("!HH", NSID, 0))
-if nsid["rcode"] != 0 or nsid["nsid_options"] != [b"oxidedns-runtime"]:
+if nsid["rcode"] != 0 or nsid["nsid_options"] != [b"borondns-runtime"]:
     raise AssertionError(f"configured NSID response missing expected identifier: {nsid}")
 assert_ad_cd_clear("configured NSID empty request", nsid)
 
@@ -572,20 +572,20 @@ nsid_nonzero = exchange(
     payload=4096,
     edns_options=struct.pack("!HH", NSID, 3) + b"bad",
 )
-if nsid_nonzero["rcode"] != 0 or nsid_nonzero["nsid_options"] != [b"oxidedns-runtime"]:
+if nsid_nonzero["rcode"] != 0 or nsid_nonzero["nsid_options"] != [b"borondns-runtime"]:
     raise AssertionError(f"non-zero NSID request data was not treated as a request: {nsid_nonzero}")
 assert_ad_cd_clear("configured NSID non-empty request", nsid_nonzero)
 
 print("DNSSEC serve runtime interop passed")
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
-nsid = "oxidedns-runtime"
+nsid = "borondns-runtime"
 
 [rrl]
 enabled = false
@@ -616,32 +616,32 @@ for _ in {1..50}; do
     sleep 0.1
 done
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after fake-primary DNSSEC AXFR" >&2
+    echo "BoronDNS did not become ready after fake-primary DNSSEC AXFR" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$oxidedns_dns_port" "$workdir/dnssec-client.log")"
+client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$borondns_dns_port" "$workdir/dnssec-client.log")"
 printf '%s\n' "$client_summary" >"$workdir/client-summary.out"
 echo "$client_summary"
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052401'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052401'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected DNSSEC line: $expected" >&2
         exit 1
@@ -685,8 +685,8 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$dnssec_client" "$artifact_dir/dnssec-client.py"
     cp "$workdir/dnssec-client.log" "$artifact_dir/dnssec-client.log"
     cp "$workdir/client-summary.out" "$artifact_dir/client-summary.out"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
     cp "$summary_env" "$artifact_dir/dnssec-serve-summary.env"
 fi

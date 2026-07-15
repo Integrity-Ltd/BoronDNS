@@ -24,8 +24,8 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/nsd-notify-refresh-$$"
-container="oxidedns-nsd-notify-refresh-$$"
-artifact_dir="${OXIDEDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
+container="borondns-nsd-notify-refresh-$$"
+artifact_dir="${BORONDNS_NSD_NOTIFY_ARTIFACT_DIR:-}"
 nsd_image="$(ensure_alpine_nsd_notify_image)"
 rm -rf "$workdir"
 mkdir -p "$workdir"
@@ -42,9 +42,9 @@ copy_failure_artifacts() {
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${notify_proxy_pid:-}" ]] && kill -0 "$notify_proxy_pid" 2>/dev/null; then
         kill "$notify_proxy_pid" 2>/dev/null || true
@@ -64,15 +64,15 @@ cleanup() {
             echo "---- notify-proxy.log ----" >&2
             tail -120 "$workdir/notify-proxy.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
 }
 trap cleanup EXIT
 
-read -r nsd_port oxidedns_dns_port oxidedns_health_port < <(
+read -r nsd_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -114,7 +114,7 @@ notify_proxy="$workdir/notify-proxy.py"
 notify_proxy_log="$workdir/notify-proxy.log"
 notify_proxy_ready="$workdir/notify-proxy.ready"
 notify_proxy_stderr="$workdir/notify-proxy.stderr"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 metrics_out="$workdir/metrics.txt"
 summary_tsv="$workdir/nsd-notify-refresh-summary.tsv"
 traceability_tsv="$workdir/nsd-notify-traceability.tsv"
@@ -210,14 +210,14 @@ while True:
         response, _ = forward.recvfrom(4096)
         if len(response) >= 4:
             _, response_flags = struct.unpack("!HH", response[:4])
-            log(f"response_from_oxidedns rcode={response_flags & 0x0F} bytes={len(response)}")
+            log(f"response_from_borondns rcode={response_flags & 0x0F} bytes={len(response)}")
         else:
-            log(f"short_response_from_oxidedns bytes={len(response)}")
+            log(f"short_response_from_borondns bytes={len(response)}")
     except TimeoutError:
-        log("response_from_oxidedns timeout")
+        log("response_from_borondns timeout")
 PY
 
-python3 "$notify_proxy" 0 "$oxidedns_dns_port" "$notify_proxy_log" "$notify_proxy_ready" >"$notify_proxy_stderr" 2>&1 &
+python3 "$notify_proxy" 0 "$borondns_dns_port" "$notify_proxy_log" "$notify_proxy_ready" >"$notify_proxy_stderr" 2>&1 &
 notify_proxy_pid=$!
 
 notify_port=""
@@ -247,7 +247,7 @@ path = Path(sys.argv[1])
 path.write_text(path.read_text().replace("__NOTIFY_PORT__", sys.argv[2]))
 PY
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 if ! docker run -d --name "$container" \
     -p "127.0.0.1:$nsd_port:5353/tcp" \
     -p "127.0.0.1:$nsd_port:5353/udp" \
@@ -273,11 +273,11 @@ if [[ "$primary_soa" != *"2026052401"* ]]; then
     exit 1
 fi
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -299,25 +299,25 @@ primaries = ["127.0.0.1:$nsd_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial NSD AXFR" >&2
+    echo "BoronDNS did not become ready after initial NSD AXFR" >&2
     exit 1
 fi
 
-initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+initial_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve initial SOA serial from NSD" >&2
+    echo "BoronDNS did not serve initial SOA serial from NSD" >&2
     exit 1
 fi
 
@@ -342,7 +342,7 @@ fi
 
 updated_answer=""
 for _ in {1..120}; do
-    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+    updated_answer="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
     if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
         break
     fi
@@ -350,38 +350,38 @@ for _ in {1..120}; do
 done
 
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-    echo "OxideDNS did not publish updated A response after NSD NOTIFY" >&2
+    echo "BoronDNS did not publish updated A response after NSD NOTIFY" >&2
     exit 1
 fi
 updated_address="$(awk '/www[.]alpha[.]test[.]/ { print $NF; exit }' <<<"$updated_answer")"
 
-updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+updated_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-    echo "OxideDNS did not publish updated SOA serial after NSD NOTIFY" >&2
+    echo "BoronDNS did not publish updated SOA serial after NSD NOTIFY" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
 for expected in \
-    'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402' \
-    'oxidedns_notify_messages_received_total' \
-    'oxidedns_notify_refresh_actions_total{action="signalled"}'; do
+    'borondns_zone_soa_serial{zone="alpha.test."} 2026052402' \
+    'borondns_notify_messages_received_total' \
+    'borondns_notify_refresh_actions_total{action="signalled"}'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected NSD NOTIFY evidence: $expected" >&2
+        echo "BoronDNS metrics missing expected NSD NOTIFY evidence: $expected" >&2
         exit 1
     fi
 done
 
-notify_received="$(awk '$1 == "oxidedns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
+notify_received="$(awk '$1 == "borondns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
 if [[ -z "$notify_received" ]] || ((notify_received < 1)); then
-    echo "OxideDNS metrics did not record NSD NOTIFY receipt" >&2
+    echo "BoronDNS metrics did not record NSD NOTIFY receipt" >&2
     exit 1
 fi
 
-notify_signalled="$(awk '$1 == "oxidedns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
+notify_signalled="$(awk '$1 == "borondns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
 if [[ -z "$notify_signalled" ]] || ((notify_signalled < 1)); then
-    echo "OxideDNS metrics did not record NSD NOTIFY refresh signal" >&2
+    echo "BoronDNS metrics did not record NSD NOTIFY refresh signal" >&2
     exit 1
 fi
 
@@ -390,18 +390,18 @@ if ! grep -q "notify_from_nsd .* opcode=4" "$notify_proxy_log"; then
     exit 1
 fi
 
-if ! grep -q "response_from_oxidedns rcode=0" "$notify_proxy_log"; then
-    echo "NSD NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
+if ! grep -q "response_from_borondns rcode=0" "$notify_proxy_log"; then
+    echo "NSD NOTIFY proxy did not observe a successful BoronDNS NOTIFY response" >&2
     exit 1
 fi
 
-if ! grep 'accepted NOTIFY' "$workdir/oxidedns.log" | grep -q 'alpha.test.'; then
-    echo "OxideDNS log missing accepted NSD NOTIFY event" >&2
+if ! grep 'accepted NOTIFY' "$workdir/borondns.log" | grep -q 'alpha.test.'; then
+    echo "BoronDNS log missing accepted NSD NOTIFY event" >&2
     exit 1
 fi
 
 {
-    printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_primary_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
+    printf 'primary\tinitial_primary_soa\tinitial_borondns_soa\tupdated_primary_soa\tupdated_borondns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
     printf 'NSD\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$primary_soa" \
         "$initial_soa" \
@@ -414,11 +414,11 @@ fi
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-real-primary	nsd_udp_notify_reception	notify-proxy.log; primary-version.txt	The NSD primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and OxideDNS receives them on the DNS listener.
-ODS-FR-NOTIFY-006	retained-real-primary	nsd_notify_response	notify-proxy.log	The forwarding proxy observes a successful OxideDNS NOTIFY response with RCODE=0 for NSD-generated NOTIFY.
-ODS-FR-NOTIFY-007	retained-real-primary	nsd_refresh_signal	metrics.txt; nsd-notify-refresh-summary.tsv	OxideDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
-ODS-FR-NOTIFY-010	retained-real-primary	nsd_notify_logging	oxidedns.log	OxideDNS emits an accepted NOTIFY log for the real-primary NSD message, including source, zone, and refresh action.
-ODS-FR-ZSM-003	retained-real-primary	nsd_notify_triggered_refresh	nsd-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and OxideDNS republishes the updated SOA serial and A record.
+ODS-FR-NOTIFY-001	retained-real-primary	nsd_udp_notify_reception	notify-proxy.log; primary-version.txt	The NSD primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and BoronDNS receives them on the DNS listener.
+ODS-FR-NOTIFY-006	retained-real-primary	nsd_notify_response	notify-proxy.log	The forwarding proxy observes a successful BoronDNS NOTIFY response with RCODE=0 for NSD-generated NOTIFY.
+ODS-FR-NOTIFY-007	retained-real-primary	nsd_refresh_signal	metrics.txt; nsd-notify-refresh-summary.tsv	BoronDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
+ODS-FR-NOTIFY-010	retained-real-primary	nsd_notify_logging	borondns.log	BoronDNS emits an accepted NOTIFY log for the real-primary NSD message, including source, zone, and refresh action.
+ODS-FR-ZSM-003	retained-real-primary	nsd_notify_triggered_refresh	nsd-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and BoronDNS republishes the updated SOA serial and A record.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
@@ -426,8 +426,8 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     cp "$nsd_conf" "$artifact_dir/nsd.conf"
     cp "$zone_file" "$artifact_dir/alpha.test.zone"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
     cp "$metrics_out" "$artifact_dir/metrics.txt"
     cp "$summary_tsv" "$artifact_dir/nsd-notify-refresh-summary.tsv"

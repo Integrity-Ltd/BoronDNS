@@ -1,6 +1,6 @@
 # Future Optimization Tracks
 
-This document owns the detailed design constraints for future OxideDNS server
+This document owns the detailed design constraints for future BoronDNS server
 optimization tracks that remain outside the current Engineering MVP runtime.
 SRS Appendix C.6 records the formal scope exclusion and re-entry pointers; this
 companion records the engineering detail, unsafe-boundary expectations, and
@@ -18,9 +18,9 @@ the relevant unsafe-boundary/dependency rows are moved from `deferred` to
 
 ## XDP/eBPF Kernel Bypass
 
-Future deployment may attach an XDP program to the OxideDNS server DNS query
+Future deployment may attach an XDP program to the BoronDNS server DNS query
 interface and use AF_XDP or another audited packet-I/O backend for packets that
-need userspace processing. The default OxideDNS server runtime uses Tokio
+need userspace processing. The default BoronDNS server runtime uses Tokio
 UDP/TCP sockets. An experimental, feature-gated server AF_XDP backend now
 exists for local structure and smoke testing, but it is not part of the default
 runtime path, not formal MVP acceptance evidence, and not a production
@@ -28,11 +28,11 @@ performance claim.
 
 The `oxide-gun` crate has an AF_XDP backend for Linux lab load generation. That
 backend remains test-tool scope only; server-side AF_XDP evidence must come
-from the OxideDNS server backend and its own smoke or physical-NIC runs.
+from the BoronDNS server backend and its own smoke or physical-NIC runs.
 
 Entry condition for re-evaluation: benchmarks of the current implementation
 show that the kernel socket path, rather than zone lookup or response assembly,
-prevents OxideDNS from meeting the relevant performance target, or a deployment
+prevents BoronDNS from meeting the relevant performance target, or a deployment
 profile with dedicated XDP-capable hardware becomes a standard target.
 
 Architectural constraints for any future implementation:

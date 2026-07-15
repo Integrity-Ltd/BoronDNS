@@ -25,16 +25,16 @@ source "$repo_root/scripts/interop-docker-images.sh"
 zone_file="$repo_root/tests/interop/knot/alpha-dnssec.test.zone"
 template_file="$repo_root/tests/interop/knot/knot-dnssec.conf.template"
 workdir="$repo_root/target/interop/knot-dnssec-$$"
-container="oxidedns-knot-dnssec-$$"
+container="borondns-knot-dnssec-$$"
 knot_image="$(ensure_alpine_knot_image)"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
@@ -48,16 +48,16 @@ cleanup() {
             echo "---- dnssec-client.log ----" >&2
             tail -120 "$workdir/dnssec-client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r knot_port oxidedns_dns_port oxidedns_health_port < <(
+read -r knot_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -345,12 +345,12 @@ if has_response_do(nsec3_non_do):
 print("Knot signed-primary DNSSEC runtime interop passed")
 PY
 
-oxidedns_conf="$workdir/oxidedns.toml"
-cat >"$oxidedns_conf" <<EOF
+borondns_conf="$workdir/borondns.toml"
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -372,34 +372,34 @@ primaries = ["127.0.0.1:$knot_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != "ready" ]]; then
-    echo "OxideDNS did not become ready after Knot signed AXFR" >&2
+    echo "BoronDNS did not become ready after Knot signed AXFR" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$oxidedns_dns_port" "$nsec3_owner" "$workdir/dnssec-client.log")"
+client_summary="$(python3 "$dnssec_client" 127.0.0.1 "$borondns_dns_port" "$nsec3_owner" "$workdir/dnssec-client.log")"
 echo "$client_summary"
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    "oxidedns_zone_soa_serial{zone=\"alpha.test.\"} $signed_serial" \
-    'oxidedns_transfer_sessions_started_total{protocol="axfr"} 1' \
-    'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
+    'borondns_zones_active 1' \
+    "borondns_zone_soa_serial{zone=\"alpha.test.\"} $signed_serial" \
+    'borondns_transfer_sessions_started_total{protocol="axfr"} 1' \
+    'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
-        echo "OxideDNS metrics missing expected line after Knot signed AXFR: $expected" >&2
+        echo "BoronDNS metrics missing expected line after Knot signed AXFR: $expected" >&2
         exit 1
     fi
 done

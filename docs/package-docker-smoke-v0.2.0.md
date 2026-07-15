@@ -31,13 +31,13 @@ Result: passed, 4 of 4 commands completed without skips.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz` | `bd92d9ae4de1a2b2584834a3284633b025c7ad9e2deb6f1349272a0fa6afdba4` |
-| `oxidedns-0.2.0-x86_64-unknown-linux-musl.bin` | `8ce2157cd7186da83766e64aef5a2f976c5a1b559dd1dc094de6d38c096faa43` |
-| `oxidedns-0.2.0-x86_64-unknown-linux-musl-oxide-gun.bin` | `a069c764d5096ee5d1535736d5b6dcb846d27a09433b75306083b9b6cac3cc3d` |
-| `oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz` | `b65e02ef9079abdda06fc980000e7e0a7956ac072aaa7bba0f50a6e6e696d14f` |
+| `borondns-0.2.0-x86_64-unknown-linux-musl.tar.xz` | `bd92d9ae4de1a2b2584834a3284633b025c7ad9e2deb6f1349272a0fa6afdba4` |
+| `borondns-0.2.0-x86_64-unknown-linux-musl.bin` | `8ce2157cd7186da83766e64aef5a2f976c5a1b559dd1dc094de6d38c096faa43` |
+| `borondns-0.2.0-x86_64-unknown-linux-musl-oxide-gun.bin` | `a069c764d5096ee5d1535736d5b6dcb846d27a09433b75306083b9b6cac3cc3d` |
+| `borondns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz` | `b65e02ef9079abdda06fc980000e7e0a7956ac072aaa7bba0f50a6e6e696d14f` |
 
-The installer manifest records `af-xdp` for `oxidedns` and `xdp` for
-`oxide-gun`. The Docker image manifest records `oxidedns:0.2.0`,
+The installer manifest records `af-xdp` for `borondns` and `xdp` for
+`oxide-gun`. The Docker image manifest records `borondns:0.2.0`,
 `alpine:3.22`, image ID
 `sha256:e514368d4f20f18736869941cdc1aec968bbeeebc8119724806c9437d0374f97`,
 and image size `16248274` bytes.
@@ -50,8 +50,8 @@ The retained logs show:
   creation;
 - static-link confirmation for both installed binaries through `file` and
   `ldd`;
-- Ubuntu 24.04 installer smoke covering fresh install, update, `oxidedns
-  check-config`, `oxide-gun --self-test`, and short `oxidedns serve` startup;
+- Ubuntu 24.04 installer smoke covering fresh install, update, `borondns
+  check-config`, `oxide-gun --self-test`, and short `borondns serve` startup;
 - Docker image archive creation, image inspect output, and `.sha256` file
   creation;
 - Docker image smoke covering `--version`, `/livez`, `/metrics`, UID `53053`,

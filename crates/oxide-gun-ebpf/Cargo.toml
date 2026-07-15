@@ -2,7 +2,7 @@
 name = "oxide-gun-ebpf"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-version = "0.2.0"
+version = "0.9.0"
 
 [lib]
 path = "src/lib.rs"

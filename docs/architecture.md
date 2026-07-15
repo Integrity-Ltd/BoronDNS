@@ -1,4 +1,4 @@
-# OxideDNS Architecture and Release Governance
+# BoronDNS Architecture and Release Governance
 
 Status: current architecture document, not final formal SRS MVP acceptance evidence.
 
@@ -14,11 +14,11 @@ release artifacts remain tracked in `docs/mvp-gap-register.md`.
 ## Module Organisation
 
 The current first-party Rust source is organised into release-reviewed modules
-at the crate/file boundary across the OxideDNS core, server, CLI, eBPF, and
+at the crate/file boundary across the BoronDNS core, server, CLI, eBPF, and
 OxideGun support-tool crates. This satisfies the `ODS-NFR-MAINT-002`
 module-count target shape for the current implementation. The server runtime
 has been decomposed into transport, transfer, metrics, configuration, status,
-shutdown, rate-limit, cookie, and support modules; `crates/oxidedns-server/src/lib.rs`
+shutdown, rate-limit, cookie, and support modules; `crates/borondns-server/src/lib.rs`
 now remains the orchestration home for catalog reconciliation, refresh
 scheduling, and NOTIFY/TSIG integration.
 
@@ -28,47 +28,47 @@ accepted.
 
 | Module | Major functional area mapping | Architecture note |
 | --- | --- | --- |
-| `crates/oxidedns-core/src/dns.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-EDNS`, `ODS-FR-DNSSEC`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, DNS message parts of `ODS-FR-NOTIFY` | DNS wire parsing, EDNS option handling, authoritative response construction, DNSSEC serve-only augmentation, DNS Cookie encoding, and UDP response shaping. |
-| `crates/oxidedns-core/src/axfr.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, `ODS-FR-SPOOF`, RR ingestion parts of `ODS-FR-DNSSEC` and `ODS-FR-URR` | AXFR/IXFR query construction, transfer stream parsing, response validation, unknown-RR preservation, and zone-publication validation. |
-| `crates/oxidedns-core/src/catalog.rs` | RFC 9432 catalog-zone Engineering MVP extension plus opt-in member-transfer metadata parsing | Catalog schema-version and member-PTR parsing for transferred catalog zones, with optional parsing of BIND-compatible `primaries.ext` records and OxideDNS `_udns-xfr` / `_udns-notify` extension records when enabled by configuration. |
-| `crates/oxidedns-core/src/config.rs` | `ODS-IF-CONF`, configuration surfaces for protocol families, interface roles, limits, TSIG, XoT, DNS Cookies, RRL, metrics, and health | Static TOML configuration schema, validation, warning catalogue inputs, redacted dump support, and environment-override targets. |
-| `crates/oxidedns-core/src/tsig.rs` | `ODS-FR-TSIG`, TSIG-dependent clauses of AXFR, IXFR, NOTIFY, ordinary query signing, and TSIG error response handling | TSIG key material handling, MAC verification/signing, TCP response-stream verification, truncation handling, and TSIG error construction. |
-| `crates/oxidedns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
-| `crates/oxidedns-core/src/zone_image.rs` | Current immutable data-plane layout for `ODS-FR-ZONE` and direct `ODS-FR-QRY` lookup behavior | Immutable `ZoneImage` compiled from `ZoneSnapshot`, packed name graph scaffolding, exact and semantic lookup plans, pre-encoded RRset wire chunks, direct RR-section emission, and shape statistics. |
-| `crates/oxidedns-core/src/lib.rs` | Core crate public API boundary | Re-exports the core configuration and protocol modules for the server and CLI crates. |
-| `crates/oxidedns-server/src/lib.rs` | Runtime integration for catalog reconciliation, refresh scheduling, NOTIFY/TSIG preparation, task supervision, and listener orchestration | Runtime startup, listener task wiring, catalog membership reconciliation, refresh scheduling, initial zone loads, NOTIFY authority, TSIG packet preparation, and runtime task supervision. |
-| `crates/oxidedns-server/src/udp.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NOTIFY`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, and UDP transport behavior | UDP listener binding, socket/reuseport worker setup, packet receive/send loops, query metrics observation, RRL application, DNS Cookie observation, and packet response handling. |
-| `crates/oxidedns-server/src/tcp.rs` | `ODS-FR-TCP`, TCP query serving, NOTIFY over TCP, and TCP overload behavior | TCP listener accept loop, global/per-source connection limits, DNS-over-TCP message framing, in-flight query limits, response writer, and TCP packet handling. |
-| `crates/oxidedns-server/src/health_metrics.rs` | `ODS-NFR-OBS`, health endpoints, metrics endpoint, runtime counters, and ZoneImage serve metrics | `/livez`, `/healthz`, `/readyz`, and `/metrics` serving, metrics compression/rate limiting, runtime counter snapshots, latency histograms, ZoneImage serve counters, and catalog/refresh metric rendering. |
-| `crates/oxidedns-server/src/observability.rs` | `ODS-NFR-OBS`, in-process JSON observability/management API | Bearer-token auth (`ObservabilityAuth`, constant-time), reduced-metrics mode, certificate/resource/time-sync status reporting, and transfer-material provisioning for the management endpoints. |
-| `crates/oxidedns-server/src/rate_limit.rs` | `ODS-FR-RRL` and NOTIFY log suppression | Response-rate limiting buckets, slip/drop decisions, RRL summaries, notify log limiting, response classification helpers, and truncated RRL response construction. |
-| `crates/oxidedns-server/src/transfer.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, and `ODS-FR-XOT` outbound transfer I/O | SOA polling, AXFR/IXFR TCP sessions, XoT TLS transport, TSIG transfer signing/verification, transfer query IDs, and PEM trust/client-certificate loading. |
-| `crates/oxidedns-server/src/transfer_plan.rs` | Transfer target planning and primary rotation for static and catalog zones | TSIG key resolution into transfer plans, transfer-source matching, primary rotation with rejection-sampling start index, catalog member plan derivation, and initial transfer origin ordering. |
-| `crates/oxidedns-server/src/secret_store.rs` | Reloadable transfer secret store | `SecretManager` filesystem-backed TSIG/XoT secret manifest parsing, bounded aggregate TSIG/XoT material, `RwLock`-backed reload over a retained static-key snapshot baseline, generation-consistent certificate metadata, and zeroized secret material. |
-| `crates/oxidedns-server/src/dns_cookie.rs` | `ODS-FR-COOKIE` runtime cookie secret helpers | DNS Cookie runtime settings, process-local Server Secret generation/rotation, configured shared-secret and previous-secret rollover state, cookie context construction, secret fingerprint redaction, and source-prefix metric configuration. |
-| `crates/oxidedns-server/src/config_validation.rs` | Runtime configuration validation and warning generation | Runtime configuration checks, XoT trust-anchor/client-key validation, file-descriptor limit formula, and warning emission inputs. |
-| `crates/oxidedns-server/src/runtime_status.rs` | Runtime readiness and draining status | Shared runtime status cell used by health and shutdown paths. |
-| `crates/oxidedns-server/src/shutdown.rs` | Graceful shutdown and task draining | Shutdown signal waiting, task-set draining/aborting, TCP connection drain waiting, and supervised runtime task result handling. |
-| `crates/oxidedns-server/src/errors.rs` | Runtime and transfer error API | `RuntimeError` and `TransferError` definitions and display surfaces. |
-| `crates/oxidedns-server/src/build_info.rs` | Build metadata constants | Build-time version, commit, Rust version, and timestamp values embedded by `build.rs`. |
-| `crates/oxidedns-server/src/af_xdp.rs` | Feature-gated server AF_XDP packet-I/O adapter and audited unsafe boundary | Linux AF_XDP socket/ring/UMEM adapter, Aya eBPF object loading, XSK map setup, redirect attach/detach, and feature-gated packet target handling for lab/pre-NIC validation. |
-| `crates/oxidedns-server/src/std_udp_mmsg.rs` | Standard UDP batch I/O adapter and audited unsafe boundary | Linux `recvmmsg`/`sendmmsg` batching, sockaddr conversion, socket target conversion, and batch adapter tests for the non-XDP UDP backend. |
-| `crates/oxidedns-server/src/std_udp_socket.rs` | Standard UDP socket setup and audited unsafe boundary | Nonblocking datagram socket creation, `SO_REUSEADDR`/`SO_REUSEPORT`, bind, raw socket-address conversion, and optional worker CPU affinity. |
-| `crates/oxidedns-server/src/privilege.rs` | `ODS-NFR-SEC-004`, root-startup privilege drop, and the audited `ODS-INV-006` unsafe boundary | Minimal Linux/POSIX FFI wrapper for user lookup, supplementary-group setup, and irrevocable uid/gid drop before network workers process input. |
-| `crates/oxidedns-server/src/process_hardening.rs` | `ODS-NFR-SEC-001`, startup process hardening, and the audited `ODS-INV-006` unsafe boundary | Minimal OS FFI wrapper for core-dump suppression and Linux `PR_SET_NO_NEW_PRIVS`; applied before network workers process input. |
-| `crates/oxidedns-server/src/process_signals.rs` | `ODS-IF-SIG`, POSIX signal disposition evidence, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for SIGHUP/SIGPIPE `SIG_IGN`; excluded from network-input parsing paths. |
-| `crates/oxidedns-server/src/resource_limits.rs` | `ODS-NFR-RES-004`, OS startup validation, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for `RLIMIT_NOFILE` inspection; feeds runtime startup validation. |
-| `crates/oxidedns-server/build.rs` | Build metadata for `ODS-IF-PROC-002`, `ODS-NFR-OBS-006`, release traceability, and metrics labels | Embeds commit, Rust compiler version, and build timestamp labels without changing runtime behavior. |
-| `crates/oxidedns-cli/src/main.rs` | `ODS-IF-PROC`, CLI mode handling, bootstrap logging, config validation/dump/example output, release evidence entrypoints | Clap-derived CLI, SRS exit-code mapping, startup logging, config mode dispatch, and runtime invocation. |
-| `crates/oxide-gun/src/main.rs` | Support tooling outside OxideDNS server runtime requirements | OxideGun load-generator CLI, portable UDP backend, packet generation, response classification, and self-test path. |
-| `crates/oxide-gun/src/xdp_backend.rs` | Support tooling unsafe boundary for OxideGun lab-only AF_XDP backend | Linux AF_XDP UMEM and ring adapter used only when OxideGun is built with the explicit `xdp` feature; not part of the OxideDNS server runtime. |
+| `crates/borondns-core/src/dns.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-EDNS`, `ODS-FR-DNSSEC`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, DNS message parts of `ODS-FR-NOTIFY` | DNS wire parsing, EDNS option handling, authoritative response construction, DNSSEC serve-only augmentation, DNS Cookie encoding, and UDP response shaping. |
+| `crates/borondns-core/src/axfr.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, `ODS-FR-SPOOF`, RR ingestion parts of `ODS-FR-DNSSEC` and `ODS-FR-URR` | AXFR/IXFR query construction, transfer stream parsing, response validation, unknown-RR preservation, and zone-publication validation. |
+| `crates/borondns-core/src/catalog.rs` | RFC 9432 catalog-zone Engineering MVP extension plus opt-in member-transfer metadata parsing | Catalog schema-version and member-PTR parsing for transferred catalog zones, with optional parsing of BIND-compatible `primaries.ext` records and BoronDNS `_udns-xfr` / `_udns-notify` extension records when enabled by configuration. |
+| `crates/borondns-core/src/config.rs` | `ODS-IF-CONF`, configuration surfaces for protocol families, interface roles, limits, TSIG, XoT, DNS Cookies, RRL, metrics, and health | Static TOML configuration schema, validation, warning catalogue inputs, redacted dump support, and environment-override targets. |
+| `crates/borondns-core/src/tsig.rs` | `ODS-FR-TSIG`, TSIG-dependent clauses of AXFR, IXFR, NOTIFY, ordinary query signing, and TSIG error response handling | TSIG key material handling, MAC verification/signing, TCP response-stream verification, truncation handling, and TSIG error construction. |
+| `crates/borondns-core/src/zone.rs` | `ODS-FR-ZONE`, lookup semantics for `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NRESP`, `ODS-FR-DNSSEC`, and atomic publication evidence for `ODS-INV-003` | Memory-resident `HashMap`-indexed zone snapshots, RRset lookup, CNAME/DNAME/wildcard/delegation logic, and DNSSEC proof selection from transferred records. |
+| `crates/borondns-core/src/zone_image.rs` | Current immutable data-plane layout for `ODS-FR-ZONE` and direct `ODS-FR-QRY` lookup behavior | Immutable `ZoneImage` compiled from `ZoneSnapshot`, packed name graph scaffolding, exact and semantic lookup plans, pre-encoded RRset wire chunks, direct RR-section emission, and shape statistics. |
+| `crates/borondns-core/src/lib.rs` | Core crate public API boundary | Re-exports the core configuration and protocol modules for the server and CLI crates. |
+| `crates/borondns-server/src/lib.rs` | Runtime integration for catalog reconciliation, refresh scheduling, NOTIFY/TSIG preparation, task supervision, and listener orchestration | Runtime startup, listener task wiring, catalog membership reconciliation, refresh scheduling, initial zone loads, NOTIFY authority, TSIG packet preparation, and runtime task supervision. |
+| `crates/borondns-server/src/udp.rs` | `ODS-FR-CORE`, `ODS-FR-QRY`, `ODS-FR-NOTIFY`, `ODS-FR-RRL`, `ODS-FR-COOKIE`, and UDP transport behavior | UDP listener binding, socket/reuseport worker setup, packet receive/send loops, query metrics observation, RRL application, DNS Cookie observation, and packet response handling. |
+| `crates/borondns-server/src/tcp.rs` | `ODS-FR-TCP`, TCP query serving, NOTIFY over TCP, and TCP overload behavior | TCP listener accept loop, global/per-source connection limits, DNS-over-TCP message framing, in-flight query limits, response writer, and TCP packet handling. |
+| `crates/borondns-server/src/health_metrics.rs` | `ODS-NFR-OBS`, health endpoints, metrics endpoint, runtime counters, and ZoneImage serve metrics | `/livez`, `/healthz`, `/readyz`, and `/metrics` serving, metrics compression/rate limiting, runtime counter snapshots, latency histograms, ZoneImage serve counters, and catalog/refresh metric rendering. |
+| `crates/borondns-server/src/observability.rs` | `ODS-NFR-OBS`, in-process JSON observability/management API | Bearer-token auth (`ObservabilityAuth`, constant-time), reduced-metrics mode, certificate/resource/time-sync status reporting, and transfer-material provisioning for the management endpoints. |
+| `crates/borondns-server/src/rate_limit.rs` | `ODS-FR-RRL` and NOTIFY log suppression | Response-rate limiting buckets, slip/drop decisions, RRL summaries, notify log limiting, response classification helpers, and truncated RRL response construction. |
+| `crates/borondns-server/src/transfer.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, and `ODS-FR-XOT` outbound transfer I/O | SOA polling, AXFR/IXFR TCP sessions, XoT TLS transport, TSIG transfer signing/verification, transfer query IDs, and PEM trust/client-certificate loading. |
+| `crates/borondns-server/src/transfer_plan.rs` | Transfer target planning and primary rotation for static and catalog zones | TSIG key resolution into transfer plans, transfer-source matching, primary rotation with rejection-sampling start index, catalog member plan derivation, and initial transfer origin ordering. |
+| `crates/borondns-server/src/secret_store.rs` | Reloadable transfer secret store | `SecretManager` filesystem-backed TSIG/XoT secret manifest parsing, bounded aggregate TSIG/XoT material, `RwLock`-backed reload over a retained static-key snapshot baseline, generation-consistent certificate metadata, and zeroized secret material. |
+| `crates/borondns-server/src/dns_cookie.rs` | `ODS-FR-COOKIE` runtime cookie secret helpers | DNS Cookie runtime settings, process-local Server Secret generation/rotation, configured shared-secret and previous-secret rollover state, cookie context construction, secret fingerprint redaction, and source-prefix metric configuration. |
+| `crates/borondns-server/src/config_validation.rs` | Runtime configuration validation and warning generation | Runtime configuration checks, XoT trust-anchor/client-key validation, file-descriptor limit formula, and warning emission inputs. |
+| `crates/borondns-server/src/runtime_status.rs` | Runtime readiness and draining status | Shared runtime status cell used by health and shutdown paths. |
+| `crates/borondns-server/src/shutdown.rs` | Graceful shutdown and task draining | Shutdown signal waiting, task-set draining/aborting, TCP connection drain waiting, and supervised runtime task result handling. |
+| `crates/borondns-server/src/errors.rs` | Runtime and transfer error API | `RuntimeError` and `TransferError` definitions and display surfaces. |
+| `crates/borondns-server/src/build_info.rs` | Build metadata constants | Build-time version, commit, Rust version, and timestamp values embedded by `build.rs`. |
+| `crates/borondns-server/src/af_xdp.rs` | Feature-gated server AF_XDP packet-I/O adapter and audited unsafe boundary | Linux AF_XDP socket/ring/UMEM adapter, Aya eBPF object loading, XSK map setup, redirect attach/detach, and feature-gated packet target handling for lab/pre-NIC validation. |
+| `crates/borondns-server/src/std_udp_mmsg.rs` | Standard UDP batch I/O adapter and audited unsafe boundary | Linux `recvmmsg`/`sendmmsg` batching, sockaddr conversion, socket target conversion, and batch adapter tests for the non-XDP UDP backend. |
+| `crates/borondns-server/src/std_udp_socket.rs` | Standard UDP socket setup and audited unsafe boundary | Nonblocking datagram socket creation, `SO_REUSEADDR`/`SO_REUSEPORT`, bind, raw socket-address conversion, and optional worker CPU affinity. |
+| `crates/borondns-server/src/privilege.rs` | `ODS-NFR-SEC-004`, root-startup privilege drop, and the audited `ODS-INV-006` unsafe boundary | Minimal Linux/POSIX FFI wrapper for user lookup, supplementary-group setup, and irrevocable uid/gid drop before network workers process input. |
+| `crates/borondns-server/src/process_hardening.rs` | `ODS-NFR-SEC-001`, startup process hardening, and the audited `ODS-INV-006` unsafe boundary | Minimal OS FFI wrapper for core-dump suppression and Linux `PR_SET_NO_NEW_PRIVS`; applied before network workers process input. |
+| `crates/borondns-server/src/process_signals.rs` | `ODS-IF-SIG`, POSIX signal disposition evidence, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for SIGHUP/SIGPIPE `SIG_IGN`; excluded from network-input parsing paths. |
+| `crates/borondns-server/src/resource_limits.rs` | `ODS-NFR-RES-004`, OS startup validation, and the audited `ODS-INV-006` unsafe boundary | Minimal Unix FFI wrapper for `RLIMIT_NOFILE` inspection; feeds runtime startup validation. |
+| `crates/borondns-server/build.rs` | Build metadata for `ODS-IF-PROC-002`, `ODS-NFR-OBS-006`, release traceability, and metrics labels | Embeds commit, Rust compiler version, and build timestamp labels without changing runtime behavior. |
+| `crates/borondns-cli/src/main.rs` | `ODS-IF-PROC`, CLI mode handling, bootstrap logging, config validation/dump/example output, release evidence entrypoints | Clap-derived CLI, SRS exit-code mapping, startup logging, config mode dispatch, and runtime invocation. |
+| `crates/oxide-gun/src/main.rs` | Support tooling outside BoronDNS server runtime requirements | OxideGun load-generator CLI, portable UDP backend, packet generation, response classification, and self-test path. |
+| `crates/oxide-gun/src/xdp_backend.rs` | Support tooling unsafe boundary for OxideGun lab-only AF_XDP backend | Linux AF_XDP UMEM and ring adapter used only when OxideGun is built with the explicit `xdp` feature; not part of the BoronDNS server runtime. |
 | `crates/oxide-gun-ebpf/src/lib.rs` | OxideGun lab-only XDP drop program and audited unsafe boundary | no_std eBPF `XDP_DROP` support program used only by OxideGun's lab backend for reply suppression tests. |
-| `crates/oxidedns-server-ebpf/src/lib.rs` | Feature-gated OxideDNS XDP redirect program and audited unsafe boundary | no_std eBPF redirect program used only by the server AF_XDP adapter when explicitly built and attached in a lab profile. |
+| `crates/borondns-server-ebpf/src/lib.rs` | Feature-gated BoronDNS XDP redirect program and audited unsafe boundary | no_std eBPF redirect program used only by the server AF_XDP adapter when explicitly built and attached in a lab profile. |
 
 The module count is intentionally measured at the first-party Rust file/module
 boundary, including `build.rs` and support-tool modules, while excluding
 test-only files from the release module map. `ODS-NFR-MAINT-002` still maps the
-major SRS §4 server functional areas to the OxideDNS server/CLI modules above;
+major SRS §4 server functional areas to the BoronDNS server/CLI modules above;
 OxideGun entries are listed so first-party workspace code remains visible
 without expanding the server protocol scope. Tests remain colocated with
 implementation code for review locality, but they are not counted toward the
@@ -85,7 +85,7 @@ implementation code for review locality, but they are not counted toward the
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
 | Minimum supported Rust | MSRV Rust `1.95`; release/development toolchain Rust `1.96.1`, edition `2024`, workspace resolver `3`, pinned exactly in `rust-toolchain.toml` while workspace metadata retains the MSRV. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Interface compatibility posture | Externally observable configuration, CLI, exit-code, environment, signal, metric, log-field, health, and network-role surfaces are tracked in `docs/interface-stability-baseline.tsv` under the policy in `docs/interface-compatibility-policy.md`; `scripts/check-interface-compatibility.py` checks the current baseline and can compare a previous release baseline. | `ODS-NFR-MAINT-006`, `ODS-IF-CONF-002` |
-| Reproducible build posture | `scripts/reproducible-build-compare.sh` performs two clean static-binary builds with fixed `SOURCE_DATE_EPOCH` and `OXIDEDNS_BUILD_*` values; `docs/reproducible-build-v0.2.0.md` records matching v0.2.0 `oxidedns` and `oxide-gun` musl binary digests. The handoff script still owns release-engineer sign-off and package/image artifact follow-up. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
+| Reproducible build posture | `scripts/reproducible-build-compare.sh` performs two clean static-binary builds with fixed `SOURCE_DATE_EPOCH` and `BORONDNS_BUILD_*` values; `docs/reproducible-build-v0.2.0.md` records matching v0.2.0 `borondns` and `oxide-gun` musl binary digests. The handoff script still owns release-engineer sign-off and package/image artifact follow-up. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
 | Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
 | Runtime task supervision | Tokio `JoinSet`/`JoinHandle` completion is inspected for listener, refresh, health, background, and TCP query tasks. Panicking or failed supervised tasks are logged through the runtime warning path rather than treated as a normative SRS mechanism such as `catch_unwind`. | `ODS-INV-006`, `ODS-NFR-SEC-001` |
 | Continuous verification posture | `scripts/check.sh` is the current local continuous verification entry point. Hosted continuous CI for every main-branch candidate is intentionally deferred while the repository remains private to avoid spending CI minutes on heavyweight evidence tooling before a public-release gate exists. The tag-push/workflow-dispatch release workflow is artifact publication automation and may supply retained release-gate logs when a release process accepts that evidence. | `ODS-VER-011`, `ODS-NFR-SEC-006` |
@@ -98,15 +98,15 @@ implementation code for review locality, but they are not counted toward the
 The SRS specifies catalog-zone behaviour, not the internal abstraction shape.
 The current implementation uses a deliberately small runtime model:
 
-- `crates/oxidedns-core/src/catalog.rs` parses the transferred catalog snapshot,
+- `crates/borondns-core/src/catalog.rs` parses the transferred catalog snapshot,
   validates the RFC 9432 version property, and extracts member PTR records.
-- `CatalogManager` in `crates/oxidedns-server/src/lib.rs` owns the applied
+- `CatalogManager` in `crates/borondns-server/src/lib.rs` owns the applied
   catalog membership state used for metrics and reconciliation.
 - Catalog member zones inherit transfer primaries, TSIG, NOTIFY source policy,
   transfer source binding, and transfer limits from the static
   `[[catalog_zones]]` entry. When `member_transfer_extensions = true`, the
   parsed catalog member can override the inherited member transfer plan with
-  BIND-compatible `primaries.ext` A/AAAA/TXT data and OxideDNS `_udns-xfr` /
+  BIND-compatible `primaries.ext` A/AAAA/TXT data and BoronDNS `_udns-xfr` /
   `_udns-notify` TXT records. Those records carry addresses, TSIG key-name
   references, transport/port/server-name hints, and NOTIFY sources only.
 - A successful catalog refresh reconciles the previous and newly parsed member
@@ -131,11 +131,11 @@ lines, excluding `#[cfg(test)]` test modules, standalone `src/tests.rs` modules,
 test directories, dependencies, and generated code in accordance with
 `ODS-NFR-MAINT-001`. If the count is below 5,000 or above 15,000, the audit
 prints a release-review warning and can be made build-blocking with
-`OXIDEDNS_MAINT_ENFORCE=1`.
+`BORONDNS_MAINT_ENFORCE=1`.
 
 The measurement includes OxideGun and its Rust eBPF companion because they are
 first-party Rust code in this workspace. OxideGun remains support-tool scope; it
-does not expand the OxideDNS server runtime or the externally observable DNS
+does not expand the BoronDNS server runtime or the externally observable DNS
 protocol requirements.
 
 Current `scripts/audit-maintainability.sh` output reports 53,740 first-party
@@ -157,7 +157,7 @@ a reason to remove implemented protocol behavior.
 
 The current primary maintainability risk is not raw production LOC but whether
 each functional area has a stable review boundary. The v0.1.4 pre-XDP
-stabilization split reduced `crates/oxidedns-server/src/lib.rs` to runtime
+stabilization split reduced `crates/borondns-server/src/lib.rs` to runtime
 orchestration and moved transport, metrics, transfer, rate-limit, cookie,
 configuration, status, shutdown, errors, and packet-I/O support code into
 dedicated modules. Further refactoring should focus on catalog, refresh, and
@@ -167,7 +167,7 @@ without changing runtime ownership or obscuring SRS traceability.
 ## Unsafe Boundary Policy
 
 The workspace defaults to `unsafe_code = "forbid"` for first-party crates. The
-`oxidedns-server` package is the deliberate exception at the manifest-lint layer
+`borondns-server` package is the deliberate exception at the manifest-lint layer
 because it owns the current operating-system and packet-I/O adapters; its crate
 root keeps `#![deny(unsafe_code)]`, and only registry-listed adapter modules may
 opt back in with local `#![allow(unsafe_code)]`. Current adapter modules include
@@ -189,7 +189,7 @@ The safe configuration helper `open_readonly_no_follow` centralizes the Unix
 observability token files. Reloadable secret-store traversal has the separate
 `posix-secret-store-open` boundary: `OpenedSecretRoot` confines `rustix`
 `open`/`openat` calls to descriptor-relative, no-follow traversal in
-`crates/oxidedns-server/src/secret_store.rs`. Callers retain responsibility for
+`crates/borondns-server/src/secret_store.rs`. Callers retain responsibility for
 validating each opened handle's type and permission policy before reading it.
 
 Future io_uring, packed-binary zone-store, cache backends, or production
@@ -239,7 +239,7 @@ attach/detach, fallback, and no-XDP-default tests before it can be offered to
 operators.
 
 The deferred response-cache track means an authoritative-only prebuilt response
-cache. It does not relax the invariant that OxideDNS has no recursive,
+cache. It does not relax the invariant that BoronDNS has no recursive,
 upstream-sourced, or non-authoritative cache. Any future response cache must
 prove zone-refresh invalidation, DO-bit keying, TTL decay, DNSSEC signature
 expiry floors, and fallback behavior before production enablement.

@@ -74,7 +74,7 @@ scripts/fuzz-campaign.sh
 ```
 
 When `CARGO_TARGET_DIR` is unset, the runner creates a private mode-0700 build
-tree beneath `${TMPDIR:-/var/tmp}/oxidedns-fuzz-builds-<uid>/`. It captures the
+tree beneath `${TMPDIR:-/var/tmp}/borondns-fuzz-builds-<uid>/`. It captures the
 parent and tree device/inode identities and removes only that exact automatic
 tree on every normal or failed exit, after retaining the build-artifact hashes.
 It does not sweep older `/var/tmp` roots. An explicitly supplied
@@ -84,8 +84,8 @@ The runner applies an outer wall-clock timeout as well as libFuzzer's
 `-max_total_time`, so a target that blocks inside one input cannot strand the
 campaign indefinitely. The outer limit is the requested duration plus a
 default 1800-second build/start grace; use
-`OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS` and
-`OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` to tighten it for prebuilt smoke
+`BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS` and
+`BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` to tighten it for prebuilt smoke
 tests.
 
 When Cargo is not explicitly overridden, the runner selects the installed
@@ -134,14 +134,14 @@ real filesystem path, either use `--toolchain nightly` so the runner prepends
 the rustup-selected cargo directory for cargo-fuzz's inner build, or set
 `CARGO` to the absolute cargo binary for the intended toolchain.
 
-The target exercises public `oxidedns-core` DNS parser and datagram handling APIs:
+The target exercises public `borondns-core` DNS parser and datagram handling APIs:
 `Header::parse`, `Question::parse`, and `answer_datagram` against an empty
 `ZoneStore`.
 
 The transfer target exercises `parse_axfr_response` and `parse_ixfr_response`
 against a fixed current `alpha.test.` zone snapshot.
 
-The TSIG target exercises public `oxidedns-core::tsig` APIs for raw and shaped DNS
+The TSIG target exercises public `borondns-core::tsig` APIs for raw and shaped DNS
 messages. The NOTIFY/EDNS target exercises public datagram answering APIs with
 authorization and acceptance hooks while varying UDP/TCP answer options. The
 ZoneImage target exercises the same datagram API with a static compiled image,

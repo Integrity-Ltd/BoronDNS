@@ -39,10 +39,10 @@ print("runtime_source_files:")
 for path in runtime_sources:
     print(f"  {path}")
 
-zone_text = runtime_sources.get(Path("crates/oxidedns-core/src/zone.rs"), "")
-zone_image_text = runtime_sources.get(Path("crates/oxidedns-core/src/zone_image.rs"), "")
-axfr_text = runtime_sources.get(Path("crates/oxidedns-core/src/axfr.rs"), "")
-dns_text = runtime_sources.get(Path("crates/oxidedns-core/src/dns.rs"), "")
+zone_text = runtime_sources.get(Path("crates/borondns-core/src/zone.rs"), "")
+zone_image_text = runtime_sources.get(Path("crates/borondns-core/src/zone_image.rs"), "")
+axfr_text = runtime_sources.get(Path("crates/borondns-core/src/axfr.rs"), "")
+dns_text = runtime_sources.get(Path("crates/borondns-core/src/dns.rs"), "")
 
 required_fragments = [
     ("transfer RRSIG RDATA validation only", "RecordType::Rrsig as u16 =>", axfr_text),

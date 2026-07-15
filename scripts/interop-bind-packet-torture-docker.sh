@@ -22,11 +22,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/bind-packet-torture-$$"
-artifact_dir="${OXIDEDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR:-}"
-bind_container="oxidedns-bind-torture-$$"
-oxide_container="oxidedns-oxide-torture-$$"
-client_container="oxidedns-dumpcap-client-$$"
-oxide_image_ref="${OXIDEDNS_BIND_PACKET_TORTURE_IMAGE_REF:-oxidedns:bind-packet-torture}"
+artifact_dir="${BORONDNS_BIND_PACKET_TORTURE_ARTIFACT_DIR:-}"
+bind_container="borondns-bind-torture-$$"
+oxide_container="borondns-oxide-torture-$$"
+client_container="borondns-dumpcap-client-$$"
+oxide_image_ref="${BORONDNS_BIND_PACKET_TORTURE_IMAGE_REF:-borondns:bind-packet-torture}"
 bind_image="$(ensure_alpine_bind_image)"
 packet_torture_image="$(ensure_alpine_packet_torture_image)"
 rm -rf "$workdir"
@@ -45,7 +45,7 @@ cleanup() {
         fi
     done
     if ((status != 0)); then
-        for log in "$workdir"/named.log "$workdir"/oxidedns.log "$workdir"/client.log "$workdir"/diff.txt; do
+        for log in "$workdir"/named.log "$workdir"/borondns.log "$workdir"/client.log "$workdir"/diff.txt; do
             [[ -f "$log" ]] || continue
             echo "---- ${log##*/} ----" >&2
             tail -160 "$log" >&2
@@ -59,7 +59,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -120,7 +120,7 @@ apex-a 300 IN A 192.0.2.11
 v6 300 IN AAAA 2001:db8:1::10
 txt-short 300 IN TXT "short text"
 txt-long 300 IN TXT "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "cccccccccccccccccccccccccccccccc"
-hinfo 300 IN HINFO "RFC8482" "OxideDNS"
+hinfo 300 IN HINFO "RFC8482" "BoronDNS"
 alias 300 IN CNAME apex-a.torture.test.
 ptr-target 300 IN PTR apex-a.torture.test.
 @ 300 IN MX 10 mail.torture.test.
@@ -164,11 +164,11 @@ wild 300 IN TXT "wildcard-control"
 *.wild 300 IN A 192.0.2.200
 EOF
 
-cat >"$workdir/oxidedns.toml" <<EOF
+cat >"$workdir/borondns.toml" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "json"
 
@@ -541,7 +541,7 @@ def main():
                 print(f"### {qname} {qtype_name}", file=diff)
                 print("BIND:", file=diff)
                 print(json.dumps(bind_cmp, indent=2, sort_keys=True, default=str), file=diff)
-                print("OxideDNS:", file=diff)
+                print("BoronDNS:", file=diff)
                 print(json.dumps(oxide_cmp, indent=2, sort_keys=True, default=str), file=diff)
         raise SystemExit(f"{len(failures)} packet-content comparison mismatches")
     with open(DIFF, "w", encoding="utf-8") as diff:
@@ -612,8 +612,8 @@ PY
     exit 1
 fi
 
-OXIDEDNS_DIST_DIR="$workdir/dist" \
-    OXIDEDNS_DOCKER_IMAGE_REF="$oxide_image_ref" \
+BORONDNS_DIST_DIR="$workdir/dist" \
+    BORONDNS_DOCKER_IMAGE_REF="$oxide_image_ref" \
     "$repo_root/scripts/package-docker-image.sh" >/dev/null
 
 docker run -d \
@@ -625,16 +625,16 @@ docker run -d \
     --security-opt no-new-privileges \
     --pids-limit 128 \
     --memory 256m \
-    -v "$workdir/oxidedns.toml:/etc/oxidedns-secondary/config.toml:ro" \
+    -v "$workdir/borondns.toml:/etc/borondns-secondary/config.toml:ro" \
     "$oxide_image_ref" \
-    serve --config /etc/oxidedns-secondary/config.toml \
-    >"$workdir/oxidedns-container-id.txt"
+    serve --config /etc/borondns-secondary/config.toml \
+    >"$workdir/borondns-container-id.txt"
 
 ready=""
 for _ in {1..120}; do
     if ready="$(
         docker exec "$oxide_container" \
-            wget -qO- "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null
+            wget -qO- "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null
     )"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
@@ -642,11 +642,11 @@ for _ in {1..120}; do
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready for packet torture comparison" >&2
+    echo "BoronDNS did not become ready for packet torture comparison" >&2
     exit 1
 fi
 
-docker logs "$oxide_container" >"$workdir/oxidedns.log" 2>&1 || true
+docker logs "$oxide_container" >"$workdir/borondns.log" 2>&1 || true
 
 docker run --rm \
     --name "$client_container" \
@@ -655,15 +655,15 @@ docker run --rm \
     --cap-add NET_ADMIN \
     -v "$workdir:/work:rw" \
     "$packet_torture_image" \
-    sh -c "dumpcap -i lo -f 'udp and (port $bind_port or port $oxidedns_dns_port)' -w /work/dns-torture.pcapng -q >/work/dumpcap.log 2>&1 & \
+    sh -c "dumpcap -i lo -f 'udp and (port $bind_port or port $borondns_dns_port)' -w /work/dns-torture.pcapng -q >/work/dumpcap.log 2>&1 & \
         cap_pid=\$!; sleep 0.4; \
-        python3 /work/client.py '$bind_port' '$oxidedns_dns_port' /work/summary.tsv /work/diff.txt /work/client.log; \
+        python3 /work/client.py '$bind_port' '$borondns_dns_port' /work/summary.tsv /work/diff.txt /work/client.log; \
         sleep 0.4; kill \$cap_pid >/dev/null 2>&1 || true; wait \$cap_pid >/dev/null 2>&1 || true"
 
 docker logs "$bind_container" >"$workdir/named.log" 2>&1 || true
-docker logs "$oxide_container" >"$workdir/oxidedns.log" 2>&1 || true
+docker logs "$oxide_container" >"$workdir/borondns.log" 2>&1 || true
 docker exec "$oxide_container" \
-    wget -qO- "http://127.0.0.1:$oxidedns_health_port/metrics" \
+    wget -qO- "http://127.0.0.1:$borondns_health_port/metrics" \
     >"$workdir/metrics.txt"
 
 if [[ ! -s "$workdir/dns-torture.pcapng" ]]; then
@@ -673,7 +673,7 @@ fi
 
 grep -F $'\tmatch' "$workdir/summary.tsv" >/dev/null
 if grep -F $'\tmismatch' "$workdir/summary.tsv" >/dev/null; then
-    echo "BIND/OxideDNS packet-content mismatch detected" >&2
+    echo "BIND/BoronDNS packet-content mismatch detected" >&2
     exit 1
 fi
 

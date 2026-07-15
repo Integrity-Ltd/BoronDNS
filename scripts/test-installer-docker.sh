@@ -2,12 +2,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-target_triple="${OXIDEDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
+target_triple="${BORONDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
 version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
-dist_dir="${OXIDEDNS_DIST_DIR:-$repo_root/target/dist}"
-archive="${OXIDEDNS_INSTALLER_ARCHIVE:-$dist_dir/oxidedns-$version-$target_triple.tar.xz}"
-image="${OXIDEDNS_INSTALLER_TEST_IMAGE:-ubuntu:24.04}"
-alpine_image="${OXIDEDNS_INSTALLER_ALPINE_TEST_IMAGE:-alpine:3.22}"
+dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
+archive="${BORONDNS_INSTALLER_ARCHIVE:-$dist_dir/borondns-$version-$target_triple.tar.xz}"
+image="${BORONDNS_INSTALLER_TEST_IMAGE:-ubuntu:24.04}"
+alpine_image="${BORONDNS_INSTALLER_ALPINE_TEST_IMAGE:-alpine:3.22}"
 workdir="$repo_root/target/installer-docker-test/$$"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -210,14 +210,14 @@ payload_dir="$(find "$workdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 
 docker run --rm -i \
     -v "$payload_dir:/pkg-source:ro" \
-    -e OXIDEDNS_ZONE=installer-smoke.example. \
-    -e OXIDEDNS_PRIMARY=127.0.0.1:9 \
-    -e OXIDEDNS_NOTIFY_SOURCE=127.0.0.1 \
-    -e OXIDEDNS_DNS_LISTEN=127.0.0.1:5300 \
-    -e OXIDEDNS_MGMT_LISTEN=127.0.0.1:18080 \
-    -e OXIDEDNS_TRANSFER_SOURCE=127.0.0.1:0 \
+    -e BORONDNS_ZONE=installer-smoke.example. \
+    -e BORONDNS_PRIMARY=127.0.0.1:9 \
+    -e BORONDNS_NOTIFY_SOURCE=127.0.0.1 \
+    -e BORONDNS_DNS_LISTEN=127.0.0.1:5300 \
+    -e BORONDNS_MGMT_LISTEN=127.0.0.1:18080 \
+    -e BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
     "$image" \
-    /bin/bash -euo pipefail <<'OXIDEDNS_UBUNTU_TEST'
+    /bin/bash -euo pipefail <<'BORONDNS_UBUNTU_TEST'
 			mutable_payload_root=/tmp/mutable-installer-payload
 			cp -a /pkg-source "$mutable_payload_root"
 			chown -R 1000:1000 "$mutable_payload_root"
@@ -236,7 +236,7 @@ docker run --rm -i \
 			chmod -R go-w /pkg
 			readiness_attempt_one_root=/tmp/readiness-attempt-one
 			rm -rf "$readiness_attempt_one_root"
-			if OXIDEDNS_INSTALLER_READINESS_ATTEMPTS=1 /pkg/install.sh install --yes --init none --no-start \
+			if BORONDNS_INSTALLER_READINESS_ATTEMPTS=1 /pkg/install.sh install --yes --init none --no-start \
 				--bin-dir "$readiness_attempt_one_root/bin" --config "$readiness_attempt_one_root/config.toml" \
 				>/tmp/readiness-attempt-one.log 2>&1; then
 				echo "installer accepted a one-probe readiness window" >&2
@@ -246,7 +246,7 @@ docker run --rm -i \
 			test ! -e "$readiness_attempt_one_root"
 
 			readiness_overflow_root=/tmp/readiness-overflow
-			if OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=18446744073709551618 \
+			if BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=18446744073709551618 \
 				/pkg/install.sh install --yes --init none --no-start \
 				--bin-dir "$readiness_overflow_root/bin" --config "$readiness_overflow_root/config.toml" \
 				>/tmp/readiness-overflow.log 2>&1; then
@@ -255,7 +255,7 @@ docker run --rm -i \
 			fi
 			grep -q "READINESS_PROBE_TIMEOUT_SECONDS must be a positive integer" /tmp/readiness-overflow.log
 			test ! -e "$readiness_overflow_root"
-			if OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=08 \
+			if BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=08 \
 				/pkg/install.sh install --yes --init none --no-start \
 				--bin-dir "$readiness_overflow_root/bin" --config "$readiness_overflow_root/config.toml" \
 				>/tmp/readiness-leading-zero.log 2>&1; then
@@ -275,15 +275,15 @@ docker run --rm -i \
 			chmod 0755 "$lock_collision_tools/systemctl"
 			for collision_kind in binary tool config document service; do
 				case "$collision_kind" in
-				binary) collision_lock="$lock_collision_root/bin/oxidedns" ;;
+				binary) collision_lock="$lock_collision_root/bin/borondns" ;;
 				tool) collision_lock="$lock_collision_root/bin/oxide-gun" ;;
 				config) collision_lock="$lock_collision_root/config/config.toml" ;;
-				document) collision_lock=/usr/share/doc/oxidedns/README.install.md ;;
-				service) collision_lock="$lock_collision_root/systemd/oxidedns.service" ;;
+				document) collision_lock=/usr/share/doc/borondns/README.install.md ;;
+				service) collision_lock="$lock_collision_root/systemd/borondns.service" ;;
 				esac
-				if OXIDEDNS_INSTALL_LOCK_FILE="$collision_lock" \
-					OXIDEDNS_SYSTEMD_DIR="$lock_collision_root/systemd" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$lock_collision_tools" \
+				if BORONDNS_INSTALL_LOCK_FILE="$collision_lock" \
+					BORONDNS_SYSTEMD_DIR="$lock_collision_root/systemd" \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$lock_collision_tools" \
 					/pkg/install.sh install --yes --init "$([ "$collision_kind" = service ] && echo systemd || echo none)" --no-start \
 					--bin-dir "$lock_collision_root/bin" \
 					--config "$lock_collision_root/config/config.toml" \
@@ -299,7 +299,7 @@ docker run --rm -i \
 			printf "hardlink sentinel\n" >"$lock_collision_root/hardlink/sentinel"
 			chmod 0644 "$lock_collision_root/hardlink/sentinel"
 			ln "$lock_collision_root/hardlink/sentinel" "$lock_collision_root/hardlink/installer.lock"
-			if OXIDEDNS_INSTALL_LOCK_FILE="$lock_collision_root/hardlink/installer.lock" \
+			if BORONDNS_INSTALL_LOCK_FILE="$lock_collision_root/hardlink/installer.lock" \
 				/pkg/install.sh install --yes --init none --no-start \
 				--bin-dir "$lock_collision_root/hardlink-bin" \
 				--config "$lock_collision_root/hardlink-config/config.toml" \
@@ -311,18 +311,18 @@ docker run --rm -i \
 			test "$(stat -c "%a:%h" "$lock_collision_root/hardlink/sentinel")" = "644:2"
 
 			/pkg/install.sh --yes --init none --no-start
-		test "$(stat -c "%a:%u" /run/lock/oxidedns)" = "700:0"
-		test "$(stat -c "%a:%u" /run/lock/oxidedns/installer.lock)" = "600:0"
-			/usr/local/bin/oxidedns --version
+		test "$(stat -c "%a:%u" /run/lock/borondns)" = "700:0"
+		test "$(stat -c "%a:%u" /run/lock/borondns/installer.lock)" = "600:0"
+			/usr/local/bin/borondns --version
 			/usr/local/bin/oxide-gun --version
-			test -f /usr/share/doc/oxidedns/README.install.md
-			test ! -L /usr/share/doc/oxidedns/README.install.md
-			grep -Fq "# OxideDNS Installer" /usr/share/doc/oxidedns/README.install.md
+			test -f /usr/share/doc/borondns/README.install.md
+			test ! -L /usr/share/doc/borondns/README.install.md
+			grep -Fq "# BoronDNS Installer" /usr/share/doc/borondns/README.install.md
 		/usr/local/bin/oxide-gun --self-test --max-packets 2 --target-qps 1000 --flush-interval-ms 0 >/tmp/oxide-gun-self-test.json
 		grep -q "\"record_type\"" /tmp/oxide-gun-self-test.json
 		grep -q "\"summary\"" /tmp/oxide-gun-self-test.json
-		/usr/local/bin/oxidedns check-config --config /etc/oxidedns-secondary/config.toml
-		grep -q "installer-smoke.example." /etc/oxidedns-secondary/config.toml
+		/usr/local/bin/borondns check-config --config /etc/borondns-secondary/config.toml
+		grep -q "installer-smoke.example." /etc/borondns-secondary/config.toml
 
 		path_shadow_dir=/tmp/installer-path-shadow
 		path_shadow_marker=/tmp/installer-path-shadow-invoked
@@ -338,34 +338,34 @@ docker run --rm -i \
 		rm -f "$path_shadow_marker"
 		PATH="$path_shadow_dir" PATH_SHADOW_MARKER="$path_shadow_marker" \
 			/pkg/install.sh update --yes --init none --no-start \
-			--user oxidedns-path-safe --group oxidedns-path-safe \
+			--user borondns-path-safe --group borondns-path-safe \
 			--bin-dir /tmp/path-safe/bin --config /tmp/path-safe/config/config.toml
 		test ! -e "$path_shadow_marker"
-		getent passwd oxidedns-path-safe >/dev/null
-		getent group oxidedns-path-safe >/dev/null
+		getent passwd borondns-path-safe >/dev/null
+		getent group borondns-path-safe >/dev/null
 
 			/pkg/install.sh update --yes --init none --no-start
-			/usr/local/bin/oxidedns check-config --config /etc/oxidedns-secondary/config.toml
+			/usr/local/bin/borondns check-config --config /etc/borondns-secondary/config.toml
 
 			config_permission_root=/tmp/installer-config-permissions
 			rm -rf "$config_permission_root"
 			mkdir -p -m 0755 "$config_permission_root"
-			groupadd --system oxidedns-config-other
+			groupadd --system borondns-config-other
 			for config_permission_case in root-root-0644 other-group-0640 world-readable-0644; do
 				case_root="$config_permission_root/$config_permission_case"
 				mkdir -p -m 0755 "$case_root/config"
-				cp /etc/oxidedns-secondary/config.toml "$case_root/config/config.toml"
+				cp /etc/borondns-secondary/config.toml "$case_root/config/config.toml"
 				case "$config_permission_case" in
 				root-root-0644)
 					chown root:root "$case_root/config/config.toml"
 					chmod 0644 "$case_root/config/config.toml"
 					;;
 				other-group-0640)
-					chown root:oxidedns-config-other "$case_root/config/config.toml"
+					chown root:borondns-config-other "$case_root/config/config.toml"
 					chmod 0640 "$case_root/config/config.toml"
 					;;
 				world-readable-0644)
-					chown root:oxidedns "$case_root/config/config.toml"
+					chown root:borondns "$case_root/config/config.toml"
 					chmod 0644 "$case_root/config/config.toml"
 					;;
 				esac
@@ -376,17 +376,17 @@ docker run --rm -i \
 					exit 1
 				fi
 				test "$case_config_hash" = "$(sha256sum "$case_root/config/config.toml")"
-				test ! -e "$case_root/bin/oxidedns"
+				test ! -e "$case_root/bin/borondns"
 			done
 
 			strict_config_root="$config_permission_root/strict-0440"
 			mkdir -p -m 0755 "$strict_config_root/config"
-			cp /etc/oxidedns-secondary/config.toml "$strict_config_root/config/config.toml"
-			chown root:oxidedns "$strict_config_root/config/config.toml"
+			cp /etc/borondns-secondary/config.toml "$strict_config_root/config/config.toml"
+			chown root:borondns "$strict_config_root/config/config.toml"
 			chmod 0440 "$strict_config_root/config/config.toml"
 			/pkg/install.sh update --yes --init none --no-start \
 				--bin-dir "$strict_config_root/bin" --config "$strict_config_root/config/config.toml"
-			test "$(stat -c "%a:%U:%G" "$strict_config_root/config/config.toml")" = "440:root:oxidedns"
+			test "$(stat -c "%a:%U:%G" "$strict_config_root/config/config.toml")" = "440:root:borondns"
 
 			mkdir -p /opt/custom-service-bin
 		printf "%s\n" "#!/bin/sh" \
@@ -394,7 +394,7 @@ docker run --rm -i \
 			"case \"\$1\" in is-active) echo inactive; exit 3 ;; is-enabled) echo not-found; exit 4 ;; *) exit 0 ;; esac" \
 			>/opt/custom-service-bin/systemctl
 		printf "%s\n" "#!/bin/sh" \
-			"case \"\$2\" in status) printf \" * rc-service: service \\\\140oxidedns\\\\047 does not exist\\n\"; exit 1 ;; *) exit 0 ;; esac" \
+			"case \"\$2\" in status) printf \" * rc-service: service \\\\140borondns\\\\047 does not exist\\n\"; exit 1 ;; *) exit 0 ;; esac" \
 			>/opt/custom-service-bin/rc-service
 		printf "%s\n" "#!/bin/sh" \
 			"case \"\$1\" in show) exit 0 ;; *) exit 0 ;; esac" \
@@ -406,20 +406,20 @@ docker run --rm -i \
 		custom_systemd_bin="$custom_systemd_root/bin-v1_2@blue+canary:53"
 		custom_systemd_config="$custom_systemd_root/etc-v1_2@blue+canary:53/config.toml"
 		custom_systemctl_log="$custom_systemd_root/systemctl.log"
-		PATH="$path_shadow_dir" PATH_SHADOW_MARKER="$path_shadow_marker" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+		PATH="$path_shadow_dir" PATH_SHADOW_MARKER="$path_shadow_marker" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
 			SYSTEMCTL_LOG="$custom_systemctl_log" \
-			OXIDEDNS_SERVICE_NAME=oxidedns-blue \
-			OXIDEDNS_SYSTEMD_DIR="$custom_systemd_root/units" \
+			BORONDNS_SERVICE_NAME=borondns-blue \
+			BORONDNS_SYSTEMD_DIR="$custom_systemd_root/units" \
 			/pkg/install.sh --yes --init systemd --no-start --bin-dir "$custom_systemd_bin" \
 			--config "$custom_systemd_config"
-		test -x "$custom_systemd_bin/oxidedns"
+		test -x "$custom_systemd_bin/borondns"
 		test -f "$custom_systemd_config"
-			grep -Fqx "ExecStart=$custom_systemd_bin/oxidedns serve --config $custom_systemd_config" \
-				"$custom_systemd_root/units/oxidedns-blue.service"
-			grep -Fqx "Documentation=file:/usr/share/doc/oxidedns/README.install.md" \
-				"$custom_systemd_root/units/oxidedns-blue.service"
-		grep -Fqx "is-active oxidedns-blue.service" "$custom_systemctl_log"
-		grep -Fqx "is-enabled oxidedns-blue.service" "$custom_systemctl_log"
+			grep -Fqx "ExecStart=$custom_systemd_bin/borondns serve --config $custom_systemd_config" \
+				"$custom_systemd_root/units/borondns-blue.service"
+			grep -Fqx "Documentation=file:/usr/share/doc/borondns/README.install.md" \
+				"$custom_systemd_root/units/borondns-blue.service"
+		grep -Fqx "is-active borondns-blue.service" "$custom_systemctl_log"
+		grep -Fqx "is-enabled borondns-blue.service" "$custom_systemctl_log"
 		if grep -Eq "^(enable|restart) " "$custom_systemctl_log"; then
 			echo "custom-path no-start install unexpectedly started the service" >&2
 			exit 1
@@ -435,9 +435,9 @@ docker run --rm -i \
 		rm -rf "$drift_root"
 		rm -rf "$drift_service_bin"
 		mkdir -p -m 0755 "$drift_service_bin" "$(dirname "$drift_config")"
-		cp /etc/oxidedns-secondary/config.toml "$drift_config"
-		cp /etc/oxidedns-secondary/config.toml "$drift_replacement"
-		chown root:oxidedns "$drift_config"
+		cp /etc/borondns-secondary/config.toml "$drift_config"
+		cp /etc/borondns-secondary/config.toml "$drift_replacement"
+		chown root:borondns "$drift_config"
 		chmod 0640 "$drift_config"
 		printf "%s\n" "#!/bin/sh" \
 			"printf \"%s\\n\" \"\$*\" >>\"\$DRIFT_SYSTEMCTL_LOG\"" \
@@ -453,10 +453,10 @@ docker run --rm -i \
 			"esac" \
 			"exit 0" >"$drift_service_bin/systemctl"
 		chmod 0755 "$drift_service_bin/systemctl"
-		if PATH="/tmp/drift-shadow:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$drift_service_bin" \
+		if PATH="/tmp/drift-shadow:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$drift_service_bin" \
 			DRIFT_SYSTEMCTL_LOG="$drift_log" DRIFT_MARKER="$drift_marker" \
 			DRIFT_CONFIG="$drift_config" DRIFT_REPLACEMENT="$drift_replacement" \
-			OXIDEDNS_SYSTEMD_DIR="$drift_root/units" \
+			BORONDNS_SYSTEMD_DIR="$drift_root/units" \
 			/pkg/install.sh update --yes --init systemd \
 			--bin-dir "$drift_root/bin" --config "$drift_config"; then
 			echo "installer started a service after validated config identity drift" >&2
@@ -471,46 +471,46 @@ docker run --rm -i \
 		custom_openrc_root=/tmp/custom-paths/openrc
 		custom_openrc_bin="$custom_openrc_root/bin-v1_2@blue+canary:53"
 		custom_openrc_config="$custom_openrc_root/etc-v1_2@blue+canary:53/config.toml"
-		PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
-			OXIDEDNS_OPENRC_DIR="$custom_openrc_root/init" \
+		PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+			BORONDNS_OPENRC_DIR="$custom_openrc_root/init" \
 			/pkg/install.sh --yes --init openrc --no-start --bin-dir "$custom_openrc_bin" \
 			--config "$custom_openrc_config"
-		test -x "$custom_openrc_bin/oxidedns"
+		test -x "$custom_openrc_bin/borondns"
 		test -f "$custom_openrc_config"
-		grep -Fqx "command=\"$custom_openrc_bin/oxidedns\"" \
-			"$custom_openrc_root/init/oxidedns"
+		grep -Fqx "command=\"$custom_openrc_bin/borondns\"" \
+			"$custom_openrc_root/init/borondns"
 		grep -Fqx "command_args=\"serve --config $custom_openrc_config\"" \
-			"$custom_openrc_root/init/oxidedns"
+			"$custom_openrc_root/init/borondns"
 
 		machine_account="installer-machine$"
 		machine_account_root=/opt/custom-paths/machine-account
-		PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
-			OXIDEDNS_OPENRC_DIR="$machine_account_root/init" \
+		PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+			BORONDNS_OPENRC_DIR="$machine_account_root/init" \
 			/pkg/install.sh --yes --init openrc --no-start \
 			--user "$machine_account" --group "$machine_account" \
 			--bin-dir "$machine_account_root/bin" \
 			--config "$machine_account_root/config/config.toml"
 		grep -Fqx "command_user=\"$machine_account:$machine_account\"" \
-			"$machine_account_root/init/oxidedns"
+			"$machine_account_root/init/borondns"
 
-		preflight_live_hash="$(sha256sum /usr/local/bin/oxidedns)"
-		preflight_config_hash="$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		preflight_live_hash="$(sha256sum /usr/local/bin/borondns)"
+		preflight_config_hash="$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		service_escape_root=/opt/installer-service-name-escape
 		rm -rf "$service_escape_root"
 		mkdir -p -m 0755 "$service_escape_root/a/units"
 		printf "service-name victim sentinel\n" >"$service_escape_root/victim.service"
 		service_escape_before="$(find "$service_escape_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-		if PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
-			OXIDEDNS_SYSTEMD_DIR="$service_escape_root/a/units" \
-			OXIDEDNS_SERVICE_NAME=../../victim \
+		if PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+			BORONDNS_SYSTEMD_DIR="$service_escape_root/a/units" \
+			BORONDNS_SERVICE_NAME=../../victim \
 			/pkg/install.sh update --yes --init systemd --no-start; then
 			echo "installer accepted a service-name path escape" >&2
 			exit 1
 		fi
 		test "$service_escape_before" = "$(find "$service_escape_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		service_suffix_root=/opt/installer-service-name-suffix
 		rm -rf "$service_suffix_root"
@@ -518,50 +518,50 @@ docker run --rm -i \
 		printf "service suffix victim sentinel\n" >"$service_suffix_root/sentinel"
 		service_suffix_before="$(find "$service_suffix_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
 		service_suffix_systemctl_log="$service_suffix_root/systemctl.log"
-		if PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+		if PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
 			SYSTEMCTL_LOG="$service_suffix_systemctl_log" \
-			OXIDEDNS_SYSTEMD_DIR="$service_suffix_root/units" \
-			OXIDEDNS_SERVICE_NAME=ssh.service \
+			BORONDNS_SYSTEMD_DIR="$service_suffix_root/units" \
+			BORONDNS_SERVICE_NAME=ssh.service \
 			/pkg/install.sh update --yes --init systemd --no-start; then
 			echo "installer accepted a service name with a systemd unit-type suffix" >&2
 			exit 1
 		fi
 		test "$service_suffix_before" = "$(find "$service_suffix_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
 		test ! -e "$service_suffix_systemctl_log"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
-		for noncanonical_service_name in oxidedns+blue oxidedns@; do
+		for noncanonical_service_name in borondns+blue borondns@; do
 			noncanonical_root="/opt/installer-noncanonical-${noncanonical_service_name//[^A-Za-z0-9]/_}"
 			rm -rf "$noncanonical_root"
 			mkdir -m 0755 "$noncanonical_root"
 			printf "noncanonical service sentinel\n" >"$noncanonical_root/sentinel"
 			noncanonical_before="$(find "$noncanonical_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-			if PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
-				OXIDEDNS_SYSTEMD_DIR="$noncanonical_root/units" \
-				OXIDEDNS_SERVICE_NAME="$noncanonical_service_name" \
+			if PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+				BORONDNS_SYSTEMD_DIR="$noncanonical_root/units" \
+				BORONDNS_SERVICE_NAME="$noncanonical_service_name" \
 				/pkg/install.sh update --yes --init systemd --no-start; then
 				echo "installer accepted noncanonical concrete systemd service name: $noncanonical_service_name" >&2
 				exit 1
 			fi
 			test "$noncanonical_before" = "$(find "$noncanonical_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		done
 
 		for unsafe_identifier_case in service user group; do
 			case "$unsafe_identifier_case" in
-			service) unsafe_identifier_env=OXIDEDNS_SERVICE_NAME ;;
-			user) unsafe_identifier_env=OXIDEDNS_RUN_USER ;;
-			group) unsafe_identifier_env=OXIDEDNS_RUN_GROUP ;;
+			service) unsafe_identifier_env=BORONDNS_SERVICE_NAME ;;
+			user) unsafe_identifier_env=BORONDNS_RUN_USER ;;
+			group) unsafe_identifier_env=BORONDNS_RUN_GROUP ;;
 			esac
 			if env "$unsafe_identifier_env=bad;identifier" \
 				/pkg/install.sh update --yes --init none --no-start; then
 				echo "installer accepted unsafe $unsafe_identifier_case identifier" >&2
 				exit 1
 			fi
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		done
 
 		for numeric_identity_case in user group; do
@@ -580,25 +580,25 @@ docker run --rm -i \
 			exit 1
 		fi
 
-		groupadd --system oxidedns-mismatch
-		if /pkg/install.sh update --yes --init none --no-start --group oxidedns-mismatch; then
+		groupadd --system borondns-mismatch
+		if /pkg/install.sh update --yes --init none --no-start --group borondns-mismatch; then
 			echo "installer accepted a runtime group that differs from the user primary group" >&2
 			exit 1
 		fi
-		groupadd --system oxidedns-extra
-		usermod -a -G oxidedns-extra oxidedns
+		groupadd --system borondns-extra
+		usermod -a -G borondns-extra borondns
 		if /pkg/install.sh update --yes --init none --no-start; then
 			echo "installer accepted a runtime user with unexpected supplementary groups" >&2
 			exit 1
 		fi
-		gpasswd -d oxidedns oxidedns-extra >/dev/null
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		gpasswd -d borondns borondns-extra >/dev/null
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		final_config_symlink_root=/opt/installer-final-config-symlink
 		rm -rf "$final_config_symlink_root"
 		mkdir -p -m 0755 "$final_config_symlink_root/trusted" "$final_config_symlink_root/mutable"
-		cp /etc/oxidedns-secondary/config.toml "$final_config_symlink_root/mutable/config.toml"
+		cp /etc/borondns-secondary/config.toml "$final_config_symlink_root/mutable/config.toml"
 		ln -s "$final_config_symlink_root/mutable/config.toml" "$final_config_symlink_root/trusted/config.toml"
 		final_config_target_hash="$(sha256sum "$final_config_symlink_root/mutable/config.toml")"
 		if /pkg/install.sh update --yes --init none --no-start \
@@ -608,22 +608,22 @@ docker run --rm -i \
 		fi
 		test -L "$final_config_symlink_root/trusted/config.toml"
 		test "$final_config_target_hash" = "$(sha256sum "$final_config_symlink_root/mutable/config.toml")"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
 
 		shared_lock_root=/tmp/installer-lock-shared-parent
 		rm -rf "$shared_lock_root"
 		mkdir -m 0755 "$shared_lock_root"
 		printf "shared lock parent sentinel\n" >"$shared_lock_root/sentinel"
 		shared_lock_before="$(find "$shared_lock_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-		if OXIDEDNS_INSTALL_LOCK_FILE="$shared_lock_root/installer.lock" \
+		if BORONDNS_INSTALL_LOCK_FILE="$shared_lock_root/installer.lock" \
 			/pkg/install.sh update --yes --init none --no-start; then
 			echo "installer accepted a lock file under an arbitrary shared parent" >&2
 			exit 1
 		fi
 		test "$shared_lock_before" = "$(find "$shared_lock_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
 		test ! -e "$shared_lock_root/installer.lock"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		for recovery_symlink_kind in final ancestor; do
 			recovery_symlink_root="/tmp/installer-recovery-$recovery_symlink_kind"
@@ -642,15 +642,15 @@ docker run --rm -i \
 				;;
 			esac
 			recovery_symlink_before="$(find "$recovery_symlink_root" -printf "%P:%y:%m:%s:%l\n" | LC_ALL=C sort)"
-			if OXIDEDNS_STATE_DIR="$recovery_symlink_root/state" \
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$recovery_path" \
+			if BORONDNS_STATE_DIR="$recovery_symlink_root/state" \
+				BORONDNS_INSTALL_RECOVERY_DIR="$recovery_path" \
 				/pkg/install.sh update --yes --init none --no-start; then
 				echo "installer accepted a $recovery_symlink_kind recovery-directory symlink" >&2
 				exit 1
 			fi
 			test "$recovery_symlink_before" = "$(find "$recovery_symlink_root" -printf "%P:%y:%m:%s:%l\n" | LC_ALL=C sort)"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		done
 
 		shared_recovery_root=/tmp/installer-recovery-shared
@@ -659,15 +659,15 @@ docker run --rm -i \
 			"$shared_recovery_root/recovery"
 		printf "shared recovery sentinel\n" >"$shared_recovery_root/recovery/sentinel"
 		shared_recovery_before="$(find "$shared_recovery_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-		if OXIDEDNS_STATE_DIR="$shared_recovery_root/state" \
-			OXIDEDNS_INSTALL_RECOVERY_DIR="$shared_recovery_root/recovery" \
+		if BORONDNS_STATE_DIR="$shared_recovery_root/state" \
+			BORONDNS_INSTALL_RECOVERY_DIR="$shared_recovery_root/recovery" \
 			/pkg/install.sh update --yes --init none --no-start; then
 			echo "installer accepted an arbitrary shared recovery directory" >&2
 			exit 1
 		fi
 		test "$shared_recovery_before" = "$(find "$shared_recovery_root" -printf "%P:%y:%m:%s\n" | LC_ALL=C sort)"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		lock_symlink_root=/tmp/installer-lock-symlink
 		rm -rf "$lock_symlink_root"
@@ -675,15 +675,15 @@ docker run --rm -i \
 		printf "lock victim sentinel\n" >"$lock_symlink_root/victim"
 		lock_victim_hash="$(sha256sum "$lock_symlink_root/victim")"
 		ln -s "$lock_symlink_root/victim" "$lock_symlink_root/installer.lock"
-		if OXIDEDNS_INSTALL_LOCK_FILE="$lock_symlink_root/installer.lock" \
+		if BORONDNS_INSTALL_LOCK_FILE="$lock_symlink_root/installer.lock" \
 			/pkg/install.sh update --yes --init none --no-start; then
 			echo "installer followed a final lock-file symlink" >&2
 			exit 1
 		fi
 		test "$lock_victim_hash" = "$(sha256sum "$lock_symlink_root/victim")"
 		test -L "$lock_symlink_root/installer.lock"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		lock_ancestor_root=/tmp/installer-lock-ancestor
 		rm -rf "$lock_ancestor_root"
@@ -692,7 +692,7 @@ docker run --rm -i \
 		printf "ancestor victim sentinel\n" >"$lock_ancestor_root/victim/sentinel"
 		lock_ancestor_before="$(find "$lock_ancestor_root/victim" -printf "%P:%y:%s\n" | LC_ALL=C sort)"
 		ln -s "$lock_ancestor_root/victim" "$lock_ancestor_root/redirect"
-		if OXIDEDNS_INSTALL_LOCK_FILE="$lock_ancestor_root/redirect/installer.lock" \
+		if BORONDNS_INSTALL_LOCK_FILE="$lock_ancestor_root/redirect/installer.lock" \
 			/pkg/install.sh update --yes --init none --no-start; then
 			echo "installer followed a lock-directory ancestor symlink" >&2
 			exit 1
@@ -710,24 +710,24 @@ docker run --rm -i \
 			systemd-final)
 				ln -s "$service_symlink_root/victim" "$service_symlink_root/units"
 				service_init=systemd
-				service_env_name=OXIDEDNS_SYSTEMD_DIR
+				service_env_name=BORONDNS_SYSTEMD_DIR
 				service_dir="$service_symlink_root/units"
 				;;
 			openrc-ancestor)
 				ln -s "$service_symlink_root/victim" "$service_symlink_root/redirect"
 				service_init=openrc
-				service_env_name=OXIDEDNS_OPENRC_DIR
+				service_env_name=BORONDNS_OPENRC_DIR
 				service_dir="$service_symlink_root/redirect/init"
 				;;
 			esac
-			if env PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin "$service_env_name=$service_dir" \
+			if env PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin "$service_env_name=$service_dir" \
 				/pkg/install.sh update --yes --init "$service_init" --no-start; then
 				echo "installer accepted $service_symlink_kind service-directory redirection" >&2
 				exit 1
 			fi
 			test "$service_victim_before" = "$(find "$service_symlink_root/victim" -printf "%P:%y:%s\n" | LC_ALL=C sort)"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		done
 
 		service_target_root=/opt/installer-service-target-link
@@ -735,16 +735,16 @@ docker run --rm -i \
 mkdir -p -m 0755 "$service_target_root/units"
 		printf "target victim sentinel\n" >"$service_target_root/victim"
 		service_target_victim_hash="$(sha256sum "$service_target_root/victim")"
-		ln -s "$service_target_root/victim" "$service_target_root/units/oxidedns.service"
-		if PATH="/tmp/custom-service-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin OXIDEDNS_SYSTEMD_DIR="$service_target_root/units" \
+		ln -s "$service_target_root/victim" "$service_target_root/units/borondns.service"
+		if PATH="/tmp/custom-service-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin BORONDNS_SYSTEMD_DIR="$service_target_root/units" \
 			/pkg/install.sh update --yes --init systemd --no-start; then
 			echo "installer accepted a symlinked final systemd service target" >&2
 			exit 1
 		fi
 		test "$service_target_victim_hash" = "$(sha256sum "$service_target_root/victim")"
-		test -L "$service_target_root/units/oxidedns.service"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test -L "$service_target_root/units/borondns.service"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		printf -v unsafe_single_quote "%b" "/tmp/unsafe\\x27path"
 		printf -v unsafe_newline "%b" "/tmp/unsafe\\npath"
@@ -770,23 +770,23 @@ mkdir -p -m 0755 "$service_target_root/units"
 			unsafe_index=$((unsafe_index + 1))
 			unsafe_lock="/tmp/unsafe-installer-preflight-$unsafe_index.lock"
 			rm -f "$unsafe_lock"
-			if OXIDEDNS_INSTALL_LOCK_FILE="$unsafe_lock" \
+			if BORONDNS_INSTALL_LOCK_FILE="$unsafe_lock" \
 				/pkg/install.sh update --yes --init none --no-start --bin-dir "$unsafe_path"; then
 				echo "installer accepted unsafe --bin-dir path at case $unsafe_index" >&2
 				exit 1
 			fi
 			test ! -e "$unsafe_lock"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
-			if OXIDEDNS_INSTALL_LOCK_FILE="$unsafe_lock" \
+			if BORONDNS_INSTALL_LOCK_FILE="$unsafe_lock" \
 				/pkg/install.sh update --yes --init none --no-start --config "$unsafe_path"; then
 				echo "installer accepted unsafe --config path at case $unsafe_index" >&2
 				exit 1
 			fi
 			test ! -e "$unsafe_lock"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		done
 
 		symlink_case=0
@@ -800,7 +800,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			mkdir -p "$symlink_victim"
 			printf "victim sentinel\n" >"$symlink_victim/sentinel"
 			symlink_bin=/usr/local/bin
-			symlink_config=/etc/oxidedns-secondary/config.toml
+			symlink_config=/etc/borondns-secondary/config.toml
 			case "$symlink_kind" in
 			bin-final)
 				ln -s "$symlink_victim" "$symlink_redirect"
@@ -820,7 +820,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				;;
 			esac
 			symlink_victim_before="$(find "$symlink_victim" -printf "%P:%y:%s\n" | LC_ALL=C sort)"
-			if OXIDEDNS_INSTALL_LOCK_FILE="$symlink_lock" \
+			if BORONDNS_INSTALL_LOCK_FILE="$symlink_lock" \
 				/pkg/install.sh update --yes --init none --no-start \
 				--bin-dir "$symlink_bin" --config "$symlink_config"; then
 				echo "installer accepted $symlink_kind directory redirection" >&2
@@ -829,23 +829,23 @@ mkdir -p -m 0755 "$service_target_root/units"
 			test ! -e "$symlink_lock"
 			test -L "$symlink_redirect"
 			test "$symlink_victim_before" = "$(find "$symlink_victim" -printf "%P:%y:%s\n" | LC_ALL=C sort)"
-			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-			test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+			test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+			test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 			if find "$symlink_victim" -name "*.rollback.*" -o -name ".*.install.*" | grep -q .; then
 				echo "rejected $symlink_kind redirection left transaction files in victim" >&2
 				exit 1
 			fi
 		done
 
-		live_hash="$(sha256sum /usr/local/bin/oxidedns)"
+		live_hash="$(sha256sum /usr/local/bin/borondns)"
 		cp -a /pkg /tmp/invalid-pkg
-		printf "#!/bin/sh\nexit 78\n" >/tmp/invalid-pkg/bin/oxidedns
-		chmod 0755 /tmp/invalid-pkg/bin/oxidedns
+		printf "#!/bin/sh\nexit 78\n" >/tmp/invalid-pkg/bin/borondns
+		chmod 0755 /tmp/invalid-pkg/bin/borondns
 		if /tmp/invalid-pkg/install.sh update --yes --init none --no-start; then
 			echo "installer accepted an invalid candidate binary" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
 		live_gun_hash="$(sha256sum /usr/local/bin/oxide-gun)"
 		cp -a /pkg /tmp/invalid-gun-pkg
 		printf "#!/bin/sh\nexit 0\n" >/tmp/invalid-gun-pkg/bin/oxide-gun
@@ -867,39 +867,39 @@ mkdir -p -m 0755 "$service_target_root/units"
 		fi
 		test "$preserved_bin_metadata" = "$(stat -c "%a:%u:%g" /tmp/preserved-bin)"
 		test "$preserved_config_metadata" = "$(stat -c "%a:%u:%g" /tmp/preserved-config)"
-		test ! -e /tmp/preserved-bin/oxidedns
+		test ! -e /tmp/preserved-bin/borondns
 		test ! -e /tmp/preserved-config/config.toml
 
 		mkdir -p /opt/fakebin /tmp/openrc
-		printf "old-openrc-service\n" >/tmp/openrc/oxidedns
+		printf "old-openrc-service\n" >/tmp/openrc/borondns
 		printf "%s\n" "#!/bin/sh" "case \"\$2\" in status) echo \" * status: started\"; exit 0 ;; stop|start) exit 0 ;; restart) exit 1 ;; *) exit 0 ;; esac" >/opt/fakebin/rc-service
 		printf "%s\n" "#!/bin/sh" \
-			"case \"\$1\" in add) test \"\${FAKE_RC_UPDATE_ADD_FAIL:-0}\" != 1 || exit 41; touch /tmp/openrc-enabled ;; del) rm -f /tmp/openrc-enabled ;; show) test ! -e /tmp/openrc-enabled || echo oxidedns ;; esac" \
+			"case \"\$1\" in add) test \"\${FAKE_RC_UPDATE_ADD_FAIL:-0}\" != 1 || exit 41; touch /tmp/openrc-enabled ;; del) rm -f /tmp/openrc-enabled ;; show) test ! -e /tmp/openrc-enabled || echo borondns ;; esac" \
 			>/opt/fakebin/rc-update
 		chmod 0755 /opt/fakebin/rc-service /opt/fakebin/rc-update
 		cp -a /pkg /tmp/rollback-pkg
-		printf x >>/tmp/rollback-pkg/bin/oxidedns
-		rollback_hash="$(sha256sum /tmp/rollback-pkg/bin/oxidedns)"
+		printf x >>/tmp/rollback-pkg/bin/borondns
+		rollback_hash="$(sha256sum /tmp/rollback-pkg/bin/borondns)"
 		rollback_hash="${rollback_hash%% *}"
 		sed -i "s/^binary_sha256=.*/binary_sha256=$rollback_hash/" /tmp/rollback-pkg/manifest.txt
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin OXIDEDNS_OPENRC_DIR=/tmp/openrc \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin BORONDNS_OPENRC_DIR=/tmp/openrc \
 			/tmp/rollback-pkg/install.sh update --yes --init openrc; then
 			echo "installer did not fail when the replacement service failed to start" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		grep -qx "old-openrc-service" /tmp/openrc/oxidedns
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		grep -qx "old-openrc-service" /tmp/openrc/borondns
 		test ! -e /tmp/openrc-enabled
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_RC_UPDATE_ADD_FAIL=1 OXIDEDNS_OPENRC_DIR=/tmp/openrc \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_RC_UPDATE_ADD_FAIL=1 BORONDNS_OPENRC_DIR=/tmp/openrc \
 			/tmp/rollback-pkg/install.sh update --yes --init openrc; then
 			echo "installer ignored an OpenRC enablement failure" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		grep -qx "old-openrc-service" /tmp/openrc/oxidedns
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		grep -qx "old-openrc-service" /tmp/openrc/borondns
 		test ! -e /tmp/openrc-enabled
 		touch /tmp/openrc-enabled
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin OXIDEDNS_OPENRC_DIR=/tmp/openrc \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin BORONDNS_OPENRC_DIR=/tmp/openrc \
 			/tmp/rollback-pkg/install.sh update --yes --init openrc; then
 			echo "installer did not fail during enabled OpenRC rollback test" >&2
 			exit 1
@@ -907,7 +907,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 		test -e /tmp/openrc-enabled
 
 		mkdir -p /tmp/systemd /tmp/systemd-state
-		printf "old-systemd-service\n" >/tmp/systemd/oxidedns.service
+		printf "old-systemd-service\n" >/tmp/systemd/borondns.service
 		touch /tmp/systemd-state/active
 		printf "%s\n" "#!/bin/sh" \
 			"state=\${FAKE_SYSTEMD_STATE:?}" \
@@ -931,8 +931,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 			"case \"\$1\" in is-active) echo inactive; exit 3 ;; is-enabled) echo disabled; exit 1 ;; *) exit 0 ;; esac" \
 			>/opt/service-swap-bin/systemctl
 		chmod 0755 /opt/service-swap-bin/systemctl
-		if PATH="/tmp/service-swap-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/service-swap-bin FAKE_SERVICE_SWAP_ROOT="$service_swap_root" \
-			OXIDEDNS_SYSTEMD_DIR="$service_swap_root/units" \
+		if PATH="/tmp/service-swap-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/service-swap-bin FAKE_SERVICE_SWAP_ROOT="$service_swap_root" \
+			BORONDNS_SYSTEMD_DIR="$service_swap_root/units" \
 			/pkg/install.sh update --yes --init systemd --no-start; then
 			echo "installer accepted a swapped systemd service directory" >&2
 			exit 1
@@ -940,8 +940,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 		test -L "$service_swap_root/units"
 		test -d "$service_swap_root/displaced-units"
 		test "$service_swap_victim_before" = "$(find "$service_swap_root/victim" -printf "%P:%y:%s\n" | LC_ALL=C sort)"
-		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$preflight_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$preflight_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$preflight_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		# Rollback and EXIT cleanup must bind writes to the captured bin/config
 		# directory inode. A replacement directory may contain unrelated operator
@@ -971,17 +971,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$installer_swap_root"
 			mkdir -m 0755 "$installer_swap_root"
 			common_swap_env=(
-				OXIDEDNS_BIN_DIR="$installer_swap_root/bin"
-				OXIDEDNS_CONFIG_DIR="$installer_swap_root/config"
-				OXIDEDNS_CONFIG_FILE="$installer_swap_root/config/config.toml"
-				OXIDEDNS_DOC_DIR="$installer_swap_root/doc"
-				OXIDEDNS_SYSTEMD_DIR="$installer_swap_root/systemd"
-				OXIDEDNS_INSTALL_LOCK_FILE="$installer_swap_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$installer_swap_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$installer_swap_root/recovery"
+				BORONDNS_BIN_DIR="$installer_swap_root/bin"
+				BORONDNS_CONFIG_DIR="$installer_swap_root/config"
+				BORONDNS_CONFIG_FILE="$installer_swap_root/config/config.toml"
+				BORONDNS_DOC_DIR="$installer_swap_root/doc"
+				BORONDNS_SYSTEMD_DIR="$installer_swap_root/systemd"
+				BORONDNS_INSTALL_LOCK_FILE="$installer_swap_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$installer_swap_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$installer_swap_root/recovery"
 			)
 			env "${common_swap_env[@]}" /pkg/install.sh install --yes --init none --no-start
-			installer_swap_bin_hash="$(sha256sum "$installer_swap_root/bin/oxidedns")"
+			installer_swap_bin_hash="$(sha256sum "$installer_swap_root/bin/borondns")"
 			installer_swap_config_hash="$(sha256sum "$installer_swap_root/config/config.toml")"
 			installer_swap_action=update
 			if test "$installer_swap_kind" = config; then
@@ -989,7 +989,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			fi
 			if env "${common_swap_env[@]}" \
 				PATH="/opt/installer-dir-swap-tools:$PATH" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-dir-swap-tools \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-dir-swap-tools \
 				FAKE_INSTALLER_DIR_SWAP_ROOT="$installer_swap_root" \
 				FAKE_INSTALLER_DIR_SWAP_KIND="$installer_swap_kind" \
 				/tmp/rollback-pkg/install.sh "$installer_swap_action" --yes --init systemd \
@@ -1035,7 +1035,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 					exit 1
 				fi
 			else
-				if test "$installer_swap_bin_hash" != "$(sha256sum "$installer_swap_root/bin/oxidedns")"; then
+				if test "$installer_swap_bin_hash" != "$(sha256sum "$installer_swap_root/bin/borondns")"; then
 					echo "config directory swap did not restore the binary" >&2
 					cat "$installer_swap_root/update.log" >&2
 					exit 1
@@ -1050,13 +1050,13 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$precallback_file_swap_root"
 			mkdir -m 0755 "$precallback_file_swap_root" /opt/installer-precallback-file-swap-tools
 			precallback_file_swap_env=(
-				OXIDEDNS_BIN_DIR="$precallback_file_swap_root/bin"
-				OXIDEDNS_CONFIG_DIR="$precallback_file_swap_root/config"
-				OXIDEDNS_CONFIG_FILE="$precallback_file_swap_root/config/config.toml"
-				OXIDEDNS_SYSTEMD_DIR="$precallback_file_swap_root/systemd"
-				OXIDEDNS_INSTALL_LOCK_FILE="$precallback_file_swap_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$precallback_file_swap_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$precallback_file_swap_root/recovery"
+				BORONDNS_BIN_DIR="$precallback_file_swap_root/bin"
+				BORONDNS_CONFIG_DIR="$precallback_file_swap_root/config"
+				BORONDNS_CONFIG_FILE="$precallback_file_swap_root/config/config.toml"
+				BORONDNS_SYSTEMD_DIR="$precallback_file_swap_root/systemd"
+				BORONDNS_INSTALL_LOCK_FILE="$precallback_file_swap_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$precallback_file_swap_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$precallback_file_swap_root/recovery"
 			)
 			env "${precallback_file_swap_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			printf "%s\n" "#!/bin/sh" \
@@ -1064,8 +1064,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"case \"\$1\" in" \
 				"is-active)" \
 				"  if test ! -e \"\$root/swapped\"; then" \
-				"    mv \"\$root/bin/oxidedns\" \"\$root/precallback-original\"" \
-				"    printf \"precallback replacement victim\\n\" >\"\$root/bin/oxidedns\"" \
+				"    mv \"\$root/bin/borondns\" \"\$root/precallback-original\"" \
+				"    printf \"precallback replacement victim\\n\" >\"\$root/bin/borondns\"" \
 				"    touch \"\$root/swapped\"" \
 				"  fi" \
 				"  echo inactive; exit 3 ;;" \
@@ -1073,7 +1073,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"*) exit 0 ;; esac" > /opt/installer-precallback-file-swap-tools/systemctl
 			chmod 0755 /opt/installer-precallback-file-swap-tools/systemctl
 			if env "${precallback_file_swap_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-precallback-file-swap-tools \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-precallback-file-swap-tools \
 				FAKE_INSTALLER_PRECALLBACK_SWAP_ROOT="$precallback_file_swap_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init systemd --no-start \
 				>"$precallback_file_swap_root/update.log" 2>&1; then
@@ -1081,7 +1081,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			grep -q "changed across an installer callback" "$precallback_file_swap_root/update.log"
-			grep -qx "precallback replacement victim" "$precallback_file_swap_root/bin/oxidedns"
+			grep -qx "precallback replacement victim" "$precallback_file_swap_root/bin/borondns"
 			test -x "$precallback_file_swap_root/precallback-original"
 
 			# Revalidation inside the final mutation must bind both the target leaf and
@@ -1093,9 +1093,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 			printf "%s\n" "#!/bin/sh" \
 				"root=\${FINAL_ACTIVATION_RACE_ROOT:?}" \
 				"if test \"\$2\" = activate-existing && test ! -e \"\$root/swapped\"; then" \
-				"  mv \"\$root/bin/oxidedns\" \"\$root/displaced-original\"" \
-				"  printf \"final activation victim\\n\" >\"\$root/bin/oxidedns\"" \
-				"  chmod 0755 \"\$root/bin/oxidedns\"" \
+				"  mv \"\$root/bin/borondns\" \"\$root/displaced-original\"" \
+				"  printf \"final activation victim\\n\" >\"\$root/bin/borondns\"" \
+				"  chmod 0755 \"\$root/bin/borondns\"" \
 				"  touch \"\$root/swapped\"" \
 				"fi" \
 				"exec /usr/bin/perl \"\$@\"" >"$final_activation_race_tools/perl"
@@ -1104,16 +1104,16 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$final_activation_race_root"
 			mkdir -m 0755 "$final_activation_race_root"
 			final_activation_race_env=(
-				OXIDEDNS_BIN_DIR="$final_activation_race_root/bin"
-				OXIDEDNS_CONFIG_DIR="$final_activation_race_root/config"
-				OXIDEDNS_CONFIG_FILE="$final_activation_race_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$final_activation_race_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$final_activation_race_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$final_activation_race_root/recovery"
+				BORONDNS_BIN_DIR="$final_activation_race_root/bin"
+				BORONDNS_CONFIG_DIR="$final_activation_race_root/config"
+				BORONDNS_CONFIG_FILE="$final_activation_race_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$final_activation_race_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$final_activation_race_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$final_activation_race_root/recovery"
 			)
 			env "${final_activation_race_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			if env "${final_activation_race_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_activation_race_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_activation_race_tools" \
 				FINAL_ACTIVATION_RACE_ROOT="$final_activation_race_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start \
 				>"$final_activation_race_root/update.log" 2>&1; then
@@ -1121,7 +1121,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			grep -q "existing activation target identity changed" "$final_activation_race_root/update.log"
-			grep -qx "final activation victim" "$final_activation_race_root/bin/oxidedns"
+			grep -qx "final activation victim" "$final_activation_race_root/bin/borondns"
 			test -x "$final_activation_race_root/displaced-original"
 
 			final_parent_race_tools=/opt/installer-final-parent-race-tools
@@ -1132,7 +1132,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"if test \"\$2\" = activate-existing && test ! -e \"\$root/swapped\"; then" \
 				"  mv \"\$root/bin\" \"\$root/displaced-bin\"" \
 				"  mkdir -m 0755 \"\$root/bin\"" \
-				"  printf \"final parent victim\\n\" >\"\$root/bin/oxidedns\"" \
+				"  printf \"final parent victim\\n\" >\"\$root/bin/borondns\"" \
 				"  touch \"\$root/swapped\"" \
 				"fi" \
 				"exec /usr/bin/perl \"\$@\"" >"$final_parent_race_tools/perl"
@@ -1141,16 +1141,16 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$final_parent_race_root"
 			mkdir -m 0755 "$final_parent_race_root"
 			final_parent_race_env=(
-				OXIDEDNS_BIN_DIR="$final_parent_race_root/bin"
-				OXIDEDNS_CONFIG_DIR="$final_parent_race_root/config"
-				OXIDEDNS_CONFIG_FILE="$final_parent_race_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$final_parent_race_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$final_parent_race_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$final_parent_race_root/recovery"
+				BORONDNS_BIN_DIR="$final_parent_race_root/bin"
+				BORONDNS_CONFIG_DIR="$final_parent_race_root/config"
+				BORONDNS_CONFIG_FILE="$final_parent_race_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$final_parent_race_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$final_parent_race_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$final_parent_race_root/recovery"
 			)
 			env "${final_parent_race_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			if env "${final_parent_race_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_parent_race_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_parent_race_tools" \
 				FINAL_PARENT_RACE_ROOT="$final_parent_race_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start \
 				>"$final_parent_race_root/update.log" 2>&1; then
@@ -1158,8 +1158,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			grep -q "installer parent-directory identity changed" "$final_parent_race_root/update.log"
-			grep -qx "final parent victim" "$final_parent_race_root/bin/oxidedns"
-			test -x "$final_parent_race_root/displaced-bin/oxidedns"
+			grep -qx "final parent victim" "$final_parent_race_root/bin/borondns"
+			test -x "$final_parent_race_root/displaced-bin/borondns"
 
 			# TERM is deferred by Bash while the foreground syscall helper runs. The
 			# helper can therefore finish its rename before the pending trap executes;
@@ -1179,15 +1179,15 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"exec /usr/bin/perl \"\$@\"" >"$signal_window_tools/perl"
 			chmod 0755 "$signal_window_tools/perl"
 			signal_window_env=(
-				OXIDEDNS_BIN_DIR="$signal_window_root/bin"
-				OXIDEDNS_CONFIG_DIR="$signal_window_root/config"
-				OXIDEDNS_CONFIG_FILE="$signal_window_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$signal_window_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$signal_window_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$signal_window_root/recovery"
+				BORONDNS_BIN_DIR="$signal_window_root/bin"
+				BORONDNS_CONFIG_DIR="$signal_window_root/config"
+				BORONDNS_CONFIG_FILE="$signal_window_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$signal_window_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$signal_window_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$signal_window_root/recovery"
 			)
 			env "${signal_window_env[@]}" /pkg/install.sh install --yes --init none --no-start
-			signal_old_binary_hash="$(sha256sum "$signal_window_root/bin/oxidedns")"
+			signal_old_binary_hash="$(sha256sum "$signal_window_root/bin/borondns")"
 			signal_old_tool_hash="$(sha256sum "$signal_window_root/bin/oxide-gun")"
 
 			run_signal_window_case() {
@@ -1198,7 +1198,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				marker="$signal_window_root/$case_name.helper-complete"
 				rm -f "$marker"
 				env "${signal_window_env[@]}" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$signal_window_tools" \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$signal_window_tools" \
 					INSTALLER_SIGNAL_HELPER_MARKER="$marker" \
 					INSTALLER_SIGNAL_HELPER_OPERATION="$operation" \
 					INSTALLER_SIGNAL_HELPER_LEAF="$leaf" \
@@ -1228,9 +1228,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				test "$installer_status" -eq 143
 			}
 
-			run_signal_window_case existing-activation activate-existing .oxidedns.install. \
+			run_signal_window_case existing-activation activate-existing .borondns.install. \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start
-			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/oxidedns")"
+			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/borondns")"
 			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/oxide-gun")"
 			test -z "$(find "$signal_window_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 			test -z "$(find "$signal_window_root/recovery" -type f -name "rollback-*.env" -print -quit)"
@@ -1239,32 +1239,32 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$signal_absent_root"
 			mkdir -m 0755 "$signal_absent_root"
 			signal_window_env=(
-				OXIDEDNS_BIN_DIR="$signal_absent_root/bin"
-				OXIDEDNS_CONFIG_DIR="$signal_absent_root/config"
-				OXIDEDNS_CONFIG_FILE="$signal_absent_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$signal_absent_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$signal_absent_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$signal_absent_root/recovery"
+				BORONDNS_BIN_DIR="$signal_absent_root/bin"
+				BORONDNS_CONFIG_DIR="$signal_absent_root/config"
+				BORONDNS_CONFIG_FILE="$signal_absent_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$signal_absent_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$signal_absent_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$signal_absent_root/recovery"
 			)
-			run_signal_window_case absent-activation activate-absent .oxidedns.install. \
+			run_signal_window_case absent-activation activate-absent .borondns.install. \
 				/pkg/install.sh install --yes --init none --no-start
-			test ! -e "$signal_absent_root/bin/oxidedns"
+			test ! -e "$signal_absent_root/bin/borondns"
 			test ! -e "$signal_absent_root/bin/oxide-gun"
 			test -z "$(find "$signal_absent_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 
 			signal_window_env=(
-				OXIDEDNS_BIN_DIR="$signal_window_root/bin"
-				OXIDEDNS_CONFIG_DIR="$signal_window_root/config"
-				OXIDEDNS_CONFIG_FILE="$signal_window_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$signal_window_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$signal_window_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$signal_window_root/recovery"
+				BORONDNS_BIN_DIR="$signal_window_root/bin"
+				BORONDNS_CONFIG_DIR="$signal_window_root/config"
+				BORONDNS_CONFIG_FILE="$signal_window_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$signal_window_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$signal_window_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$signal_window_root/recovery"
 			)
-			run_signal_window_case uninstall-removal move oxidedns \
+			run_signal_window_case uninstall-removal move borondns \
 				/pkg/install.sh uninstall --yes --init none --no-start
-			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/oxidedns")"
+			test "$signal_old_binary_hash" = "$(sha256sum "$signal_window_root/bin/borondns")"
 			test "$signal_old_tool_hash" = "$(sha256sum "$signal_window_root/bin/oxide-gun")"
-			test -f /usr/share/doc/oxidedns/README.install.md
+			test -f /usr/share/doc/borondns/README.install.md
 			test -z "$(find "$signal_window_root" -type f -name "*.rollback.*" -print -quit)"
 			test -z "$(find "$signal_window_root/recovery" -type f -name "rollback-*.env" -print -quit)"
 
@@ -1287,19 +1287,19 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"exec /usr/bin/perl \"\$@\"" >"$late_error_tools/perl"
 			chmod 0755 "$late_error_tools/perl"
 			late_error_env=(
-				OXIDEDNS_BIN_DIR="$late_error_root/bin"
-				OXIDEDNS_CONFIG_DIR="$late_error_root/config"
-				OXIDEDNS_CONFIG_FILE="$late_error_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$late_error_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$late_error_root/state-dir"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$late_error_root/recovery"
+				BORONDNS_BIN_DIR="$late_error_root/bin"
+				BORONDNS_CONFIG_DIR="$late_error_root/config"
+				BORONDNS_CONFIG_FILE="$late_error_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$late_error_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$late_error_root/state-dir"
+				BORONDNS_INSTALL_RECOVERY_DIR="$late_error_root/recovery"
 			)
 			env "${late_error_env[@]}" /pkg/install.sh install --yes --init none --no-start
-			late_error_old_binary_hash="$(sha256sum "$late_error_root/bin/oxidedns")"
+			late_error_old_binary_hash="$(sha256sum "$late_error_root/bin/borondns")"
 			late_error_old_tool_hash="$(sha256sum "$late_error_root/bin/oxide-gun")"
 			mkdir -m 0755 "$late_error_root/fault-state"
 			if env "${late_error_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
 				INSTALLER_LATE_ERROR_STATE="$late_error_root/fault-state" \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start \
 				>"$late_error_root/update.log" 2>&1; then
@@ -1308,7 +1308,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			fi
 			test -e "$late_error_root/fault-state/activate"
 			test -e "$late_error_root/fault-state/exchange"
-			test "$late_error_old_binary_hash" = "$(sha256sum "$late_error_root/bin/oxidedns")"
+			test "$late_error_old_binary_hash" = "$(sha256sum "$late_error_root/bin/borondns")"
 			test "$late_error_old_tool_hash" = "$(sha256sum "$late_error_root/bin/oxide-gun")"
 			test -z "$(find "$late_error_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 
@@ -1318,12 +1318,12 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$late_absent_root"
 			mkdir -p -m 0755 "$late_absent_root/fault-state"
 			late_absent_env=(
-				OXIDEDNS_BIN_DIR="$late_absent_root/bin"
-				OXIDEDNS_CONFIG_DIR="$late_absent_root/config"
-				OXIDEDNS_CONFIG_FILE="$late_absent_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$late_absent_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$late_absent_root/state-dir"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$late_absent_root/recovery"
+				BORONDNS_BIN_DIR="$late_absent_root/bin"
+				BORONDNS_CONFIG_DIR="$late_absent_root/config"
+				BORONDNS_CONFIG_FILE="$late_absent_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$late_absent_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$late_absent_root/state-dir"
+				BORONDNS_INSTALL_RECOVERY_DIR="$late_absent_root/recovery"
 			)
 			printf "%s\n" "#!/bin/bash" \
 				"if [[ \"\$2\" == activate-absent && ! -e \"\${INSTALLER_LATE_ERROR_STATE:?}/absent\" ]]; then" \
@@ -1331,7 +1331,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"fi" "exec /usr/bin/perl \"\$@\"" >"$late_error_tools/perl"
 			chmod 0755 "$late_error_tools/perl"
 			if env "${late_absent_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
 				INSTALLER_LATE_ERROR_STATE="$late_absent_root/fault-state" \
 				/pkg/install.sh install --yes --init none --no-start \
 				>"$late_absent_root/install.log" 2>&1; then
@@ -1339,7 +1339,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			test -e "$late_absent_root/fault-state/absent"
-			test ! -e "$late_absent_root/bin/oxidedns"
+			test ! -e "$late_absent_root/bin/borondns"
 			test ! -e "$late_absent_root/bin/oxide-gun"
 			test -z "$(find "$late_absent_root" -type f \( -name "*.rollback.*" -o -name "*.install.*" \) -print -quit)"
 			grep -q "restored the previous installation" "$late_absent_root/install.log"
@@ -1357,12 +1357,12 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$partial_remove_root"
 			mkdir -m 0755 "$partial_remove_root" "$partial_remove_root/fault-state"
 			partial_remove_env=(
-				OXIDEDNS_BIN_DIR="$partial_remove_root/bin"
-				OXIDEDNS_CONFIG_DIR="$partial_remove_root/config"
-				OXIDEDNS_CONFIG_FILE="$partial_remove_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$partial_remove_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$partial_remove_root/state-dir"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$partial_remove_root/recovery"
+				BORONDNS_BIN_DIR="$partial_remove_root/bin"
+				BORONDNS_CONFIG_DIR="$partial_remove_root/config"
+				BORONDNS_CONFIG_FILE="$partial_remove_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$partial_remove_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$partial_remove_root/state-dir"
+				BORONDNS_INSTALL_RECOVERY_DIR="$partial_remove_root/recovery"
 			)
 			env "${partial_remove_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			printf "%s\n" "#!/bin/bash" \
@@ -1374,7 +1374,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"exec /usr/bin/perl \"\$@\"" >"$late_error_tools/perl"
 			chmod 0755 "$late_error_tools/perl"
 			if env "${partial_remove_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
 				INSTALLER_LATE_ERROR_STATE="$partial_remove_root/fault-state" \
 				INSTALLER_PARTIAL_REMOVE_PARENT="$partial_remove_root/bin" \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start \
@@ -1392,7 +1392,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				echo "partial-removal cleanup failure was not reported" >&2
 				exit 1
 			}
-			partial_remove_quarantine="$(find "$partial_remove_root" -type f -name "*.oxidedns-remove.*" -print -quit)"
+			partial_remove_quarantine="$(find "$partial_remove_root" -type f -name "*.borondns-remove.*" -print -quit)"
 			if [[ -n "$partial_remove_quarantine" ]]; then
 				cat "$partial_remove_root/update.log" >&2
 				echo "partial-removal reconciliation left quarantine: $partial_remove_quarantine" >&2
@@ -1425,7 +1425,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"  /usr/bin/perl \"\$1\" move \"\${@:3}\"" \
 				"  : >\"\$state/quarantined\"; exit 97" \
 				"fi" \
-				"if [[ \"\$2\" == move && \"\$5\" == *.oxidedns-remove.* && -e \"\$state/quarantined\" && ! -e \"\$state/restore-failed\" ]]; then" \
+				"if [[ \"\$2\" == move && \"\$5\" == *.borondns-remove.* && -e \"\$state/quarantined\" && ! -e \"\$state/restore-failed\" ]]; then" \
 					"  printf foreign-replacement >\"\$3/\$7\"" \
 					"  printf %s \"\$3/\$5\" >\"\$state/retained-path\"" \
 					"  : >\"\$state/restore-failed\"" \
@@ -1439,17 +1439,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 				rm -rf "$retained_cleanup_root"
 				mkdir -m 0755 "$retained_cleanup_root" "$retained_cleanup_root/fault-state"
 				retained_cleanup_env=(
-					OXIDEDNS_BIN_DIR="$retained_cleanup_root/bin"
-					OXIDEDNS_CONFIG_DIR="$retained_cleanup_root/config"
-					OXIDEDNS_CONFIG_FILE="$retained_cleanup_root/config/config.toml"
-					OXIDEDNS_INSTALL_LOCK_FILE="$retained_cleanup_root/lock/installer.lock"
-					OXIDEDNS_STATE_DIR="$retained_cleanup_root/state-dir"
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$retained_cleanup_root/recovery"
+					BORONDNS_BIN_DIR="$retained_cleanup_root/bin"
+					BORONDNS_CONFIG_DIR="$retained_cleanup_root/config"
+					BORONDNS_CONFIG_FILE="$retained_cleanup_root/config/config.toml"
+					BORONDNS_INSTALL_LOCK_FILE="$retained_cleanup_root/lock/installer.lock"
+					BORONDNS_STATE_DIR="$retained_cleanup_root/state-dir"
+					BORONDNS_INSTALL_RECOVERY_DIR="$retained_cleanup_root/recovery"
 				)
 				env "${retained_cleanup_env[@]}" /pkg/install.sh install --yes --init none --no-start
-				retained_old_hash="$(sha256sum "$retained_cleanup_root/bin/oxidedns" | cut -d" " -f1)"
+				retained_old_hash="$(sha256sum "$retained_cleanup_root/bin/borondns" | cut -d" " -f1)"
 				if env "${retained_cleanup_env[@]}" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$retained_cleanup_tools" \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$retained_cleanup_tools" \
 					INSTALLER_RETAINED_STATE="$retained_cleanup_root/fault-state" \
 					INSTALLER_RETAINED_MODE="$retained_mode" \
 					INSTALLER_RETAINED_PARENT="$retained_cleanup_root/bin" \
@@ -1487,16 +1487,16 @@ mkdir -p -m 0755 "$service_target_root/units"
 					retained_fixture_fail "recovery diagnostic lacks exact retained path"
 				grep -Fq "$retained_path" "$retained_cleanup_root/update.log" ||
 					retained_fixture_fail "stderr lacks exact retained path"
-				if grep -Fq "retained_backup_oxidedns=$obsolete_path" "$retained_cleanup_root/update.log"; then
+				if grep -Fq "retained_backup_borondns=$obsolete_path" "$retained_cleanup_root/update.log"; then
 					exit 1
 				fi
 				if [[ "$retained_mode" == commit ]]; then
-					test "$rollback_hash" = "$(sha256sum "$retained_cleanup_root/bin/oxidedns" | cut -d" " -f1)" ||
+					test "$rollback_hash" = "$(sha256sum "$retained_cleanup_root/bin/borondns" | cut -d" " -f1)" ||
 						retained_fixture_fail "committed live generation was rolled back"
 					grep -q "committed, but transaction-backup cleanup was incomplete" \
 						"$retained_cleanup_root/update.log" || retained_fixture_fail "commit failure message is missing"
 				else
-					test "$retained_old_hash" = "$(sha256sum "$retained_cleanup_root/bin/oxidedns" | cut -d" " -f1)" ||
+					test "$retained_old_hash" = "$(sha256sum "$retained_cleanup_root/bin/borondns" | cut -d" " -f1)" ||
 						retained_fixture_fail "rollback did not restore the old live generation"
 					grep -q "automatic rollback is incomplete" "$retained_cleanup_root/update.log" ||
 						retained_fixture_fail "rollback cleanup failure message is missing"
@@ -1515,14 +1515,14 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"state=\${INSTALLER_STAGED_RETAINED_STATE:?}" \
 				"mode=\${INSTALLER_STAGED_RETAINED_MODE:?}" \
 				"parent=\${INSTALLER_STAGED_RETAINED_PARENT:?}" \
-				"if [[ \"\$mode\" == after-diagnostic && \"\$2\" == activate-absent && \"\$3\" == \"\$parent\" && \"\$5\" == .oxidedns.install.* && ! -e \"\$state/activation-failed\" ]]; then" \
+				"if [[ \"\$mode\" == after-diagnostic && \"\$2\" == activate-absent && \"\$3\" == \"\$parent\" && \"\$5\" == .borondns.install.* && ! -e \"\$state/activation-failed\" ]]; then" \
 				"  /usr/bin/perl \"\$@\"; : >\"\$state/activation-failed\"; exit 96" \
 				"fi" \
-				"if [[ \"\$mode\" == after-diagnostic && \"\$2\" == remove && \"\$3\" == \"\$parent\" && \"\$5\" == oxidedns && ! -e \"\$state/rollback-failed\" ]]; then" \
+				"if [[ \"\$mode\" == after-diagnostic && \"\$2\" == remove && \"\$3\" == \"\$parent\" && \"\$5\" == borondns && ! -e \"\$state/rollback-failed\" ]]; then" \
 				"  : >\"\$state/rollback-failed\"; exit 95" \
 				"fi" \
 				"staged_match=0" \
-				"if [[ \"\$mode\" == no-transaction && \"\$5\" == .oxidedns.install.* ]]; then staged_match=1; fi" \
+				"if [[ \"\$mode\" == no-transaction && \"\$5\" == .borondns.install.* ]]; then staged_match=1; fi" \
 				"if [[ \"\$mode\" == after-diagnostic && \"\$5\" == .oxide-gun.install.* ]]; then staged_match=1; fi" \
 				"if [[ \"\$2\" == remove && \"\$3\" == \"\$parent\" && \"\$staged_match\" == 1 && ! -e \"\$state/quarantined\" ]]; then" \
 				"  printf %s \"\$3/\$5\" >\"\$state/original-path\"" \
@@ -1531,7 +1531,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"  /usr/bin/perl \"\$1\" move \"\${@:3}\"" \
 				"  : >\"\$state/quarantined\"; exit 97" \
 				"fi" \
-				"if [[ \"\$2\" == move && \"\$5\" == *.oxidedns-remove.* && -e \"\$state/quarantined\" && ! -e \"\$state/restore-failed\" ]]; then" \
+				"if [[ \"\$2\" == move && \"\$5\" == *.borondns-remove.* && -e \"\$state/quarantined\" && ! -e \"\$state/restore-failed\" ]]; then" \
 				"  printf foreign-replacement >\"\$3/\$7\"" \
 				"  printf %s \"\$3/\$5\" >\"\$state/retained-path\"" \
 				"  : >\"\$state/restore-failed\"" \
@@ -1549,21 +1549,21 @@ mkdir -p -m 0755 "$service_target_root/units"
 				rm -rf "$staged_retained_root"
 				mkdir -m 0755 "$staged_retained_root" "$staged_retained_root/fault-state"
 				staged_retained_env=(
-					OXIDEDNS_BIN_DIR="$staged_retained_root/bin"
-					OXIDEDNS_CONFIG_DIR="$staged_retained_root/config"
-					OXIDEDNS_CONFIG_FILE="$staged_retained_root/config/config.toml"
-					OXIDEDNS_INSTALL_LOCK_FILE="$staged_retained_root/lock/installer.lock"
-					OXIDEDNS_STATE_DIR="$staged_retained_root/state-dir"
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$staged_retained_root/recovery"
+					BORONDNS_BIN_DIR="$staged_retained_root/bin"
+					BORONDNS_CONFIG_DIR="$staged_retained_root/config"
+					BORONDNS_CONFIG_FILE="$staged_retained_root/config/config.toml"
+					BORONDNS_INSTALL_LOCK_FILE="$staged_retained_root/lock/installer.lock"
+					BORONDNS_STATE_DIR="$staged_retained_root/state-dir"
+					BORONDNS_INSTALL_RECOVERY_DIR="$staged_retained_root/recovery"
 				)
 				staged_config_mode=invalid
 				[[ "$staged_retained_mode" != after-diagnostic ]] || staged_config_mode=zone
 				if env "${staged_retained_env[@]}" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$staged_retained_tools" \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$staged_retained_tools" \
 					INSTALLER_STAGED_RETAINED_STATE="$staged_retained_root/fault-state" \
 					INSTALLER_STAGED_RETAINED_MODE="$staged_retained_mode" \
 					INSTALLER_STAGED_RETAINED_PARENT="$staged_retained_root/bin" \
-					OXIDEDNS_CONFIG_MODE="$staged_config_mode" \
+					BORONDNS_CONFIG_MODE="$staged_config_mode" \
 					/pkg/install.sh install --yes --init none --no-start \
 					>"$staged_retained_root/install.log" 2>&1; then
 					echo "installer ignored retained staged cleanup failure: $staged_retained_mode" >&2
@@ -1618,15 +1618,15 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$partial_root"
 			mkdir -m 0755 "$partial_root" "$partial_root/fault-state"
 			partial_env=(
-				OXIDEDNS_BIN_DIR="$partial_root/bin"
-				OXIDEDNS_CONFIG_DIR="$partial_root/config"
-				OXIDEDNS_CONFIG_FILE="$partial_root/config/config.toml"
-				OXIDEDNS_INSTALL_LOCK_FILE="$partial_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$partial_root/state-dir"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$partial_root/recovery"
+				BORONDNS_BIN_DIR="$partial_root/bin"
+				BORONDNS_CONFIG_DIR="$partial_root/config"
+				BORONDNS_CONFIG_FILE="$partial_root/config/config.toml"
+				BORONDNS_INSTALL_LOCK_FILE="$partial_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$partial_root/state-dir"
+				BORONDNS_INSTALL_RECOVERY_DIR="$partial_root/recovery"
 			)
 			env "${partial_env[@]}" /pkg/install.sh install --yes --init none --no-start
-			partial_old_hash="$(sha256sum "$partial_root/bin/oxidedns")"
+			partial_old_hash="$(sha256sum "$partial_root/bin/borondns")"
 			printf "%s\n" "#!/bin/bash" \
 				"state=\${INSTALLER_LATE_ERROR_STATE:?}" \
 				"script=\$state/helper.pl" \
@@ -1641,7 +1641,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"exec /usr/bin/perl \"\$script\" \"\${@:2}\"" >"$late_error_tools/perl"
 			chmod 0755 "$late_error_tools/perl"
 			if env "${partial_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$late_error_tools" \
 				INSTALLER_LATE_ERROR_STATE="$partial_root/fault-state" \
 				/tmp/rollback-pkg/install.sh update --yes --init none --no-start \
 				>"$partial_root/update.log" 2>&1; then
@@ -1658,7 +1658,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				echo "partial-exchange recovery failure was not exercised" >&2
 				exit 1
 			}
-			if [[ "$partial_old_hash" != "$(sha256sum "$partial_root/bin/oxidedns")" ]]; then
+			if [[ "$partial_old_hash" != "$(sha256sum "$partial_root/bin/borondns")" ]]; then
 				cat "$partial_root/update.log" >&2
 				echo "partial-exchange rollback did not restore the old binary" >&2
 				exit 1
@@ -1675,9 +1675,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 			runtime_denied_root=/opt/installer-runtime-denied
 			rm -rf "$runtime_denied_root"
 			mkdir -m 0700 "$runtime_denied_root"
-			if OXIDEDNS_RUN_USER=oxidedns-runtime-denied OXIDEDNS_RUN_GROUP=oxidedns-runtime-denied \
-				OXIDEDNS_STATE_DIR=/opt/installer-runtime-denied-state \
-				OXIDEDNS_INSTALL_RECOVERY_DIR=/opt/installer-runtime-denied-state/recovery \
+			if BORONDNS_RUN_USER=borondns-runtime-denied BORONDNS_RUN_GROUP=borondns-runtime-denied \
+				BORONDNS_STATE_DIR=/opt/installer-runtime-denied-state \
+				BORONDNS_INSTALL_RECOVERY_DIR=/opt/installer-runtime-denied-state/recovery \
 				/pkg/install.sh install --yes --init none --no-start \
 				--bin-dir "$runtime_denied_root/bin" \
 				--config "$runtime_denied_root/config/config.toml" \
@@ -1689,12 +1689,12 @@ mkdir -p -m 0755 "$service_target_root/units"
 				cat "$runtime_denied_root.log" >&2
 				exit 1
 			}
-			test ! -e "$runtime_denied_root/bin/oxidedns"
+			test ! -e "$runtime_denied_root/bin/borondns"
 			test ! -e "$runtime_denied_root/config/config.toml"
 
 			# systemd PrivateTmp/ProtectHome make these host paths unavailable to the
 			# service even though root can stage them.
-			if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
+			if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/custom-service-bin \
 				/pkg/install.sh install --yes --init systemd --no-start \
 				--bin-dir /tmp/systemd-private-path/bin \
 				--config /tmp/systemd-private-path/config.toml \
@@ -1717,9 +1717,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 			chmod 0755 "$blocking_tools/systemctl" "$blocking_tools/rc-service" "$blocking_tools/rc-update"
 			for blocking_init in systemd openrc; do
 				set +e
-				timeout 6 env OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
-					OXIDEDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
-					OXIDEDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
+				timeout 6 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
+					BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
+					BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
 					/pkg/install.sh status --init "$blocking_init" \
 					>"/tmp/blocking-$blocking_init.log" 2>&1
 				blocking_status=$?
@@ -1735,15 +1735,15 @@ mkdir -p -m 0755 "$service_target_root/units"
 				rm -rf "$blocking_mutation_root"
 				mkdir -m 0755 "$blocking_mutation_root"
 				set +e
-				timeout 6 env OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
-					OXIDEDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
-					OXIDEDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
-					OXIDEDNS_BIN_DIR="$blocking_mutation_root/bin" \
-					OXIDEDNS_CONFIG_DIR="$blocking_mutation_root/config" \
-					OXIDEDNS_CONFIG_FILE="$blocking_mutation_root/config/config.toml" \
-					OXIDEDNS_INSTALL_LOCK_FILE="$blocking_mutation_root/lock/installer.lock" \
-					OXIDEDNS_STATE_DIR="$blocking_mutation_root/state" \
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$blocking_mutation_root/recovery" \
+				timeout 6 env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$blocking_tools" \
+					BORONDNS_INSTALLER_SERVICE_MANAGER_TIMEOUT_SECONDS=1 \
+					BORONDNS_INSTALLER_SERVICE_MANAGER_KILL_AFTER_SECONDS=1 \
+					BORONDNS_BIN_DIR="$blocking_mutation_root/bin" \
+					BORONDNS_CONFIG_DIR="$blocking_mutation_root/config" \
+					BORONDNS_CONFIG_FILE="$blocking_mutation_root/config/config.toml" \
+					BORONDNS_INSTALL_LOCK_FILE="$blocking_mutation_root/lock/installer.lock" \
+					BORONDNS_STATE_DIR="$blocking_mutation_root/state" \
+					BORONDNS_INSTALL_RECOVERY_DIR="$blocking_mutation_root/recovery" \
 					/pkg/install.sh install --yes --init "$blocking_init" --no-start \
 					>"/tmp/blocking-mutation-$blocking_init.log" 2>&1
 				blocking_mutation_status=$?
@@ -1755,7 +1755,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 					echo "$blocking_init blocking mutation did not report an indeterminate service state" >&2
 					exit 1
 				}
-				test ! -e "$blocking_mutation_root/bin/oxidedns"
+				test ! -e "$blocking_mutation_root/bin/borondns"
 				test ! -e "$blocking_mutation_root/config/config.toml"
 			done
 
@@ -1771,8 +1771,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"is-enabled) echo disabled; exit 1 ;;" \
 				"daemon-reload)" \
 				"  case \"\${INSTALLER_COMMIT_MUTATION_KIND:?}\" in" \
-				"    content) printf \"%s\\n\" \"callback replacement content\" >\"\$root/bin/oxidedns\"; chmod 0755 \"\$root/bin/oxidedns\" ;;" \
-				"    file-mode) chmod 0700 \"\$root/bin/oxidedns\" ;;" \
+				"    content) printf \"%s\\n\" \"callback replacement content\" >\"\$root/bin/borondns\"; chmod 0755 \"\$root/bin/borondns\" ;;" \
+				"    file-mode) chmod 0700 \"\$root/bin/borondns\" ;;" \
 				"    ancestor-mode) chmod 0700 \"\$root/bin\" ;;" \
 				"  esac ;;" \
 				"*) exit 0 ;;" \
@@ -1782,16 +1782,16 @@ mkdir -p -m 0755 "$service_target_root/units"
 				commit_mutation_root="/opt/installer-commit-mutation-$commit_mutation_kind"
 				rm -rf "$commit_mutation_root"
 				mkdir -m 0755 "$commit_mutation_root"
-				if env OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$commit_mutation_tools" \
+				if env BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$commit_mutation_tools" \
 					INSTALLER_COMMIT_MUTATION_ROOT="$commit_mutation_root" \
 					INSTALLER_COMMIT_MUTATION_KIND="$commit_mutation_kind" \
-					OXIDEDNS_BIN_DIR="$commit_mutation_root/bin" \
-					OXIDEDNS_CONFIG_DIR="$commit_mutation_root/config" \
-					OXIDEDNS_CONFIG_FILE="$commit_mutation_root/config/config.toml" \
-					OXIDEDNS_SYSTEMD_DIR="$commit_mutation_root/systemd" \
-					OXIDEDNS_INSTALL_LOCK_FILE="$commit_mutation_root/lock/installer.lock" \
-					OXIDEDNS_STATE_DIR="$commit_mutation_root/state" \
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$commit_mutation_root/recovery" \
+					BORONDNS_BIN_DIR="$commit_mutation_root/bin" \
+					BORONDNS_CONFIG_DIR="$commit_mutation_root/config" \
+					BORONDNS_CONFIG_FILE="$commit_mutation_root/config/config.toml" \
+					BORONDNS_SYSTEMD_DIR="$commit_mutation_root/systemd" \
+					BORONDNS_INSTALL_LOCK_FILE="$commit_mutation_root/lock/installer.lock" \
+					BORONDNS_STATE_DIR="$commit_mutation_root/state" \
+					BORONDNS_INSTALL_RECOVERY_DIR="$commit_mutation_root/recovery" \
 					/pkg/install.sh install --yes --init systemd --no-start \
 					>"$commit_mutation_root.log" 2>&1; then
 					echo "installer committed after $commit_mutation_kind callback mutation" >&2
@@ -1817,10 +1817,10 @@ mkdir -p -m 0755 "$service_target_root/units"
 			mkdir -m 0755 "$final_rollback_race_tools"
 			printf "%s\n" "#!/bin/sh" \
 				"root=\${FINAL_ROLLBACK_RACE_ROOT:?}" \
-				"if test \"\$2\" = exchange && test \"\$5\" = oxidedns && test ! -e \"\$root/swapped\"; then" \
-				"  mv \"\$root/bin/oxidedns\" \"\$root/displaced-activated\"" \
-				"  printf \"final rollback victim\\n\" >\"\$root/bin/oxidedns\"" \
-				"  chmod 0755 \"\$root/bin/oxidedns\"" \
+				"if test \"\$2\" = exchange && test \"\$5\" = borondns && test ! -e \"\$root/swapped\"; then" \
+				"  mv \"\$root/bin/borondns\" \"\$root/displaced-activated\"" \
+				"  printf \"final rollback victim\\n\" >\"\$root/bin/borondns\"" \
+				"  chmod 0755 \"\$root/bin/borondns\"" \
 				"  touch \"\$root/swapped\"" \
 				"fi" \
 				"exec /usr/bin/perl \"\$@\"" >"$final_rollback_race_tools/perl"
@@ -1832,17 +1832,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$final_rollback_race_root"
 			mkdir -m 0755 "$final_rollback_race_root"
 			final_rollback_race_env=(
-				OXIDEDNS_BIN_DIR="$final_rollback_race_root/bin"
-				OXIDEDNS_CONFIG_DIR="$final_rollback_race_root/config"
-				OXIDEDNS_CONFIG_FILE="$final_rollback_race_root/config/config.toml"
-				OXIDEDNS_SYSTEMD_DIR="$final_rollback_race_root/systemd"
-				OXIDEDNS_INSTALL_LOCK_FILE="$final_rollback_race_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$final_rollback_race_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$final_rollback_race_root/recovery"
+				BORONDNS_BIN_DIR="$final_rollback_race_root/bin"
+				BORONDNS_CONFIG_DIR="$final_rollback_race_root/config"
+				BORONDNS_CONFIG_FILE="$final_rollback_race_root/config/config.toml"
+				BORONDNS_SYSTEMD_DIR="$final_rollback_race_root/systemd"
+				BORONDNS_INSTALL_LOCK_FILE="$final_rollback_race_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$final_rollback_race_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$final_rollback_race_root/recovery"
 			)
 			env "${final_rollback_race_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			if env "${final_rollback_race_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_rollback_race_tools" \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_rollback_race_tools" \
 				FINAL_ROLLBACK_RACE_ROOT="$final_rollback_race_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init systemd \
 				>"$final_rollback_race_root/update.log" 2>&1; then
@@ -1850,9 +1850,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			grep -q "exchange left input identity changed" "$final_rollback_race_root/update.log"
-			grep -qx "final rollback victim" "$final_rollback_race_root/bin/oxidedns"
+			grep -qx "final rollback victim" "$final_rollback_race_root/bin/borondns"
 			test -x "$final_rollback_race_root/displaced-activated"
-			test "$(find "$final_rollback_race_root/bin" -maxdepth 1 -type f -name "oxidedns.rollback.*" | wc -l)" -ge 1
+			test "$(find "$final_rollback_race_root/bin" -maxdepth 1 -type f -name "borondns.rollback.*" | wc -l)" -ge 1
 
 			# Service-manager callbacks run after regular-file activation. Replacing an
 			# activated pathname must make rollback fail closed without deleting the
@@ -1861,13 +1861,13 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$activated_file_swap_root"
 			mkdir -m 0755 "$activated_file_swap_root" /opt/installer-activated-file-swap-tools
 			activated_file_swap_env=(
-				OXIDEDNS_BIN_DIR="$activated_file_swap_root/bin"
-				OXIDEDNS_CONFIG_DIR="$activated_file_swap_root/config"
-				OXIDEDNS_CONFIG_FILE="$activated_file_swap_root/config/config.toml"
-				OXIDEDNS_SYSTEMD_DIR="$activated_file_swap_root/systemd"
-				OXIDEDNS_INSTALL_LOCK_FILE="$activated_file_swap_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$activated_file_swap_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$activated_file_swap_root/recovery"
+				BORONDNS_BIN_DIR="$activated_file_swap_root/bin"
+				BORONDNS_CONFIG_DIR="$activated_file_swap_root/config"
+				BORONDNS_CONFIG_FILE="$activated_file_swap_root/config/config.toml"
+				BORONDNS_SYSTEMD_DIR="$activated_file_swap_root/systemd"
+				BORONDNS_INSTALL_LOCK_FILE="$activated_file_swap_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$activated_file_swap_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$activated_file_swap_root/recovery"
 			)
 			env "${activated_file_swap_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			printf "%s\n" "#!/bin/sh" \
@@ -1876,14 +1876,14 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"is-active) echo active; exit 0 ;;" \
 				"is-enabled) echo disabled; exit 1 ;;" \
 				"restart)" \
-				"  mv \"\$root/bin/oxidedns\" \"\$root/activated-original\"" \
-				"  printf \"activated replacement victim\\n\" >\"\$root/bin/oxidedns\"" \
+				"  mv \"\$root/bin/borondns\" \"\$root/activated-original\"" \
+				"  printf \"activated replacement victim\\n\" >\"\$root/bin/borondns\"" \
 				"  exit 79 ;;" \
 				"*) exit 0 ;;" \
 				"esac" > /opt/installer-activated-file-swap-tools/systemctl
 			chmod 0755 /opt/installer-activated-file-swap-tools/systemctl
 			if env "${activated_file_swap_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-activated-file-swap-tools \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-activated-file-swap-tools \
 				FAKE_INSTALLER_FILE_SWAP_ROOT="$activated_file_swap_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init systemd \
 				>"$activated_file_swap_root/update.log" 2>&1; then
@@ -1891,7 +1891,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			grep -q "activated rollback target identity changed" "$activated_file_swap_root/update.log"
-			grep -qx "activated replacement victim" "$activated_file_swap_root/bin/oxidedns"
+			grep -qx "activated replacement victim" "$activated_file_swap_root/bin/borondns"
 			test -f "$activated_file_swap_root/activated-original"
 			test "$(find "$activated_file_swap_root/bin" -maxdepth 1 -type f -name "*.rollback.*" | wc -l)" -ge 1
 			test "$(find "$activated_file_swap_root/recovery" -maxdepth 1 -type f -name "rollback-*.env" | wc -l)" -eq 1
@@ -1903,13 +1903,13 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$backup_file_swap_root"
 			mkdir -m 0755 "$backup_file_swap_root" /opt/installer-backup-file-swap-tools
 			backup_file_swap_env=(
-				OXIDEDNS_BIN_DIR="$backup_file_swap_root/bin"
-				OXIDEDNS_CONFIG_DIR="$backup_file_swap_root/config"
-				OXIDEDNS_CONFIG_FILE="$backup_file_swap_root/config/config.toml"
-				OXIDEDNS_SYSTEMD_DIR="$backup_file_swap_root/systemd"
-				OXIDEDNS_INSTALL_LOCK_FILE="$backup_file_swap_root/lock/installer.lock"
-				OXIDEDNS_STATE_DIR="$backup_file_swap_root/state"
-				OXIDEDNS_INSTALL_RECOVERY_DIR="$backup_file_swap_root/recovery"
+				BORONDNS_BIN_DIR="$backup_file_swap_root/bin"
+				BORONDNS_CONFIG_DIR="$backup_file_swap_root/config"
+				BORONDNS_CONFIG_FILE="$backup_file_swap_root/config/config.toml"
+				BORONDNS_SYSTEMD_DIR="$backup_file_swap_root/systemd"
+				BORONDNS_INSTALL_LOCK_FILE="$backup_file_swap_root/lock/installer.lock"
+				BORONDNS_STATE_DIR="$backup_file_swap_root/state"
+				BORONDNS_INSTALL_RECOVERY_DIR="$backup_file_swap_root/recovery"
 			)
 			env "${backup_file_swap_env[@]}" /pkg/install.sh install --yes --init none --no-start
 			printf "%s\n" "#!/bin/sh" \
@@ -1919,7 +1919,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"is-enabled) echo disabled; exit 1 ;;" \
 				"daemon-reload)" \
 				"  if test ! -e \"\$root/swapped\"; then" \
-				"    backup=\$(find \"\$root/bin\" -maxdepth 1 -type f -name \"oxidedns.rollback.*\" -print -quit)" \
+				"    backup=\$(find \"\$root/bin\" -maxdepth 1 -type f -name \"borondns.rollback.*\" -print -quit)" \
 				"    test -n \"\$backup\" || exit 91" \
 				"    mv \"\$backup\" \"\$backup.original\"" \
 				"    printf \"backup replacement victim\\n\" >\"\$backup\"" \
@@ -1930,7 +1930,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"esac" > /opt/installer-backup-file-swap-tools/systemctl
 			chmod 0755 /opt/installer-backup-file-swap-tools/systemctl
 			if env "${backup_file_swap_env[@]}" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-backup-file-swap-tools \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-backup-file-swap-tools \
 				FAKE_INSTALLER_BACKUP_SWAP_ROOT="$backup_file_swap_root" \
 				/tmp/rollback-pkg/install.sh update --yes --init systemd --no-start \
 				>"$backup_file_swap_root/update.log" 2>&1; then
@@ -1973,17 +1973,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 				rm -rf "$installer_commit_swap_root"
 				mkdir -m 0755 "$installer_commit_swap_root"
 				commit_swap_env=(
-					OXIDEDNS_BIN_DIR="$installer_commit_swap_root/bin"
-					OXIDEDNS_CONFIG_DIR="$installer_commit_swap_root/config"
-					OXIDEDNS_CONFIG_FILE="$installer_commit_swap_root/config/config.toml"
-					OXIDEDNS_DOC_DIR="$installer_commit_swap_root/doc"
-					OXIDEDNS_SYSTEMD_DIR="$installer_commit_swap_root/service"
-					OXIDEDNS_INSTALL_LOCK_FILE="$installer_commit_swap_root/lock/installer.lock"
-					OXIDEDNS_STATE_DIR="$installer_commit_swap_root/state"
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$installer_commit_swap_root/recovery"
+					BORONDNS_BIN_DIR="$installer_commit_swap_root/bin"
+					BORONDNS_CONFIG_DIR="$installer_commit_swap_root/config"
+					BORONDNS_CONFIG_FILE="$installer_commit_swap_root/config/config.toml"
+					BORONDNS_DOC_DIR="$installer_commit_swap_root/doc"
+					BORONDNS_SYSTEMD_DIR="$installer_commit_swap_root/service"
+					BORONDNS_INSTALL_LOCK_FILE="$installer_commit_swap_root/lock/installer.lock"
+					BORONDNS_STATE_DIR="$installer_commit_swap_root/state"
+					BORONDNS_INSTALL_RECOVERY_DIR="$installer_commit_swap_root/recovery"
 				)
 				if env "${commit_swap_env[@]}" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-commit-swap-tools \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-commit-swap-tools \
 					FAKE_INSTALLER_COMMIT_SWAP_ROOT="$installer_commit_swap_root" \
 					FAKE_INSTALLER_COMMIT_SWAP_KIND="$installer_commit_swap_kind" \
 					/pkg/install.sh install --yes --init systemd --no-start \
@@ -2003,8 +2003,8 @@ mkdir -p -m 0755 "$service_target_root/units"
 				test "$(find "$installer_commit_swap_root/recovery" -maxdepth 1 -type f -name "rollback-*.env" | wc -l)" -eq 1
 				grep -q "^file_rollback_failed=1$" "$installer_commit_swap_root"/recovery/rollback-*.env
 				case "$installer_commit_swap_kind" in
-				service) test -f "$installer_commit_swap_root/displaced-service/oxidedns.service" ;;
-				bin) test -x "$installer_commit_swap_root/displaced-bin/oxidedns" ;;
+				service) test -f "$installer_commit_swap_root/displaced-service/borondns.service" ;;
+				bin) test -x "$installer_commit_swap_root/displaced-bin/borondns" ;;
 				config) test -f "$installer_commit_swap_root/config/config.toml" ;;
 				esac
 			done
@@ -2022,9 +2022,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"is-enabled) echo disabled; exit 1 ;;" \
 				"daemon-reload)" \
 				"  if test ! -e \"\$root/swapped\"; then" \
-				"    mv /usr/share/doc/oxidedns \"\$root/displaced-doc\"" \
-				"    mkdir -m 0755 /usr/share/doc/oxidedns" \
-				"    printf \"replacement documentation sentinel\\n\" >/usr/share/doc/oxidedns/operator-sentinel" \
+				"    mv /usr/share/doc/borondns \"\$root/displaced-doc\"" \
+				"    mkdir -m 0755 /usr/share/doc/borondns" \
+				"    printf \"replacement documentation sentinel\\n\" >/usr/share/doc/borondns/operator-sentinel" \
 				"    touch \"\$root/swapped\"" \
 				"  fi" \
 				"  exit 0 ;;" \
@@ -2032,9 +2032,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"esac" > /opt/installer-doc-swap-tools/systemctl
 			chmod 0755 /opt/installer-doc-swap-tools/systemctl
 			if PATH="/opt/installer-doc-swap-tools:$PATH" \
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-doc-swap-tools \
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/installer-doc-swap-tools \
 				FAKE_INSTALLER_DOC_SWAP_ROOT="$doc_swap_root" \
-				OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+				BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 				/tmp/rollback-pkg/install.sh update --yes --init systemd --no-start \
 				>"$doc_swap_root/update.log" 2>&1; then
 				echo "installer committed after documentation directory replacement" >&2
@@ -2051,9 +2051,9 @@ mkdir -p -m 0755 "$service_target_root/units"
 				exit 1
 			fi
 			if ! grep -qx "replacement documentation sentinel" \
-				/usr/share/doc/oxidedns/operator-sentinel; then
+				/usr/share/doc/borondns/operator-sentinel; then
 				echo "replacement documentation sentinel was changed" >&2
-				find "$doc_swap_root" /usr/share/doc/oxidedns -maxdepth 2 -printf "%M %p\n" >&2
+				find "$doc_swap_root" /usr/share/doc/borondns -maxdepth 2 -printf "%M %p\n" >&2
 				exit 1
 			fi
 			if test "$(find "$doc_swap_root/displaced-doc" -maxdepth 1 \
@@ -2062,28 +2062,28 @@ mkdir -p -m 0755 "$service_target_root/units"
 				find "$doc_swap_root" -maxdepth 2 -printf "%M %p\n" >&2
 				exit 1
 			fi
-			if ! grep -q '^backup_document=' /var/lib/oxidedns/installer-recovery/rollback-*.env; then
+			if ! grep -q '^backup_document=' /var/lib/borondns/installer-recovery/rollback-*.env; then
 				echo "missing retained documentation backup diagnostic" >&2
-				cat /var/lib/oxidedns/installer-recovery/rollback-*.env >&2
+				cat /var/lib/borondns/installer-recovery/rollback-*.env >&2
 				exit 1
 			fi
-			rm -rf /usr/share/doc/oxidedns
+			rm -rf /usr/share/doc/borondns
 			find "$doc_swap_root/displaced-doc" -maxdepth 1 -type f -name "*.rollback.*" -delete
-			mv "$doc_swap_root/displaced-doc" /usr/share/doc/oxidedns
+			mv "$doc_swap_root/displaced-doc" /usr/share/doc/borondns
 
-			if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-state \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+			if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-state \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd; then
 			echo "installer did not fail when systemd replacement restart failed" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		grep -qx "old-systemd-service" /tmp/systemd/oxidedns.service
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		grep -qx "old-systemd-service" /tmp/systemd/borondns.service
 		test -e /tmp/systemd-state/active
 		test ! -e /tmp/systemd-state/enabled
 		touch /tmp/systemd-state/enabled
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-state \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-state \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd; then
 			echo "installer did not fail during enabled systemd rollback test" >&2
 			exit 1
@@ -2103,23 +2103,23 @@ mkdir -p -m 0755 "$service_target_root/units"
 			>/opt/signal-bin/mv
 		cp /opt/fakebin/systemctl /opt/signal-bin/systemctl
 		chmod 0755 /opt/signal-bin/mv /opt/signal-bin/systemctl
-		live_config_hash="$(sha256sum /etc/oxidedns-secondary/config.toml)"
-		signal_backups_before="$(find /usr/local/bin /etc/oxidedns-secondary /usr/share/doc/oxidedns /tmp/systemd \
+		live_config_hash="$(sha256sum /etc/borondns-secondary/config.toml)"
+		signal_backups_before="$(find /usr/local/bin /etc/borondns-secondary /usr/share/doc/borondns /tmp/systemd \
 			-maxdepth 1 -name "*.rollback.*" -print | LC_ALL=C sort)"
-		if PATH="/tmp/signal-bin:/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/signal-bin \
+		if PATH="/tmp/signal-bin:/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/signal-bin \
 			FAKE_MV_COUNT=/tmp/signal-mv-count \
 			FAKE_SYSTEMD_STATE=/tmp/systemd-state \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd; then
 			echo "installer survived injected TERM during activation" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
-		grep -qx "old-systemd-service" /tmp/systemd/oxidedns.service
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
+		grep -qx "old-systemd-service" /tmp/systemd/borondns.service
 		test -e /tmp/systemd-state/active
 		test -e /tmp/systemd-state/enabled
-			signal_backups_after="$(find /usr/local/bin /etc/oxidedns-secondary /usr/share/doc/oxidedns /tmp/systemd \
+			signal_backups_after="$(find /usr/local/bin /etc/borondns-secondary /usr/share/doc/borondns /tmp/systemd \
 				-maxdepth 1 -name "*.rollback.*" -print | LC_ALL=C sort)"
 			if test "$signal_backups_before" != "$signal_backups_after"; then
 			echo "signal rollback left transaction backups behind" >&2
@@ -2143,33 +2143,33 @@ mkdir -p -m 0755 "$service_target_root/units"
 			"esac" \
 			>/opt/restart-signal-bin/systemctl
 		chmod 0755 /opt/restart-signal-bin/systemctl
-		printf "old-systemd-service\n" >/tmp/systemd/oxidedns.service
+		printf "old-systemd-service\n" >/tmp/systemd/borondns.service
 		touch /tmp/systemd-state/active /tmp/systemd-state/enabled
-		if PATH="/tmp/restart-signal-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/restart-signal-bin \
+		if PATH="/tmp/restart-signal-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/restart-signal-bin \
 			FAKE_SYSTEMD_STATE=/tmp/systemd-state \
-			FAKE_SERVICE_BINARY=/usr/local/bin/oxidedns \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+			FAKE_SERVICE_BINARY=/usr/local/bin/borondns \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd; then
 			echo "installer survived injected TERM after replacement restart" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
 		test "${live_hash%% *}" = "$(cat /tmp/systemd-state/running-hash)"
-		grep -qx "old-systemd-service" /tmp/systemd/oxidedns.service
+		grep -qx "old-systemd-service" /tmp/systemd/borondns.service
 		test -e /tmp/systemd-state/active
 		test -e /tmp/systemd-state/enabled
 
-		stale_backup=/usr/local/bin/oxidedns.rollback.operator-recovery
+		stale_backup=/usr/local/bin/borondns.rollback.operator-recovery
 		printf "operator recovery sentinel\n" >"$stale_backup"
 		/pkg/install.sh update --yes --init none --no-start
 		grep -qx "operator recovery sentinel" "$stale_backup"
 
-		mkdir -m 0700 /tmp/oxidedns-installer-lock-test
-		touch /tmp/oxidedns-installer-lock-test/installer.lock
-		chmod 0600 /tmp/oxidedns-installer-lock-test/installer.lock
-		exec 9<>/tmp/oxidedns-installer-lock-test/installer.lock
+		mkdir -m 0700 /tmp/borondns-installer-lock-test
+		touch /tmp/borondns-installer-lock-test/installer.lock
+		chmod 0600 /tmp/borondns-installer-lock-test/installer.lock
+		exec 9<>/tmp/borondns-installer-lock-test/installer.lock
 		flock -n 9
-		if OXIDEDNS_INSTALL_LOCK_FILE=/tmp/oxidedns-installer-lock-test/installer.lock \
+		if BORONDNS_INSTALL_LOCK_FILE=/tmp/borondns-installer-lock-test/installer.lock \
 			/pkg/install.sh update --yes --init none --no-start; then
 			echo "installer ignored an already-held transaction lock" >&2
 			exit 1
@@ -2180,7 +2180,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 		mkdir -p /opt/restore-fail-bin /tmp/restore-fail-state /tmp/restore-recovery
 		chmod 0700 /tmp/restore-recovery
 		touch /tmp/restore-fail-state/active /tmp/restore-fail-state/enabled
-		printf "old-systemd-service\n" >/tmp/systemd/oxidedns.service
+		printf "old-systemd-service\n" >/tmp/systemd/borondns.service
 		printf "%s\n" "#!/bin/sh" \
 			"state=\${FAKE_SYSTEMD_STATE:?}" \
 			"case \"\$1\" in" \
@@ -2196,10 +2196,10 @@ mkdir -p -m 0755 "$service_target_root/units"
 			"esac" \
 			>/opt/restore-fail-bin/systemctl
 		chmod 0755 /opt/restore-fail-bin/systemctl
-		if PATH="/tmp/restore-fail-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/restore-fail-bin \
+		if PATH="/tmp/restore-fail-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/restore-fail-bin \
 			FAKE_SYSTEMD_STATE=/tmp/restore-fail-state \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
-			OXIDEDNS_INSTALL_RECOVERY_DIR=/tmp/restore-recovery \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
+			BORONDNS_INSTALL_RECOVERY_DIR=/tmp/restore-recovery \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd \
 			>/tmp/restore-fail.log 2>&1; then
 			echo "installer accepted an incomplete service-state rollback" >&2
@@ -2213,14 +2213,14 @@ mkdir -p -m 0755 "$service_target_root/units"
 		recovery_diagnostic="$(find /tmp/restore-recovery -maxdepth 1 -type f -name "rollback-*.env" -print -quit)"
 		recovery_binary_backup=""
 		while IFS="=" read -r recovery_key recovery_value; do
-			if [[ "$recovery_key" == "backup_oxidedns" ]]; then
+			if [[ "$recovery_key" == "backup_borondns" ]]; then
 				recovery_binary_backup="$recovery_value"
 				break
 			fi
 		done <"$recovery_diagnostic"
 		test -n "$recovery_binary_backup"
 		test -f "$recovery_binary_backup"
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
 
 		mkdir -p /opt/diagnostic-signal-bin /tmp/diagnostic-signal-recovery
 		chmod 0700 /tmp/diagnostic-signal-recovery
@@ -2234,11 +2234,11 @@ mkdir -p -m 0755 "$service_target_root/units"
 			>/opt/diagnostic-signal-bin/mktemp
 		cp /opt/restore-fail-bin/systemctl /opt/diagnostic-signal-bin/systemctl
 		chmod 0755 /opt/diagnostic-signal-bin/mktemp /opt/diagnostic-signal-bin/systemctl
-		if PATH="/tmp/diagnostic-signal-bin:/tmp/restore-fail-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/diagnostic-signal-bin \
+		if PATH="/tmp/diagnostic-signal-bin:/tmp/restore-fail-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/diagnostic-signal-bin \
 			FAKE_SYSTEMD_STATE=/tmp/restore-fail-state \
 			FAKE_RECOVERY_TRIGGER=/tmp/diagnostic-signal-recovery \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
-			OXIDEDNS_INSTALL_RECOVERY_DIR=/tmp/diagnostic-signal-recovery \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
+			BORONDNS_INSTALL_RECOVERY_DIR=/tmp/diagnostic-signal-recovery \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd \
 			>/tmp/diagnostic-signal.log 2>&1; then
 			echo "installer accepted signal-interrupted incomplete rollback" >&2
@@ -2251,7 +2251,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 		mkdir -p /opt/diagnostic-fail-bin /tmp/diagnostic-fail-state /tmp/diagnostic-fail-recovery
 		chmod 0700 /tmp/diagnostic-fail-recovery
 		touch /tmp/diagnostic-fail-state/active /tmp/diagnostic-fail-state/enabled
-		printf "old-systemd-service\n" >/tmp/systemd/oxidedns.service
+		printf "old-systemd-service\n" >/tmp/systemd/borondns.service
 		printf "%s\n" "#!/bin/sh" \
 			"state=\${FAKE_SYSTEMD_STATE:?}" \
 			"case \"\$1\" in" \
@@ -2272,11 +2272,11 @@ mkdir -p -m 0755 "$service_target_root/units"
 			"exec /usr/bin/mktemp \"\$@\"" \
 			>/opt/diagnostic-fail-bin/mktemp
 		chmod 0755 /opt/diagnostic-fail-bin/systemctl /opt/diagnostic-fail-bin/mktemp
-		if PATH="/tmp/diagnostic-fail-bin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/diagnostic-fail-bin \
+		if PATH="/tmp/diagnostic-fail-bin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/diagnostic-fail-bin \
 			FAKE_SYSTEMD_STATE=/tmp/diagnostic-fail-state \
 			FAKE_RECOVERY_TRIGGER=/tmp/diagnostic-fail-recovery \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
-			OXIDEDNS_INSTALL_RECOVERY_DIR=/tmp/diagnostic-fail-recovery \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd \
+			BORONDNS_INSTALL_RECOVERY_DIR=/tmp/diagnostic-fail-recovery \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd \
 			>/tmp/diagnostic-fail.log 2>&1; then
 			echo "installer accepted rollback with failed diagnostic creation" >&2
@@ -2286,7 +2286,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			test "$(grep -c "^retained_backup_" /tmp/diagnostic-fail.log)" -eq 5
 			fallback_binary_backup=""
 		while IFS="=" read -r recovery_key recovery_value; do
-			if [[ "$recovery_key" == "retained_backup_oxidedns" ]]; then
+			if [[ "$recovery_key" == "retained_backup_borondns" ]]; then
 				fallback_binary_backup="$recovery_value"
 				break
 			fi
@@ -2309,7 +2309,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 				"    /usr/bin/touch \"\$RECOVERY_POST_CREATE_ROOT/fault-fired\"; exit 97" \
 				"  fi" \
 				"fi" \
-				"exec /usr/bin/stat.oxidedns-post-create-backup \"\$@\"" >"$post_create_tools/stat"
+				"exec /usr/bin/stat.borondns-post-create-backup \"\$@\"" >"$post_create_tools/stat"
 			printf "%s\n" "#!/bin/bash" \
 				"candidate=\"\${!#}\"" \
 				"if [[ \"\${RECOVERY_POST_CREATE_MODE:-}\" == sync && \"\$candidate\" == /proc/self/fd/* ]]; then" \
@@ -2340,10 +2340,10 @@ mkdir -p -m 0755 "$service_target_root/units"
 				rm -rf "$post_create_root"
 				mkdir -m 0700 "$post_create_root" "$post_create_root/state"
 				touch "$post_create_root/state/active" "$post_create_root/state/enabled"
-				printf "old-systemd-service\n" >/tmp/systemd/oxidedns.service
+				printf "old-systemd-service\n" >/tmp/systemd/borondns.service
 				post_create_stat_replaced=0
 				if [[ "$post_create_mode" == fd-stat ]]; then
-					mv /usr/bin/stat /usr/bin/stat.oxidedns-post-create-backup
+					mv /usr/bin/stat /usr/bin/stat.borondns-post-create-backup
 					cp "$post_create_tools/stat" /usr/bin/stat
 					chmod 0755 /usr/bin/stat
 					post_create_stat_replaced=1
@@ -2351,16 +2351,16 @@ mkdir -p -m 0755 "$service_target_root/units"
 				post_create_install_succeeded=0
 				if RECOVERY_POST_CREATE_MODE="$post_create_mode" \
 					RECOVERY_POST_CREATE_ROOT="$post_create_root" \
-					OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$post_create_tools" \
+					BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$post_create_tools" \
 					FAKE_SYSTEMD_STATE="$post_create_root/state" \
-					OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
-					OXIDEDNS_INSTALL_RECOVERY_DIR="$post_create_root" \
+					BORONDNS_SYSTEMD_DIR=/tmp/systemd \
+					BORONDNS_INSTALL_RECOVERY_DIR="$post_create_root" \
 					/tmp/rollback-pkg/install.sh update --yes --init systemd \
 					>"$post_create_root/install.log" 2>&1; then
 					post_create_install_succeeded=1
 				fi
 				if ((post_create_stat_replaced)); then
-					mv /usr/bin/stat.oxidedns-post-create-backup /usr/bin/stat
+					mv /usr/bin/stat.borondns-post-create-backup /usr/bin/stat
 				fi
 				if ((post_create_install_succeeded)); then
 					echo "installer accepted post-create diagnostic $post_create_mode failure" >&2
@@ -2375,55 +2375,55 @@ mkdir -p -m 0755 "$service_target_root/units"
 			unset -f printf
 
 			mkdir -p /tmp/systemd-fresh/state
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-fresh/state \
-			OXIDEDNS_SYSTEMD_DIR=/tmp/systemd-fresh/units \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin FAKE_SYSTEMD_STATE=/tmp/systemd-fresh/state \
+			BORONDNS_SYSTEMD_DIR=/tmp/systemd-fresh/units \
 			/pkg/install.sh --yes --init systemd \
 			--bin-dir /tmp/systemd-fresh/bin --config /tmp/systemd-fresh/config/config.toml; then
 			echo "fresh installer did not fail when systemd restart failed" >&2
 			exit 1
 		fi
 		test ! -e /tmp/systemd-fresh/state/enabled
-		test ! -e /tmp/systemd-fresh/bin/oxidedns
+		test ! -e /tmp/systemd-fresh/bin/borondns
 		test ! -e /tmp/systemd-fresh/config/config.toml
-		test ! -e /tmp/systemd-fresh/units/oxidedns.service
+		test ! -e /tmp/systemd-fresh/units/borondns.service
 
-		live_config_hash="$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		live_config_hash="$(sha256sum /etc/borondns-secondary/config.toml)"
 		cp -a /pkg /tmp/configure-pkg
-		printf x >>/tmp/configure-pkg/bin/oxidedns
-		configure_hash="$(sha256sum /tmp/configure-pkg/bin/oxidedns)"
+		printf x >>/tmp/configure-pkg/bin/borondns
+		configure_hash="$(sha256sum /tmp/configure-pkg/bin/borondns)"
 		configure_hash="${configure_hash%% *}"
 		sed -i "s/^binary_sha256=.*/binary_sha256=$configure_hash/" /tmp/configure-pkg/manifest.txt
-		if OXIDEDNS_DNS_LISTEN=not-an-address \
+		if BORONDNS_DNS_LISTEN=not-an-address \
 			/tmp/configure-pkg/install.sh configure --yes --init none; then
 			echo "configure accepted an invalid candidate config" >&2
 			exit 1
 		fi
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		test -e /tmp/systemd-state/active
 		test -e /tmp/systemd-state/enabled
 
-		configure_live_hash="$(sha256sum /usr/local/bin/oxidedns)"
-		configure_live_config_hash="$(sha256sum /etc/oxidedns-secondary/config.toml)"
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin \
-			FAKE_SYSTEMD_STATE=/tmp/systemd-state OXIDEDNS_ZONE=configure-failure.example. \
+		configure_live_hash="$(sha256sum /usr/local/bin/borondns)"
+		configure_live_config_hash="$(sha256sum /etc/borondns-secondary/config.toml)"
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin \
+			FAKE_SYSTEMD_STATE=/tmp/systemd-state BORONDNS_ZONE=configure-failure.example. \
 			/tmp/configure-pkg/install.sh configure --yes --init systemd; then
 			echo "configure accepted an active systemd restart failure" >&2
 			exit 1
 		fi
-		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$configure_live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$configure_live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		test -e /tmp/systemd-state/active
 		test -e /tmp/systemd-state/enabled
 
-		if PATH="/tmp/fakebin:$PATH" OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin \
-			OXIDEDNS_ZONE=configure-openrc-failure.example. \
+		if PATH="/tmp/fakebin:$PATH" BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/fakebin \
+			BORONDNS_ZONE=configure-openrc-failure.example. \
 			/tmp/configure-pkg/install.sh configure --yes --init openrc; then
 			echo "configure accepted an active OpenRC restart failure" >&2
 			exit 1
 		fi
-		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$configure_live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$configure_live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		test -e /tmp/openrc-enabled
 
 		mkdir -p /opt/configure-delayed-fail-bin /tmp/configure-delayed-fail-state
@@ -2439,17 +2439,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 			"enable) touch \"\$state/enabled\" ;; disable) rm -f \"\$state/enabled\" ;; daemon-reload) exit 0 ;; *) exit 0 ;; esac" \
 			>/opt/configure-delayed-fail-bin/systemctl
 		chmod 0755 /opt/configure-delayed-fail-bin/systemctl
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-delayed-fail-bin \
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-delayed-fail-bin \
 			FAKE_SYSTEMD_STATE=/tmp/configure-delayed-fail-state \
-			OXIDEDNS_INSTALLER_READINESS_ATTEMPTS=2 OXIDEDNS_ZONE=configure-delayed-failure.example. \
+			BORONDNS_INSTALLER_READINESS_ATTEMPTS=2 BORONDNS_ZONE=configure-delayed-failure.example. \
 			/tmp/configure-pkg/install.sh configure --yes --init systemd \
 			>/tmp/configure-delayed-failure.log 2>&1; then
 			echo "configure accepted a transient active state followed by delayed failure" >&2
 			exit 1
 		fi
-		grep -q "responsive OxideDNS listener for two consecutive probes" /tmp/configure-delayed-failure.log
-		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$configure_live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		grep -q "responsive BoronDNS listener for two consecutive probes" /tmp/configure-delayed-failure.log
+		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$configure_live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 		test -e /tmp/configure-delayed-fail-state/active
 		test -e /tmp/configure-delayed-fail-state/enabled
 
@@ -2457,17 +2457,17 @@ mkdir -p -m 0755 "$service_target_root/units"
 		# post-start stability window before committing replacement files.
 		rm -f /tmp/configure-delayed-fail-state/restarted /tmp/configure-delayed-fail-state/probes
 		touch /tmp/configure-delayed-fail-state/active /tmp/configure-delayed-fail-state/enabled
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-delayed-fail-bin \
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-delayed-fail-bin \
 			FAKE_SYSTEMD_STATE=/tmp/configure-delayed-fail-state \
-			OXIDEDNS_INSTALLER_READINESS_ATTEMPTS=2 OXIDEDNS_SYSTEMD_DIR=/tmp/systemd \
+			BORONDNS_INSTALLER_READINESS_ATTEMPTS=2 BORONDNS_SYSTEMD_DIR=/tmp/systemd \
 			/tmp/rollback-pkg/install.sh update --yes --init systemd \
 			>/tmp/update-delayed-failure.log 2>&1; then
 			echo "update committed without post-start listener stability" >&2
 			exit 1
 		fi
-		grep -q "responsive OxideDNS listener for two consecutive probes" /tmp/update-delayed-failure.log
-		test "$live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		grep -qx "old-systemd-service" /tmp/systemd/oxidedns.service
+		grep -q "responsive BoronDNS listener for two consecutive probes" /tmp/update-delayed-failure.log
+		test "$live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		grep -qx "old-systemd-service" /tmp/systemd/borondns.service
 		test -e /tmp/configure-delayed-fail-state/active
 		test -e /tmp/configure-delayed-fail-state/enabled
 
@@ -2480,20 +2480,20 @@ mkdir -p -m 0755 "$service_target_root/units"
 		rm -f /tmp/configure-delayed-fail-state/restarted /tmp/configure-delayed-fail-state/probes
 		touch /tmp/configure-delayed-fail-state/active /tmp/configure-delayed-fail-state/enabled
 		SECONDS=0
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/readiness-blackhole-bin \
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/readiness-blackhole-bin \
 			FAKE_SYSTEMD_STATE=/tmp/configure-delayed-fail-state \
-				OXIDEDNS_INSTALLER_READINESS_ATTEMPTS=2 \
-			OXIDEDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=1 \
-			OXIDEDNS_ZONE=configure-blackhole.example. \
+				BORONDNS_INSTALLER_READINESS_ATTEMPTS=2 \
+			BORONDNS_INSTALLER_READINESS_PROBE_TIMEOUT_SECONDS=1 \
+			BORONDNS_ZONE=configure-blackhole.example. \
 			/tmp/configure-pkg/install.sh configure --yes --init systemd \
 			>/tmp/configure-blackhole.log 2>&1; then
 			echo "configure accepted a permanently blocked readiness connect" >&2
 			exit 1
 		fi
 		test "$SECONDS" -le 5
-		grep -q "responsive OxideDNS listener for two consecutive probes" /tmp/configure-blackhole.log
-		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/oxidedns)"
-		test "$configure_live_config_hash" = "$(sha256sum /etc/oxidedns-secondary/config.toml)"
+		grep -q "responsive BoronDNS listener for two consecutive probes" /tmp/configure-blackhole.log
+		test "$configure_live_hash" = "$(sha256sum /usr/local/bin/borondns)"
+		test "$configure_live_config_hash" = "$(sha256sum /etc/borondns-secondary/config.toml)"
 
 		mkdir -p /opt/configure-success-bin
 		printf "%s\n" "#!/bin/sh" \
@@ -2508,18 +2508,18 @@ mkdir -p -m 0755 "$service_target_root/units"
 			>/opt/configure-success-bin/systemctl
 		chmod 0755 /opt/configure-success-bin/systemctl
 		PATH="/tmp/configure-success-bin:$PATH" \
-			OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-success-bin \
-			FAKE_SYSTEMD_STATE=/tmp/systemd-state FAKE_SERVICE_BINARY=/usr/local/bin/oxidedns \
-			FAKE_SERVICE_CONFIG=/etc/oxidedns-secondary/config.toml OXIDEDNS_ZONE=configure-success.example. \
+			BORONDNS_INSTALLER_TRUSTED_TOOL_DIR=/opt/configure-success-bin \
+			FAKE_SYSTEMD_STATE=/tmp/systemd-state FAKE_SERVICE_BINARY=/usr/local/bin/borondns \
+			FAKE_SERVICE_CONFIG=/etc/borondns-secondary/config.toml BORONDNS_ZONE=configure-success.example. \
 			/tmp/configure-pkg/install.sh configure --yes --init systemd \
 			>/tmp/configure-success.log
-		grep -q "Restarted the active oxidedns service with the new configuration" \
+		grep -q "Restarted the active borondns service with the new configuration" \
 			/tmp/configure-success.log
-		grep -Fqx "restart oxidedns.service" /tmp/systemd-state/configure.log
+		grep -Fqx "restart borondns.service" /tmp/systemd-state/configure.log
 		test -e /tmp/systemd-state/active
 		test -e /tmp/systemd-state/enabled
-		test "$configure_hash" = "$(sha256sum /usr/local/bin/oxidedns | cut -d " " -f1)"
-		grep -Fq "name = \"configure-success.example.\"" /etc/oxidedns-secondary/config.toml
+		test "$configure_hash" = "$(sha256sum /usr/local/bin/borondns | cut -d " " -f1)"
+		grep -Fq "name = \"configure-success.example.\"" /etc/borondns-secondary/config.toml
 		read -r configure_service_pid </tmp/systemd-state/pid
 		kill "$configure_service_pid"
 			wait "$configure_service_pid" 2>/dev/null || true
@@ -2532,7 +2532,7 @@ mkdir -p -m 0755 "$service_target_root/units"
 			rm -rf "$readiness_root" "$readiness_tools"
 			mkdir -p "$readiness_root/bin" "$readiness_root/config" "$readiness_root/units" \
 				"$readiness_root/state" "$readiness_tools"
-			cp /pkg/bin/oxidedns /pkg/bin/oxide-gun "$readiness_root/bin/"
+			cp /pkg/bin/borondns /pkg/bin/oxide-gun "$readiness_root/bin/"
 			printf "%s\n" "#!/bin/sh" \
 				"state=\${READINESS_STATE:?}" \
 				"case \"\$1\" in" \
@@ -2550,7 +2550,7 @@ listen_udp = ["127.0.0.1:15301"]
 listen_tcp = ["127.0.0.1:15301"]
 health = "127.0.0.1:18181"
 [process]
-run_as_user = "oxidedns"
+run_as_user = "borondns"
 [limits]
 max_tcp_connections = 8
 max_concurrent_transfers = 1
@@ -2561,7 +2561,7 @@ EOF
 			cat >"$readiness_root/config/multiline.toml" <<EOF
 [server]
 [process]
-run_as_user = "oxidedns"
+run_as_user = "borondns"
 [interfaces]
 dns = ["127.0.0.1:15302"]
 mgmt = [
@@ -2580,7 +2580,7 @@ EOF
 			cat >"$readiness_root/config/structured.toml" <<EOF
 [server]
 [process]
-run_as_user = "oxidedns"
+run_as_user = "borondns"
 [interfaces]
 dns = [
     { address = "127.0.0.1:15303", name = "dns-primary" },
@@ -2592,30 +2592,30 @@ max_concurrent_transfers = 1
 name = "structured-readiness.example."
 primaries = ["127.0.0.1:9"]
 EOF
-			chown root:oxidedns "$readiness_root/config/"*.toml
+			chown root:borondns "$readiness_root/config/"*.toml
 			chmod 0640 "$readiness_root/config/"*.toml
 				for readiness_case in legacy multiline structured; do
 				readiness_config="$readiness_root/config/$readiness_case.toml"
-				/pkg/bin/oxidedns check-config --config "$readiness_config" >/dev/null
-				OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
-					OXIDEDNS_SYSTEMD_DIR="$readiness_root/units" OXIDEDNS_STATE_DIR="$readiness_root/runtime" \
-					READINESS_STATE="$readiness_root/state" READINESS_BINARY="$readiness_root/bin/oxidedns" \
+				/pkg/bin/borondns check-config --config "$readiness_config" >/dev/null
+				BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
+					BORONDNS_SYSTEMD_DIR="$readiness_root/units" BORONDNS_STATE_DIR="$readiness_root/runtime" \
+					READINESS_STATE="$readiness_root/state" READINESS_BINARY="$readiness_root/bin/borondns" \
 					READINESS_CONFIG="$readiness_config" /pkg/install.sh update --yes --init systemd \
 					--bin-dir "$readiness_root/bin" --config "$readiness_config" \
 					>"$readiness_root/$readiness_case.log"
-				grep -q "OxideDNS update complete" "$readiness_root/$readiness_case.log"
+				grep -q "BoronDNS update complete" "$readiness_root/$readiness_case.log"
 					READINESS_STATE="$readiness_root/state" "$readiness_tools/systemctl" stop
 				done
 
 				port_zero_root=/opt/installer-readiness-port-zero
 				rm -rf "$port_zero_root"
 				mkdir -p "$port_zero_root/bin" "$port_zero_root/config" "$port_zero_root/units"
-				cp /bin/true "$port_zero_root/bin/oxidedns"
+				cp /bin/true "$port_zero_root/bin/borondns"
 				cp /bin/true "$port_zero_root/bin/oxide-gun"
 				cat >"$port_zero_root/config/config.toml" <<EOF
 [server]
 [process]
-run_as_user = "oxidedns"
+run_as_user = "borondns"
 [interfaces]
 dns = ["127.0.0.1:0"]
 [limits]
@@ -2625,14 +2625,14 @@ max_concurrent_transfers = 1
 name = "port-zero.example."
 primaries = ["127.0.0.1:9"]
 EOF
-				chown root:oxidedns "$port_zero_root/config/config.toml"
+				chown root:borondns "$port_zero_root/config/config.toml"
 				chmod 0640 "$port_zero_root/config/config.toml"
-				/pkg/bin/oxidedns check-config --config "$port_zero_root/config/config.toml" >/dev/null
-				port_zero_binary_before="$(sha256sum "$port_zero_root/bin/oxidedns")"
+				/pkg/bin/borondns check-config --config "$port_zero_root/config/config.toml" >/dev/null
+				port_zero_binary_before="$(sha256sum "$port_zero_root/bin/borondns")"
 				port_zero_tool_before="$(sha256sum "$port_zero_root/bin/oxide-gun")"
 				port_zero_config_before="$(sha256sum "$port_zero_root/config/config.toml")"
-				if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
-					OXIDEDNS_SYSTEMD_DIR="$port_zero_root/units" OXIDEDNS_STATE_DIR="$port_zero_root/runtime" \
+				if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
+					BORONDNS_SYSTEMD_DIR="$port_zero_root/units" BORONDNS_STATE_DIR="$port_zero_root/runtime" \
 					/pkg/install.sh update --yes --init systemd --no-start \
 					--bin-dir "$port_zero_root/bin" --config "$port_zero_root/config/config.toml" \
 					>"$port_zero_root/update.log" 2>&1; then
@@ -2641,16 +2641,16 @@ EOF
 				fi
 				grep -q "installer-managed readiness endpoint must use a fixed nonzero port" \
 					"$port_zero_root/update.log"
-				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/oxidedns")"
+				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/borondns")"
 				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/oxide-gun")"
 				test "$port_zero_config_before" = "$(sha256sum "$port_zero_root/config/config.toml")"
-				test ! -e "$port_zero_root/units/oxidedns.service"
+				test ! -e "$port_zero_root/units/borondns.service"
 
-				if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
-					OXIDEDNS_SYSTEMD_DIR="$port_zero_root/units" OXIDEDNS_STATE_DIR="$port_zero_root/runtime" \
-					OXIDEDNS_ZONE=port-zero-configure.example. OXIDEDNS_PRIMARY=127.0.0.1:9 \
-					OXIDEDNS_NOTIFY_SOURCE=127.0.0.1 OXIDEDNS_DNS_LISTEN=127.0.0.1:0 \
-					OXIDEDNS_MGMT_LISTEN=, \
+				if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$readiness_tools" \
+					BORONDNS_SYSTEMD_DIR="$port_zero_root/units" BORONDNS_STATE_DIR="$port_zero_root/runtime" \
+					BORONDNS_ZONE=port-zero-configure.example. BORONDNS_PRIMARY=127.0.0.1:9 \
+					BORONDNS_NOTIFY_SOURCE=127.0.0.1 BORONDNS_DNS_LISTEN=127.0.0.1:0 \
+					BORONDNS_MGMT_LISTEN=, \
 					/pkg/install.sh configure --yes --init systemd --no-start \
 					--bin-dir "$port_zero_root/bin" --config "$port_zero_root/config/config.toml" \
 					>"$port_zero_root/configure.log" 2>&1; then
@@ -2659,20 +2659,20 @@ EOF
 				fi
 				grep -q "installer-managed readiness endpoint must use a fixed nonzero port" \
 					"$port_zero_root/configure.log"
-				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/oxidedns")"
+				test "$port_zero_binary_before" = "$(sha256sum "$port_zero_root/bin/borondns")"
 				test "$port_zero_tool_before" = "$(sha256sum "$port_zero_root/bin/oxide-gun")"
 				test "$port_zero_config_before" = "$(sha256sum "$port_zero_root/config/config.toml")"
-				test ! -e "$port_zero_root/units/oxidedns.service"
+				test ! -e "$port_zero_root/units/borondns.service"
 
-					if OXIDEDNS_CONFIG_MODE=catalog \
-			OXIDEDNS_CATALOG_ZONE=missing-tsig.example. \
-			OXIDEDNS_PRIMARY=127.0.0.1:9 \
+					if BORONDNS_CONFIG_MODE=catalog \
+			BORONDNS_CATALOG_ZONE=missing-tsig.example. \
+			BORONDNS_PRIMARY=127.0.0.1:9 \
 			/pkg/install.sh --yes --init none --no-start \
 			--bin-dir /tmp/missing-tsig-bin --config /tmp/missing-tsig/config.toml; then
 			echo "unattended catalog install accepted missing TSIG material" >&2
 			exit 1
 			fi
-				test ! -e /tmp/missing-tsig-bin/oxidedns
+				test ! -e /tmp/missing-tsig-bin/borondns
 				test ! -e /tmp/missing-tsig/config.toml
 
 				for partial_tsig_case in name-only secret-only; do
@@ -2680,19 +2680,19 @@ EOF
 					rm -rf "$partial_tsig_root"
 					case "$partial_tsig_case" in
 					name-only)
-						partial_tsig_env=(OXIDEDNS_TSIG_NAME=transfer-key.)
+						partial_tsig_env=(BORONDNS_TSIG_NAME=transfer-key.)
 						;;
 					secret-only)
-						partial_tsig_env=(OXIDEDNS_TSIG_SECRET=dG9wc2VjcmV0)
+						partial_tsig_env=(BORONDNS_TSIG_SECRET=dG9wc2VjcmV0)
 						;;
 					esac
-					if env OXIDEDNS_ZONE=partial-tsig.example. OXIDEDNS_PRIMARY=127.0.0.1:9 \
+					if env BORONDNS_ZONE=partial-tsig.example. BORONDNS_PRIMARY=127.0.0.1:9 \
 						"${partial_tsig_env[@]}" /pkg/install.sh --yes --init none --no-start \
 						--bin-dir "$partial_tsig_root/bin" --config "$partial_tsig_root/config/config.toml"; then
 						echo "unattended static-zone install accepted partial TSIG material: $partial_tsig_case" >&2
 						exit 1
 					fi
-					test ! -e "$partial_tsig_root/bin/oxidedns"
+					test ! -e "$partial_tsig_root/bin/borondns"
 					test ! -e "$partial_tsig_root/config/config.toml"
 				done
 
@@ -2704,44 +2704,44 @@ EOF
 					echo "installer accepted hostile configuration input: $case_name" >&2
 					exit 1
 				fi
-				test ! -e "/tmp/hostile-$case_name-bin/oxidedns"
+				test ! -e "/tmp/hostile-$case_name-bin/borondns"
 				test ! -e "/tmp/hostile-$case_name/config.toml"
 			}
 			printf -v hostile_zone_newline "%b" "safe.example.\\n[limits]"
 			printf -v hostile_zone_control "%b" "safe\\001.example."
 			printf -v hostile_tsig_name "%b" "key.\\n[observability]"
 			printf -v hostile_tsig_secret "%b" "dG9w\"\\n\\n[limits]\\nmax_zones = 1\\n#"
-			expect_hostile_config_rejected zone-newline "OXIDEDNS_ZONE=$hostile_zone_newline"
-			expect_hostile_config_rejected zone-control "OXIDEDNS_ZONE=$hostile_zone_control"
+			expect_hostile_config_rejected zone-newline "BORONDNS_ZONE=$hostile_zone_newline"
+			expect_hostile_config_rejected zone-control "BORONDNS_ZONE=$hostile_zone_control"
 			expect_hostile_config_rejected tsig-name \
-				"OXIDEDNS_TSIG_NAME=$hostile_tsig_name" OXIDEDNS_TSIG_SECRET=dG9w
+				"BORONDNS_TSIG_NAME=$hostile_tsig_name" BORONDNS_TSIG_SECRET=dG9w
 			expect_hostile_config_rejected tsig-secret \
-				OXIDEDNS_TSIG_NAME=transfer-key. "OXIDEDNS_TSIG_SECRET=$hostile_tsig_secret"
+				BORONDNS_TSIG_NAME=transfer-key. "BORONDNS_TSIG_SECRET=$hostile_tsig_secret"
 			expect_hostile_config_rejected tsig-noncanonical \
-				OXIDEDNS_TSIG_NAME=transfer-key. OXIDEDNS_TSIG_SECRET=AB==
+				BORONDNS_TSIG_NAME=transfer-key. BORONDNS_TSIG_SECRET=AB==
 			expect_hostile_config_rejected tsig-unpadded \
-				OXIDEDNS_TSIG_NAME=transfer-key. OXIDEDNS_TSIG_SECRET=YQ
+				BORONDNS_TSIG_NAME=transfer-key. BORONDNS_TSIG_SECRET=YQ
 
-			OXIDEDNS_ZONE=padded-tsig.example. OXIDEDNS_PRIMARY=127.0.0.1:9 \
-				OXIDEDNS_NOTIFY_SOURCE=127.0.0.1 OXIDEDNS_DNS_LISTEN=127.0.0.1:5450 \
-				OXIDEDNS_MGMT_LISTEN=127.0.0.1:18082 OXIDEDNS_TRANSFER_SOURCE=127.0.0.1:0 \
-				OXIDEDNS_TSIG_NAME=transfer-key. OXIDEDNS_TSIG_SECRET=YQ== \
+			BORONDNS_ZONE=padded-tsig.example. BORONDNS_PRIMARY=127.0.0.1:9 \
+				BORONDNS_NOTIFY_SOURCE=127.0.0.1 BORONDNS_DNS_LISTEN=127.0.0.1:5450 \
+				BORONDNS_MGMT_LISTEN=127.0.0.1:18082 BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
+				BORONDNS_TSIG_NAME=transfer-key. BORONDNS_TSIG_SECRET=YQ== \
 				/pkg/install.sh --yes --init none --no-start \
 				--bin-dir /tmp/padded-tsig/bin --config /tmp/padded-tsig/config/config.toml
-			/tmp/padded-tsig/bin/oxidedns check-config --config /tmp/padded-tsig/config/config.toml
+			/tmp/padded-tsig/bin/borondns check-config --config /tmp/padded-tsig/config/config.toml
 
-			OXIDEDNS_CONFIG_MODE=catalog \
-		OXIDEDNS_CATALOG_ZONE=catalog-smoke.example. \
-		OXIDEDNS_PRIMARY=127.0.0.1:9 \
-		OXIDEDNS_NOTIFY_SOURCE=127.0.0.1 \
-		OXIDEDNS_DNS_LISTEN=127.0.0.1:5400 \
-		OXIDEDNS_MGMT_LISTEN=127.0.0.1:18081 \
-		OXIDEDNS_TRANSFER_SOURCE=127.0.0.1:0 \
-		OXIDEDNS_TSIG_NAME=catalog-transfer-key. \
-		OXIDEDNS_TSIG_SECRET=dG9wc2VjcmV0 \
+			BORONDNS_CONFIG_MODE=catalog \
+		BORONDNS_CATALOG_ZONE=catalog-smoke.example. \
+		BORONDNS_PRIMARY=127.0.0.1:9 \
+		BORONDNS_NOTIFY_SOURCE=127.0.0.1 \
+		BORONDNS_DNS_LISTEN=127.0.0.1:5400 \
+		BORONDNS_MGMT_LISTEN=127.0.0.1:18081 \
+		BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
+		BORONDNS_TSIG_NAME=catalog-transfer-key. \
+		BORONDNS_TSIG_SECRET=dG9wc2VjcmV0 \
 		/pkg/install.sh --yes --init none --no-start \
 		--bin-dir /tmp/catalog-bin --config /tmp/catalog/config.toml
-		/tmp/catalog-bin/oxidedns check-config --config /tmp/catalog/config.toml
+		/tmp/catalog-bin/borondns check-config --config /tmp/catalog/config.toml
 		grep -q "catalog-smoke.example." /tmp/catalog/config.toml
 		grep -q "tsig_key = \"catalog-transfer-key.\"" /tmp/catalog/config.toml
 
@@ -2749,8 +2749,8 @@ EOF
 		uninstall_tool_dir=/opt/uninstall-preflight-bin
 		rm -rf "$uninstall_root" "$uninstall_tool_dir"
 		mkdir -p "$uninstall_root/bin" "$uninstall_root/units" "$uninstall_root/state" "$uninstall_tool_dir"
-		cp /usr/local/bin/oxidedns /usr/local/bin/oxide-gun "$uninstall_root/bin/"
-		printf "managed unit\n" >"$uninstall_root/units/oxidedns.service"
+		cp /usr/local/bin/borondns /usr/local/bin/oxide-gun "$uninstall_root/bin/"
+		printf "managed unit\n" >"$uninstall_root/units/borondns.service"
 		touch "$uninstall_root/state/active" "$uninstall_root/state/enabled"
 		printf "%s\n" "#!/bin/sh" \
 			"state=\${UNINSTALL_STATE:?}" \
@@ -2758,25 +2758,25 @@ EOF
 			"case \"\$1\" in is-active) if test -e \"\$state/active\"; then echo active; else echo inactive; exit 3; fi ;; is-enabled) if test -e \"\$state/enabled\"; then echo enabled; else echo disabled; exit 1; fi ;; stop) rm -f \"\$state/active\" ;; disable) rm -f \"\$state/enabled\" ;; *) exit 0 ;; esac" \
 			>"$uninstall_tool_dir/systemctl"
 		chmod 0755 "$uninstall_tool_dir/systemctl"
-		mv /usr/share/doc/oxidedns/README.install.md /usr/share/doc/oxidedns/README.install.md.before-hostile
+		mv /usr/share/doc/borondns/README.install.md /usr/share/doc/borondns/README.install.md.before-hostile
 		printf "hostile documentation target sentinel\n" >"$uninstall_root/doc-victim"
-		ln -s "$uninstall_root/doc-victim" /usr/share/doc/oxidedns/README.install.md
-		uninstall_binary_hash="$(sha256sum "$uninstall_root/bin/oxidedns")"
-		uninstall_unit_hash="$(sha256sum "$uninstall_root/units/oxidedns.service")"
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tool_dir" UNINSTALL_STATE="$uninstall_root/state" \
-			OXIDEDNS_BIN_DIR="$uninstall_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_root/units" \
+		ln -s "$uninstall_root/doc-victim" /usr/share/doc/borondns/README.install.md
+		uninstall_binary_hash="$(sha256sum "$uninstall_root/bin/borondns")"
+		uninstall_unit_hash="$(sha256sum "$uninstall_root/units/borondns.service")"
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tool_dir" UNINSTALL_STATE="$uninstall_root/state" \
+			BORONDNS_BIN_DIR="$uninstall_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_root/units" \
 			/pkg/install.sh uninstall --yes --init systemd; then
 			echo "uninstall accepted a hostile documentation symlink after service mutation" >&2
 			exit 1
 		fi
-		test "$uninstall_binary_hash" = "$(sha256sum "$uninstall_root/bin/oxidedns")"
-		test "$uninstall_unit_hash" = "$(sha256sum "$uninstall_root/units/oxidedns.service")"
+		test "$uninstall_binary_hash" = "$(sha256sum "$uninstall_root/bin/borondns")"
+		test "$uninstall_unit_hash" = "$(sha256sum "$uninstall_root/units/borondns.service")"
 		test -e "$uninstall_root/state/active"
 		test -e "$uninstall_root/state/enabled"
 		test ! -s "$uninstall_root/state/commands"
 		grep -qx "hostile documentation target sentinel" "$uninstall_root/doc-victim"
-		rm /usr/share/doc/oxidedns/README.install.md
-		mv /usr/share/doc/oxidedns/README.install.md.before-hostile /usr/share/doc/oxidedns/README.install.md
+		rm /usr/share/doc/borondns/README.install.md
+		mv /usr/share/doc/borondns/README.install.md.before-hostile /usr/share/doc/borondns/README.install.md
 
 		# Uninstall is a service-and-file transaction: manager failures after
 		# service mutation must restore both managed files and prior state.
@@ -2786,16 +2786,16 @@ EOF
 		mkdir -p "$uninstall_tx_root/bin" "$uninstall_tx_root/units" \
 			"$uninstall_tx_root/state" "$uninstall_tx_root/runtime" "$uninstall_tx_tools"
 		chmod 0700 "$uninstall_tx_root/runtime"
-		cp /usr/local/bin/oxidedns /usr/local/bin/oxide-gun "$uninstall_tx_root/bin/"
-		printf "transactional unit\n" >"$uninstall_tx_root/units/oxidedns.service"
+		cp /usr/local/bin/borondns /usr/local/bin/oxide-gun "$uninstall_tx_root/bin/"
+		printf "transactional unit\n" >"$uninstall_tx_root/units/borondns.service"
 		touch "$uninstall_tx_root/state/active" "$uninstall_tx_root/state/enabled"
 			printf "%s\n" "#!/bin/sh" \
 				"state=\${UNINSTALL_TX_STATE:?}" \
 				"case \"\$1\" in" \
 				"is-active)" \
 				"  if test \"\${UNINSTALL_PRECALLBACK_SWAP:-0}\" = 1 && test ! -e \"\$state/precallback-swapped\"; then" \
-				"    mv \"\${UNINSTALL_TX_UNITS:?}/oxidedns.service\" \"\$state/precallback-original\"" \
-				"    printf \"uninstall precallback victim\\n\" >\"\${UNINSTALL_TX_UNITS:?}/oxidedns.service\"" \
+				"    mv \"\${UNINSTALL_TX_UNITS:?}/borondns.service\" \"\$state/precallback-original\"" \
+				"    printf \"uninstall precallback victim\\n\" >\"\${UNINSTALL_TX_UNITS:?}/borondns.service\"" \
 				"    touch \"\$state/precallback-swapped\"" \
 				"  fi" \
 				"  if test -e \"\$state/active\"; then echo active; else echo inactive; exit 3; fi ;;" \
@@ -2807,33 +2807,33 @@ EOF
 				"daemon-reload)" \
 				"  if test \"\${FAIL_UNINSTALL_RELOAD_ONCE:-0}\" = 1 && test ! -e \"\$state/reload-failed\"; then touch \"\$state/reload-failed\"; exit 43; fi" \
 				"  if test \"\${RECREATE_UNINSTALL_UNIT:-0}\" = 1 && test ! -e \"\$state/unit-recreated\"; then" \
-				"    printf \"recreated uninstall unit victim\\n\" >\"\${UNINSTALL_TX_UNITS:?}/oxidedns.service\"" \
+				"    printf \"recreated uninstall unit victim\\n\" >\"\${UNINSTALL_TX_UNITS:?}/borondns.service\"" \
 				"    touch \"\$state/unit-recreated\"" \
 				"  fi ;;" \
 				"*) exit 0 ;; esac" >"$uninstall_tx_tools/systemctl"
 		chmod 0755 "$uninstall_tx_tools/systemctl"
-		uninstall_tx_binary_hash="$(sha256sum "$uninstall_tx_root/bin/oxidedns")"
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
+		uninstall_tx_binary_hash="$(sha256sum "$uninstall_tx_root/bin/borondns")"
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
 			UNINSTALL_TX_STATE="$uninstall_tx_root/state" FAIL_UNINSTALL_DISABLE=1 \
-			OXIDEDNS_BIN_DIR="$uninstall_tx_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
-			OXIDEDNS_STATE_DIR="$uninstall_tx_root/runtime" \
+			BORONDNS_BIN_DIR="$uninstall_tx_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
+			BORONDNS_STATE_DIR="$uninstall_tx_root/runtime" \
 			/pkg/install.sh uninstall --yes --init systemd; then
 			echo "uninstall ignored a service disable failure" >&2
 			exit 1
 		fi
-		test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/oxidedns")"
-		grep -qx "transactional unit" "$uninstall_tx_root/units/oxidedns.service"
+		test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/borondns")"
+		grep -qx "transactional unit" "$uninstall_tx_root/units/borondns.service"
 		test -e "$uninstall_tx_root/state/active"
 			test -e "$uninstall_tx_root/state/enabled"
 
 			# The initial uninstall preflight must remain authoritative across manager
 			# callbacks; a replacement unit must survive and make the transaction fail.
 			rm -f "$uninstall_tx_root/state/active" "$uninstall_tx_root/state/precallback-swapped"
-			if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
+			if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
 				UNINSTALL_TX_STATE="$uninstall_tx_root/state" \
 				UNINSTALL_TX_UNITS="$uninstall_tx_root/units" UNINSTALL_PRECALLBACK_SWAP=1 \
-				OXIDEDNS_BIN_DIR="$uninstall_tx_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
-				OXIDEDNS_STATE_DIR="$uninstall_tx_root/runtime" \
+				BORONDNS_BIN_DIR="$uninstall_tx_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
+				BORONDNS_STATE_DIR="$uninstall_tx_root/runtime" \
 				/pkg/install.sh uninstall --yes --init systemd \
 				>"$uninstall_tx_root/precallback.log" 2>&1; then
 				echo "uninstall adopted a pre-callback service-file replacement" >&2
@@ -2843,7 +2843,7 @@ EOF
 					cat "$uninstall_tx_root/precallback.log" >&2
 					exit 1
 				}
-				grep -qx "uninstall precallback victim" "$uninstall_tx_root/units/oxidedns.service" || {
+				grep -qx "uninstall precallback victim" "$uninstall_tx_root/units/borondns.service" || {
 					find "$uninstall_tx_root" -maxdepth 2 -type f -print -exec sed -n "1p" {} \; >&2
 					exit 1
 				}
@@ -2851,7 +2851,7 @@ EOF
 					find "$uninstall_tx_root" -maxdepth 2 -type f -print -exec sed -n "1p" {} \; >&2
 					exit 1
 				}
-				mv "$uninstall_tx_root/state/precallback-original" "$uninstall_tx_root/units/oxidedns.service"
+				mv "$uninstall_tx_root/state/precallback-original" "$uninstall_tx_root/units/borondns.service"
 				touch "$uninstall_tx_root/state/active" "$uninstall_tx_root/state/enabled"
 
 			# The transactional uninstall removal itself must re-open the service leaf
@@ -2863,52 +2863,52 @@ EOF
 			cp "$uninstall_tx_tools/systemctl" "$final_removal_tools/systemctl"
 			printf "%s\n" "#!/bin/sh" \
 				"root=\${FINAL_REMOVAL_RACE_ROOT:?}" \
-				"if test \"\$2\" = move && test \"\$5\" = oxidedns.service && test ! -e \"\$root/state/final-removal-swapped\"; then" \
-				"  mv \"\$root/units/oxidedns.service\" \"\$root/state/final-removal-original\"" \
-				"  printf \"final removal victim\\n\" >\"\$root/units/oxidedns.service\"" \
+				"if test \"\$2\" = move && test \"\$5\" = borondns.service && test ! -e \"\$root/state/final-removal-swapped\"; then" \
+				"  mv \"\$root/units/borondns.service\" \"\$root/state/final-removal-original\"" \
+				"  printf \"final removal victim\\n\" >\"\$root/units/borondns.service\"" \
 				"  touch \"\$root/state/final-removal-swapped\"" \
 				"fi" \
 				"exec /usr/bin/perl \"\$@\"" >"$final_removal_tools/perl"
 			chmod 0755 "$final_removal_tools/systemctl" "$final_removal_tools/perl"
-			if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_removal_tools" \
+			if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$final_removal_tools" \
 				UNINSTALL_TX_STATE="$uninstall_tx_root/state" FINAL_REMOVAL_RACE_ROOT="$uninstall_tx_root" \
-				OXIDEDNS_BIN_DIR="$uninstall_tx_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
-				OXIDEDNS_STATE_DIR="$uninstall_tx_root/runtime" \
+				BORONDNS_BIN_DIR="$uninstall_tx_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
+				BORONDNS_STATE_DIR="$uninstall_tx_root/runtime" \
 				/pkg/install.sh uninstall --yes --init systemd \
 				>"$uninstall_tx_root/final-removal.log" 2>&1; then
 				echo "uninstall accepted a final removal leaf replacement" >&2
 				exit 1
 			fi
 			grep -q "installer move input identity changed" "$uninstall_tx_root/final-removal.log"
-			grep -qx "final removal victim" "$uninstall_tx_root/units/oxidedns.service"
+			grep -qx "final removal victim" "$uninstall_tx_root/units/borondns.service"
 			grep -qx "transactional unit" "$uninstall_tx_root/state/final-removal-original"
-			test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/oxidedns")"
+			test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/borondns")"
 			test -e "$uninstall_tx_root/state/active"
 			test -e "$uninstall_tx_root/state/enabled"
-			mv "$uninstall_tx_root/state/final-removal-original" "$uninstall_tx_root/units/oxidedns.service"
+			mv "$uninstall_tx_root/state/final-removal-original" "$uninstall_tx_root/units/borondns.service"
 
 		rm -f "$uninstall_tx_root/state/reload-failed"
-		if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
+		if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
 			UNINSTALL_TX_STATE="$uninstall_tx_root/state" FAIL_UNINSTALL_RELOAD_ONCE=1 \
-			OXIDEDNS_BIN_DIR="$uninstall_tx_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
-			OXIDEDNS_STATE_DIR="$uninstall_tx_root/runtime" \
+			BORONDNS_BIN_DIR="$uninstall_tx_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
+			BORONDNS_STATE_DIR="$uninstall_tx_root/runtime" \
 			/pkg/install.sh uninstall --yes --init systemd; then
 			echo "uninstall ignored a daemon-reload failure after unit removal" >&2
 			exit 1
 		fi
-		test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/oxidedns")"
-		grep -qx "transactional unit" "$uninstall_tx_root/units/oxidedns.service"
+		test "$uninstall_tx_binary_hash" = "$(sha256sum "$uninstall_tx_root/bin/borondns")"
+		grep -qx "transactional unit" "$uninstall_tx_root/units/borondns.service"
 		test -e "$uninstall_tx_root/state/active"
 			test -e "$uninstall_tx_root/state/enabled"
 
 			# A successful daemon-reload callback that recreates a removed unit must
 			# prevent commit; the foreign unit and the original rollback backup remain.
 			rm -f "$uninstall_tx_root/state/unit-recreated" "$uninstall_tx_root/state/active"
-			if OXIDEDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
+			if BORONDNS_INSTALLER_TRUSTED_TOOL_DIR="$uninstall_tx_tools" \
 				UNINSTALL_TX_STATE="$uninstall_tx_root/state" UNINSTALL_TX_UNITS="$uninstall_tx_root/units" \
 				RECREATE_UNINSTALL_UNIT=1 \
-				OXIDEDNS_BIN_DIR="$uninstall_tx_root/bin" OXIDEDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
-				OXIDEDNS_STATE_DIR="$uninstall_tx_root/runtime" \
+				BORONDNS_BIN_DIR="$uninstall_tx_root/bin" BORONDNS_SYSTEMD_DIR="$uninstall_tx_root/units" \
+				BORONDNS_STATE_DIR="$uninstall_tx_root/runtime" \
 				/pkg/install.sh uninstall --yes --init systemd \
 				>"$uninstall_tx_root/recreated-unit.log" 2>&1; then
 				echo "uninstall committed after daemon-reload recreated its removed unit" >&2
@@ -2916,16 +2916,16 @@ EOF
 			fi
 			grep -q "removed service target reappeared before installer commit" \
 				"$uninstall_tx_root/recreated-unit.log"
-			grep -qx "recreated uninstall unit victim" "$uninstall_tx_root/units/oxidedns.service"
+			grep -qx "recreated uninstall unit victim" "$uninstall_tx_root/units/borondns.service"
 			test "$(find "$uninstall_tx_root/units" -maxdepth 1 -type f -name "*.rollback.*" | wc -l)" -ge 1
 
-		/usr/local/bin/oxidedns serve --config /etc/oxidedns-secondary/config.toml >/tmp/oxidedns.log 2>&1 &
+		/usr/local/bin/borondns serve --config /etc/borondns-secondary/config.toml >/tmp/borondns.log 2>&1 &
 		pid=$!
 		sleep 1
 		kill -0 "$pid"
 		kill "$pid"
 		wait "$pid" || true
-			grep -q "OxideDNS runtime initialized" /tmp/oxidedns.log
+			grep -q "BoronDNS runtime initialized" /tmp/borondns.log
 
 			unsafe_tool_mode="$(stat -c %a /usr/bin/sha256sum)"
 			chmod 0777 /usr/bin/sha256sum
@@ -2936,26 +2936,26 @@ EOF
 			grep -q "missing or unsafe required installer tool: sha256sum" /tmp/unsafe-tool.log
 			chmod "$unsafe_tool_mode" /usr/bin/sha256sum
 
-			mv /usr/bin/flock /usr/bin/flock.oxidedns-test-backup
+			mv /usr/bin/flock /usr/bin/flock.borondns-test-backup
 			if /pkg/install.sh --help >/tmp/missing-tool.log 2>&1; then
 				echo "installer accepted a missing required tool" >&2
 				exit 1
 			fi
 			grep -q "missing or unsafe required installer tool: flock" /tmp/missing-tool.log
-			mv /usr/bin/flock.oxidedns-test-backup /usr/bin/flock
-OXIDEDNS_UBUNTU_TEST
+			mv /usr/bin/flock.borondns-test-backup /usr/bin/flock
+BORONDNS_UBUNTU_TEST
 
 # Exercise the documented OpenRC host path with Alpine's real package layout
 # and service-manager tools. Dependencies are installed explicitly so this
 # smoke also verifies the operator prerequisite list and trusted-tool bootstrap.
 docker run --rm \
     -v "$payload_dir:/pkg-source:ro" \
-    -e OXIDEDNS_ZONE=installer-openrc.example. \
-    -e OXIDEDNS_PRIMARY=127.0.0.1:9 \
-    -e OXIDEDNS_NOTIFY_SOURCE=127.0.0.1 \
-    -e OXIDEDNS_DNS_LISTEN=127.0.0.1:5300 \
-    -e OXIDEDNS_MGMT_LISTEN=127.0.0.1:18080 \
-    -e OXIDEDNS_TRANSFER_SOURCE=127.0.0.1:0 \
+    -e BORONDNS_ZONE=installer-openrc.example. \
+    -e BORONDNS_PRIMARY=127.0.0.1:9 \
+    -e BORONDNS_NOTIFY_SOURCE=127.0.0.1 \
+    -e BORONDNS_DNS_LISTEN=127.0.0.1:5300 \
+    -e BORONDNS_MGMT_LISTEN=127.0.0.1:18080 \
+    -e BORONDNS_TRANSFER_SOURCE=127.0.0.1:0 \
     "$alpine_image" \
     /bin/sh -ec '
         apk add --no-cache bash perl coreutils grep sed gawk util-linux shadow shadow-login libcap openrc libc-utils
@@ -2973,22 +2973,22 @@ docker run --rm \
         chmod -R go-w /root/pkg
 
         /root/pkg/install.sh install --yes --init openrc --no-start
-        /usr/local/bin/oxidedns check-config --config /etc/oxidedns-secondary/config.toml
-        test -x /etc/init.d/oxidedns
-        grep -Fq "rc_ulimit=\"-n 65536\"" /etc/init.d/oxidedns
+        /usr/local/bin/borondns check-config --config /etc/borondns-secondary/config.toml
+        test -x /etc/init.d/borondns
+        grep -Fq "rc_ulimit=\"-n 65536\"" /etc/init.d/borondns
 
-        rc-update add oxidedns default
+        rc-update add borondns default
         /root/pkg/install.sh update --yes --init openrc --no-start
-        OXIDEDNS_ZONE=installer-openrc-configure.example. \
+        BORONDNS_ZONE=installer-openrc-configure.example. \
             /root/pkg/install.sh configure --yes --init openrc --no-start
-        grep -Fq "installer-openrc-configure.example." /etc/oxidedns-secondary/config.toml
-        rc-update show default | grep -Fq oxidedns
+        grep -Fq "installer-openrc-configure.example." /etc/borondns-secondary/config.toml
+        rc-update show default | grep -Fq borondns
 
         /root/pkg/install.sh uninstall --yes --init openrc --no-start
-        test ! -e /usr/local/bin/oxidedns
+        test ! -e /usr/local/bin/borondns
         test ! -e /usr/local/bin/oxide-gun
-        test ! -e /etc/init.d/oxidedns
-        test -f /etc/oxidedns-secondary/config.toml
+        test ! -e /etc/init.d/borondns
+        test -f /etc/borondns-secondary/config.toml
     '
 
 printf 'installer Docker smoke passed: %s on %s and %s/OpenRC\n' \

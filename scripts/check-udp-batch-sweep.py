@@ -102,7 +102,7 @@ def append_ratio_check(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Validate retained OxideDNS UDP batch sweep summary TSV."
+        description="Validate retained BoronDNS UDP batch sweep summary TSV."
     )
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", type=Path)

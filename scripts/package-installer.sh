@@ -5,21 +5,21 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/package-common.sh"
 # Release artifact modes must not depend on a caller's permissive umask.
 umask 022
-target_triple="${OXIDEDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
-dist_dir="${OXIDEDNS_DIST_DIR:-$repo_root/target/dist}"
+target_triple="${BORONDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
+dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
 cargo_bin="${CARGO:-}"
 rustc_bin="${RUSTC:-}"
-package_name="${OXIDEDNS_PACKAGE_NAME:-oxidedns}"
-package_require_safe_component OXIDEDNS_PACKAGE_NAME "$package_name" '^[a-z0-9][a-z0-9._-]*$'
-package_require_safe_component OXIDEDNS_PACKAGE_TARGET "$target_triple" '^[A-Za-z0-9][A-Za-z0-9._-]*$'
-allow_dynamic="${OXIDEDNS_PACKAGE_ALLOW_DYNAMIC:-0}"
-allow_dirty_non_release="${OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"
+package_name="${BORONDNS_PACKAGE_NAME:-borondns}"
+package_require_safe_component BORONDNS_PACKAGE_NAME "$package_name" '^[a-z0-9][a-z0-9._-]*$'
+package_require_safe_component BORONDNS_PACKAGE_TARGET "$target_triple" '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+allow_dynamic="${BORONDNS_PACKAGE_ALLOW_DYNAMIC:-0}"
+allow_dirty_non_release="${BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"
 [[ "$allow_dynamic" == 0 || "$allow_dynamic" == 1 ]] || {
-    printf 'OXIDEDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1\n' >&2
+    printf 'BORONDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1\n' >&2
     exit 1
 }
 [[ "$allow_dirty_non_release" == 0 || "$allow_dirty_non_release" == 1 ]] || {
-    printf 'OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
+    printf 'BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
     exit 1
 }
 if [[ "$allow_dynamic" == 1 && "${GITHUB_ACTIONS:-false}" == true ]]; then
@@ -141,7 +141,7 @@ elif [[ "$allow_dynamic" == 1 ]]; then
 fi
 package_require_safe_component package-version "$version" '^[0-9][A-Za-z0-9.+-]*$'
 package_require_safe_component archive-root "$archive_root"
-dist_dir="$(package_canonical_output_root OXIDEDNS_DIST_DIR "$dist_dir")"
+dist_dir="$(package_canonical_output_root BORONDNS_DIST_DIR "$dist_dir")"
 archive="$(package_safe_child_path "$dist_dir" "$archive_root.tar.xz" 'installer archive')"
 binary_asset="$(package_safe_child_path "$dist_dir" "$archive_root.bin" 'installer binary asset')"
 oxide_gun_asset="$(package_safe_child_path "$dist_dir" "$archive_root-oxide-gun.bin" 'installer tool binary asset')"
@@ -208,17 +208,17 @@ fi
     [[ "$(sha256_file "$rustc_bin" | awk '{ print $1 }')" == "$verified_rustc_sha256" ]]
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
-        OXIDEDNS_BUILD_COMMIT="$commit" \
-        OXIDEDNS_BUILD_RUST_VERSION="$verified_rust_version" \
-        OXIDEDNS_BUILD_TIMESTAMP="$build_timestamp" \
+        BORONDNS_BUILD_COMMIT="$commit" \
+        BORONDNS_BUILD_RUST_VERSION="$verified_rust_version" \
+        BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
         SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0 \
         CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release \
-        --target-dir "$run_build_target" --target "$target_triple" -p oxidedns-cli --features af-xdp
+        --target-dir "$run_build_target" --target "$target_triple" -p borondns-cli --features af-xdp
     env -i HOME="$run_build_home" CARGO_HOME="$run_cargo_home" \
         PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
-        OXIDEDNS_BUILD_COMMIT="$commit" \
-        OXIDEDNS_BUILD_RUST_VERSION="$verified_rust_version" \
-        OXIDEDNS_BUILD_TIMESTAMP="$build_timestamp" \
+        BORONDNS_BUILD_COMMIT="$commit" \
+        BORONDNS_BUILD_RUST_VERSION="$verified_rust_version" \
+        BORONDNS_BUILD_TIMESTAMP="$build_timestamp" \
         SOURCE_DATE_EPOCH="$source_epoch" CARGO_INCREMENTAL=0 \
         CARGO_TARGET_DIR="$run_build_target" "$cargo_bin" build --locked --release \
         --target-dir "$run_build_target" --target "$target_triple" -p oxide-gun --features xdp
@@ -227,7 +227,7 @@ fi
 )
 verify_source_identity "after build"
 
-binary="$run_build_target/$target_triple/release/oxidedns"
+binary="$run_build_target/$target_triple/release/borondns"
 oxide_gun_binary="$run_build_target/$target_triple/release/oxide-gun"
 [[ -x "$binary" ]] || {
     printf 'missing built binary: %s\n' "$binary" >&2
@@ -238,13 +238,13 @@ oxide_gun_binary="$run_build_target/$target_triple/release/oxide-gun"
     exit 1
 }
 
-mkdir -p "$run_staging/bin" "$run_staging/share/oxidedns"
-install -m 0755 "$binary" "$run_staging/bin/oxidedns"
+mkdir -p "$run_staging/bin" "$run_staging/share/borondns"
+install -m 0755 "$binary" "$run_staging/bin/borondns"
 install -m 0755 "$oxide_gun_binary" "$run_staging/bin/oxide-gun"
 install -m 0755 "$repo_root/packaging/installer/install.sh" "$run_staging/install.sh"
-cp -R "$repo_root/packaging/installer/share/oxidedns/." "$run_staging/share/oxidedns/"
+cp -R "$repo_root/packaging/installer/share/borondns/." "$run_staging/share/borondns/"
 install -m 0644 "$repo_root/packaging/installer/README.install.md" "$run_staging/README.install.md"
-install -m 0644 "$repo_root/config/oxidedns.example.toml" "$run_staging/share/oxidedns/oxidedns.example.toml"
+install -m 0644 "$repo_root/config/borondns.example.toml" "$run_staging/share/borondns/borondns.example.toml"
 install -m 0644 "$repo_root/LICENSE-MIT" "$run_staging/LICENSE-MIT"
 install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
 
@@ -263,23 +263,23 @@ install -m 0644 "$repo_root/LICENSE-APACHE" "$run_staging/LICENSE-APACHE"
     sha256_file "$cargo_bin" | awk '{print "cargo_sha256="$1}'
     printf 'rustc_executable=rustc\n'
     sha256_file "$rustc_bin" | awk '{print "rustc_sha256="$1}'
-    printf 'binary=bin/oxidedns\n'
+    printf 'binary=bin/borondns\n'
     printf 'binary_features=af-xdp\n'
     printf 'tool_binary=bin/oxide-gun\n'
     printf 'tool_binary_features=xdp\n'
     sha256_file "$run_staging/install.sh" | awk '{print "installer_sha256="$1}'
-    sha256_file "$run_staging/bin/oxidedns" | awk '{print "binary_sha256="$1}'
+    sha256_file "$run_staging/bin/borondns" | awk '{print "binary_sha256="$1}'
     sha256_file "$run_staging/bin/oxide-gun" | awk '{print "tool_binary_sha256="$1}'
-    sha256_file "$run_staging/share/oxidedns/systemd/oxidedns.service" |
+    sha256_file "$run_staging/share/borondns/systemd/borondns.service" |
         awk '{print "systemd_template_sha256="$1}'
-    sha256_file "$run_staging/share/oxidedns/openrc/oxidedns" |
+    sha256_file "$run_staging/share/borondns/openrc/borondns" |
         awk '{print "openrc_template_sha256="$1}'
     sha256_file "$run_staging/README.install.md" | awk '{print "readme_sha256="$1}'
 } >"$run_staging/manifest.txt"
 
 if command -v file >/dev/null 2>&1; then
     {
-        file "$run_staging/bin/oxidedns"
+        file "$run_staging/bin/borondns"
         file "$run_staging/bin/oxide-gun"
     } >"$run_staging/file.txt"
 else
@@ -300,21 +300,21 @@ static_link_confirmed() {
 }
 
 if command -v ldd >/dev/null 2>&1; then
-    ldd "$run_staging/bin/oxidedns" >"$run_staging/ldd-oxidedns.txt" 2>&1 || true
+    ldd "$run_staging/bin/borondns" >"$run_staging/ldd-borondns.txt" 2>&1 || true
     ldd "$run_staging/bin/oxide-gun" >"$run_staging/ldd-oxide-gun.txt" 2>&1 || true
     {
-        printf '== %s ==\n' "$run_staging/bin/oxidedns"
-        cat "$run_staging/ldd-oxidedns.txt"
+        printf '== %s ==\n' "$run_staging/bin/borondns"
+        cat "$run_staging/ldd-borondns.txt"
         printf '\n== %s ==\n' "$run_staging/bin/oxide-gun"
         cat "$run_staging/ldd-oxide-gun.txt"
     } >"$run_staging/ldd.txt"
 else
-    printf 'ldd not available\n' >"$run_staging/ldd-oxidedns.txt"
+    printf 'ldd not available\n' >"$run_staging/ldd-borondns.txt"
     printf 'ldd not available\n' >"$run_staging/ldd-oxide-gun.txt"
     printf 'ldd not available\n' >"$run_staging/ldd.txt"
 fi
 
-for checked_binary in "$run_staging/bin/oxidedns" "$run_staging/bin/oxide-gun"; do
+for checked_binary in "$run_staging/bin/borondns" "$run_staging/bin/oxide-gun"; do
     ldd_report="$run_staging/ldd-$(basename "$checked_binary").txt"
     if static_link_confirmed "$checked_binary" "$ldd_report" "$run_staging/file.txt"; then
         continue
@@ -322,7 +322,7 @@ for checked_binary in "$run_staging/bin/oxidedns" "$run_staging/bin/oxide-gun"; 
     if [[ "$target_triple" == "x86_64-unknown-linux-musl" && "$allow_dynamic" != "1" ]]; then
         printf 'error: static-link verification failed for release target %s binary %s\n' "$target_triple" "$checked_binary" >&2
         printf 'inspect %s and %s\n' "$run_staging/ldd.txt" "$run_staging/file.txt" >&2
-        printf 'set OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 only for non-release developer artifacts\n' >&2
+        printf 'set BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 only for non-release developer artifacts\n' >&2
         exit 1
     fi
     printf 'warning: static linking not confirmed for %s; inspect %s and %s\n' "$checked_binary" "$run_staging/ldd.txt" "$run_staging/file.txt" >&2

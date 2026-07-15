@@ -47,14 +47,14 @@ audited_unsafe_adapter_paths = {
 }
 tool_unsafe_adapter_paths = current_unsafe_adapter_paths - audited_unsafe_adapter_paths
 expected_current_unsafe_adapters = {
-    Path("crates/oxidedns-server-ebpf/src/lib.rs"),
-    Path("crates/oxidedns-server/src/af_xdp.rs"),
-    Path("crates/oxidedns-server/src/privilege.rs"),
-    Path("crates/oxidedns-server/src/process_hardening.rs"),
-    Path("crates/oxidedns-server/src/process_signals.rs"),
-    Path("crates/oxidedns-server/src/resource_limits.rs"),
-    Path("crates/oxidedns-server/src/std_udp_mmsg.rs"),
-    Path("crates/oxidedns-server/src/std_udp_socket.rs"),
+    Path("crates/borondns-server-ebpf/src/lib.rs"),
+    Path("crates/borondns-server/src/af_xdp.rs"),
+    Path("crates/borondns-server/src/privilege.rs"),
+    Path("crates/borondns-server/src/process_hardening.rs"),
+    Path("crates/borondns-server/src/process_signals.rs"),
+    Path("crates/borondns-server/src/resource_limits.rs"),
+    Path("crates/borondns-server/src/std_udp_mmsg.rs"),
+    Path("crates/borondns-server/src/std_udp_socket.rs"),
 }
 if audited_unsafe_adapter_paths != expected_current_unsafe_adapters:
     raise SystemExit(
@@ -88,8 +88,8 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
             re.compile(r"\bOpenOptions\b"),
         ],
         [
-            Path("crates/oxidedns-core/src/dns.rs"),
-            Path("crates/oxidedns-core/src/zone.rs"),
+            Path("crates/borondns-core/src/dns.rs"),
+            Path("crates/borondns-core/src/zone.rs"),
         ],
     ),
     (
@@ -1421,9 +1421,9 @@ for title, success, patterns, paths in checks:
             for pattern in patterns:
                 if pattern.search(line):
                     if title.startswith("ODS-INV-005") and (
-                        path == Path("crates/oxidedns-server/src/secret_store.rs")
+                        path == Path("crates/borondns-server/src/secret_store.rs")
                         or (
-                            path == Path("crates/oxidedns-server/src/lib.rs")
+                            path == Path("crates/borondns-server/src/lib.rs")
                             and "secrets.reload()" in line
                         )
                     ):
@@ -1445,28 +1445,28 @@ for title, success, patterns, paths in checks:
         print("status=passed")
         print(f"evidence={success}")
 
-zone_text = runtime_sources[Path("crates/oxidedns-core/src/zone.rs")]
-dns_text = runtime_sources[Path("crates/oxidedns-core/src/dns.rs")]
-axfr_text = runtime_sources[Path("crates/oxidedns-core/src/axfr.rs")]
-catalog_text = runtime_sources[Path("crates/oxidedns-core/src/catalog.rs")]
-config_text = runtime_sources[Path("crates/oxidedns-core/src/config.rs")]
+zone_text = runtime_sources[Path("crates/borondns-core/src/zone.rs")]
+dns_text = runtime_sources[Path("crates/borondns-core/src/dns.rs")]
+axfr_text = runtime_sources[Path("crates/borondns-core/src/axfr.rs")]
+catalog_text = runtime_sources[Path("crates/borondns-core/src/catalog.rs")]
+config_text = runtime_sources[Path("crates/borondns-core/src/config.rs")]
 server_module_paths = [
-    Path("crates/oxidedns-server/src/build_info.rs"),
-    Path("crates/oxidedns-server/src/config_validation.rs"),
-    Path("crates/oxidedns-server/src/dns_cookie.rs"),
-    Path("crates/oxidedns-server/src/errors.rs"),
-    Path("crates/oxidedns-server/src/health_metrics.rs"),
-    Path("crates/oxidedns-server/src/lib.rs"),
-    Path("crates/oxidedns-server/src/rate_limit.rs"),
-    Path("crates/oxidedns-server/src/runtime_status.rs"),
-    Path("crates/oxidedns-server/src/shutdown.rs"),
-    Path("crates/oxidedns-server/src/tcp.rs"),
-    Path("crates/oxidedns-server/src/transfer.rs"),
-    Path("crates/oxidedns-server/src/transfer_plan.rs"),
-    Path("crates/oxidedns-server/src/udp.rs"),
+    Path("crates/borondns-server/src/build_info.rs"),
+    Path("crates/borondns-server/src/config_validation.rs"),
+    Path("crates/borondns-server/src/dns_cookie.rs"),
+    Path("crates/borondns-server/src/errors.rs"),
+    Path("crates/borondns-server/src/health_metrics.rs"),
+    Path("crates/borondns-server/src/lib.rs"),
+    Path("crates/borondns-server/src/rate_limit.rs"),
+    Path("crates/borondns-server/src/runtime_status.rs"),
+    Path("crates/borondns-server/src/shutdown.rs"),
+    Path("crates/borondns-server/src/tcp.rs"),
+    Path("crates/borondns-server/src/transfer.rs"),
+    Path("crates/borondns-server/src/transfer_plan.rs"),
+    Path("crates/borondns-server/src/udp.rs"),
 ]
 server_text = "\n".join(runtime_sources[path] for path in server_module_paths)
-bench_text = (repo_root / "crates/oxidedns-core/examples/zone_image_bench.rs").read_text(
+bench_text = (repo_root / "crates/borondns-core/examples/zone_image_bench.rs").read_text(
     encoding="utf-8"
 )
 
@@ -1490,7 +1490,7 @@ required_fragments = [
     ),
     (
         "fixed ZoneImage serve-failure reason metrics",
-        "oxidedns_zone_image_serve_failures_by_reason_total",
+        "borondns_zone_image_serve_failures_by_reason_total",
         server_text,
     ),
     ("insert_loading method", "pub fn insert_loading", zone_text),
@@ -1873,7 +1873,7 @@ else:
 
 print()
 print("check=Direct ZoneImage answer uses exact-plan invariant")
-zone_image_text = runtime_sources[Path("crates/oxidedns-core/src/zone_image.rs")]
+zone_image_text = runtime_sources[Path("crates/borondns-core/src/zone_image.rs")]
 direct_start = dns_text.find("fn build_direct_zone_image_answer_response")
 direct_end = dns_text.find("#[allow(clippy::too_many_arguments)]", direct_start)
 if direct_start >= 0 and direct_end >= 0:
@@ -2089,7 +2089,7 @@ else:
 
 print()
 print("check=ZoneImage wire append helper surface stays narrow")
-zone_image_text = runtime_sources[Path("crates/oxidedns-core/src/zone_image.rs")]
+zone_image_text = runtime_sources[Path("crates/borondns-core/src/zone_image.rs")]
 wire_helper_failures = []
 if "pub fn append_plan_wire" not in zone_image_text:
     wire_helper_failures.append("benchmark append_plan_wire hook is missing")
@@ -4157,7 +4157,7 @@ else:
 
 print()
 print("check=ZoneImage ANY selection uses compiled order without query-time sort")
-zone_image_text = runtime_sources[Path("crates/oxidedns-core/src/zone_image.rs")]
+zone_image_text = runtime_sources[Path("crates/borondns-core/src/zone_image.rs")]
 lookup_plan_start = zone_image_text.find("pub fn lookup_response_plan")
 lookup_plan_end = zone_image_text.find("pub fn augment_lookup_plan_with_dnssec", lookup_plan_start)
 lookup_plan_text = (
@@ -5102,7 +5102,7 @@ print("check=ZoneSnapshot oracle lookup remains outside runtime serving")
 snapshot_lookup_failures = []
 runtime_lookup_hits = []
 for path, text in runtime_sources.items():
-    if path == Path("crates/oxidedns-core/src/zone.rs"):
+    if path == Path("crates/borondns-core/src/zone.rs"):
         continue
     for marker in [".offline_oracle()", ".oracle_lookup_with_options(", ".oracle_lookup("]:
         if marker in text:
@@ -5269,7 +5269,7 @@ live_shadow_hits = [
         "zone_image_shadow",
         "ZoneImageShadowValidator",
         "snapshot_lookup_summary",
-        "oxidedns_zone_image_shadow",
+        "borondns_zone_image_shadow",
     ]
     if marker in server_text or marker in config_text
 ]
@@ -5288,8 +5288,8 @@ else:
 print()
 print("allowed_startup_file_reads:")
 allowed_reads = [
-    "crates/oxidedns-core/src/config.rs: configuration and TSIG secret file reads at startup validation or config dump",
-    "crates/oxidedns-server/src/lib.rs: XoT certificate/key/trust-anchor reads during startup validation or transfer setup",
+    "crates/borondns-core/src/config.rs: configuration and TSIG secret file reads at startup validation or config dump",
+    "crates/borondns-server/src/lib.rs: XoT certificate/key/trust-anchor reads during startup validation or transfer setup",
 ]
 for item in allowed_reads:
     print(f"  {item}")
@@ -5301,7 +5301,7 @@ for item in sorted(audited_unsafe_adapter_paths):
 if tool_unsafe_adapter_paths:
     print("audited_tool_unsafe_boundaries:")
     for item in sorted(tool_unsafe_adapter_paths):
-        print(f"  {item}: reviewed by scripts/audit-safe-rust.sh and excluded from OxideDNS runtime invariant scope")
+        print(f"  {item}: reviewed by scripts/audit-safe-rust.sh and excluded from BoronDNS runtime invariant scope")
 
 if failures:
     print()

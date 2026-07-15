@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/evidence-artifacts.sh
 source "$repo_root/scripts/evidence-artifacts.sh"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-evidence_root="${OXIDEDNS_EVIDENCE_DIR:-$repo_root/target/evidence}"
+evidence_root="${BORONDNS_EVIDENCE_DIR:-$repo_root/target/evidence}"
 snapshot_dir="$evidence_root/$timestamp"
 mkdir -p "$snapshot_dir/logs" "$snapshot_dir/interop-primary-versions"
 printf 'source_path\tsnapshot_path\n' >"$snapshot_dir/interop-primary-versions/INDEX.tsv"
@@ -68,22 +68,22 @@ require_positive_integer() {
 run_rrl_campaign() {
     local name="$1"
     local campaign_dir="$snapshot_dir/$name"
-    local iterations="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS:-3}"
-    local duration="${OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION:-}"
+    local iterations="${BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS:-3}"
+    local duration="${BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION:-}"
 
     if [[ -n "$duration" ]]; then
-        require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION "$duration"
+        require_positive_integer BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION "$duration"
         run_and_capture "$name" bash -lc \
             "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --duration '$duration' --evidence-dir '$campaign_dir'"
     else
-        require_positive_integer OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS "$iterations"
+        require_positive_integer BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS "$iterations"
         run_and_capture "$name" bash -lc \
             "cd '$repo_root' && scripts/rrl-evidence-campaign.sh --iterations '$iterations' --evidence-dir '$campaign_dir'"
     fi
 }
 
 cat >"$snapshot_dir/README.md" <<EOF
-# OxideDNS Release Evidence Snapshot
+# BoronDNS Release Evidence Snapshot
 
 - Created UTC: $timestamp
 - Repository: $repo_root
@@ -132,29 +132,29 @@ record_version curl curl --version
 record_version python3 python3 --version
 
 {
-    printf '# OxideDNS Verification Commands\n\n'
+    printf '# BoronDNS Verification Commands\n\n'
     awk '/^```sh$/ { in_block=1 } in_block { print } /^```$/ && in_block { in_block=0 }' \
         "$repo_root/docs/evidence-command-catalog.md"
 } >"$snapshot_dir/verification-commands.md"
 
 run_and_capture test-plan-check bash -lc "cd '$repo_root' && scripts/check-test-plan.sh"
 run_and_capture security-policy-check bash -lc "cd '$repo_root' && scripts/check-security-policy.sh"
-run_and_capture cli-evidence bash -lc "cd '$repo_root' && OXIDEDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
-run_and_capture log-evidence bash -lc "cd '$repo_root' && OXIDEDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
-run_and_capture signal-evidence bash -lc "cd '$repo_root' && OXIDEDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
-run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && OXIDEDNS_HEALTH_METRICS_EVIDENCE_DIR='$snapshot_dir/health-metrics-evidence' scripts/capture-health-metrics-evidence.sh"
-run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && OXIDEDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
-run_and_capture portability-evidence bash -lc "cd '$repo_root' && OXIDEDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
-run_and_capture resource-evidence bash -lc "cd '$repo_root' && OXIDEDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
-run_and_capture coverage-evidence bash -lc "cd '$repo_root' && OXIDEDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
-run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && OXIDEDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR='$snapshot_dir/unsafe-dependency-evidence' scripts/capture-unsafe-dependency-evidence.sh"
-run_and_capture interface-compatibility bash -lc "cd '$repo_root' && OXIDEDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility' scripts/capture-interface-compatibility-evidence.sh"
-run_and_capture info-verbosity-handoff bash -lc "cd '$repo_root' && OXIDEDNS_INFO_VERBOSITY_HANDOFF_DIR='$snapshot_dir/info-verbosity-handoff' scripts/capture-info-verbosity-handoff.sh"
-run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && OXIDEDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
-run_and_capture soak-handoff bash -lc "cd '$repo_root' && OXIDEDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
-run_and_capture reproducible-build-handoff bash -lc "cd '$repo_root' && OXIDEDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR='$snapshot_dir/reproducible-build-handoff' scripts/capture-reproducible-build-handoff.sh"
-run_and_capture release-handoff bash -lc "cd '$repo_root' && OXIDEDNS_RELEASE_HANDOFF_DIR='$snapshot_dir/release-handoff' scripts/capture-release-handoff.sh"
-run_and_capture sbom-evidence bash -lc "cd '$repo_root' && OXIDEDNS_DIST_DIR='$snapshot_dir/sbom-evidence' OXIDEDNS_SBOM_DOCKER=0 scripts/package-sbom.sh"
+run_and_capture cli-evidence bash -lc "cd '$repo_root' && BORONDNS_CLI_EVIDENCE_DIR='$snapshot_dir/cli-evidence' scripts/capture-cli-evidence.sh"
+run_and_capture log-evidence bash -lc "cd '$repo_root' && BORONDNS_LOG_EVIDENCE_DIR='$snapshot_dir/log-evidence' scripts/capture-log-evidence.sh"
+run_and_capture signal-evidence bash -lc "cd '$repo_root' && BORONDNS_SIGNAL_EVIDENCE_DIR='$snapshot_dir/signal-evidence' scripts/capture-signal-evidence.sh"
+run_and_capture health-metrics-evidence bash -lc "cd '$repo_root' && BORONDNS_HEALTH_METRICS_EVIDENCE_DIR='$snapshot_dir/health-metrics-evidence' scripts/capture-health-metrics-evidence.sh"
+run_and_capture malformed-query-evidence bash -lc "cd '$repo_root' && BORONDNS_MALFORMED_QUERY_EVIDENCE_DIR='$snapshot_dir/malformed-query-evidence' scripts/capture-malformed-query-evidence.sh"
+run_and_capture portability-evidence bash -lc "cd '$repo_root' && BORONDNS_PORTABILITY_EVIDENCE_DIR='$snapshot_dir/portability-evidence' scripts/capture-portability-evidence.sh"
+run_and_capture resource-evidence bash -lc "cd '$repo_root' && BORONDNS_RESOURCE_EVIDENCE_DIR='$snapshot_dir/resource-evidence' scripts/capture-resource-evidence.sh"
+run_and_capture coverage-evidence bash -lc "cd '$repo_root' && BORONDNS_COVERAGE_EVIDENCE_DIR='$snapshot_dir/coverage-evidence' scripts/capture-coverage-evidence.sh"
+run_and_capture unsafe-dependency-evidence bash -lc "cd '$repo_root' && BORONDNS_UNSAFE_DEPENDENCY_EVIDENCE_DIR='$snapshot_dir/unsafe-dependency-evidence' scripts/capture-unsafe-dependency-evidence.sh"
+run_and_capture interface-compatibility bash -lc "cd '$repo_root' && BORONDNS_INTERFACE_COMPATIBILITY_DIR='$snapshot_dir/interface-compatibility' scripts/capture-interface-compatibility-evidence.sh"
+run_and_capture info-verbosity-handoff bash -lc "cd '$repo_root' && BORONDNS_INFO_VERBOSITY_HANDOFF_DIR='$snapshot_dir/info-verbosity-handoff' scripts/capture-info-verbosity-handoff.sh"
+run_and_capture benchmark-handoff bash -lc "cd '$repo_root' && BORONDNS_BENCHMARK_HANDOFF_DIR='$snapshot_dir/benchmark-handoff' scripts/capture-benchmark-handoff.sh"
+run_and_capture soak-handoff bash -lc "cd '$repo_root' && BORONDNS_SOAK_HANDOFF_DIR='$snapshot_dir/soak-handoff' scripts/capture-soak-handoff.sh"
+run_and_capture reproducible-build-handoff bash -lc "cd '$repo_root' && BORONDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR='$snapshot_dir/reproducible-build-handoff' scripts/capture-reproducible-build-handoff.sh"
+run_and_capture release-handoff bash -lc "cd '$repo_root' && BORONDNS_RELEASE_HANDOFF_DIR='$snapshot_dir/release-handoff' scripts/capture-release-handoff.sh"
+run_and_capture sbom-evidence bash -lc "cd '$repo_root' && BORONDNS_DIST_DIR='$snapshot_dir/sbom-evidence' BORONDNS_SBOM_DOCKER=0 scripts/package-sbom.sh"
 run_and_capture check-sh bash -lc "cd '$repo_root' && ./scripts/check.sh"
 run_and_capture fuzz-cargo-check bash -lc "cd '$repo_root' && cargo check --manifest-path fuzz/Cargo.toml"
 run_and_capture cargo-deny bash -lc "cd '$repo_root' && cargo deny check"
@@ -162,68 +162,68 @@ run_and_capture unsafe-boundary-registry bash -lc "cd '$repo_root' && scripts/ch
 run_and_capture unsafe-prone-dependency-gate bash -lc "cd '$repo_root' && scripts/check-unsafe-prone-dependencies.py"
 run_and_capture functional-requirement-references bash -lc "cd '$repo_root' && scripts/check-functional-requirement-references.py"
 run_and_capture audit-invariants bash -lc "cd '$repo_root' && scripts/audit-invariants.sh"
-run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' OXIDEDNS_READONLY_RUNTIME_CONTAINER=\"\${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"
+run_and_capture audit-readonly-runtime bash -lc "cd '$repo_root' && BORONDNS_READONLY_RUNTIME_ARTIFACT_DIR='$snapshot_dir/readonly-runtime-artifacts' BORONDNS_READONLY_RUNTIME_CONTAINER=\"\${BORONDNS_READONLY_RUNTIME_CONTAINER:-auto}\" scripts/audit-readonly-runtime.sh"
 run_and_capture audit-safe-rust bash -lc "cd '$repo_root' && scripts/audit-safe-rust.sh"
 run_and_capture audit-maintainability bash -lc "cd '$repo_root' && scripts/audit-maintainability.sh"
 run_and_capture audit-spoof-evidence bash -lc "cd '$repo_root' && scripts/audit-spoof-evidence.py"
 run_and_capture audit-log-fields bash -lc "cd '$repo_root' && scripts/audit-log-fields.py"
 run_and_capture audit-log-lazy-formatting bash -lc "cd '$repo_root' && scripts/audit-log-lazy-formatting.py"
-run_and_capture audit-unused-code bash -lc "cd '$repo_root' && OXIDEDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
+run_and_capture audit-unused-code bash -lc "cd '$repo_root' && BORONDNS_UNUSED_CODE_AUDIT_DIR='$snapshot_dir/unused-code-audit' scripts/audit-unused-code.sh"
 run_and_capture audit-xot-revocation bash -lc "cd '$repo_root' && scripts/audit-xot-revocation.sh"
 run_and_capture audit-dnssec-passive bash -lc "cd '$repo_root' && scripts/audit-dnssec-passive.sh"
-run_and_capture perf-smoke bash -lc "cd '$repo_root' && OXIDEDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' OXIDEDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"
-run_and_capture negative-responses bash -lc "cd '$repo_root' && OXIDEDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR='$snapshot_dir/negative-response-artifacts' scripts/interop-negative-responses.sh"
-run_and_capture notify-negative bash -lc "cd '$repo_root' && OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR='$snapshot_dir/notify-negative-artifacts' scripts/interop-notify-negative.sh"
-run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && OXIDEDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
-run_and_capture edns-behavior bash -lc "cd '$repo_root' && OXIDEDNS_EDNS_BEHAVIOR_ARTIFACT_DIR='$snapshot_dir/edns-behavior-artifacts' scripts/interop-edns-behavior.sh"
-run_and_capture dns-cookie-dig bash -lc "cd '$repo_root' && OXIDEDNS_DNS_COOKIE_ARTIFACT_DIR='$snapshot_dir/dns-cookie-artifacts' scripts/interop-dns-cookie-dig.sh"
-run_and_capture ixfr-notimp-fallback bash -lc "cd '$repo_root' && OXIDEDNS_IXFR_FALLBACK_ARTIFACT_DIR='$snapshot_dir/ixfr-fallback-artifacts' scripts/interop-ixfr-notimp-fallback.sh"
-run_and_capture dnssec-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_SERVE_ARTIFACT_DIR='$snapshot_dir/dnssec-serve-artifacts' scripts/interop-dnssec-serve.sh"
-run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && OXIDEDNS_DNSSEC_NSEC3_ARTIFACT_DIR='$snapshot_dir/dnssec-nsec3-artifacts' scripts/interop-dnssec-nsec3-serve.sh"
-run_and_capture rrl-udp bash -lc "cd '$repo_root' && OXIDEDNS_RRL_UDP_ARTIFACT_DIR='$snapshot_dir/rrl-udp-artifacts' scripts/interop-rrl-udp.sh"
+run_and_capture perf-smoke bash -lc "cd '$repo_root' && BORONDNS_PERF_SMOKE_METRICS_OUT='$snapshot_dir/perf-smoke-metrics.env' BORONDNS_PERF_SMOKE_ARTIFACT_DIR='$snapshot_dir/perf-smoke-artifacts' scripts/perf-smoke.sh"
+run_and_capture negative-responses bash -lc "cd '$repo_root' && BORONDNS_NEGATIVE_RESPONSE_ARTIFACT_DIR='$snapshot_dir/negative-response-artifacts' scripts/interop-negative-responses.sh"
+run_and_capture notify-negative bash -lc "cd '$repo_root' && BORONDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR='$snapshot_dir/notify-negative-artifacts' scripts/interop-notify-negative.sh"
+run_and_capture tcp-truncation-retry bash -lc "cd '$repo_root' && BORONDNS_TCP_TRUNCATION_ARTIFACT_DIR='$snapshot_dir/tcp-truncation-artifacts' scripts/interop-tcp-truncation-retry.sh"
+run_and_capture edns-behavior bash -lc "cd '$repo_root' && BORONDNS_EDNS_BEHAVIOR_ARTIFACT_DIR='$snapshot_dir/edns-behavior-artifacts' scripts/interop-edns-behavior.sh"
+run_and_capture dns-cookie-dig bash -lc "cd '$repo_root' && BORONDNS_DNS_COOKIE_ARTIFACT_DIR='$snapshot_dir/dns-cookie-artifacts' scripts/interop-dns-cookie-dig.sh"
+run_and_capture ixfr-notimp-fallback bash -lc "cd '$repo_root' && BORONDNS_IXFR_FALLBACK_ARTIFACT_DIR='$snapshot_dir/ixfr-fallback-artifacts' scripts/interop-ixfr-notimp-fallback.sh"
+run_and_capture dnssec-serve bash -lc "cd '$repo_root' && BORONDNS_DNSSEC_SERVE_ARTIFACT_DIR='$snapshot_dir/dnssec-serve-artifacts' scripts/interop-dnssec-serve.sh"
+run_and_capture dnssec-nsec3-serve bash -lc "cd '$repo_root' && BORONDNS_DNSSEC_NSEC3_ARTIFACT_DIR='$snapshot_dir/dnssec-nsec3-artifacts' scripts/interop-dnssec-nsec3-serve.sh"
+run_and_capture rrl-udp bash -lc "cd '$repo_root' && BORONDNS_RRL_UDP_ARTIFACT_DIR='$snapshot_dir/rrl-udp-artifacts' scripts/interop-rrl-udp.sh"
 
-if [[ "${OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN:-0}" == "1" ]]; then
+if [[ "${BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN:-0}" == "1" ]]; then
     run_rrl_campaign rrl-evidence-campaign
 else
     cat >"$snapshot_dir/logs/rrl-evidence-campaign-skipped.log" <<'EOF'
 RRL evidence campaign was not run by default.
 
-Set OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1 to run scripts/rrl-evidence-campaign.sh
-inside this snapshot. OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS controls the
-iteration count and defaults to 3. OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION switches
+Set BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1 to run scripts/rrl-evidence-campaign.sh
+inside this snapshot. BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS controls the
+iteration count and defaults to 3. BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION switches
 the campaign to wall-clock duration mode in seconds.
 EOF
 fi
 
-if [[ -n "${OXIDEDNS_PERF_BASELINE:-}" ]]; then
+if [[ -n "${BORONDNS_PERF_BASELINE:-}" ]]; then
     run_and_capture perf-regression bash -lc \
-        "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$OXIDEDNS_PERF_BASELINE' --threshold-pct '${OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
+        "cd '$repo_root' && scripts/check-perf-regression.py --candidate '$snapshot_dir/perf-smoke-metrics.env' --history '$BORONDNS_PERF_BASELINE' --threshold-pct '${BORONDNS_PERF_REGRESSION_THRESHOLD_PCT:-10}'"
 else
     cat >"$snapshot_dir/logs/perf-regression-skipped.log" <<'EOF'
 Performance regression comparison was not run by default.
 
-Set OXIDEDNS_PERF_BASELINE to a whitespace-delimited history file with rows shaped
-as: release metric value. OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT overrides the SRS
+Set BORONDNS_PERF_BASELINE to a whitespace-delimited history file with rows shaped
+as: release metric value. BORONDNS_PERF_REGRESSION_THRESHOLD_PCT overrides the SRS
 default 10 percent threshold.
 EOF
 fi
 
-if [[ -n "${OXIDEDNS_RELEASE_NOTES:-}" ]]; then
+if [[ -n "${BORONDNS_RELEASE_NOTES:-}" ]]; then
     run_and_capture release-notes-gate bash -lc \
-        "cd '$repo_root' && scripts/check-release-notes.sh '$OXIDEDNS_RELEASE_NOTES' '$snapshot_dir'"
+        "cd '$repo_root' && scripts/check-release-notes.sh '$BORONDNS_RELEASE_NOTES' '$snapshot_dir'"
 else
     cat >"$snapshot_dir/logs/release-notes-gate-skipped.log" <<'EOF'
 Release notes gate was not run by default.
 
-Set OXIDEDNS_RELEASE_NOTES to a completed release notes markdown file to run
+Set BORONDNS_RELEASE_NOTES to a completed release notes markdown file to run
 scripts/check-release-notes.sh against this evidence snapshot.
 EOF
 fi
 
-if [[ "${OXIDEDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
-    fuzz_duration="${OXIDEDNS_EVIDENCE_FUZZ_DURATION:-10}"
+if [[ "${BORONDNS_EVIDENCE_RUN_FUZZ:-0}" == "1" ]]; then
+    fuzz_duration="${BORONDNS_EVIDENCE_FUZZ_DURATION:-10}"
     if [[ ! "$fuzz_duration" =~ ^[1-9][0-9]*$ ]]; then
-        printf 'OXIDEDNS_EVIDENCE_FUZZ_DURATION must be a positive integer: %s\n' "$fuzz_duration" >&2
+        printf 'BORONDNS_EVIDENCE_FUZZ_DURATION must be a positive integer: %s\n' "$fuzz_duration" >&2
         exit 1
     fi
     run_and_capture fuzz-campaign bash -lc \
@@ -232,14 +232,14 @@ else
     cat >"$snapshot_dir/logs/fuzz-campaign-skipped.log" <<'EOF'
 Fuzz campaigns were not run by default.
 
-Set OXIDEDNS_EVIDENCE_RUN_FUZZ=1 to run scripts/fuzz-campaign.sh and retain its
+Set BORONDNS_EVIDENCE_RUN_FUZZ=1 to run scripts/fuzz-campaign.sh and retain its
 logs, artifacts, and campaign-summary.tsv inside this snapshot.
-OXIDEDNS_EVIDENCE_FUZZ_DURATION controls the per-target duration in seconds and
+BORONDNS_EVIDENCE_FUZZ_DURATION controls the per-target duration in seconds and
 defaults to 10.
 EOF
 fi
 
-if [[ "${OXIDEDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
+if [[ "${BORONDNS_EVIDENCE_RUN_INTEROP:-0}" == "1" ]]; then
     while IFS= read -r command_line; do
         [[ -z "$command_line" || "$command_line" =~ ^# ]] && continue
         [[ "$command_line" == ./* || "$command_line" == scripts/* ]] || continue
@@ -266,7 +266,7 @@ else
     cat >"$snapshot_dir/logs/interop-skipped.log" <<'EOF'
 Interop scripts were not run by default.
 
-Set OXIDEDNS_EVIDENCE_RUN_INTEROP=1 to run the interop commands listed in
+Set BORONDNS_EVIDENCE_RUN_INTEROP=1 to run the interop commands listed in
 docs/evidence-command-catalog.md and capture each command log into this snapshot.
 EOF
 fi

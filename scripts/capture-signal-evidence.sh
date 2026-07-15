@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-evidence_dir="${OXIDEDNS_SIGNAL_EVIDENCE_DIR:-$repo_root/target/signal-evidence}"
+evidence_dir="${BORONDNS_SIGNAL_EVIDENCE_DIR:-$repo_root/target/signal-evidence}"
 mkdir -p "$evidence_dir"
 
 require_text() {
@@ -41,13 +41,13 @@ wait_for_running() {
             return 0
         fi
         if ! kill -0 "$pid" >/dev/null 2>&1; then
-            printf 'OxideDNS exited before becoming observable\n' >&2
+            printf 'BoronDNS exited before becoming observable\n' >&2
             sed -n '1,120p' "$stderr" >&2 || true
             return 1
         fi
         sleep 0.05
     done
-    printf 'OxideDNS did not emit running-state evidence\n' >&2
+    printf 'BoronDNS did not emit running-state evidence\n' >&2
     sed -n '1,120p' "$stderr" >&2 || true
     return 1
 }
@@ -62,7 +62,7 @@ wait_for_exit() {
         fi
         sleep 0.05
     done
-    printf 'OxideDNS did not exit after %s\n' "$name" >&2
+    printf 'BoronDNS did not exit after %s\n' "$name" >&2
     kill -KILL "$pid" >/dev/null 2>&1 || true
     wait "$pid" >/dev/null 2>&1 || true
     return 124
@@ -77,7 +77,7 @@ run_signal_exit_capture() {
     local status_file="$evidence_dir/$name.status"
     write_config "$config"
 
-    "$repo_root/target/debug/oxidedns" serve --config "$config" >"$stdout" 2>"$stderr" &
+    "$repo_root/target/debug/borondns" serve --config "$config" >"$stdout" 2>"$stderr" &
     local pid=$!
     wait_for_running "$pid" "$stderr"
 
@@ -88,7 +88,7 @@ run_signal_exit_capture() {
     set -e
     printf '%s\n' "$status" >"$status_file"
     if ((status != 0)); then
-        printf 'OxideDNS exited with status %s after %s\n' "$status" "$signal" >&2
+        printf 'BoronDNS exited with status %s after %s\n' "$status" "$signal" >&2
         sed -n '1,120p' "$stderr" >&2 || true
         exit "$status"
     fi
@@ -103,14 +103,14 @@ run_sighup_capture() {
     local observation_file="$evidence_dir/sighup.observation"
     write_config "$config"
 
-    "$repo_root/target/debug/oxidedns" serve --config "$config" >"$stdout" 2>"$stderr" &
+    "$repo_root/target/debug/borondns" serve --config "$config" >"$stdout" 2>"$stderr" &
     local pid=$!
     wait_for_running "$pid" "$stderr"
 
     kill -HUP "$pid"
     sleep 0.2
     if ! kill -0 "$pid" >/dev/null 2>&1; then
-        printf 'OxideDNS exited after SIGHUP\n' >&2
+        printf 'BoronDNS exited after SIGHUP\n' >&2
         wait "$pid" || true
         exit 1
     fi
@@ -123,7 +123,7 @@ run_sighup_capture() {
     set -e
     printf '%s\n' "$status" >"$status_file"
     if ((status != 0)); then
-        printf 'OxideDNS exited with status %s after SIGTERM following SIGHUP\n' "$status" >&2
+        printf 'BoronDNS exited with status %s after SIGTERM following SIGHUP\n' "$status" >&2
         sed -n '1,120p' "$stderr" >&2 || true
         exit "$status"
     fi
@@ -136,14 +136,14 @@ run_closed_consumers_capture() {
     local observation_file="$evidence_dir/closed-consumers.observation"
     write_config "$config"
 
-    "$repo_root/target/debug/oxidedns" serve --config "$config" \
+    "$repo_root/target/debug/borondns" serve --config "$config" \
         > >(head -c 0 >/dev/null) \
         2> >(head -c 0 >/dev/null) &
     local pid=$!
 
     sleep 1.2
     if ! kill -0 "$pid" >/dev/null 2>&1; then
-        printf 'OxideDNS exited after stdout/stderr consumers closed\n' >&2
+        printf 'BoronDNS exited after stdout/stderr consumers closed\n' >&2
         wait "$pid" || true
         exit 1
     fi
@@ -156,7 +156,7 @@ run_closed_consumers_capture() {
     set -e
     printf '%s\n' "$status" >"$status_file"
     if ((status != 0)); then
-        printf 'OxideDNS exited with status %s after closed consumers\n' "$status" >&2
+        printf 'BoronDNS exited with status %s after closed consumers\n' "$status" >&2
         exit "$status"
     fi
 }
@@ -200,7 +200,7 @@ run_linux_disposition_capture() {
     local summary="$evidence_dir/linux-dispositions.summary"
     write_config "$config"
 
-    "$repo_root/target/debug/oxidedns" serve --config "$config" >"$stdout" 2>"$stderr" &
+    "$repo_root/target/debug/borondns" serve --config "$config" >"$stdout" 2>"$stderr" &
     local pid=$!
     wait_for_running "$pid" "$stderr"
     cp "/proc/$pid/status" "$proc_status"
@@ -234,14 +234,14 @@ run_linux_disposition_capture() {
     set -e
     printf '%s\n' "$status" >"$status_file"
     if ((status != 0)); then
-        printf 'OxideDNS exited with status %s after disposition capture\n' "$status" >&2
+        printf 'BoronDNS exited with status %s after disposition capture\n' "$status" >&2
         sed -n '1,120p' "$stderr" >&2 || true
         exit "$status"
     fi
 }
 
 cd "$repo_root"
-cargo build -q -p oxidedns-cli
+cargo build -q -p borondns-cli
 
 run_signal_exit_capture sigterm SIGTERM
 run_signal_exit_capture sigint SIGINT
@@ -256,7 +256,7 @@ EOF
 fi
 
 cat >"$evidence_dir/README.md" <<'EOF'
-# OxideDNS Signal Evidence
+# BoronDNS Signal Evidence
 
 Captured process-signal evidence for SRS signal-interface requirements:
 

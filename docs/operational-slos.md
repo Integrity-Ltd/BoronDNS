@@ -2,7 +2,7 @@
 
 Status: informative operator SLO publication for `ODS-NFR-MAINT-009`.
 
-This guide records suggested operational service-level objectives for OxideDNS
+This guide records suggested operational service-level objectives for BoronDNS
 deployments. It is not a formal SRS acceptance claim. Engineering MVP provides
 the evidence commands and handoff paths; formal SRS acceptance still depends on
 later performance, reliability, soak, and external-operator evidence execution
@@ -13,7 +13,7 @@ tracked in `docs/mvp-gap-register.md`.
 | Objective | Suggested target | Evidence source |
 | --- | --- | --- |
 | Authoritative service readiness | `/readyz` is HTTP 200 for at least 99.9% of one-minute probes outside declared maintenance when at least one zone is expected ACTIVE | `GET /readyz`, zone-state metrics, maintenance record |
-| Initial and refresh transfer health | Every configured zone reaches ACTIVE inside the operator's expected transfer window; long-LOADING behavior beyond `[limits].zsm_loading_warning_threshold_secs` is actionable | `/readyz`, `oxidedns_secondary_zone_loading_seconds`, `zone_loading_threshold_exceeded` logs |
+| Initial and refresh transfer health | Every configured zone reaches ACTIVE inside the operator's expected transfer window; long-LOADING behavior beyond `[limits].zsm_loading_warning_threshold_secs` is actionable | `/readyz`, `borondns_secondary_zone_loading_seconds`, `zone_loading_threshold_exceeded` logs |
 | Direct-hit latency | On the Reference Hardware Profile, keep p99 direct-hit UDP query processing below 1 ms at up to 50% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-002` | release benchmark artifacts; smoke metrics are not enough for acceptance |
 | Near-capacity latency | On the Reference Hardware Profile, keep p99 query processing below 10 ms at up to 90% of the `ODS-NFR-PERF-001` throughput target, matching `ODS-NFR-PERF-003` | release benchmark artifacts |
 | Memory growth | During the 30-day soak, RSS at day 30 remains within 10% of the 24-hour baseline for stable workload conditions, matching `ODS-NFR-REL-003` | soak report with RSS samples and workload description |

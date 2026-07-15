@@ -27,25 +27,25 @@ source "$repo_root/scripts/interop-docker-images.sh"
 source "$repo_root/scripts/interop-dns-assertions.sh"
 
 workdir="$repo_root/target/interop/bind-catalog-zone-docker-$$"
-container="oxidedns-bind-catalog-$$"
-artifact_dir="${OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR:-}"
+container="borondns-bind-catalog-$$"
+artifact_dir="${BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if docker ps -a --format '{{.Names}}' | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
             echo "---- BIND container logs ----" >&2
             docker logs "$container" >&2 || true
-            [[ -f "$workdir/oxidedns.log" ]] && {
-                echo "---- oxidedns.log ----" >&2
-                tail -160 "$workdir/oxidedns.log" >&2
+            [[ -f "$workdir/borondns.log" ]] && {
+                echo "---- borondns.log ----" >&2
+                tail -160 "$workdir/borondns.log" >&2
             }
         fi
         docker rm -f "$container" >/dev/null 2>&1 || true
@@ -53,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_port rndc_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port rndc_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -73,7 +73,7 @@ catalog_zone="$workdir/catalog.example.zone"
 member_zone="$workdir/member.example.zone"
 named_conf="$workdir/named.conf"
 rndc_conf="$workdir/rndc.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 summary_tsv="$workdir/bind-catalog-zone-summary.tsv"
 traceability_tsv="$workdir/bind-catalog-zone-traceability.tsv"
 catalog_hidden_out="$workdir/catalog-hidden.out"
@@ -229,11 +229,11 @@ if [[ "$primary_catalog_soa" != *"2026052501"* ]]; then
     exit 1
 fi
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -262,48 +262,48 @@ algorithm = "hmac-sha256"
 secret = "$tsig_secret"
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 catalog_acquired=false
 for _ in {1..120}; do
-    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/borondns.log" >/dev/null 2>&1; then
         catalog_acquired=true
         break
     fi
     sleep 0.1
 done
 if [[ "$catalog_acquired" != "true" ]]; then
-    echo "OxideDNS did not acquire the initial hidden catalog zone" >&2
+    echo "BoronDNS did not acquire the initial hidden catalog zone" >&2
     exit 1
 fi
 
-metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_initial="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_initial" >"$metrics_initial_out"
-if [[ "$metrics_initial" != *'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052501'* ]] ||
-    [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS initial metrics did not retain the hidden catalog without counting it active" >&2
+if [[ "$metrics_initial" != *'borondns_zone_soa_serial{zone="catalog.example."} 2026052501'* ]] ||
+    [[ "$metrics_initial" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS initial metrics did not retain the hidden catalog without counting it active" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$readyz_initial_out")"
 if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
-    echo "OxideDNS became ready before the catalog produced an active member zone" >&2
+    echo "BoronDNS became ready before the catalog produced an active member zone" >&2
     exit 1
 fi
 
 if ! dig_until_rcode "$catalog_hidden_out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the hidden catalog zone query" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the hidden catalog zone query" >&2
     exit 1
 fi
 
 member_before_out="$workdir/member-before.out"
 if ! dig_until_rcode "$member_before_out" REFUSED 20 0.1 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE member.example before the catalog listed it" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE member.example before the catalog listed it" >&2
     exit 1
 fi
 
@@ -314,7 +314,7 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_added=""
 for _ in {1..80}; do
-    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+    if member_added="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
         if [[ "$member_added" == "192.0.2.77" ]]; then
             break
         fi
@@ -323,25 +323,25 @@ for _ in {1..80}; do
 done
 printf '%s\n' "$member_added" >"$member_added_out"
 if [[ "$member_added" != "192.0.2.77" ]]; then
-    echo "OxideDNS did not serve the catalog-added member zone" >&2
+    echo "BoronDNS did not serve the catalog-added member zone" >&2
     exit 1
 fi
 
-ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$borondns_health_port/readyz")"
 ready="$(<"$readyz_after_add_out")"
 if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after the first catalog member became active" >&2
+    echo "BoronDNS did not become ready after the first catalog member became active" >&2
     exit 1
 fi
 
-metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_add="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052502' \
-    'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'; do
+    'borondns_zones_active 1' \
+    'borondns_zone_soa_serial{zone="catalog.example."} 2026052502' \
+    'borondns_zone_soa_serial{zone="member.example."} 2026052501'; do
     if [[ "$metrics_after_add" != *"$expected"* ]]; then
-        echo "OxideDNS metrics after catalog add missing expected line: $expected" >&2
+        echo "BoronDNS metrics after catalog add missing expected line: $expected" >&2
         exit 1
     fi
 done
@@ -352,20 +352,20 @@ docker exec "$container" named-checkzone catalog.example. /work/catalog.example.
 docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/null
 
 if ! dig_until_rcode "$member_removed_out" REFUSED 80 0.25 \
-    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
-    echo "OxideDNS did not REFUSE the member zone after catalog removal" >&2
+    "@127.0.0.1" -p "$borondns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "BoronDNS did not REFUSE the member zone after catalog removal" >&2
     exit 1
 fi
 member_removed="REFUSED"
 
-metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics_after_remove="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
-if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
-    echo "OxideDNS metrics after catalog removal did not return to zero published active zones" >&2
+if [[ "$metrics_after_remove" != *'borondns_zones_active 0'* ]]; then
+    echo "BoronDNS metrics after catalog removal did not return to zero published active zones" >&2
     exit 1
 fi
-if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
-    echo "OxideDNS metrics still reported the removed catalog member zone" >&2
+if [[ "$metrics_after_remove" == *'borondns_zone_soa_serial{zone="member.example."}'* ]]; then
+    echo "BoronDNS metrics still reported the removed catalog member zone" >&2
     exit 1
 fi
 
@@ -378,16 +378,16 @@ docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
-RFC9432-CATALOG-MVP-001	retained-real-primary	bind_catalog_transfer	catalog-initial.zone; primary-version.txt; metrics-initial.txt; readyz-initial.json	OxideDNS transfers a real BIND-served RFC 9432 catalog zone and records the catalog SOA serial while remaining not-ready until a published member is active.
-RFC9432-CATALOG-MVP-002	retained-real-primary	bind_catalog_member_add	catalog-added.zone; member-added.out; bind-catalog-zone-summary.tsv	A live BIND catalog mutation adds member.example. while OxideDNS is running, and OxideDNS transfers and serves the member zone.
-RFC9432-CATALOG-MVP-003	retained-real-primary	bind_catalog_member_remove	catalog-removed.zone; member-removed.out; metrics-after-remove.txt	A live BIND catalog mutation removes member.example. while OxideDNS is running, and OxideDNS stops serving the catalog-managed member zone.
-RFC9432-CATALOG-MVP-004	retained-real-primary	catalog_query_hidden	catalog-hidden.out; oxidedns.toml	The catalog zone is transferred for management use but not served on the DNS query interface when serve_catalog_zone=false.
+RFC9432-CATALOG-MVP-001	retained-real-primary	bind_catalog_transfer	catalog-initial.zone; primary-version.txt; metrics-initial.txt; readyz-initial.json	BoronDNS transfers a real BIND-served RFC 9432 catalog zone and records the catalog SOA serial while remaining not-ready until a published member is active.
+RFC9432-CATALOG-MVP-002	retained-real-primary	bind_catalog_member_add	catalog-added.zone; member-added.out; bind-catalog-zone-summary.tsv	A live BIND catalog mutation adds member.example. while BoronDNS is running, and BoronDNS transfers and serves the member zone.
+RFC9432-CATALOG-MVP-003	retained-real-primary	bind_catalog_member_remove	catalog-removed.zone; member-removed.out; metrics-after-remove.txt	A live BIND catalog mutation removes member.example. while BoronDNS is running, and BoronDNS stops serving the catalog-managed member zone.
+RFC9432-CATALOG-MVP-004	retained-real-primary	catalog_query_hidden	catalog-hidden.out; borondns.toml	The catalog zone is transferred for management use but not served on the DNS query interface when serve_catalog_zone=false.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     for artifact in \
-        named.conf rndc.conf oxidedns.toml named.log oxidedns.log primary-version.txt \
+        named.conf rndc.conf borondns.toml named.log borondns.log primary-version.txt \
         catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
         catalog-hidden.out member-before.out member-added.out member-removed.out \
         metrics-initial.txt metrics-after-add.txt metrics-after-remove.txt \

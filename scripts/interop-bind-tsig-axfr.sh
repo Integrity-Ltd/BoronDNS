@@ -19,25 +19,25 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 zone_file="$repo_root/tests/interop/bind/alpha.test.zone"
 template_file="$repo_root/tests/interop/bind/named-tsig.conf.template"
 tsig_secret="dG9wc2VjcmV0"
-bind_cache_parent="/var/cache/bind/oxidedns-interop"
+bind_cache_parent="/var/cache/bind/borondns-interop"
 if [[ -d "$bind_cache_parent" && -w "$bind_cache_parent" ]]; then
     work_parent="$bind_cache_parent"
 else
-    work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+    work_parent="${TMPDIR:-/tmp}/borondns-interop"
 fi
 mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-tsig-axfr-$$"
-artifact_dir="${OXIDEDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_BIND_TSIG_AXFR_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${named_pid:-}" ]] && kill -0 "$named_pid" 2>/dev/null; then
         kill "$named_pid" 2>/dev/null || true
@@ -48,9 +48,9 @@ cleanup() {
             echo "---- named.log ----" >&2
             tail -100 "$workdir/named.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -100 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -100 "$workdir/borondns.log" >&2
         }
         [[ -f "$workdir/unsigned-axfr.out" ]] && {
             echo "---- unsigned-axfr.out ----" >&2
@@ -64,7 +64,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r bind_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -79,7 +79,7 @@ PY
 
 named_conf="$workdir/named.conf"
 bind_zone_file="$workdir/alpha.test.zone"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cp "$zone_file" "$bind_zone_file"
 chmod 0644 "$bind_zone_file"
@@ -100,11 +100,11 @@ chmod 0644 "$named_conf"
 named-checkconf -z "$named_conf" >/dev/null
 record_bind_primary_version "$workdir" "bind-tsig-axfr" "tcp-axfr" "tsig-hmac-sha256" "$named_conf" "$bind_zone_file"
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -165,13 +165,13 @@ if [[ "$signed_axfr" != *"www.alpha.test."* ]] || [[ "$signed_axfr" != *"alias.a
     exit 1
 fi
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
@@ -179,45 +179,45 @@ done
 
 printf '%s\n' "$ready" >"$workdir/readyz.json"
 if [[ "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after TSIG-signed BIND AXFR" >&2
+    echo "BoronDNS did not become ready after TSIG-signed BIND AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer \
-    >"$workdir/oxidedns-answer-a.out"
-answer_a="$(cat "$workdir/oxidedns-answer-a.out")"
+dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer \
+    >"$workdir/borondns-answer-a.out"
+answer_a="$(cat "$workdir/borondns-answer-a.out")"
 if [[ "$answer_a" != *"www.alpha.test."* ]] || [[ "$answer_a" != *"192.0.2.10"* ]]; then
-    echo "OxideDNS did not serve expected A response after TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected A response after TSIG AXFR" >&2
     exit 1
 fi
 
-dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
-    >"$workdir/oxidedns-tcp-soa.out"
-tcp_soa="$(cat "$workdir/oxidedns-tcp-soa.out")"
+dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short \
+    >"$workdir/borondns-tcp-soa.out"
+tcp_soa="$(cat "$workdir/borondns-tcp-soa.out")"
 if [[ "$tcp_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve expected TCP SOA response after TSIG AXFR" >&2
+    echo "BoronDNS did not serve expected TCP SOA response after TSIG AXFR" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$workdir/metrics.txt"
-if [[ "$metrics" != *'oxidedns_zones_active 1'* ]] || [[ "$metrics" != *'oxidedns_transfer_sessions_completed_total{protocol="axfr"} 1'* ]]; then
-    echo "OxideDNS metrics did not expose successful TSIG AXFR transfer" >&2
+if [[ "$metrics" != *'borondns_zones_active 1'* ]] || [[ "$metrics" != *'borondns_transfer_sessions_completed_total{protocol="axfr"} 1'* ]]; then
+    echo "BoronDNS metrics did not expose successful TSIG AXFR transfer" >&2
     exit 1
 fi
 
-if grep -F "$tsig_secret" "$workdir/oxidedns.log" >/dev/null 2>&1; then
-    echo "OxideDNS log leaked TSIG secret" >&2
+if grep -F "$tsig_secret" "$workdir/borondns.log" >/dev/null 2>&1; then
+    echo "BoronDNS log leaked TSIG secret" >&2
     exit 1
 fi
 
 cat >"$workdir/bind-tsig-axfr-summary.env" <<EOF
 unsigned_axfr_rejected=1
 signed_axfr_succeeded=1
-oxidedns_ready_after_signed_axfr=1
-oxidedns_served_transferred_a=1
-oxidedns_served_transferred_tcp_soa=1
-oxidedns_transfer_metrics_checked=1
+borondns_ready_after_signed_axfr=1
+borondns_served_transferred_a=1
+borondns_served_transferred_tcp_soa=1
+borondns_transfer_metrics_checked=1
 tsig_secret_redaction_checked=1
 EOF
 
@@ -225,13 +225,13 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$named_conf" >"$artifact_dir/named.conf.redacted"
-    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$oxidedns_conf" >"$artifact_dir/oxidedns.toml.redacted"
+    sed "s/$tsig_secret/<redacted-tsig-secret>/g" "$borondns_conf" >"$artifact_dir/borondns.toml.redacted"
     cp "$workdir/named.log" "$artifact_dir/named.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$workdir/unsigned-axfr.out" "$artifact_dir/unsigned-axfr.out"
     cp "$workdir/signed-axfr.out" "$artifact_dir/signed-axfr.out"
-    cp "$workdir/oxidedns-answer-a.out" "$artifact_dir/oxidedns-answer-a.out"
-    cp "$workdir/oxidedns-tcp-soa.out" "$artifact_dir/oxidedns-tcp-soa.out"
+    cp "$workdir/borondns-answer-a.out" "$artifact_dir/borondns-answer-a.out"
+    cp "$workdir/borondns-tcp-soa.out" "$artifact_dir/borondns-tcp-soa.out"
     cp "$workdir/readyz.json" "$artifact_dir/readyz.json"
     cp "$workdir/metrics.txt" "$artifact_dir/metrics.txt"
     cp "$workdir/bind-tsig-axfr-summary.env" "$artifact_dir/bind-tsig-axfr-summary.env"

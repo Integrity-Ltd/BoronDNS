@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 
-SRS_PATH = Path("docs/OxideDNS-Secondary-SRS-v0.9.1.md")
+SRS_PATH = Path("docs/BoronDNS-Secondary-SRS-v0.9.1.md")
 FUNCTIONAL_ID_RE = re.compile(r"\bODS-FR-[A-Z]+-\d{3}\b")
 COMMENT_PREFIXES = ("//", "///", "//!", "/*", "*", "*/")
 

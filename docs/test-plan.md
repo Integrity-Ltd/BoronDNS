@@ -1,4 +1,4 @@
-# OxideDNS Test Plan
+# BoronDNS Test Plan
 
 This Test Plan is the sibling document required by SRS v0.9.1 section 7.6. It
 records the current verification harnesses, their SRS method classifications,
@@ -9,7 +9,7 @@ and release evidence snapshots own that expansion.
 
 ## Scope
 
-- Normative source: `docs/OxideDNS-Secondary-SRS-v0.9.1.md`.
+- Normative source: `docs/BoronDNS-Secondary-SRS-v0.9.1.md`.
 - Working evidence ledger: `docs/verification-ledger.md`.
 - Family traceability matrix: `docs/appendix-a-traceability-matrix.md`.
 - Release evidence snapshot: `scripts/release-evidence-snapshot.sh`.
@@ -40,7 +40,7 @@ until their corresponding retained runs exist.
 | Static analysis | Continuous plus release review | `cargo fmt --all --check`; `cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check`; `scripts/check-shell-scripts.sh` (non-mutating `shfmt -d` plus `shellcheck`); `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings`; `scripts/check-github-actions.sh`; `scripts/audit-invariants.sh`; `scripts/audit-safe-rust.sh`; `scripts/check-unsafe-boundaries.py`; `scripts/check-unsafe-prone-dependencies.py`; `scripts/check-interface-compatibility.py`; `scripts/check-functional-requirement-references.py`; `scripts/audit-unused-code.sh`; `scripts/audit-spoof-evidence.py`; `scripts/audit-log-fields.py`; `scripts/audit-log-lazy-formatting.py`; `scripts/audit-dnssec-passive.sh`; `scripts/audit-xot-revocation.sh`; `cargo deny check`; release-review `scripts/capture-unsafe-dependency-evidence.sh` | `docs/verification-ledger.md`; `docs/appendix-a-traceability-matrix.md` |
 | Unit test | Continuous | Default-feature `cargo test --workspace -- --test-threads=1` plus `cargo test --workspace --all-targets --all-features -- --test-threads=1` so the feature-gated server AF_XDP and OxideGun XDP adapter suites remain blocking; `scripts/capture-coverage-evidence.sh` for `cargo-llvm-cov` threshold evidence | Rust test names and ledger rows |
 | Property-based test | Continuous | Targeted randomized tests inside `cargo test --workspace`; promote dedicated property suites here when introduced | Rust test names and ledger rows |
-| Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/oxidedns-cli/tests` | Rust test names and ledger rows |
+| Integration test | Continuous | Runtime tests inside `cargo test --workspace`; CLI process tests in `crates/borondns-cli/tests` | Rust test names and ledger rows |
 | Conformance test | Continuous and Gate | DNS wire-format, EDNS, TSIG, DNSSEC-passive, signal, CLI, health, metrics, and config tests inside `cargo test --workspace`; retained via release snapshot at Gate | Rust test names, release snapshot logs, and ledger rows |
 | Short-cadence Fuzz test | Continuous | `cargo check --manifest-path fuzz/Cargo.toml`; fuzz-crate formatting and warning-free Clippy gates; optional `scripts/fuzz-campaign.sh --duration <seconds>` runs not exceeding one hour per parser | `fuzz/README.md`; release snapshot logs |
 | Dependency security audit | Continuous | `cargo deny check` | `docs/verification-ledger.md` dependency audit row |
@@ -154,7 +154,7 @@ across later epochs as valid evidence.
 The repository also contains a tag-push/workflow-dispatch release workflow. It
 runs `scripts/check.sh` as a blocking Continuous gate, then acts as artifact publication automation
 for a named release by building and smoking the
-`x86_64-unknown-linux-musl` installer archive, raw static `oxidedns` binary,
+`x86_64-unknown-linux-musl` installer archive, raw static `borondns` binary,
 raw static XDP-enabled `oxide-gun` binary, and Docker image archive; it is not
 the standing Continuous gate unless the release
 process records its retained logs as the accepted release-gate automation
@@ -163,21 +163,21 @@ evidence.
 Manual real-primary smoke evidence is intentionally outside `scripts/check.sh`
 because it depends on Docker or host BIND availability. For developer/operator
 confidence after an Engineering MVP build, run `scripts/interop-bind-axfr-docker.sh`
-and retain artifacts with `OXIDEDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR`, as described
+and retain artifacts with `BORONDNS_BIND_DOCKER_AXFR_ARTIFACT_DIR`, as described
 in `docs/manual-bind-interop.md`. For RFC 9432 catalog-zone confidence, run
 `scripts/interop-bind-catalog-zone-docker.sh` and retain artifacts with
-`OXIDEDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR`; that harness mutates the BIND
-catalog while OxideDNS remains running and verifies live member add/remove
+`BORONDNS_BIND_CATALOG_DOCKER_ARTIFACT_DIR`; that harness mutates the BIND
+catalog while BoronDNS remains running and verifies live member add/remove
 behavior end to end. For BIND 9 XoT catalog-zone confidence, run
 `scripts/interop-bind-xot-catalog-zone-docker.sh` and retain artifacts with
-`OXIDEDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR`; that harness verifies ALPN
+`BORONDNS_BIND_XOT_CATALOG_DOCKER_ARTIFACT_DIR`; that harness verifies ALPN
 `dot`, TSIG over XoT, denied plain TCP transfer, and live catalog member
 add/remove. For the intended PowerDNS plus PostgreSQL primary shape, run
 `scripts/interop-powerdns-postgres-catalog-tsig-docker.sh` and retain artifacts
-with `OXIDEDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR`; that harness uses PowerDNS
+with `BORONDNS_POWERDNS_CATALOG_TSIG_ARTIFACT_DIR`; that harness uses PowerDNS
 producer catalog metadata, PostgreSQL/gpgsql storage, TSIG-only catalog/member
 transfers, live catalog assignment add/remove, and an in-place member-zone
-record update while OxideDNS remains running.
+record update while BoronDNS remains running.
 
 ## Periodic Execution
 
@@ -201,12 +201,12 @@ these rows remain handoff obligations unless completed artifacts are retained.
 ## Gate Execution
 
 Release Gate evidence is captured with `scripts/release-evidence-snapshot.sh`.
-Set `OXIDEDNS_EVIDENCE_RUN_INTEROP=1` for release candidates that need retained
-interop artifacts, `OXIDEDNS_EVIDENCE_RUN_FUZZ=1` for release-cadence fuzz evidence,
-`OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` for retained RRL campaign evidence, and
-`OXIDEDNS_RELEASE_NOTES=<path>` to run the release-notes gate against the snapshot.
-Use `OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
-`OXIDEDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` for wall-clock duration campaigns.
+Set `BORONDNS_EVIDENCE_RUN_INTEROP=1` for release candidates that need retained
+interop artifacts, `BORONDNS_EVIDENCE_RUN_FUZZ=1` for release-cadence fuzz evidence,
+`BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN=1` for retained RRL campaign evidence, and
+`BORONDNS_RELEASE_NOTES=<path>` to run the release-notes gate against the snapshot.
+Use `BORONDNS_EVIDENCE_RRL_CAMPAIGN_ITERATIONS` for iteration-count campaigns or
+`BORONDNS_EVIDENCE_RRL_CAMPAIGN_DURATION` for wall-clock duration campaigns.
 
 Gate review must not treat skipped interop, fuzz, performance, soak, security
 audit, or external-operator steps as passing evidence for final SRS acceptance.
@@ -219,7 +219,7 @@ serving path, retain `scripts/zone-image-evidence-gate.sh` output as the
 ZoneImage release gate. A local loopback run is acceptable for Engineering
 release stabilization evidence; formal performance acceptance must use the
 Reference Hardware/Profile or a physical non-loopback run with
-`OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`.
+`BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true`.
 
 `scripts/capture-release-handoff.sh` is intentionally a setup artifact. It
 creates the release attachment map, scheduled CI/manual-run plan, signing
@@ -264,9 +264,9 @@ tagged workflow validates the current-commit result before signing and carries
 those records under a separate authenticated internal manifest; the handoff
 remains for external sign-off and package/image follow-up.
 
-When `OXIDEDNS_PERF_BASELINE` points at a whitespace-delimited history file with
+When `BORONDNS_PERF_BASELINE` points at a whitespace-delimited history file with
 rows shaped as `release metric value`, `scripts/release-evidence-snapshot.sh`
-runs the smoke-metric regression comparison. `OXIDEDNS_PERF_REGRESSION_THRESHOLD_PCT`
+runs the smoke-metric regression comparison. `BORONDNS_PERF_REGRESSION_THRESHOLD_PCT`
 overrides the default 10 percent threshold.
 
 ## Regression Policy

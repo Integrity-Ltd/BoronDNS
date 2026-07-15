@@ -1,10 +1,10 @@
-# OxideDNS Specification Documents
+# BoronDNS Specification Documents
 
-This directory contains the OxideDNS / OxideDNS-Secondary project
+This directory contains the BoronDNS / BoronDNS-Secondary project
 specification, planning, and evidence documents.
 
 The current normative Software Requirements Specification is
-`OxideDNS-Secondary-SRS-v0.9.1.md`.
+`BoronDNS-Secondary-SRS-v0.9.1.md`.
 
 The documentation set intentionally separates three things:
 
@@ -30,7 +30,7 @@ and slowly diverging.
 
 | Question | Owning document | Other documents should |
 | --- | --- | --- |
-| What is required behavior? | `OxideDNS-Secondary-SRS-v0.9.1.md` | Link to the requirement ID instead of restating normative wording. |
+| What is required behavior? | `BoronDNS-Secondary-SRS-v0.9.1.md` | Link to the requirement ID instead of restating normative wording. |
 | What is the current release-candidate boundary? | `engineering-mvp-scope.md` | Refer to this boundary when explaining why long-running evidence is deferred from local preflight. |
 | Is the release candidate ready to claim? | `engineering-mvp-readiness.md` | Link to the readiness checklist instead of inventing local stop conditions. |
 | What is still open for SRS acceptance? | `mvp-gap-register.md` | Keep only short active closeout gaps here; put detailed evidence in the ledger or Appendix A. |
@@ -54,7 +54,7 @@ and slowly diverging.
 
 ## Current Requirements and Design
 
-- `OxideDNS-Secondary-SRS-v0.9.1.md`: current normative Software Requirements
+- `BoronDNS-Secondary-SRS-v0.9.1.md`: current normative Software Requirements
   Specification, updated through the v0.9.1 requirement set.
 - `architecture.md`: current module map, implementation decisions, deferred
   acceleration/storage tracks, unsafe-boundary posture, and release-governance
@@ -157,10 +157,10 @@ and slowly diverging.
 These files are retained under `docs/archive/` for provenance only. They are not
 current requirements and are not maintained against v0.9.1:
 
-- `archive/OxideDNS-Secondary-SRS-v0.1.md`: previous SRS baseline.
-- `archive/OxideDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion
+- `archive/BoronDNS-Secondary-SRS-v0.1.md`: previous SRS baseline.
+- `archive/BoronDNS-Secondary-SBVR-v0.1.md`: SBVR Structured English companion
   from the v0.1 baseline.
-- `archive/OxideDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary
+- `archive/BoronDNS-Secondary-SRS-v0.1-Executive-Summary.md`: executive summary
   for the v0.1 baseline.
 
 The planning and evidence documents are companion working artifacts. They remain

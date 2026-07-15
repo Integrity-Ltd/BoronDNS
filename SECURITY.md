@@ -1,4 +1,4 @@
-# OxideDNS Security Policy
+# BoronDNS Security Policy
 
 This policy implements the current project handling requirements for
 `ODS-NFR-SEC-007` and the release-signing publication requirements in
@@ -66,10 +66,10 @@ release notes or release artifact manifest, for example:
 
 ```sh
 cosign verify-blob \
-  --bundle oxidedns.tar.gz.sigstore-bundle \
+  --bundle borondns.tar.gz.sigstore-bundle \
   --certificate-identity "$EXPECTED_IDENTITY" \
   --certificate-oidc-issuer "$EXPECTED_ISSUER" \
-  oxidedns.tar.gz
+  borondns.tar.gz
 ```
 
 If OpenPGP is used, the release notes must include the public-key location and a

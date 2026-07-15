@@ -4,20 +4,20 @@ Status: companion policy for SRS Appendix A, ODS-VER-005, ODS-VER-006, and
 ODS-VER-014.
 
 This document owns the maintenance rules for RFC traceability. The SRS owns
-normative OxideDNS requirements. `docs/rfc-compliance-assertions.md` owns the
+normative BoronDNS requirements. `docs/rfc-compliance-assertions.md` owns the
 current structured RFC compliance posture. `docs/appendix-a-traceability-matrix.md`
 owns checked requirement-range-to-evidence mappings.
 
 The purpose of this split is to keep the SRS from becoming an unchecked
 standards research dump. A standards clause belongs in a current requirement
-only when it has been checked against the current OxideDNS scope, code, and
+only when it has been checked against the current BoronDNS scope, code, and
 evidence plan.
 
 ## Scope Categories
 
 Use these categories when adding or reviewing RFC mappings:
 
-- **Full.** All normative clauses in the RFC are in OxideDNS scope.
+- **Full.** All normative clauses in the RFC are in BoronDNS scope.
 - **Partial (secondary-side).** Secondary authoritative server clauses are in
   scope; primary, resolver, validator, or client-only clauses are out of scope.
 - **Partial (selected clauses).** Only named wire-format, option-format,
@@ -47,7 +47,7 @@ Fine-grained rows must include:
 
 The live repository should prefer companion artifacts over long inline SRS
 tables. Do not add clause-by-clause standards prose to the SRS body unless it
-changes required OxideDNS behavior.
+changes required BoronDNS behavior.
 
 ## Verification Status
 

@@ -18,11 +18,11 @@ HEADER = [
 ]
 
 REQUIRED_CURRENT = {
-    "posix-signal-disposition": "crates/oxidedns-server/src/process_signals.rs",
-    "posix-rlimit": "crates/oxidedns-server/src/resource_limits.rs",
-    "posix-privilege-drop": "crates/oxidedns-server/src/privilege.rs",
-    "posix-process-hardening": "crates/oxidedns-server/src/process_hardening.rs",
-    "posix-secret-store-open": "crates/oxidedns-server/src/secret_store.rs",
+    "posix-signal-disposition": "crates/borondns-server/src/process_signals.rs",
+    "posix-rlimit": "crates/borondns-server/src/resource_limits.rs",
+    "posix-privilege-drop": "crates/borondns-server/src/privilege.rs",
+    "posix-process-hardening": "crates/borondns-server/src/process_hardening.rs",
+    "posix-secret-store-open": "crates/borondns-server/src/secret_store.rs",
 }
 
 CURRENT_SOURCE_SHAPE = {

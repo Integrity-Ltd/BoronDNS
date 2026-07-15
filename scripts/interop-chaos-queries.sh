@@ -16,24 +16,24 @@ ulimit -n 65536 2>/dev/null || true
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/chaos-queries-$$"
-artifact_dir="${OXIDEDNS_CHAOS_QUERIES_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_CHAOS_QUERIES_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if ((status != 0)); then
         [[ -f "$workdir/client.log" ]] && {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
         for metrics_file in "$workdir"/metrics-*.txt; do
             [[ -f "$metrics_file" ]] || continue
@@ -66,7 +66,7 @@ client="$workdir/client.py"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/chaos-query-summary.tsv"
 traceability_tsv="$workdir/chaos-query-traceability.tsv"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cat >"$client" <<'PY'
 #!/usr/bin/env python3
@@ -209,7 +209,7 @@ CASES = [
 ]
 
 CONFIGURED_CASES = [
-    ("configured-version", "version.server.", TXT, CH, "NOERROR", True, "OxideDNS anycast"),
+    ("configured-version", "version.server.", TXT, CH, "NOERROR", True, "BoronDNS anycast"),
     ("configured-hostname", "hostname.bind.", TXT, CH, "NOERROR", True, "bud-dns-1"),
 ]
 
@@ -242,12 +242,12 @@ with open(SUMMARY_PATH, "a", encoding="utf-8") as summary:
 PY
 chmod +x "$client"
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 write_config() {
     local version="$1"
     local hostname="$2"
-    cat >"$oxidedns_conf" <<EOF
+    cat >"$borondns_conf" <<EOF
 [server]
 listen_udp = ["127.0.0.1:$dns_port"]
 listen_tcp = ["127.0.0.1:$dns_port"]
@@ -269,26 +269,26 @@ primaries = ["127.0.0.1:$primary_port"]
 EOF
 }
 
-start_oxidedns() {
-    : >"$workdir/oxidedns.log"
-    "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-    oxidedns_pid=$!
+start_borondns() {
+    : >"$workdir/borondns.log"
+    "$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+    borondns_pid=$!
     for _ in {1..100}; do
         if curl -fsS "http://127.0.0.1:$health_port/livez" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.05
     done
-    echo "OxideDNS did not become live" >&2
+    echo "BoronDNS did not become live" >&2
     return 1
 }
 
-stop_oxidedns() {
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+stop_borondns() {
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
-    oxidedns_pid=""
+    borondns_pid=""
 }
 
 printf 'transport\tcase\tqname\tqtype\tqclass\trcode\taa\ttext\n' >"$summary_tsv"
@@ -304,22 +304,22 @@ printf 'transport\tcase\tqname\tqtype\tqclass\trcode\taa\ttext\n' >"$summary_tsv
 } >"$traceability_tsv"
 
 write_config "" ""
-start_oxidedns
+start_borondns
 "$client" "$dns_port" "$client_log" "$summary_tsv" udp default
 "$client" "$dns_port" "$client_log" "$summary_tsv" tcp default
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$workdir/metrics-default.txt"
-grep -F 'oxidedns_chaos_queries_total{outcome="answered"} 2' "$workdir/metrics-default.txt" >/dev/null
-grep -F 'oxidedns_chaos_queries_total{outcome="missing_value"} 2' "$workdir/metrics-default.txt" >/dev/null
-grep -F 'oxidedns_chaos_queries_total{outcome="unrecognized_name"} 2' "$workdir/metrics-default.txt" >/dev/null
-grep -F 'oxidedns_chaos_queries_total{outcome="non_txt"} 6' "$workdir/metrics-default.txt" >/dev/null
-stop_oxidedns
+grep -F 'borondns_chaos_queries_total{outcome="answered"} 2' "$workdir/metrics-default.txt" >/dev/null
+grep -F 'borondns_chaos_queries_total{outcome="missing_value"} 2' "$workdir/metrics-default.txt" >/dev/null
+grep -F 'borondns_chaos_queries_total{outcome="unrecognized_name"} 2' "$workdir/metrics-default.txt" >/dev/null
+grep -F 'borondns_chaos_queries_total{outcome="non_txt"} 6' "$workdir/metrics-default.txt" >/dev/null
+stop_borondns
 
-write_config "OxideDNS anycast" "bud-dns-1"
-start_oxidedns
+write_config "BoronDNS anycast" "bud-dns-1"
+start_borondns
 "$client" "$dns_port" "$client_log" "$summary_tsv" udp configured
 "$client" "$dns_port" "$client_log" "$summary_tsv" tcp configured
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$workdir/metrics-configured.txt"
-grep -F 'oxidedns_chaos_queries_total{outcome="answered"} 4' "$workdir/metrics-configured.txt" >/dev/null
-stop_oxidedns
+grep -F 'borondns_chaos_queries_total{outcome="answered"} 4' "$workdir/metrics-configured.txt" >/dev/null
+stop_borondns
 
 printf 'CHAOS query interop passed: %s\n' "$summary_tsv"

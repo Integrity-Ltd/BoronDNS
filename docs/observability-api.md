@@ -1,15 +1,15 @@
 # Optional Observability API
 
-Status: implemented initial optional OxideDNS observability API. The current
+Status: implemented initial optional BoronDNS observability API. The current
 implementation exposes the endpoint family below as compact JSON snapshots on
 the existing management HTTP listener when `[observability].enabled = true`.
 Host resource, time-sync, and certificate checks use bounded host-local probes;
 unavailable optional checks return explicit `unknown` or `disabled` status
 values rather than blocking.
 
-This document defines the shape for the in-process OxideDNS observability API.
+This document defines the shape for the in-process BoronDNS observability API.
 It replaces the idea of a separate on-node monitoring agent with a narrower
-product-native surface: OxideDNS exposes read-only facts about
+product-native surface: BoronDNS exposes read-only facts about
 its own runtime, transfer state, catalog state, local resource posture, and
 serving-relevant environment checks when explicitly enabled.
 
@@ -25,7 +25,7 @@ ingestion, operator debugging, and external probe correlation.
 
 In scope:
 
-- current OxideDNS runtime status beyond liveness/readiness;
+- current BoronDNS runtime status beyond liveness/readiness;
 - zone, catalog, transfer, NOTIFY, TSIG, DNS Cookie, RRL, DNSSEC-serving, and
   `ZoneImage` summary facts already known by the process;
 - per-zone transfer progress and last-result state;
@@ -34,7 +34,7 @@ In scope:
 - serving-relevant certificate expiry summaries for configured XoT/mTLS
   material;
 - host time-synchronization status as reported by existing OS services, without
-  implementing an NTP/SNTP client in OxideDNS;
+  implementing an NTP/SNTP client in BoronDNS;
 - redacted configuration and build/runtime identity facts.
 
 Out of scope:
@@ -42,22 +42,22 @@ Out of scope:
 - remediation, restart, reload, reconfiguration, or any mutating endpoint;
 - a general host-monitoring daemon;
 - log scraping as a replacement for the system journal or centralized logs;
-- implementing NTP, SNTP, or time-service probing inside OxideDNS;
+- implementing NTP, SNTP, or time-service probing inside BoronDNS;
 - external black-box DNS probing from Internet, zone-sync, or management
   vantage points;
 - alert routing, de-duplication, escalation, or long-term event storage;
 - control-plane tenant/auth/RBAC/audit functions.
 
-OxideDNS remains a secondary-only authoritative data-plane backend. The
+BoronDNS remains a secondary-only authoritative data-plane backend. The
 observability API must not create a runtime administration API and must not put
-OxideDNS in charge of tenant, billing, ownership, policy, or alert workflow.
+BoronDNS in charge of tenant, billing, ownership, policy, or alert workflow.
 
 ## Relationship To Other Monitoring
 
 The observability API provides inside-the-process facts. It does not replace:
 
 - systemd, Kubernetes, Icinga, Prometheus scrape absence, or another supervisor
-  for detecting that the OxideDNS process is down;
+  for detecting that the BoronDNS process is down;
 - external black-box DNS probes that verify real answers, DNSSEC chains,
   latency, public exposure, recursion refusal, and transfer refusal from the
   network;
@@ -65,7 +65,7 @@ The observability API provides inside-the-process facts. It does not replace:
   expected state, node state, external probe results, tenant context, and
   operator workflow.
 
-If OxideDNS is not running, this API cannot answer. That failure mode is
+If BoronDNS is not running, this API cannot answer. That failure mode is
 deliberately left to existing supervisors and external collectors.
 
 ## Configuration
@@ -100,7 +100,7 @@ include_filesystems = true
 # Default: true.
 include_process_resources = true
 
-# Include host time-synchronization status. OxideDNS does not implement NTP/SNTP,
+# Include host time-synchronization status. BoronDNS does not implement NTP/SNTP,
 # does not spawn host commands, and does not inspect supervisor-specific service
 # files. Until a portable configured source exists, this reports unknown.
 # Default: true.
@@ -126,7 +126,7 @@ include_config_summary = true
 # owner-only (for example mode 0600) and its final path component cannot be a
 # symlink. Token files are capped at 8 KiB, with the same opened handle checked
 # and bounded so concurrent growth cannot bypass the ceiling. Default: unset.
-# bearer_token_file = "/etc/oxidedns-secondary/observability.token"
+# bearer_token_file = "/etc/borondns-secondary/observability.token"
 ```
 
 Authentication is deployment-dependent. Localhost-only and private management
@@ -170,7 +170,7 @@ host services return `unknown`.
 
 ## Response Principles
 
-Responses should be compact snapshots rather than event streams. OxideDNS does
+Responses should be compact snapshots rather than event streams. BoronDNS does
 not persist transfer history or runtime state to disk; any recent-history fields
 are bounded in memory and may reset on process restart.
 
@@ -275,7 +275,7 @@ and filesystem view. It should not grow into full host inventory.
 ## Zone And Transfer State
 
 The zone endpoints should expose data-plane-native state that is already
-tracked by OxideDNS:
+tracked by BoronDNS:
 
 - zone apex and source kind: static, catalog-derived, or catalog zone;
 - serving state: active, loading, expired, withdrawn, draining;
@@ -308,12 +308,12 @@ Catalog observability should expose:
 - whether `serve_catalog_zone` is enabled;
 - whether optional member-transfer metadata extensions were observed.
 
-This supports control-plane catalog correlation without making OxideDNS an
+This supports control-plane catalog correlation without making BoronDNS an
 administrative catalog editor.
 
 ## Security And Exposure State
 
-The security endpoint should report only observations OxideDNS can make from
+The security endpoint should report only observations BoronDNS can make from
 its own runtime:
 
 - recursion-refusal behavior for the authoritative server configuration;
@@ -331,13 +331,13 @@ black-box probes, not this API.
 
 ## Time And Certificate Checks
 
-Clock correctness matters for TSIG and DNSSEC signature validity, but OxideDNS
+Clock correctness matters for TSIG and DNSSEC signature validity, but BoronDNS
 does not implement its own NTP/SNTP protocol client and does not spawn host
 commands or inspect supervisor-specific service files. Until a portable,
 explicitly configured status source exists, the endpoint returns `unknown`, not
 `ok`.
 
-Certificate status should be limited to configured files OxideDNS already uses,
+Certificate status should be limited to configured files BoronDNS already uses,
 such as XoT trust anchors and client certificates. The response should expose
 subject/issuer names and not-before/not-after timestamps, not PEM bytes.
 
@@ -372,9 +372,9 @@ assurance model. The control plane remains the owner of:
 The intended data flow is:
 
 1. The control plane publishes configuration/catalog state.
-2. OxideDNS serves as a secondary and exposes read-only observability facts.
+2. BoronDNS serves as a secondary and exposes read-only observability facts.
 3. External probes verify black-box behavior.
-4. The control plane correlates expected state, OxideDNS facts, and probe results.
+4. The control plane correlates expected state, BoronDNS facts, and probe results.
 
-This keeps OxideDNS small enough to remain a data-plane component while giving
+This keeps BoronDNS small enough to remain a data-plane component while giving
 the control plane better material than generic process metrics alone.

@@ -220,9 +220,9 @@ campaign_require_transport_integer() {
 campaign_ssh_bounded() {
     local operation_timeout="$1"
     shift
-    local connect_timeout="${OXIDEDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
-    local alive_interval="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
-    local alive_count="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
+    local connect_timeout="${BORONDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
+    local alive_interval="${BORONDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
+    local alive_count="${BORONDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
     campaign_require_transport_integer operation-timeout "$operation_timeout" 86400 || return 1
     campaign_require_transport_integer connect-timeout "$connect_timeout" 300 || return 1
     campaign_require_transport_integer alive-interval "$alive_interval" 300 || return 1
@@ -230,9 +230,9 @@ campaign_ssh_bounded() {
     local -a transport_argv=(timeout --preserve-status --kill-after=10 "$operation_timeout"
         ssh -o BatchMode=yes -o "ConnectTimeout=$connect_timeout"
         -o "ServerAliveInterval=$alive_interval" -o "ServerAliveCountMax=$alive_count" "$@")
-    if [[ -n "${OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
-        campaign_is_positive_signed_64 "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
-        campaign_run_before_deadline "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
+    if [[ -n "${BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
+        campaign_is_positive_signed_64 "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
+        campaign_run_before_deadline "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
     else
         "${transport_argv[@]}"
     fi
@@ -241,10 +241,10 @@ campaign_ssh_bounded() {
 campaign_rsync_bounded() {
     local operation_timeout="$1"
     shift
-    local connect_timeout="${OXIDEDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
-    local alive_interval="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
-    local alive_count="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
-    local idle_timeout="${OXIDEDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS:-120}"
+    local connect_timeout="${BORONDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
+    local alive_interval="${BORONDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
+    local alive_count="${BORONDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
+    local idle_timeout="${BORONDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS:-120}"
     campaign_require_transport_integer operation-timeout "$operation_timeout" 86400 || return 1
     campaign_require_transport_integer connect-timeout "$connect_timeout" 300 || return 1
     campaign_require_transport_integer alive-interval "$alive_interval" 300 || return 1
@@ -255,9 +255,9 @@ campaign_rsync_bounded() {
         "$connect_timeout" "$alive_interval" "$alive_count"
     local -a transport_argv=(timeout --preserve-status --kill-after=10 "$operation_timeout"
         rsync --timeout="$idle_timeout" -e "$remote_shell" "$@")
-    if [[ -n "${OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
-        campaign_is_positive_signed_64 "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
-        campaign_run_before_deadline "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
+    if [[ -n "${BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
+        campaign_is_positive_signed_64 "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
+        campaign_run_before_deadline "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
     else
         "${transport_argv[@]}"
     fi
@@ -266,9 +266,9 @@ campaign_rsync_bounded() {
 campaign_scp_bounded() {
     local operation_timeout="$1"
     shift
-    local connect_timeout="${OXIDEDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
-    local alive_interval="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
-    local alive_count="${OXIDEDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
+    local connect_timeout="${BORONDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS:-15}"
+    local alive_interval="${BORONDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS:-15}"
+    local alive_count="${BORONDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX:-3}"
     campaign_require_transport_integer operation-timeout "$operation_timeout" 86400 || return 1
     campaign_require_transport_integer connect-timeout "$connect_timeout" 300 || return 1
     campaign_require_transport_integer alive-interval "$alive_interval" 300 || return 1
@@ -276,9 +276,9 @@ campaign_scp_bounded() {
     local -a transport_argv=(timeout --preserve-status --kill-after=10 "$operation_timeout"
         scp -o BatchMode=yes -o "ConnectTimeout=$connect_timeout"
         -o "ServerAliveInterval=$alive_interval" -o "ServerAliveCountMax=$alive_count" "$@")
-    if [[ -n "${OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
-        campaign_is_positive_signed_64 "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
-        campaign_run_before_deadline "$OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
+    if [[ -n "${BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE:-}" ]]; then
+        campaign_is_positive_signed_64 "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" || return 1
+        campaign_run_before_deadline "$BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE" "${transport_argv[@]}"
     else
         "${transport_argv[@]}"
     fi
@@ -428,7 +428,7 @@ campaign_run_before_deadline_capture() {
     trap 'campaign_deadline_capture_forward_signal TERM 15' TERM
     trap 'campaign_deadline_capture_forward_signal HUP 1' HUP
     exec {campaign_deadline_capture_fd}< <(
-        OXIDEDNS_CAMPAIGN_DEADLINE_OWNER_PID="$campaign_deadline_capture_owner_pid" \
+        BORONDNS_CAMPAIGN_DEADLINE_OWNER_PID="$campaign_deadline_capture_owner_pid" \
             campaign_run_before_deadline "$absolute_deadline" "$@"
     ) || setup_status=$?
     spawned_pid="${!:-}"
@@ -486,7 +486,7 @@ campaign_run_before_deadline() {
     shift
     (($# > 0)) || return 1
     campaign_is_positive_signed_64 "$absolute_deadline" || return 1
-    local owner_pids="${OXIDEDNS_CAMPAIGN_DEADLINE_OWNER_PID:-$BASHPID}"
+    local owner_pids="${BORONDNS_CAMPAIGN_DEADLINE_OWNER_PID:-$BASHPID}"
     if [[ ",$owner_pids," != *",$$,"* ]]; then
         owner_pids+=",$$"
     fi
@@ -496,7 +496,7 @@ campaign_run_before_deadline() {
     [[ "$owner_pids" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || return 1
     local campaign_deadline_supervisor_pid="" campaign_deadline_supervisor_job=""
     local campaign_deadline_input_fd
-    local termination_tail_seconds="${OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS:-5}"
+    local termination_tail_seconds="${BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS:-5}"
     local campaign_deadline_forwarded_signal=0 supervisor_status=0 job_line active_pid
     local previous_int previous_term previous_hup
     previous_int="$(trap -p INT)"
@@ -516,8 +516,8 @@ campaign_run_before_deadline() {
     trap 'campaign_deadline_forward_signal INT 2' INT
     trap 'campaign_deadline_forward_signal TERM 15' TERM
     trap 'campaign_deadline_forward_signal HUP 1' HUP
-    OXIDEDNS_CAMPAIGN_DEADLINE_INPUT_FD="$campaign_deadline_input_fd" \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS="$termination_tail_seconds" \
+    BORONDNS_CAMPAIGN_DEADLINE_INPUT_FD="$campaign_deadline_input_fd" \
+        BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS="$termination_tail_seconds" \
         python3 - "$absolute_deadline" "$owner_pids" "$@" <<'PY' &
 import ctypes
 import os
@@ -529,12 +529,12 @@ import time
 deadline = int(sys.argv[1])
 owner_pids = [int(value) for value in sys.argv[2].split(",")]
 command = sys.argv[3:]
-input_fd = int(os.environ["OXIDEDNS_CAMPAIGN_DEADLINE_INPUT_FD"])
+input_fd = int(os.environ["BORONDNS_CAMPAIGN_DEADLINE_INPUT_FD"])
 if input_fd <= 2:
     raise RuntimeError("deadline supervisor input descriptor overlaps standard streams")
 os.fstat(input_fd)
 child_environment = os.environ.copy()
-del child_environment["OXIDEDNS_CAMPAIGN_DEADLINE_INPUT_FD"]
+del child_environment["BORONDNS_CAMPAIGN_DEADLINE_INPUT_FD"]
 if deadline <= time.clock_gettime_ns(time.CLOCK_BOOTTIME):
     raise SystemExit(124)
 
@@ -632,16 +632,16 @@ child_reaped = False
 pid_fd = None
 cleanup_attempted = False
 termination_tail_seconds = int(
-    os.environ["OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS"]
+    os.environ["BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS"]
 )
-delay_reap_for_test = os.environ.get("OXIDEDNS_CAMPAIGN_DEADLINE_TEST_DELAY_REAP") == "1"
+delay_reap_for_test = os.environ.get("BORONDNS_CAMPAIGN_DEADLINE_TEST_DELAY_REAP") == "1"
 
 
 def test_pause(point):
-    if os.environ.get("OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PHASE") != point:
+    if os.environ.get("BORONDNS_CAMPAIGN_DEADLINE_TEST_PHASE") != point:
         return
-    marker = os.environ.get("OXIDEDNS_CAMPAIGN_DEADLINE_TEST_MARKER", "")
-    continuation = os.environ.get("OXIDEDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE", "")
+    marker = os.environ.get("BORONDNS_CAMPAIGN_DEADLINE_TEST_MARKER", "")
+    continuation = os.environ.get("BORONDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE", "")
     if not marker or not continuation:
         raise RuntimeError("deadline supervisor test hook is incomplete")
     with open(marker, "x", encoding="ascii") as output:
@@ -681,7 +681,7 @@ def terminate():
     # unrelated group.
     if child_reaped:
         return
-    killpg_marker = os.environ.get("OXIDEDNS_CAMPAIGN_DEADLINE_TEST_KILLPG_MARKER", "")
+    killpg_marker = os.environ.get("BORONDNS_CAMPAIGN_DEADLINE_TEST_KILLPG_MARKER", "")
     if killpg_marker:
         with open(killpg_marker, "a", encoding="ascii") as output:
             output.write(f"{child_pid}\n")
@@ -721,7 +721,7 @@ def group_has_nonleader_members(cleanup_deadline):
         result = b"0"
         try:
             entry_cap_text = os.environ.get(
-                "OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PROC_ENTRY_CAP", "4194304"
+                "BORONDNS_CAMPAIGN_DEADLINE_TEST_PROC_ENTRY_CAP", "4194304"
             )
             if (
                 not entry_cap_text.isascii()
@@ -1074,7 +1074,7 @@ import time
 
 pid, expected_starttime, absolute_deadline = map(int, sys.argv[1:4])
 label = sys.argv[4]
-if os.environ.get("OXIDEDNS_CAMPAIGN_TEST_DISABLE_PIDFD") == "1":
+if os.environ.get("BORONDNS_CAMPAIGN_TEST_DISABLE_PIDFD") == "1":
     raise SystemExit(f"{label} termination test disabled pidfd support")
 if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
     raise SystemExit(f"{label} termination requires pidfd support")
@@ -1152,8 +1152,8 @@ try:
     if state in {"Z", "X"} or starttime != expected_starttime:
         raise RuntimeError(f"{label} bound process identity does not match")
 
-    test_bound = os.environ.get("OXIDEDNS_CAMPAIGN_PIDFD_BOUND_MARKER", "")
-    test_continue = os.environ.get("OXIDEDNS_CAMPAIGN_PIDFD_CONTINUE_MARKER", "")
+    test_bound = os.environ.get("BORONDNS_CAMPAIGN_PIDFD_BOUND_MARKER", "")
+    test_continue = os.environ.get("BORONDNS_CAMPAIGN_PIDFD_CONTINUE_MARKER", "")
     if test_bound:
         open(test_bound, "x", encoding="ascii").close()
         while test_continue and not os.path.exists(test_continue):
@@ -1232,7 +1232,7 @@ campaign_abort_protocol_child_before_deadline() {
 
 campaign_wait_lock_child_bounded() {
     local pid="$1"
-    local timeout_seconds="${2:-${OXIDEDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS:-2}}"
+    local timeout_seconds="${2:-${BORONDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS:-2}}"
     [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
         printf 'invalid campaign lock release timeout: %s\n' "$timeout_seconds" >&2
         return 1
@@ -1246,7 +1246,7 @@ campaign_terminate_lock_child() {
     local pid="$1"
     local absolute_deadline="${2:-}"
     local expected_starttime="${3:-}"
-    local timeout_seconds="${OXIDEDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS:-2}"
+    local timeout_seconds="${BORONDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS:-2}"
     [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
         printf 'invalid campaign lock release timeout: %s\n' "$timeout_seconds" >&2
         timeout_seconds=2
@@ -1266,8 +1266,8 @@ campaign_acquire_private_lock() {
     local absolute_deadline="${4:-}"
     local cleanup_deadline="${5:-}"
     local helper helper_snapshot_b64 helper_snapshot=""
-    helper="${OXIDEDNS_CAMPAIGN_LOCK_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/campaign-lock-helper.py}"
-    helper_snapshot_b64="${OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64:-}"
+    helper="${BORONDNS_CAMPAIGN_LOCK_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/campaign-lock-helper.py}"
+    helper_snapshot_b64="${BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64:-}"
     command -v python3 >/dev/null 2>&1 || {
         printf 'missing required campaign lock runtime: python3\n' >&2
         return 1
@@ -1305,7 +1305,7 @@ campaign_acquire_private_lock() {
     campaign_lock_owner_pid=""
 
     local response broker_deadline broker_starttime caller_supplied_deadline=0
-    local heartbeat_timeout="${OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}"
+    local heartbeat_timeout="${BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}"
     [[ "$heartbeat_timeout" =~ ^[1-9][0-9]*$ ]] || {
         printf 'invalid campaign lock heartbeat timeout: %s\n' "$heartbeat_timeout" >&2
         return 1
@@ -1443,7 +1443,7 @@ campaign_assert_private_lock() {
     local cleanup_deadline="${2:-}"
     local preserve_cleanup_authority=0
     local label="${campaign_lock_label:-campaign lock}"
-    local heartbeat_timeout="${OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}"
+    local heartbeat_timeout="${BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}"
     if campaign_private_lock_is_inherited; then
         printf '%s authority belongs to process %s, not inherited process %s\n' \
             "$label" "$campaign_lock_owner_pid" "$BASHPID" >&2
@@ -1630,10 +1630,10 @@ directory_fd = os.open(
     parent,
     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
 )
-bound_name = f".{destination_name}.oxidedns-bound.{os.getpid()}.{secrets.token_hex(8)}"
+bound_name = f".{destination_name}.borondns-bound.{os.getpid()}.{secrets.token_hex(8)}"
 bound_created = False
 exchange_pending = False
-rejection_text = b"oxidedns publication rejected: authenticated content changed\n"
+rejection_text = b"borondns publication rejected: authenticated content changed\n"
 libc = ctypes.CDLL(None, use_errno=True)
 try:
     renameat2 = libc.renameat2
@@ -1672,10 +1672,10 @@ def destination_matches_expected(name):
 
 
 def test_pause(point):
-    if os.environ.get("OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE", "") != point:
+    if os.environ.get("BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE", "") != point:
         return
-    marker = os.environ.get("OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER", "")
-    continuation = os.environ.get("OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE", "")
+    marker = os.environ.get("BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER", "")
+    continuation = os.environ.get("BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE", "")
     if not marker or not continuation:
         raise RuntimeError("identity-bound publication test hook is incomplete")
     open(marker, "x", encoding="ascii").close()
@@ -1687,8 +1687,8 @@ def test_pause(point):
 
 
 def rejection_test_pause():
-    marker = os.environ.get("OXIDEDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_MARKER", "")
-    continuation = os.environ.get("OXIDEDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_CONTINUE", "")
+    marker = os.environ.get("BORONDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_MARKER", "")
+    continuation = os.environ.get("BORONDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_CONTINUE", "")
     if not marker and not continuation:
         return
     if not marker or not continuation:
@@ -1763,7 +1763,7 @@ def reject_published_destination():
     # there is no stat-then-unlink window and no unauthenticated rollback.
     rejection_test_pause()
     rejected_name = (
-        f".{destination_name}.oxidedns-rejected.{os.getpid()}.{secrets.token_hex(8)}"
+        f".{destination_name}.borondns-rejected.{os.getpid()}.{secrets.token_hex(8)}"
     )
     rejected_fd = os.open(
         rejected_name,
@@ -1931,7 +1931,7 @@ try:
         ):
             raise SystemExit("campaign stale text pathname identity changed before cleanup")
         quarantine_name = (
-            f".{stale_name}.oxidedns-remove.{os.getpid()}.{secrets.token_hex(12)}"
+            f".{stale_name}.borondns-remove.{os.getpid()}.{secrets.token_hex(12)}"
         )
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = libc.renameat2
@@ -1982,11 +1982,11 @@ campaign_identity_bound_remove_impl() {
     local expected_target_owner="$9"
     local absolute_deadline="${10:-}"
     local quarantine_override="${11:-}"
-    local remove_timeout="${OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TIMEOUT_SECONDS:-}"
+    local remove_timeout="${BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TIMEOUT_SECONDS:-}"
     local campaign_uid campaign_gids
-    local test_phase="${OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_PHASE:-}"
-    local test_marker="${OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_MARKER:-}"
-    local test_continue="${OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_CONTINUE:-}"
+    local test_phase="${BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_PHASE:-}"
+    local test_marker="${BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_MARKER:-}"
+    local test_continue="${BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_CONTINUE:-}"
     campaign_uid="$(id -u)" || return 1
     campaign_gids="$(id -G)" || return 1
     if [[ -n "$remove_timeout" && ! "$remove_timeout" =~ ^[1-9][0-9]*$ ]]; then
@@ -2105,10 +2105,10 @@ def restore_quarantine(directory_fd, quarantine_name, original_name):
 
 def quarantine_name_for(name, override=""):
     if override:
-        if not re.fullmatch(rf"\.{re.escape(name)}\.oxidedns-remove\.[0-9]+\.[0-9a-f]{{24}}", override):
+        if not re.fullmatch(rf"\.{re.escape(name)}\.borondns-remove\.[0-9]+\.[0-9a-f]{{24}}", override):
             raise RuntimeError("invalid identity-bound cleanup quarantine override")
         return override
-    return f".{name}.oxidedns-remove.{os.getpid()}.{secrets.token_hex(12)}"
+    return f".{name}.borondns-remove.{os.getpid()}.{secrets.token_hex(12)}"
 
 
 def check_deadline():
@@ -2298,7 +2298,7 @@ try:
         quarantine_name = quarantine_name_for(target_name, quarantine_override)
         check_deadline()
         rename_noreplace(parent_fd, target_name, quarantine_name)
-        if os.environ.get("OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE") == "root-quarantined":
+        if os.environ.get("BORONDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE") == "root-quarantined":
             os.kill(os.getpid(), 9)
         quarantined = os.stat(quarantine_name, dir_fd=parent_fd, follow_symlinks=False)
         if (quarantined.st_dev, quarantined.st_ino) != expected_target:
@@ -2359,12 +2359,12 @@ campaign_retained_identity_bound_remove() {
     [[ "$(dirname "$target")" == "$parent" && "$target_name" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
     nonce="$(python3 -c 'import secrets; print(secrets.token_hex(12))')" || return 1
     [[ "$nonce" =~ ^[0-9a-f]{24}$ ]] || return 1
-    quarantine_name=".${target_name}.oxidedns-remove.${BASHPID}.${nonce}"
+    quarantine_name=".${target_name}.borondns-remove.${BASHPID}.${nonce}"
     quarantine_path="$parent/$quarantine_name"
     # Every cleanup attempt gets a distinct evidence inode. Earlier retained
     # mappings must remain inspectable and must not block a meaningful retry
     # that created a new canonical target with a different identity.
-    journal="$parent/.oxidedns-retained-cleanup-${target_name}.${BASHPID}.${nonce}.env"
+    journal="$parent/.borondns-retained-cleanup-${target_name}.${BASHPID}.${nonce}.env"
     [[ ! -e "$quarantine_path" && ! -L "$quarantine_path" &&
         ! -e "$journal" && ! -L "$journal" ]] || {
         printf '%s refused an existing quarantine or journal: %s\n' "$label" "$target" >&2
@@ -2648,7 +2648,7 @@ campaign_prepare_private_temporary_tree() {
         printf 'missing required private temporary tree path codec: base64\n' >&2
         return 1
     }
-    local creator_timeout="${OXIDEDNS_CAMPAIGN_PRIVATE_TREE_TIMEOUT_SECONDS:-30}"
+    local creator_timeout="${BORONDNS_CAMPAIGN_PRIVATE_TREE_TIMEOUT_SECONDS:-30}"
     [[ "$creator_timeout" =~ ^[1-9][0-9]*$ ]] || {
         printf 'invalid private temporary tree timeout: %s\n' "$creator_timeout" >&2
         return 1
@@ -2702,7 +2702,7 @@ lock_fd = None
 lock_identity = None
 family_authority = None
 metadata_published = False
-fault_phase = os.environ.get("OXIDEDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE", "")
+fault_phase = os.environ.get("BORONDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE", "")
 
 
 def fault(point: str) -> None:
@@ -2711,10 +2711,10 @@ def fault(point: str) -> None:
 
 
 def journal_recovery_test_pause(point: str) -> None:
-    if os.environ.get("OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE", "") != point:
+    if os.environ.get("BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE", "") != point:
         return
-    marker = os.environ.get("OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER", "")
-    continuation = os.environ.get("OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE", "")
+    marker = os.environ.get("BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER", "")
+    continuation = os.environ.get("BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE", "")
     if not marker or not continuation:
         raise RuntimeError("automatic-tree journal recovery test hook is incomplete")
     open(marker, "x", encoding="ascii").close()
@@ -2736,14 +2736,14 @@ def boottime_now() -> int:
     return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
 
 
-enumeration_cap_text = os.environ.get("OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP", "4096")
+enumeration_cap_text = os.environ.get("BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP", "4096")
 if not enumeration_cap_text.isdigit() or enumeration_cap_text.startswith("0"):
     raise RuntimeError("invalid automatic-tree enumeration entry cap")
 enumeration_entry_cap = int(enumeration_cap_text)
 if not 1 <= enumeration_entry_cap <= 65536:
     raise RuntimeError("invalid automatic-tree enumeration entry cap")
 enumeration_delay_text = os.environ.get(
-    "OXIDEDNS_CAMPAIGN_ENUMERATION_TEST_DELAY_NANOSECONDS", "0"
+    "BORONDNS_CAMPAIGN_ENUMERATION_TEST_DELAY_NANOSECONDS", "0"
 )
 if not enumeration_delay_text.isdigit() or int(enumeration_delay_text) > 1_000_000_000:
     raise RuntimeError("invalid automatic-tree enumeration test delay")
@@ -2881,7 +2881,7 @@ def clear_directory(directory_fd: int, expected_device: int) -> None:
             raise RuntimeError("automatic-tree recovery deadline expired")
         info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         expected = identity(info)
-        quarantine = f".{name}.oxidedns-recovery-remove.{os.getpid()}.{secrets.token_hex(12)}"
+        quarantine = f".{name}.borondns-recovery-remove.{os.getpid()}.{secrets.token_hex(12)}"
         journal_recovery_test_pause("before-child-quarantine")
         require_family_authority()
         rename_with_flags(directory_fd, name, quarantine, 1)  # RENAME_NOREPLACE
@@ -2917,7 +2917,7 @@ def remove_exact_file(
     directory_fd: int, name: str, expected: tuple[int, int, int], label: str,
     test_point: str, allow_detached_lock: bool = False,
 ) -> None:
-    quarantine = f".{name}.oxidedns-remove.{os.getpid()}.{secrets.token_hex(12)}"
+    quarantine = f".{name}.borondns-remove.{os.getpid()}.{secrets.token_hex(12)}"
     journal_recovery_test_pause(test_point)
     require_cleanup_authority(allow_detached_lock)
     rename_with_flags(directory_fd, name, quarantine, 1)  # RENAME_NOREPLACE
@@ -2932,7 +2932,7 @@ def remove_exact_empty_directory(
     directory_fd: int, name: str, expected: tuple[int, int, int], label: str,
     allow_detached_lock: bool = False, quarantine_override: str = "",
 ) -> None:
-    quarantine = quarantine_override or f".{name}.oxidedns-remove.{os.getpid()}.{secrets.token_hex(12)}"
+    quarantine = quarantine_override or f".{name}.borondns-remove.{os.getpid()}.{secrets.token_hex(12)}"
     require_cleanup_authority(allow_detached_lock)
     rename_with_flags(directory_fd, name, quarantine, 1)  # RENAME_NOREPLACE
     if not same_named_identity(directory_fd, quarantine, expected):
@@ -2944,7 +2944,7 @@ def rollback_exact_tree_and_journal(allow_detached_lock: bool = False) -> None:
     global journal_identity
     if not same_named_identity(parent_fd, tree_name, tree_identity):
         raise RuntimeError("automatic-tree rollback target identity changed")
-    quarantine = f".{tree_name}.oxidedns-remove.{owner_pid}.{secrets.token_hex(12)}"
+    quarantine = f".{tree_name}.borondns-remove.{owner_pid}.{secrets.token_hex(12)}"
     journal_identity = update_removal_journal(
         journal_name, journal_identity, parent_identity, tree_name, tree_identity,
         boot_id, owner_pid, owner_starttime, quarantine,
@@ -3041,7 +3041,7 @@ def read_journal(name: str, expected_final_name: str | None = None) -> tuple[dic
         elif any(values[key] == "0" for key in ("tree_device", "tree_inode")):
             raise RuntimeError(f"automatic-tree journal has no target identity: {name}")
         quarantine = values["quarantine_name"]
-        expected_quarantine = rf"\.{re.escape(values['tree_name'])}\.oxidedns-remove\.[0-9]+\.[0-9a-f]{{24}}"
+        expected_quarantine = rf"\.{re.escape(values['tree_name'])}\.borondns-remove\.[0-9]+\.[0-9a-f]{{24}}"
         if values["phase"] == "removing":
             if re.fullmatch(expected_quarantine, quarantine) is None:
                 raise RuntimeError(f"invalid automatic-tree quarantine name: {name}")
@@ -3329,7 +3329,7 @@ try:
     family_authority = socket.socket(
         socket.AF_UNIX, socket.SOCK_STREAM | getattr(socket, "SOCK_CLOEXEC", 0)
     )
-    family_authority.bind(f"\0oxidedns-automatic-{expected_uid}-{authority_digest}")
+    family_authority.bind(f"\0borondns-automatic-{expected_uid}-{authority_digest}")
     lock_name = ".automatic-recovery.lock"
     lock_fd = os.open(
         lock_name, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -3783,8 +3783,8 @@ owner_starttime = int(owner_starttime)
 absolute_deadline = int(absolute_deadline)
 if absolute_deadline <= 0 or absolute_deadline > 9223372036854775807:
     raise SystemExit("invalid automatic-tree removal deadline")
-delay_phase = os.environ.get("OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE", "")
-delay_until_text = os.environ.get("OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS", "")
+delay_phase = os.environ.get("BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE", "")
+delay_until_text = os.environ.get("BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS", "")
 
 
 def identity(info):
@@ -3857,7 +3857,7 @@ try:
         raise SystemExit("cannot authenticate automatic-tree removal boot ID")
     if process_starttime(owner_pid) != owner_starttime:
         raise SystemExit("automatic-tree removal owner identity changed")
-    quarantine = f".{tree_name}.oxidedns-remove.{owner_pid}.{secrets.token_hex(12)}"
+    quarantine = f".{tree_name}.borondns-remove.{owner_pid}.{secrets.token_hex(12)}"
     temporary = f".{journal_name}.removing.{secrets.token_hex(8)}"
     payload = "\n".join((
         "schema=3", "phase=removing", f"boot_id={boot_id}",
@@ -3920,7 +3920,7 @@ finally:
 PY
     )" || return 1
     IFS=$'\t' read -r quarantine journal_device journal_inode journal_owner extra <<<"$result"
-    [[ "$quarantine" =~ ^\..+\.oxidedns-remove\.[0-9]+\.[0-9a-f]{24}$ && -z "$extra" &&
+    [[ "$quarantine" =~ ^\..+\.borondns-remove\.[0-9]+\.[0-9a-f]{24}$ && -z "$extra" &&
         "$journal_device" =~ ^[0-9]+$ && "$journal_inode" =~ ^[0-9]+$ && "$journal_owner" =~ ^[0-9]+$ ]] || return 1
     CAMPAIGN_CLEANUP_IDENTITIES["$identity_prefix:journal_device"]="$journal_device"
     CAMPAIGN_CLEANUP_IDENTITIES["$identity_prefix:journal_inode"]="$journal_inode"
@@ -3958,7 +3958,7 @@ campaign_remove_private_temporary_tree() {
             mutation_deadline="${campaign_lock_operation_deadline:-}"
         else
             mutation_deadline="$(campaign_deadline_from_timeout_seconds \
-                "${OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
+                "${BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
             mutation_deadline=$((mutation_deadline + 300000000))
             campaign_assert_private_lock "$mutation_deadline" "$mutation_deadline" || return 1
         fi
@@ -4047,7 +4047,7 @@ import time
 directory, device, inode, owner, prefix, deadline_text = sys.argv[1:]
 expected = (int(device), int(inode), int(owner))
 deadline = int(deadline_text)
-cap_text = os.environ.get("OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP", "4096")
+cap_text = os.environ.get("BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP", "4096")
 if not cap_text.isdigit() or cap_text.startswith("0"):
     raise SystemExit("invalid campaign enumeration entry cap")
 entry_cap = int(cap_text)
@@ -4120,11 +4120,11 @@ campaign_atomic_replace_text() {
         campaign_is_positive_signed_64 "$enumeration_deadline" || return 1
     else
         enumeration_deadline="$(campaign_deadline_from_timeout_seconds \
-            "${OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
+            "${BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
         enumeration_deadline=$((enumeration_deadline + 300000000))
     fi
     campaign_enumerate_direct_children_bounded "$parent" "$parent_device" "$parent_inode" \
-        "$parent_owner" ".${destination##*/}.oxidedns-staged." \
+        "$parent_owner" ".${destination##*/}.borondns-staged." \
         "$enumeration_deadline" stale_listing || return 1
     while IFS= read -r stale_encoded; do
         [[ -n "$stale_encoded" ]] || continue
@@ -4154,7 +4154,7 @@ campaign_atomic_replace_text() {
         }
     done <<<"$stale_listing"
     campaign_assert_private_lock || return 1
-    staged="$(mktemp "$parent/.${destination##*/}.oxidedns-staged.XXXXXX")" || return 1
+    staged="$(mktemp "$parent/.${destination##*/}.borondns-staged.XXXXXX")" || return 1
     if ! printf '%s\n' "$content" >"$staged"; then
         campaign_assert_private_lock && rm -f -- "$staged"
         return 1
@@ -4348,7 +4348,7 @@ renameat2.argtypes = [
 ]
 renameat2.restype = ctypes.c_int
 directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-bound = f".{destination}.oxidedns-bound.{os.getpid()}.{secrets.token_hex(12)}"
+bound = f".{destination}.borondns-bound.{os.getpid()}.{secrets.token_hex(12)}"
 bound_contains_staged = False
 try:
     root_info = os.fstat(directory_fd)
@@ -4487,7 +4487,7 @@ campaign_publish_systemd_fragment() {
         destination_inode="$destination_remainder"
     fi
     local staged staged_size
-    staged="$(sudo mktemp "$unit_root/.$(basename "$destination").oxidedns-staged.XXXXXX")" || return 1
+    staged="$(sudo mktemp "$unit_root/.$(basename "$destination").borondns-staged.XXXXXX")" || return 1
     if ! sudo install -m 0644 -o root -g root -- "$candidate" "$staged" ||
         [[ "$(campaign_sha256 "$staged")" != "$expected_sha256" ]] ||
         ! campaign_validate_systemd_fragment_schema "$staged" "$expected_runner"; then
@@ -4521,7 +4521,7 @@ campaign_publish_root_runner() {
     campaign_assert_private_lock || return 1
     [[ "$unit" =~ ^[A-Za-z0-9_.@-]+\.service$ ]] || return 1
     campaign_candidate_identity_matches "$candidate" "$expected_sha256" "$expected_device" "$expected_inode" || return 1
-    local runner_root=/var/tmp/oxidedns-campaign-runners
+    local runner_root=/var/tmp/borondns-campaign-runners
     local unit_root="$runner_root/${unit%.service}"
     campaign_prepare_root_runner_tree "$runner_root" "$unit_root" "$label" || return 1
     local runner_dir runner identity_candidate
@@ -4595,7 +4595,7 @@ campaign_prepare_root_runner_tree() {
     local runner_parent
     runner_parent="$(dirname "$runner_root")"
     [[ "$runner_root" == "$runner_parent"/* && "$(dirname "$unit_root")" == "$runner_root" ]] || return 1
-    [[ "$(basename "$runner_root")" == oxidedns-campaign-runners ]] || return 1
+    [[ "$(basename "$runner_root")" == borondns-campaign-runners ]] || return 1
     [[ "$(basename "$unit_root")" =~ ^[A-Za-z0-9_.@-]+$ ]] || return 1
     [[ -d "$runner_parent" && ! -L "$runner_parent" && "$(realpath -ms "$runner_parent")" == "$(realpath -e "$runner_parent")" ]] || return 1
     [[ "$(stat -c %u "$runner_parent")" == 0 ]] || return 1
@@ -4729,7 +4729,7 @@ campaign_remove_root_runner_tree() {
     local label="$2"
     campaign_assert_private_lock || return 1
     [[ "$unit" =~ ^[A-Za-z0-9_.@-]+\.service$ ]] || return 1
-    local unit_root="/var/tmp/oxidedns-campaign-runners/${unit%.service}"
+    local unit_root="/var/tmp/borondns-campaign-runners/${unit%.service}"
     local unit_parent
     unit_parent="$(dirname "$unit_root")"
     [[ -e "$unit_root" || -L "$unit_root" ]] || return 0
@@ -4784,11 +4784,11 @@ campaign_remove_systemd_fragment_staging() {
         campaign_is_positive_signed_64 "$enumeration_deadline" || return 1
     else
         enumeration_deadline="$(campaign_deadline_from_timeout_seconds \
-            "${OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
+            "${BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS:-5}")" || return 1
         enumeration_deadline=$((enumeration_deadline + 300000000))
     fi
     campaign_enumerate_direct_children_bounded "$unit_root" "$parent_device" "$parent_inode" \
-        "$parent_owner" ".$(basename "$destination").oxidedns-staged." \
+        "$parent_owner" ".$(basename "$destination").borondns-staged." \
         "$enumeration_deadline" staged_listing || return 1
     while IFS= read -r staged_encoded; do
         [[ -n "$staged_encoded" ]] || continue
@@ -5011,7 +5011,7 @@ campaign_publish_root_atomic_text() {
         rm -f -- "$candidate"
         return 1
     }
-    staged="$(sudo mktemp "$root/.$(basename "$destination").oxidedns-staged.XXXXXX")" || {
+    staged="$(sudo mktemp "$root/.$(basename "$destination").borondns-staged.XXXXXX")" || {
         rm -f -- "$candidate"
         return 1
     }
@@ -5398,11 +5398,11 @@ campaign_prepare_collection_budget() {
         return 1
         ;;
     esac
-    local timeout_seconds="${OXIDEDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS:-10800}"
-    campaign_collection_max_entries="${OXIDEDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES:-100000}"
-    campaign_collection_max_depth="${OXIDEDNS_CAMPAIGN_COLLECTION_MAX_DEPTH:-64}"
-    campaign_collection_max_file_bytes="${OXIDEDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES:-2147483648}"
-    campaign_collection_max_total_bytes="${OXIDEDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES:-68719476736}"
+    local timeout_seconds="${BORONDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS:-10800}"
+    campaign_collection_max_entries="${BORONDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES:-100000}"
+    campaign_collection_max_depth="${BORONDNS_CAMPAIGN_COLLECTION_MAX_DEPTH:-64}"
+    campaign_collection_max_file_bytes="${BORONDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES:-2147483648}"
+    campaign_collection_max_total_bytes="${BORONDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES:-68719476736}"
     campaign_require_bounded_positive_integer collection-timeout-seconds "$timeout_seconds" 86400 || return 1
     campaign_require_bounded_positive_integer collection-entry-cap "$campaign_collection_max_entries" 1000000 || return 1
     campaign_require_bounded_positive_integer collection-depth-cap "$campaign_collection_max_depth" 128 || return 1
@@ -5538,10 +5538,10 @@ try:
     ):
         raise SystemExit("collection metadata file is unsafe or oversized")
     test_marker = os.environ.get(
-        "OXIDEDNS_CAMPAIGN_COLLECTION_METADATA_TEST_MARKER", ""
+        "BORONDNS_CAMPAIGN_COLLECTION_METADATA_TEST_MARKER", ""
     )
     test_continue = os.environ.get(
-        "OXIDEDNS_CAMPAIGN_COLLECTION_METADATA_TEST_CONTINUE", ""
+        "BORONDNS_CAMPAIGN_COLLECTION_METADATA_TEST_CONTINUE", ""
     )
     if bool(test_marker) != bool(test_continue):
         raise SystemExit("collection metadata test hook is incomplete")
@@ -5667,9 +5667,9 @@ campaign_remote_tree_snapshot() {
     local absolute_deadline="$3"
     local snapshot operation_timeout
     campaign_collection_phase_timeout_seconds operation_timeout "$absolute_deadline" \
-        "${OXIDEDNS_CAMPAIGN_REMOTE_SNAPSHOT_TIMEOUT_SECONDS:-1800}" || return 1
+        "${BORONDNS_CAMPAIGN_REMOTE_SNAPSHOT_TIMEOUT_SECONDS:-1800}" || return 1
     snapshot="$(
-        OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$absolute_deadline" \
+        BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$absolute_deadline" \
             campaign_ssh_bounded "$operation_timeout" \
             -- "$host" bash -s -- "$root" <<'REMOTE'
 set -euo pipefail
@@ -5823,7 +5823,7 @@ campaign_collection_stop_marker_broker() {
     local write_fd="${CAMPAIGN_COLLECTION_MARKER_WRITE_FDS[$marker]:-}"
     local broker_pid="${CAMPAIGN_COLLECTION_MARKER_PIDS[$marker]:-}"
     local broker_starttime="${CAMPAIGN_COLLECTION_MARKER_STARTTIMES[$marker]:-}"
-    local stop_status=0 stop_timeout="${OXIDEDNS_CAMPAIGN_MARKER_STOP_TIMEOUT_SECONDS:-2}"
+    local stop_status=0 stop_timeout="${BORONDNS_CAMPAIGN_MARKER_STOP_TIMEOUT_SECONDS:-2}"
     local stop_deadline=""
     campaign_require_bounded_positive_integer marker-broker-stop-timeout "$stop_timeout" 60 || stop_status=1
     if ((stop_status == 0)); then
@@ -6405,7 +6405,7 @@ campaign_recover_collection_bundle() {
             "${held_transaction_identity%%:*}" =~ ^[0-9]+$ &&
             "${transaction_remainder%%:*}" =~ ^[0-9]+$ &&
             "${held_transaction_identity##*:}" =~ ^[0-9]+$ ]] || return 1
-        OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=64 \
+        BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=64 \
             campaign_enumerate_direct_children_bounded "$transaction" \
             "${held_transaction_identity%%:*}" "${transaction_remainder%%:*}" \
             "${held_transaction_identity##*:}" 'old-' "$absolute_deadline" \

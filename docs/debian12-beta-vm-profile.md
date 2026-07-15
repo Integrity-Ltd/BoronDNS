@@ -3,7 +3,7 @@
 Status: deployment-profile note for beta-test VM handover.
 
 The repository does not ship a VM image, but the release Docker image archive is
-usable as the OxideDNS payload inside a Debian 12 beta-test VM. In this profile,
+usable as the BoronDNS payload inside a Debian 12 beta-test VM. In this profile,
 the VM owner prepares the operating system, Docker CE, `nftables`, `fail2ban`,
 time synchronization, SSH access, and three interface roles outside this
 repository:
@@ -16,11 +16,11 @@ repository:
 
 This VM is the secondary DNS server under test. It requires at least one
 configured primary authoritative DNS server, such as a BIND 9 host, that serves
-the master copy of the test zone and allows AXFR/IXFR from the OxideDNS VM. The
+the master copy of the test zone and allows AXFR/IXFR from the BoronDNS VM. The
 primary should be authoritative-only for this test role: it should not provide
-recursive resolution, and it should be reachable only from the test OxideDNS
-addresses. Allow UDP/TCP 53 to the OxideDNS DNS interface, outbound TCP 53 or
-853 from OxideDNS to the primary, authorized NOTIFY from the primary, and ICMP
+recursive resolution, and it should be reachable only from the test BoronDNS
+addresses. Allow UDP/TCP 53 to the BoronDNS DNS interface, outbound TCP 53 or
+853 from BoronDNS to the primary, authorized NOTIFY from the primary, and ICMP
 Path MTU messages, including IPv4 Destination Unreachable / Fragmentation
 Needed (Type 3, Code 4) and ICMPv6 Packet Too Big.
 
@@ -28,9 +28,9 @@ For this profile, prefer loading the release asset locally instead of relying on
 a registry during beta handover:
 
 ```sh
-sha256sum -c oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
-xz -dc oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
-docker tag oxidedns:<version> oxidedns:beta
+sha256sum -c borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+xz -dc borondns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
+docker tag borondns:<version> borondns:beta
 ```
 
 Use host networking only when the container must bind the VM's role-specific
@@ -48,14 +48,14 @@ when `nftables` owns policy:
 Because the published image defaults to an unprivileged user, a host-network
 deployment that binds port 53 can either keep the default high-port container
 configuration and publish host port 53, or grant only `CAP_NET_BIND_SERVICE`
-and run the container as root only long enough for OxideDNS to bind privileged
-sockets and then drop privileges through `[process].run_as_user = "oxidedns"`.
+and run the container as root only long enough for BoronDNS to bind privileged
+sockets and then drop privileges through `[process].run_as_user = "borondns"`.
 The second form matches a
 three-interface beta VM where Docker port publishing is not used:
 
 ```toml
 [process]
-run_as_user = "oxidedns"
+run_as_user = "borondns"
 disable_core_dumps = true
 no_new_privileges = true
 
@@ -70,7 +70,7 @@ this:
 
 ```ini
 [Unit]
-Description=OxideDNS secondary DNS server beta container
+Description=BoronDNS secondary DNS server beta container
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -81,9 +81,9 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
 TimeoutStopSec=35s
-ExecStartPre=-/usr/bin/docker rm -f oxidedns
+ExecStartPre=-/usr/bin/docker rm -f borondns
 ExecStart=/usr/bin/docker run \
-  --name oxidedns \
+  --name borondns \
   --rm \
   --network host \
   --read-only \
@@ -95,10 +95,10 @@ ExecStart=/usr/bin/docker run \
   --security-opt no-new-privileges \
   --pids-limit 128 \
   --user 0:0 \
-  -v /etc/oxidedns-secondary:/etc/oxidedns-secondary:ro \
-  oxidedns:beta \
-  serve --config /etc/oxidedns-secondary/config.toml
-ExecStop=/usr/bin/docker stop oxidedns
+  -v /etc/borondns-secondary:/etc/borondns-secondary:ro \
+  borondns:beta \
+  serve --config /etc/borondns-secondary/config.toml
+ExecStop=/usr/bin/docker stop borondns
 
 [Install]
 WantedBy=multi-user.target
@@ -108,7 +108,7 @@ This beta profile intentionally keeps the Alpine-based image inspectable with
 `docker exec` for troubleshooting. Release packaging pins the image base to the
 reviewed platform manifest
 `alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6`.
-`OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE` is accepted only when it equals that exact
+`BORONDNS_DOCKER_ALPINE_BASE_IMAGE` is accepted only when it equals that exact
 reference, and the retained image manifest records both `base_image` and
-`base_image_digest`; do not treat the Alpine choice as part of the OxideDNS
+`base_image_digest`; do not treat the Alpine choice as part of the BoronDNS
 runtime compatibility contract.

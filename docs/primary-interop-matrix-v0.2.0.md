@@ -10,7 +10,7 @@ Evidence directory:
 Run command:
 
 ```sh
-OXIDEDNS_PRIMARY_MATRIX_ARTIFACT_DIR=target/evidence/primary-matrix-20260614T010049Z \
+BORONDNS_PRIMARY_MATRIX_ARTIFACT_DIR=target/evidence/primary-matrix-20260614T010049Z \
   scripts/interop-primary-matrix.sh
 ```
 
@@ -75,4 +75,4 @@ target, while local Docker bridge gateway delivery is not reliable on every
 host. The harness therefore discovers the host's routable IPv4 address for the
 NSD `notify` target and retains failed workdirs when a case fails. The passing
 case proves that NSD emitted an OPCODE=4 NOTIFY packet observed by the proxy and
-that OxideDNS accepted the forwarded NOTIFY and refreshed from the NSD primary.
+that BoronDNS accepted the forwarded NOTIFY and refreshed from the NSD primary.

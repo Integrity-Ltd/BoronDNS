@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oxidedns_core::{
+use borondns_core::{
     dns::{Header, Question, answer_datagram},
     zone::ZoneStore,
 };

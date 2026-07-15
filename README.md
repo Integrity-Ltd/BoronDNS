@@ -1,8 +1,8 @@
-![OxideDNS](docs/assets/oxidedns-banner.png)
+![BoronDNS](docs/assets/borondns-banner.png)
 
-# OxideDNS
+# BoronDNS
 
-OxideDNS is a secondary-only authoritative DNS server. It loads zone data from
+BoronDNS is a secondary-only authoritative DNS server. It loads zone data from
 configured primary DNS servers over AXFR or IXFR, keeps the active zone state in
 memory, and serves authoritative answers over UDP and TCP.
 
@@ -16,7 +16,7 @@ Network listeners are split into three roles, configured under `[interfaces]`:
 - `transfer` — outbound source addresses used when pulling transfers from primaries.
 - `mgmt` — the operator-facing management interface for health and metrics.
 
-OxideDNS accepts authorized NOTIFY on the DNS listeners; there is no separate
+BoronDNS accepts authorized NOTIFY on the DNS listeners; there is no separate
 NOTIFY listener role.
 
 ## Features
@@ -24,7 +24,7 @@ NOTIFY listener role.
 - Incremental zone transfer (IXFR) with automatic full-transfer (AXFR) fallback.
 - Outbound zone transfer over TLS (XoT).
 - Passive DNSSEC serving — serves the RRSIG/NSEC/NSEC3 records received from the
-  primary; OxideDNS never signs.
+  primary; BoronDNS never signs.
 - Response Rate Limiting (RRL) and DNS Cookies for UDP abuse mitigation.
 - RFC 9432 catalog zones, with opt-in member-transfer extensions.
 - Reloadable, filesystem-backed TSIG / XoT secret snapshots.
@@ -38,7 +38,7 @@ are not implied unless that document names them.
 
 ## Project Status
 
-OxideDNS is now tracked as a **release-candidate secondary server**, not as a
+BoronDNS is now tracked as a **release-candidate secondary server**, not as a
 minimal local milestone. It is not yet a final formal SRS acceptance build: the
 remaining closeout work is tracked in the
 [SRS acceptance gap register](docs/mvp-gap-register.md). That register separates
@@ -61,7 +61,7 @@ names them.
 - Current release scope: [Release-candidate scope](docs/engineering-mvp-scope.md)
 - Retained implemented feature slices: [Implemented feature scope](docs/implemented-feature-scope.md)
 - Verification status: [Verification ledger](docs/verification-ledger.md)
-- Full requirements: [OxideDNS Secondary SRS v0.9.1](docs/OxideDNS-Secondary-SRS-v0.9.1.md)
+- Full requirements: [BoronDNS Secondary SRS v0.9.1](docs/BoronDNS-Secondary-SRS-v0.9.1.md)
 - External SRS review handling: [SRS review disposition](docs/srs-review-disposition.md)
 
 ## Quick Local Commands
@@ -73,13 +73,13 @@ builds. Each line below is an independent mode, not a sequence:
 
 ```bash
 # Validate the config and exit (non-zero on error).
-cargo run -p oxidedns-cli -- --validate-config config/oxidedns.example.toml
+cargo run -p borondns-cli -- --validate-config config/borondns.example.toml
 # Print the effective config with secrets redacted.
-cargo run -p oxidedns-cli -- --dump-config config/oxidedns.example.toml
+cargo run -p borondns-cli -- --dump-config config/borondns.example.toml
 # Print a fresh annotated example config to stdout.
-cargo run -p oxidedns-cli -- --example-config
+cargo run -p borondns-cli -- --example-config
 # Run the server.
-cargo run -p oxidedns-cli -- --config config/oxidedns.example.toml serve
+cargo run -p borondns-cli -- --config config/borondns.example.toml serve
 # Run the local lint + test gate.
 ./scripts/check.sh
 ```
@@ -89,20 +89,20 @@ deployment, copy it and replace the example primary addresses, zone names, TSIG
 keys, XoT files, listener addresses, and management bind address. At least one
 static secondary zone or catalog zone must be configured before service startup.
 
-When no config path is supplied, `oxidedns` reads
-`/etc/oxidedns-secondary/config.toml`. Top-level `--config` or
-`OXIDEDNS_CONFIG` can override the path for validation, config dumping,
+When no config path is supplied, `borondns` reads
+`/etc/borondns-secondary/config.toml`. Top-level `--config` or
+`BORONDNS_CONFIG` can override the path for validation, config dumping,
 `check-config`, and `serve`. Mode-specific paths, such as `serve --config
 path/to/config.toml`, remain supported and take precedence.
 
 ## Workspace
 
-- `oxidedns-core`: configuration, DNS wire parsing, AXFR/IXFR parsing, TSIG, and
+- `borondns-core`: configuration, DNS wire parsing, AXFR/IXFR parsing, TSIG, and
   in-memory zone state.
-- `oxidedns-server`: runtime, listeners, transfers, reloadable secret snapshots,
+- `borondns-server`: runtime, listeners, transfers, reloadable secret snapshots,
   health, metrics, RRL, XoT, packet-I/O adapters, and graceful shutdown.
-- `oxidedns-cli`: command-line entrypoint.
-- `oxide-gun`: OxideDNS test-tool DNS load generator with portable UDP self-tests
+- `borondns-cli`: command-line entrypoint.
+- `oxide-gun`: BoronDNS test-tool DNS load generator with portable UDP self-tests
   and an explicit Linux AF_XDP backend for lab hosts.
 
 The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
@@ -130,7 +130,7 @@ The workspace targets Rust 1.95, Rust 2024 edition, and Cargo resolver 3.
 
 ## License
 
-OxideDNS is licensed under either of:
+BoronDNS is licensed under either of:
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT license ([LICENSE-MIT](LICENSE-MIT))

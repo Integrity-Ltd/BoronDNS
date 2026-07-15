@@ -13,7 +13,7 @@ REQUIRED_FILES = [
     "docs/verification-ledger.md",
     "docs/implementation-plan.md",
     "docs/operator-deployment-guide.md",
-    "config/oxidedns.example.toml",
+    "config/borondns.example.toml",
 ]
 
 REQUIRED_PHRASES = [

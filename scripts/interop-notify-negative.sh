@@ -15,15 +15,15 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/interop/notify-negative-$$"
-artifact_dir="${OXIDEDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_NOTIFY_NEGATIVE_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -38,16 +38,16 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -160 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -160 "$workdir/borondns.log" >&2
         }
     fi
     rm -rf "$workdir"
 }
 trap cleanup EXIT
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -66,7 +66,7 @@ primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
 summary_tsv="$workdir/notify-negative-summary.tsv"
 traceability_tsv="$workdir/notify-traceability.tsv"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 
 cat >"$fake_primary" <<'PY'
 #!/usr/bin/env python3
@@ -477,7 +477,7 @@ def wait_active():
                 log("active zone query succeeded")
                 return
         time.sleep(0.05)
-    raise AssertionError("OxideDNS did not publish active notify-negative.test zone")
+    raise AssertionError("BoronDNS did not publish active notify-negative.test zone")
 
 
 def assert_response(
@@ -577,11 +577,11 @@ if __name__ == "__main__":
     main()
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 log_format = "logfmt"
 
@@ -619,7 +619,7 @@ notify_sources = ["127.0.0.1"]
 tsig_key = "transfer-key."
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" &
 primary_pid=$!
@@ -635,45 +635,45 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 live=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/livez" >/dev/null 2>&1; then
         live=1
         break
     fi
     sleep 0.05
 done
 if ((live != 1)); then
-    echo "OxideDNS did not become live during negative NOTIFY interop" >&2
+    echo "BoronDNS did not become live during negative NOTIFY interop" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$oxidedns_dns_port" "$client_log" "$summary_tsv")"
+client_summary="$(python3 "$client" "$borondns_dns_port" "$borondns_dns_port" "$client_log" "$summary_tsv")"
 summary_logged=0
 for _ in {1..40}; do
-    if grep -q 'event=notify_log_rate_limit_summary' "$workdir/oxidedns.log"; then
+    if grep -q 'event=notify_log_rate_limit_summary' "$workdir/borondns.log"; then
         summary_logged=1
         break
     fi
     sleep 0.1
 done
 if ((summary_logged != 1)); then
-    echo "OxideDNS log missing NOTIFY log-rate summary event" >&2
+    echo "BoronDNS log missing NOTIFY log-rate summary event" >&2
     exit 1
 fi
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_notify_messages_received_total 11' \
-    'oxidedns_notify_messages_unauthorized_total 3' \
-    'oxidedns_notify_refresh_actions_total{action="signalled"} 2' \
-    'oxidedns_notify_refresh_actions_total{action="deduplicated"} 2' \
-    'oxidedns_tsig_notify_verifications_total{result="ok"} 1' \
-    'oxidedns_tsig_notify_verifications_total{result="badkey"} 1' \
-    'oxidedns_tsig_notify_verifications_total{result="badsig"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_notify_messages_received_total 11' \
+    'borondns_notify_messages_unauthorized_total 3' \
+    'borondns_notify_refresh_actions_total{action="signalled"} 2' \
+    'borondns_notify_refresh_actions_total{action="deduplicated"} 2' \
+    'borondns_tsig_notify_verifications_total{result="ok"} 1' \
+    'borondns_tsig_notify_verifications_total{result="badkey"} 1' \
+    'borondns_tsig_notify_verifications_total{result="badsig"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected negative NOTIFY line: $expected" >&2
         exit 1
@@ -691,33 +691,33 @@ for expected_log in \
     'suppressed_tsig_failures=1' \
     'distinct_source_prefixes=1' \
     'total_suppressed=3'; do
-    if ! grep -q "$expected_log" "$workdir/oxidedns.log"; then
-        echo "OxideDNS log missing expected negative NOTIFY event: $expected_log" >&2
+    if ! grep -q "$expected_log" "$workdir/borondns.log"; then
+        echo "BoronDNS log missing expected negative NOTIFY event: $expected_log" >&2
         exit 1
     fi
 done
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; oxidedns.toml; crates/oxidedns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_dns_interface	This harness receives NOTIFY on the configured DNS interface over both UDP and TCP, preserving the three-role interface model.
+ODS-FR-NOTIFY-001	retained-runtime	tcp_and_udp_notify_reception	notify-negative-summary.tsv; borondns.toml; crates/borondns-server/src/lib.rs::runtime_serves_queries_and_notify_on_configured_dns_interface	This harness receives NOTIFY on the configured DNS interface over both UDP and TCP, preserving the three-role interface model.
 ODS-FR-NOTIFY-002	retained-runtime	non_soa_question	notify-negative-summary.tsv; client.log	A NOTIFY with QTYPE=A receives FORMERR with QID, opcode, and question echoed.
 ODS-FR-NOTIFY-003	retained-runtime	unknown_zone	notify-negative-summary.tsv; client.log	A NOTIFY for an unconfigured zone receives REFUSED and no refresh action is expected.
-ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; oxidedns.log	Unauthorized sources receive no response, increment unauthorized metrics, emit the first warning log, and feed retained suppression-summary evidence for repeats.
-ODS-FR-NOTIFY-005	retained-runtime	signed_valid_and_tampered_notify	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; valid signed NOTIFY increments ok and receives signed NOERROR response evidence; tampered signed NOTIFY returns NOTAUTH with BADSIG evidence.
+ODS-FR-NOTIFY-004	retained-runtime	unauthorized_source_discard	notify-negative-summary.tsv; metrics.txt; borondns.log	Unauthorized sources receive no response, increment unauthorized metrics, emit the first warning log, and feed retained suppression-summary evidence for repeats.
+ODS-FR-NOTIFY-005	retained-runtime	signed_valid_and_tampered_notify	notify-negative-summary.tsv; metrics.txt; borondns.log	A signed zone receiving an unsigned authorized NOTIFY returns NOTAUTH with BADKEY TSIG evidence; valid signed NOTIFY increments ok and receives signed NOERROR response evidence; tampered signed NOTIFY returns NOTAUTH with BADSIG evidence.
 ODS-FR-NOTIFY-006	retained-runtime	accepted_notify_response	notify-negative-summary.tsv; client.log	Accepted and duplicate NOTIFY messages over UDP and TCP receive QR=1, OPCODE=NOTIFY, AA=1, NOERROR responses with QID and question echoed; signed valid NOTIFY responses carry a NOERROR TSIG.
-ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; oxidedns.log	Unsigned and signed accepted NOTIFY messages record action=refresh_signalled and increment the refresh signalled metric.
-ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; oxidedns.log; crates/oxidedns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
-ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; oxidedns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
-ODS-FR-NOTIFY-010	retained-runtime	notify_logging	oxidedns.log	Accepted unsigned, accepted signed, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
-ODS-FR-NOTIFY-011	retained-runtime	log_rate_suppression_summary	oxidedns.log; notify-negative-summary.tsv	This harness retains first warning logs plus a periodic aggregate summary proving repeated unauthorized and TSIG-failure NOTIFY warnings are suppressed and counted.
+ODS-FR-NOTIFY-007	retained-runtime	accepted_refresh_signalled	metrics.txt; borondns.log	Unsigned and signed accepted NOTIFY messages record action=refresh_signalled and increment the refresh signalled metric.
+ODS-FR-NOTIFY-008	retained-runtime-plus-support	embedded_soa_serial	notify-negative-summary.tsv; borondns.log; crates/borondns-core/src/dns.rs notify embedded SOA tests	The accepted NOTIFY carries embedded SOA serial 2026052502 and logs it; malformed owner/class and timer-field isolation remain covered by focused tests.
+ODS-FR-NOTIFY-009	retained-runtime	duplicate_deduplicated	notify-negative-summary.tsv; metrics.txt; borondns.log	A duplicate well-formed NOTIFY still receives a response but records action=deduplicated and does not create a second signalled metric.
+ODS-FR-NOTIFY-010	retained-runtime	notify_logging	borondns.log	Accepted unsigned, accepted signed, deduplicated, unauthorized, and TSIG-failure paths have retained log evidence with action, source, zone, and serial where applicable.
+ODS-FR-NOTIFY-011	retained-runtime	log_rate_suppression_summary	borondns.log; notify-negative-summary.tsv	This harness retains first warning logs plus a periodic aggregate summary proving repeated unauthorized and TSIG-failure NOTIFY warnings are suppressed and counted.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$summary_tsv" "$artifact_dir/notify-negative-summary.tsv"
     cp "$traceability_tsv" "$artifact_dir/notify-traceability.tsv"
     printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"

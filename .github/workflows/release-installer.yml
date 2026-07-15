@@ -176,11 +176,11 @@ jobs:
       - name: Verify current-commit reproducible release binaries
         shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
         run: |
-          evidence="$RUNNER_TEMP/oxidedns-release-reproducibility"
+          evidence="$RUNNER_TEMP/borondns-release-reproducibility"
           /usr/bin/rm -rf "$evidence"
-          OXIDEDNS_REPRODUCIBLE_BUILD_CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" \
-            OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" \
-            OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$evidence" \
+          BORONDNS_REPRODUCIBLE_BUILD_CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" \
+            BORONDNS_REPRODUCIBLE_BUILD_RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" \
+            BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$evidence" \
             scripts/reproducible-build-compare.sh
           python3 scripts/verify-release-reproducibility.py \
             --require-artifacts "$evidence" "${{ needs.verify-source.outputs.source_commit }}"
@@ -191,20 +191,20 @@ jobs:
           verified_rustc="${{ steps.packaging-tools.outputs.rustc-path }}"
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
           test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
-          release_target_dir="$RUNNER_TEMP/oxidedns-release-target"
+          release_target_dir="$RUNNER_TEMP/borondns-release-target"
           /usr/bin/rm -rf "$release_target_dir"
           /usr/bin/mkdir -p "$release_target_dir"
           /usr/bin/rm -rf target/dist
           CARGO="$verified_cargo" RUSTC="$verified_rustc" CARGO_TARGET_DIR="$release_target_dir" scripts/package-installer.sh
           shopt -s nullglob
-          release_oxidedns=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
-          test "${#release_oxidedns[@]}" -eq 1
+          release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_borondns[@]}" -eq 1
           test "${#release_oxide_gun[@]}" -eq 1
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
           test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
           test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
 
@@ -218,20 +218,20 @@ jobs:
         run: scripts/test-docker-image.sh
 
       - name: Generate release SBOMs
-        run: CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
+        run: CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" BORONDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 
       - name: Verify static binaries
         shell: bash
         run: |
           shopt -s nullglob
-          oxidedns_bins=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
-          oxide_gun_bins=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
-          test "${#oxidedns_bins[@]}" -eq 1
+          borondns_bins=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
+          oxide_gun_bins=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#borondns_bins[@]}" -eq 1
           test "${#oxide_gun_bins[@]}" -eq 1
-          ldd "${oxidedns_bins[0]}" > target/dist/release-binary-ldd.txt 2>&1 || true
+          ldd "${borondns_bins[0]}" > target/dist/release-binary-ldd.txt 2>&1 || true
           cat target/dist/release-binary-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-binary-ldd.txt
-          "${oxidedns_bins[0]}" --version
+          "${borondns_bins[0]}" --version
           ldd "${oxide_gun_bins[0]}" > target/dist/release-oxide-gun-ldd.txt 2>&1 || true
           cat target/dist/release-oxide-gun-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-oxide-gun-ldd.txt
@@ -258,45 +258,45 @@ jobs:
           /usr/bin/rm -rf "$handoff"
           /usr/bin/mkdir -p "$handoff"
           assets=(
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
+            target/dist/borondns-*-x86_64-unknown-linux-musl.tar.xz
+            target/dist/borondns-*-x86_64-unknown-linux-musl.tar.xz.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl.bin
+            target/dist/borondns-*-x86_64-unknown-linux-musl.bin.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin
+            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
+            target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
+            target/dist/borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json
+            target/dist/borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
+            target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
+            target/dist/borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
+            target/dist/borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
           )
           test "${#assets[@]}" -eq 16
-          release_oxidedns=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
-          test "${#release_oxidedns[@]}" -eq 1
+          release_borondns=(target/dist/borondns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(target/dist/borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_borondns[@]}" -eq 1
           test "${#release_oxide_gun[@]}" -eq 1
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
-          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
           for asset in "${assets[@]}"; do
             /usr/bin/install -m 0644 "$asset" "$handoff/$(/usr/bin/basename "$asset")"
           done
           /usr/bin/install -m 0644 \
-            "$RUNNER_TEMP/oxidedns-release-reproducibility/reproducible-build-summary.env" \
-            "$RUNNER_TEMP/oxidedns-release-reproducibility/comparison.tsv" \
-            "$RUNNER_TEMP/oxidedns-release-reproducibility/artifact-manifest.tsv" \
+            "$RUNNER_TEMP/borondns-release-reproducibility/reproducible-build-summary.env" \
+            "$RUNNER_TEMP/borondns-release-reproducibility/comparison.tsv" \
+            "$RUNNER_TEMP/borondns-release-reproducibility/artifact-manifest.tsv" \
             scripts/release-api-supervisor.py scripts/verify-release-reproducibility.py \
             "$handoff/"
           for builder in a b; do
-            for artifact in oxidedns oxide-gun; do
+            for artifact in borondns oxide-gun; do
               /usr/bin/install -D -m 0555 \
-                "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/$builder/$artifact" \
+                "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/$builder/$artifact" \
                 "$handoff/artifacts/$builder/$artifact"
             done
           done
@@ -309,9 +309,9 @@ jobs:
               reproducible-build-summary.env
               comparison.tsv
               artifact-manifest.tsv
-              artifacts/a/oxidedns
+              artifacts/a/borondns
               artifacts/a/oxide-gun
-              artifacts/b/oxidedns
+              artifacts/b/borondns
               artifacts/b/oxide-gun
             )
             LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256
@@ -329,7 +329,7 @@ jobs:
         id: upload-handoff
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: oxidedns-release-handoff-${{ github.sha }}
+          name: borondns-release-handoff-${{ github.sha }}
           path: target/release-handoff/
           if-no-files-found: error
           retention-days: 7
@@ -354,7 +354,7 @@ jobs:
       - name: Download authenticated release handoff
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          name: oxidedns-release-handoff-${{ github.sha }}
+          name: borondns-release-handoff-${{ github.sha }}
           path: target/release-handoff
 
       - name: Create GitHub release
@@ -369,7 +369,7 @@ jobs:
             *) printf 'cosign installer published an unexpected path: %s\n' "$cosign_source" >&2; exit 1 ;;
           esac
           gh_source="$(/usr/bin/realpath -e /usr/bin/gh)"
-          authenticated_tools="$RUNNER_TEMP/oxidedns-authenticated-release-tools"
+          authenticated_tools="$RUNNER_TEMP/borondns-authenticated-release-tools"
           export PATH=/usr/bin:/bin
           /usr/bin/rm -rf "$authenticated_tools"
           /usr/bin/install -d -m 0700 "$authenticated_tools"
@@ -392,41 +392,41 @@ jobs:
             release_make_latest=false
           fi
           notes="release-notes-$version.md"
-          tarball="oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
-          binary="oxidedns-$version-x86_64-unknown-linux-musl.bin"
-          oxide_gun="oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
-          docker_image="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
-          docker_manifest="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
-          oxidedns_sbom="oxidedns-$version-x86_64-unknown-linux-musl-oxidedns.cdx.json"
-          oxide_gun_sbom="oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
-          docker_sbom="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
-          sbom_manifest="oxidedns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
+          tarball="borondns-$version-x86_64-unknown-linux-musl.tar.xz"
+          binary="borondns-$version-x86_64-unknown-linux-musl.bin"
+          oxide_gun="borondns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
+          docker_image="borondns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
+          docker_manifest="borondns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+          borondns_sbom="borondns-$version-x86_64-unknown-linux-musl-borondns.cdx.json"
+          oxide_gun_sbom="borondns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
+          docker_sbom="borondns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
+          sbom_manifest="borondns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
           certificate_issuer="https://token.actions.githubusercontent.com"
           certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-installer.yml@refs/tags/$tag"
           shopt -s nullglob
           assets=(
-            oxidedns-*-x86_64-unknown-linux-musl.tar.xz
-            oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
-            oxidedns-*-x86_64-unknown-linux-musl.bin
-            oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin
-            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
-            oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
-            oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json
-            oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
-            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
-            oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
-            oxidedns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
+            borondns-*-x86_64-unknown-linux-musl.tar.xz
+            borondns-*-x86_64-unknown-linux-musl.tar.xz.sha256
+            borondns-*-x86_64-unknown-linux-musl.bin
+            borondns-*-x86_64-unknown-linux-musl.bin.sha256
+            borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin
+            borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
+            borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
+            borondns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+            borondns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
+            borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json
+            borondns-*-x86_64-unknown-linux-musl-borondns.cdx.json.sha256
+            borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
+            borondns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
+            borondns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
+            borondns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
             release-handoff.sha256
           )
           test "${#assets[@]}" -eq 17
-          release_oxidedns=(oxidedns-*-x86_64-unknown-linux-musl.bin)
-          release_oxide_gun=(oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
-          test "${#release_oxidedns[@]}" -eq 1
+          release_borondns=(borondns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(borondns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_borondns[@]}" -eq 1
           test "${#release_oxide_gun[@]}" -eq 1
 
           verify_authenticated_handoff() {
@@ -443,7 +443,7 @@ jobs:
             test "$(/usr/bin/wc -l < signing-inputs.sha256)" -eq 9
             test "$(/usr/bin/find . -type f -print | /usr/bin/wc -l)" -eq 27
             python3 verify-release-reproducibility.py --require-artifacts \
-              --release-oxidedns "${release_oxidedns[0]}" \
+              --release-borondns "${release_borondns[0]}" \
               --release-oxide-gun "${release_oxide_gun[0]}" \
               . "$GITHUB_SHA"
           }
@@ -520,8 +520,8 @@ jobs:
           release_id=""
           release_upload_base=""
           release_publish_attempted=0
-          release_transaction_marker="<!-- oxidedns-release-transaction run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA -->"
-          release_response_file="$(/usr/bin/mktemp "$RUNNER_TEMP/oxidedns-release-response.XXXXXX")"
+          release_transaction_marker="<!-- borondns-release-transaction run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA -->"
+          release_response_file="$(/usr/bin/mktemp "$RUNNER_TEMP/borondns-release-response.XXXXXX")"
 
           bounded_cleanup_api() {
             /usr/bin/timeout --preserve-status --signal=TERM --kill-after=1s 1s \
@@ -542,7 +542,7 @@ jobs:
             printf '%s  %s\n' "$EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256" signing-inputs.sha256 | /usr/bin/sha256sum -c --strict - >/dev/null
             /usr/bin/sha256sum -c --strict signing-inputs.sha256 >/dev/null
             local authority_token="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$BASHPID:$RANDOM:$RANDOM"
-            release_authority_file="$(/usr/bin/mktemp "$RUNNER_TEMP/oxidedns-release-authority.XXXXXX")"
+            release_authority_file="$(/usr/bin/mktemp "$RUNNER_TEMP/borondns-release-authority.XXXXXX")"
             /usr/bin/chmod 0600 "$release_authority_file"
             exec {release_authority_fd}<>"$release_authority_file"
             release_spawn_critical=1
@@ -655,14 +655,14 @@ jobs:
 
           cat > "$notes" <<EOF
           $release_transaction_marker
-          OxideDNS $version
+          BoronDNS $version
 
           Assets:
           - Installer archive: $tarball
-          - Static OxideDNS binary: $binary
+          - Static BoronDNS binary: $binary
           - Static XDP-enabled OxideGun binary: $oxide_gun
           - Docker image archive: $docker_image
-          - CycloneDX SBOMs: $oxidedns_sbom, $oxide_gun_sbom, $docker_sbom
+          - CycloneDX SBOMs: $borondns_sbom, $oxide_gun_sbom, $docker_sbom
           - SHA256 files are attached for the installer, binaries, Docker image archive, and SBOMs.
           - The authenticated handoff manifest is release-handoff.sha256.
           - Each published asset has a keyless Sigstore bundle named \`<asset>.sigstore.json\`.
@@ -672,7 +672,7 @@ jobs:
 
           Docker image use:
           xz -dc $docker_image | docker load
-          docker run --rm oxidedns:$version --version
+          docker run --rm borondns:$version --version
 
           Verify any asset after installing Cosign:
           cosign verify-blob \\
@@ -717,7 +717,7 @@ jobs:
           run_supervised_release_command 120 "$gh_path" api --method POST \
             "repos/$GITHUB_REPOSITORY/releases" \
             -f "tag_name=$tag" -f "target_commitish=$GITHUB_SHA" \
-            -f "name=OxideDNS $version" -f "body=$(<"$notes")" -F draft=true \
+            -f "name=BoronDNS $version" -f "body=$(<"$notes")" -F draft=true \
             -F "prerelease=$release_prerelease" -f "make_latest=false" \
             --jq '[.id, .upload_url, .draft, .prerelease] | @tsv' >"$release_response_file"
           IFS=$'\t' read -r release_id release_upload_url created_draft created_prerelease <"$release_response_file"
@@ -737,8 +737,8 @@ jobs:
             "$docker_image" "$docker_image.sha256"
             "$docker_image.sigstore.json" "$docker_image.sha256.sigstore.json"
             "$docker_manifest" "$docker_manifest.sigstore.json"
-            "$oxidedns_sbom" "$oxidedns_sbom.sha256"
-            "$oxidedns_sbom.sigstore.json" "$oxidedns_sbom.sha256.sigstore.json"
+            "$borondns_sbom" "$borondns_sbom.sha256"
+            "$borondns_sbom.sigstore.json" "$borondns_sbom.sha256.sigstore.json"
             "$oxide_gun_sbom" "$oxide_gun_sbom.sha256"
             "$oxide_gun_sbom.sigstore.json" "$oxide_gun_sbom.sha256.sigstore.json"
             "$docker_sbom" "$docker_sbom.sha256"

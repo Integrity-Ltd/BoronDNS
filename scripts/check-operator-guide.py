@@ -13,7 +13,7 @@ GUIDE = ROOT / "docs" / "operator-deployment-guide.md"
 RELEASE_GUIDE = ROOT / "docs" / "release-evidence-guide.md"
 SLO_GUIDE = ROOT / "docs" / "operational-slos.md"
 DEBIAN_PROFILE = ROOT / "docs" / "debian12-beta-vm-profile.md"
-CLI_MAIN = ROOT / "crates" / "oxidedns-cli" / "src" / "main.rs"
+CLI_MAIN = ROOT / "crates" / "borondns-cli" / "src" / "main.rs"
 
 REQUIRED_TEXT = [
     "## Service Level Objectives",
@@ -54,11 +54,11 @@ RELEASE_GUIDE_TEXT = [
     "soak-handoff",
     "release-handoff",
     "reproducible-build-handoff",
-    "OXIDEDNS_EVIDENCE_RUN_FUZZ",
-    "OXIDEDNS_EVIDENCE_RUN_RRL_CAMPAIGN",
-    "OXIDEDNS_EVIDENCE_RUN_INTEROP",
-    "OXIDEDNS_RELEASE_NOTES",
-    "OXIDEDNS_PERF_BASELINE",
+    "BORONDNS_EVIDENCE_RUN_FUZZ",
+    "BORONDNS_EVIDENCE_RUN_RRL_CAMPAIGN",
+    "BORONDNS_EVIDENCE_RUN_INTEROP",
+    "BORONDNS_RELEASE_NOTES",
+    "BORONDNS_PERF_BASELINE",
     "ODS-VER-008",
     "ODS-VER-015",
     "`device:inode:owner:type`",
@@ -89,7 +89,7 @@ DEBIAN_PROFILE_TEXT = [
     "docker load",
     "--network host",
     "CAP_NET_BIND_SERVICE",
-    "OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE",
+    "BORONDNS_DOCKER_ALPINE_BASE_IMAGE",
     "base_image_digest",
     "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
 ]

@@ -210,10 +210,10 @@ def main() -> None:
         return False
 
     def test_pause_before_spawn() -> int | None:
-        if os.environ.get("OXIDEDNS_RELEASE_API_TEST_PHASE") != "before-spawn":
+        if os.environ.get("BORONDNS_RELEASE_API_TEST_PHASE") != "before-spawn":
             return None
-        marker = os.environ.get("OXIDEDNS_RELEASE_API_TEST_MARKER", "")
-        continuation = os.environ.get("OXIDEDNS_RELEASE_API_TEST_CONTINUE", "")
+        marker = os.environ.get("BORONDNS_RELEASE_API_TEST_MARKER", "")
+        continuation = os.environ.get("BORONDNS_RELEASE_API_TEST_CONTINUE", "")
         if not marker or not continuation:
             raise RuntimeError("release API supervisor test hook is incomplete")
         with open(marker, "x", encoding="ascii") as output:

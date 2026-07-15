@@ -15,30 +15,30 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$repo_root/target/readonly-runtime/$$"
-artifact_dir="${OXIDEDNS_READONLY_RUNTIME_ARTIFACT_DIR:-}"
-container_mode="${OXIDEDNS_READONLY_RUNTIME_CONTAINER:-0}"
-container_image="${OXIDEDNS_READONLY_RUNTIME_CONTAINER_IMAGE:-debian:trixie-slim}"
-primary_container_image="${OXIDEDNS_READONLY_RUNTIME_PRIMARY_IMAGE:-rust:1.94.1-bookworm}"
+artifact_dir="${BORONDNS_READONLY_RUNTIME_ARTIFACT_DIR:-}"
+container_mode="${BORONDNS_READONLY_RUNTIME_CONTAINER:-0}"
+container_image="${BORONDNS_READONLY_RUNTIME_CONTAINER_IMAGE:-debian:trixie-slim}"
+primary_container_image="${BORONDNS_READONLY_RUNTIME_PRIMARY_IMAGE:-rust:1.94.1-bookworm}"
 container=""
 primary_container=""
 container_network=""
 container_summary="container_readonly_rootfs=not_requested"
 mkdir -p "$workdir"
 
-stop_oxidedns() {
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+stop_borondns() {
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
-    oxidedns_pid=""
+    borondns_pid=""
 }
 
 cleanup() {
     local status=$?
-    stop_oxidedns
+    stop_borondns
     if [[ -n "$container" ]] && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fx "$container" >/dev/null 2>&1; then
         if ((status != 0)); then
-            echo "---- container oxidedns logs ----" >&2
+            echo "---- container borondns logs ----" >&2
             docker logs "$container" >&2 || true
         fi
         docker rm -f "$container" >/dev/null 2>&1 || true
@@ -67,9 +67,9 @@ cleanup() {
             echo "---- client.log ----" >&2
             tail -120 "$workdir/client.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
         [[ -f "$workdir/strace.log" ]] && {
             echo "---- strace.log ----" >&2
@@ -89,7 +89,7 @@ container_enabled() {
         return 0
         ;;
     *)
-        echo "invalid OXIDEDNS_READONLY_RUNTIME_CONTAINER value: $container_mode" >&2
+        echo "invalid BORONDNS_READONLY_RUNTIME_CONTAINER value: $container_mode" >&2
         exit 2
         ;;
     esac
@@ -115,7 +115,7 @@ skip_container_audit() {
     container_summary="container_readonly_rootfs=skipped container_skip_reason=$reason"
 }
 
-read -r primary_port oxidedns_dns_port oxidedns_health_port < <(
+read -r primary_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -132,8 +132,8 @@ fake_primary="$workdir/fake-primary.py"
 client="$workdir/client.py"
 primary_log="$workdir/fake-primary.log"
 client_log="$workdir/client.log"
-oxidedns_conf="$workdir/oxidedns.toml"
-container_oxidedns_conf="$workdir/container-oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
+container_borondns_conf="$workdir/container-borondns.toml"
 proc_status="$workdir/proc-status.txt"
 readonly_tmp="$workdir/readonly-tmp"
 mkdir "$readonly_tmp"
@@ -306,11 +306,11 @@ log(summary)
 print(summary)
 PY
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "warn"
 log_format = "plain"
 
@@ -333,7 +333,7 @@ class = "IN"
 primaries = ["127.0.0.1:$primary_port"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
+cargo build -p borondns-cli >/dev/null
 
 python3 "$fake_primary" "$primary_port" "$primary_log" "0.0.0.0" &
 primary_pid=$!
@@ -349,51 +349,51 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-oxidedns_cmd=("$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf")
+borondns_cmd=("$repo_root/target/debug/borondns" serve --config "$borondns_conf")
 trace_status="not_available"
 if command -v strace >/dev/null 2>&1; then
     trace_status="captured"
     # Keep the traced server as this shell's direct child so `$!`, shutdown,
     # thread accounting, and the no-child-process assertion all target the
     # server rather than strace's supervisor process.
-    TMPDIR="$readonly_tmp" strace -D -f -e trace=%file -o "$workdir/strace.log" "${oxidedns_cmd[@]}" >"$workdir/oxidedns.log" 2>&1 &
+    TMPDIR="$readonly_tmp" strace -D -f -e trace=%file -o "$workdir/strace.log" "${borondns_cmd[@]}" >"$workdir/borondns.log" 2>&1 &
 else
-    TMPDIR="$readonly_tmp" "${oxidedns_cmd[@]}" >"$workdir/oxidedns.log" 2>&1 &
+    TMPDIR="$readonly_tmp" "${borondns_cmd[@]}" >"$workdir/borondns.log" 2>&1 &
 fi
-oxidedns_pid=$!
+borondns_pid=$!
 
 ready=0
 for _ in {1..200}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
         ready=1
         break
     fi
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready during read-only runtime audit" >&2
+    echo "BoronDNS did not become ready during read-only runtime audit" >&2
     exit 1
 fi
 
-if [[ ! -d "/proc/$oxidedns_pid/task" ]]; then
-    echo "OxideDNS /proc task view is unavailable during read-only runtime audit" >&2
+if [[ ! -d "/proc/$borondns_pid/task" ]]; then
+    echo "BoronDNS /proc task view is unavailable during read-only runtime audit" >&2
     exit 1
 fi
-thread_count="$(find "/proc/$oxidedns_pid/task" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+thread_count="$(find "/proc/$borondns_pid/task" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
 
 child_pids=()
 if [[ -d /proc ]]; then
     while IFS= read -r status_file; do
         pid="$(awk '/^Pid:/ { print $2 }' "$status_file" 2>/dev/null || true)"
         ppid="$(awk '/^PPid:/ { print $2 }' "$status_file" 2>/dev/null || true)"
-        if [[ -n "$pid" && "$ppid" == "$oxidedns_pid" ]]; then
+        if [[ -n "$pid" && "$ppid" == "$borondns_pid" ]]; then
             child_pids+=("$pid")
         fi
     done < <(find /proc -mindepth 2 -maxdepth 2 -path '/proc/[0-9]*/status' -print 2>/dev/null)
 fi
 child_process_count="${#child_pids[@]}"
 {
-    printf 'oxidedns_pid=%s\n' "$oxidedns_pid"
+    printf 'borondns_pid=%s\n' "$borondns_pid"
     printf 'thread_count=%s\n' "$thread_count"
     printf 'child_process_count=%s\n' "$child_process_count"
     for child_pid in "${child_pids[@]}"; do
@@ -401,17 +401,17 @@ child_process_count="${#child_pids[@]}"
     done
 } >"$proc_status"
 if ((child_process_count > 0)); then
-    echo "OxideDNS spawned child processes during read-only runtime audit" >&2
+    echo "BoronDNS spawned child processes during read-only runtime audit" >&2
     cat "$proc_status" >&2
     exit 1
 fi
 
-client_summary="$(python3 "$client" "$oxidedns_dns_port" "$client_log")"
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+client_summary="$(python3 "$client" "$borondns_dns_port" "$client_log")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 for expected in \
-    'oxidedns_zones_active 1' \
-    'oxidedns_secondary_queries_total{zone="readonly.test."} 1' \
-    'oxidedns_secondary_query_responses_total{zone="readonly.test.",rcode="NOERROR"} 1'; do
+    'borondns_zones_active 1' \
+    'borondns_secondary_queries_total{zone="readonly.test."} 1' \
+    'borondns_secondary_query_responses_total{zone="readonly.test.",rcode="NOERROR"} 1'; do
     if [[ "$metrics" != *"$expected"* ]]; then
         echo "metrics missing expected read-only runtime line: $expected" >&2
         exit 1
@@ -437,7 +437,7 @@ run_container_audit() {
     local container_inspect="$workdir/container-inspect.json"
     local container_mountinfo="$workdir/container-mountinfo.txt"
     local container_probe="$workdir/container-readonly-probe.txt"
-    local container_log="$workdir/container-oxidedns.log"
+    local container_log="$workdir/container-borondns.log"
     local container_pid
     local container_ready=0
     local container_thread_count
@@ -469,10 +469,10 @@ run_container_audit() {
         return 0
     fi
 
-    stop_oxidedns
-    container="oxidedns-readonly-runtime-$$"
-    primary_container="oxidedns-readonly-primary-$$"
-    container_network="oxidedns-readonly-runtime-$$"
+    stop_borondns
+    container="borondns-readonly-runtime-$$"
+    primary_container="borondns-readonly-primary-$$"
+    container_network="borondns-readonly-runtime-$$"
     if ! docker network create "$container_network" >/dev/null; then
         skip_container_audit "container_network_create_failed"
         return 0
@@ -503,11 +503,11 @@ run_container_audit() {
         return 0
     fi
 
-    cat >"$container_oxidedns_conf" <<EOF
+    cat >"$container_borondns_conf" <<EOF
 [server]
-listen_udp = ["0.0.0.0:$oxidedns_dns_port"]
-listen_tcp = ["0.0.0.0:$oxidedns_dns_port"]
-health = "0.0.0.0:$oxidedns_health_port"
+listen_udp = ["0.0.0.0:$borondns_dns_port"]
+listen_tcp = ["0.0.0.0:$borondns_dns_port"]
+health = "0.0.0.0:$borondns_health_port"
 log_level = "warn"
 log_format = "plain"
 
@@ -535,14 +535,14 @@ EOF
         --network "$container_network" \
         --cap-drop ALL \
         --security-opt no-new-privileges \
-        -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/udp" \
-        -p "127.0.0.1:$oxidedns_dns_port:$oxidedns_dns_port/tcp" \
-        -p "127.0.0.1:$oxidedns_health_port:$oxidedns_health_port/tcp" \
+        -p "127.0.0.1:$borondns_dns_port:$borondns_dns_port/udp" \
+        -p "127.0.0.1:$borondns_dns_port:$borondns_dns_port/tcp" \
+        -p "127.0.0.1:$borondns_health_port:$borondns_health_port/tcp" \
         -e TMPDIR=/tmp \
-        -v "$repo_root/target/debug/oxidedns:/usr/local/bin/oxidedns:ro" \
-        -v "$container_oxidedns_conf:/etc/oxidedns/oxidedns.toml:ro" \
+        -v "$repo_root/target/debug/borondns:/usr/local/bin/borondns:ro" \
+        -v "$container_borondns_conf:/etc/borondns/borondns.toml:ro" \
         "$container_image" \
-        /usr/local/bin/oxidedns serve --config /etc/oxidedns/oxidedns.toml \
+        /usr/local/bin/borondns serve --config /etc/borondns/borondns.toml \
         >/dev/null; then
         skip_container_audit "container_start_failed"
         return 0
@@ -556,20 +556,20 @@ EOF
     fi
 
     for _ in {1..200}; do
-        if curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" >/dev/null 2>&1; then
+        if curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" >/dev/null 2>&1; then
             container_ready=1
             break
         fi
         sleep 0.05
     done
     if ((container_ready != 1)); then
-        echo "containerized OxideDNS did not become ready during read-only runtime audit" >&2
+        echo "containerized BoronDNS did not become ready during read-only runtime audit" >&2
         exit 1
     fi
 
     container_pid="$(docker inspect --format '{{.State.Pid}}' "$container")"
     if [[ -z "$container_pid" || "$container_pid" == "0" || ! -d "/proc/$container_pid/task" ]]; then
-        echo "containerized OxideDNS /proc task view is unavailable during read-only runtime audit" >&2
+        echo "containerized BoronDNS /proc task view is unavailable during read-only runtime audit" >&2
         exit 1
     fi
     cp "/proc/$container_pid/mountinfo" "$container_mountinfo"
@@ -593,24 +593,24 @@ EOF
         done
     } >"$container_proc_status"
     if ((container_child_process_count > 0)); then
-        echo "containerized OxideDNS spawned child processes during read-only runtime audit" >&2
+        echo "containerized BoronDNS spawned child processes during read-only runtime audit" >&2
         cat "$container_proc_status" >&2
         exit 1
     fi
 
-    if docker exec "$container" sh -c 'touch /tmp/oxidedns-readonly-runtime-probe' >"$container_probe" 2>&1; then
+    if docker exec "$container" sh -c 'touch /tmp/borondns-readonly-runtime-probe' >"$container_probe" 2>&1; then
         echo "container accepted a write to /tmp under read-only root filesystem" >&2
         cat "$container_probe" >&2
         exit 1
     fi
 
-    container_client_summary="$(python3 "$client" "$oxidedns_dns_port" "$container_client_log")"
+    container_client_summary="$(python3 "$client" "$borondns_dns_port" "$container_client_log")"
     container_client_summary="container_${container_client_summary// / container_}"
-    container_metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+    container_metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
     for expected in \
-        'oxidedns_zones_active 1' \
-        'oxidedns_secondary_queries_total{zone="readonly.test."} 1' \
-        'oxidedns_secondary_query_responses_total{zone="readonly.test.",rcode="NOERROR"} 1'; do
+        'borondns_zones_active 1' \
+        'borondns_secondary_queries_total{zone="readonly.test."} 1' \
+        'borondns_secondary_query_responses_total{zone="readonly.test.",rcode="NOERROR"} 1'; do
         if [[ "$container_metrics" != *"$expected"* ]]; then
             echo "container metrics missing expected read-only runtime line: $expected" >&2
             exit 1
@@ -630,11 +630,11 @@ if [[ -n "$artifact_dir" ]]; then
     mkdir -p "$artifact_dir"
     cp "$primary_log" "$artifact_dir/fake-primary.log"
     cp "$client_log" "$artifact_dir/client.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$proc_status" "$artifact_dir/proc-status.txt"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
-    if [[ -f "$container_oxidedns_conf" ]]; then
-        cp "$container_oxidedns_conf" "$artifact_dir/container-oxidedns.toml"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
+    if [[ -f "$container_borondns_conf" ]]; then
+        cp "$container_borondns_conf" "$artifact_dir/container-borondns.toml"
     fi
     printf '%s\n' "$summary" >"$artifact_dir/readonly-runtime-summary.env"
     printf '%s\n' "$metrics" >"$artifact_dir/metrics.txt"
@@ -644,8 +644,8 @@ if [[ -n "$artifact_dir" ]]; then
     if [[ -f "$workdir/container-metrics.txt" ]]; then
         cp "$workdir/container-metrics.txt" "$artifact_dir/container-metrics.txt"
     fi
-    if [[ -f "$workdir/container-oxidedns.log" ]]; then
-        cp "$workdir/container-oxidedns.log" "$artifact_dir/container-oxidedns.log"
+    if [[ -f "$workdir/container-borondns.log" ]]; then
+        cp "$workdir/container-borondns.log" "$artifact_dir/container-borondns.log"
     fi
     if [[ -f "$workdir/container-fake-primary.log" ]]; then
         cp "$workdir/container-fake-primary.log" "$artifact_dir/container-fake-primary.log"

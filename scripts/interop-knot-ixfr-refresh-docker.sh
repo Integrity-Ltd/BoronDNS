@@ -24,17 +24,17 @@ source "$repo_root/scripts/interop-version-evidence.sh"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
 workdir="$repo_root/target/interop/knot-ixfr-refresh-$$"
-container="oxidedns-knot-ixfr-refresh-$$"
-artifact_dir="${OXIDEDNS_KNOT_IXFR_ARTIFACT_DIR:-}"
+container="borondns-knot-ixfr-refresh-$$"
+artifact_dir="${BORONDNS_KNOT_IXFR_ARTIFACT_DIR:-}"
 knot_image="$(ensure_alpine_knot_image)"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${proxy_pid:-}" ]] && kill -0 "$proxy_pid" 2>/dev/null; then
         kill "$proxy_pid" 2>/dev/null || true
@@ -56,9 +56,9 @@ cleanup() {
             echo "---- transfer-proxy.stderr ----" >&2
             tail -140 "$workdir/transfer-proxy.stderr" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -140 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -140 "$workdir/borondns.log" >&2
         }
     else
         rm -rf "$workdir"
@@ -66,7 +66,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r knot_port proxy_port oxidedns_dns_port oxidedns_health_port < <(
+read -r knot_port proxy_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -81,16 +81,16 @@ PY
 
 zone_file="$workdir/alpha.test.zone"
 knot_conf="$workdir/knot.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 transfer_proxy="$workdir/transfer-proxy.py"
 transfer_proxy_log="$workdir/transfer-proxy.log"
 primary_initial_soa_out="$workdir/primary-initial-soa.out"
 readyz_out="$workdir/readyz.txt"
-oxidedns_initial_soa_out="$workdir/oxidedns-initial-soa.out"
+borondns_initial_soa_out="$workdir/borondns-initial-soa.out"
 primary_updated_soa_out="$workdir/primary-updated-soa.out"
 primary_probe_ixfr_out="$workdir/primary-probe-ixfr.out"
-oxidedns_updated_answer_out="$workdir/oxidedns-updated-answer-a.out"
-oxidedns_updated_soa_out="$workdir/oxidedns-updated-soa.out"
+borondns_updated_answer_out="$workdir/borondns-updated-answer-a.out"
+borondns_updated_soa_out="$workdir/borondns-updated-soa.out"
 metrics_out="$workdir/metrics.txt"
 summary_out="$workdir/knot-ixfr-refresh-summary.env"
 knot_log="$workdir/knot.log"
@@ -381,11 +381,11 @@ for _ in {1..50}; do
     sleep 0.1
 done
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [rrl]
@@ -450,13 +450,13 @@ if [[ "$primary_soa" != *"2026052401"* ]]; then
     exit 1
 fi
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
@@ -464,14 +464,14 @@ done
 
 printf '%s\n' "$ready" >"$readyz_out"
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial Knot AXFR through transfer proxy" >&2
+    echo "BoronDNS did not become ready after initial Knot AXFR through transfer proxy" >&2
     exit 1
 fi
 
-initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
-printf '%s\n' "$initial_soa" >"$oxidedns_initial_soa_out"
+initial_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$initial_soa" >"$borondns_initial_soa_out"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve initial SOA serial" >&2
+    echo "BoronDNS did not serve initial SOA serial" >&2
     exit 1
 fi
 
@@ -502,7 +502,7 @@ if [[ "$probe_ixfr" != *"2026052402"* ]] || [[ "$probe_ixfr" != *"2026052401"* ]
     exit 1
 fi
 
-python3 - "$oxidedns_dns_port" <<'PY'
+python3 - "$borondns_dns_port" <<'PY'
 import socket
 import struct
 import sys
@@ -531,7 +531,7 @@ sock.settimeout(2)
 sock.sendto(packet, ("127.0.0.1", port))
 response, _ = sock.recvfrom(4096)
 if len(response) < 4:
-    raise SystemExit("short NOTIFY response from OxideDNS")
+    raise SystemExit("short NOTIFY response from BoronDNS")
 response_id, response_flags = struct.unpack("!HH", response[:4])
 rcode = response_flags & 0x0F
 qr = response_flags >> 15
@@ -541,38 +541,38 @@ PY
 
 updated_answer=""
 for _ in {1..160}; do
-    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer || true)"
+    updated_answer="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer || true)"
     if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
         break
     fi
     sleep 0.1
 done
 
-printf '%s\n' "$updated_answer" >"$oxidedns_updated_answer_out"
+printf '%s\n' "$updated_answer" >"$borondns_updated_answer_out"
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-    echo "OxideDNS did not publish updated A response after Knot IXFR refresh" >&2
+    echo "BoronDNS did not publish updated A response after Knot IXFR refresh" >&2
     exit 1
 fi
 
-updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
-printf '%s\n' "$updated_soa" >"$oxidedns_updated_soa_out"
+updated_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+printf '%s\n' "$updated_soa" >"$borondns_updated_soa_out"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-    echo "OxideDNS did not publish updated SOA serial after Knot IXFR refresh" >&2
+    echo "BoronDNS did not publish updated SOA serial after Knot IXFR refresh" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
-ixfr_started="$(awk '$1 == "oxidedns_transfer_sessions_started_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
-ixfr_succeeded="$(awk '$1 == "oxidedns_transfer_sessions_completed_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
+ixfr_started="$(awk '$1 == "borondns_transfer_sessions_started_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
+ixfr_succeeded="$(awk '$1 == "borondns_transfer_sessions_completed_total{protocol=\"ixfr\"}" { print $2 }' <<<"$metrics")"
 
 if [[ -z "$ixfr_started" ]] || ((ixfr_started < 1)); then
-    echo "OxideDNS metrics did not record a Knot IXFR attempt" >&2
+    echo "BoronDNS metrics did not record a Knot IXFR attempt" >&2
     exit 1
 fi
 
 if ! grep -q "TCP query .* qtype=251" "$transfer_proxy_log"; then
-    echo "transfer proxy did not observe a OxideDNS IXFR query to Knot" >&2
+    echo "transfer proxy did not observe a BoronDNS IXFR query to Knot" >&2
     exit 1
 fi
 
@@ -585,43 +585,43 @@ done
 
 if grep -q "TCP IXFR response_mode=incremental" "$transfer_proxy_log"; then
     if [[ -z "$ixfr_succeeded" ]] || ((ixfr_succeeded < 1)); then
-        echo "Knot provided a true incremental IXFR response, but OxideDNS rejected it instead of recording IXFR success" >&2
+        echo "Knot provided a true incremental IXFR response, but BoronDNS rejected it instead of recording IXFR success" >&2
         exit 1
     fi
-    if [[ "$metrics" != *'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
-        echo "OxideDNS metrics missing updated Knot IXFR SOA serial" >&2
+    if [[ "$metrics" != *'borondns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
+        echo "BoronDNS metrics missing updated Knot IXFR SOA serial" >&2
         exit 1
     fi
     docker logs "$container" >"$knot_log" 2>&1 || true
     cat >"$summary_out" <<EOF
 primary_initial_serial=2026052401
 primary_updated_serial=2026052402
-oxidedns_initial_serial=2026052401
-oxidedns_updated_serial=2026052402
+borondns_initial_serial=2026052401
+borondns_updated_serial=2026052402
 incremental_ixfr_observed=1
-oxidedns_ixfr_attempt_recorded=1
-oxidedns_ixfr_success_recorded=1
-oxidedns_served_updated_a=1
-oxidedns_metrics_checked=1
+borondns_ixfr_attempt_recorded=1
+borondns_ixfr_success_recorded=1
+borondns_served_updated_a=1
+borondns_metrics_checked=1
 EOF
     if [[ -n "$artifact_dir" ]]; then
         mkdir -p "$artifact_dir"
         cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
         cp "$knot_conf" "$artifact_dir/knot.conf"
-        cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+        cp "$borondns_conf" "$artifact_dir/borondns.toml"
         cp "$workdir/alpha.test.initial.zone" "$artifact_dir/alpha.test.initial.zone"
         cp "$workdir/alpha.test.updated.zone" "$artifact_dir/alpha.test.updated.zone"
         cp "$knot_log" "$artifact_dir/knot.log"
         cp "$transfer_proxy_log" "$artifact_dir/transfer-proxy.log"
         cp "$workdir/transfer-proxy.stderr" "$artifact_dir/transfer-proxy.stderr"
-        cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+        cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
         cp "$primary_initial_soa_out" "$artifact_dir/primary-initial-soa.out"
         cp "$readyz_out" "$artifact_dir/readyz.txt"
-        cp "$oxidedns_initial_soa_out" "$artifact_dir/oxidedns-initial-soa.out"
+        cp "$borondns_initial_soa_out" "$artifact_dir/borondns-initial-soa.out"
         cp "$primary_updated_soa_out" "$artifact_dir/primary-updated-soa.out"
         cp "$primary_probe_ixfr_out" "$artifact_dir/primary-probe-ixfr.out"
-        cp "$oxidedns_updated_answer_out" "$artifact_dir/oxidedns-updated-answer-a.out"
-        cp "$oxidedns_updated_soa_out" "$artifact_dir/oxidedns-updated-soa.out"
+        cp "$borondns_updated_answer_out" "$artifact_dir/borondns-updated-answer-a.out"
+        cp "$borondns_updated_soa_out" "$artifact_dir/borondns-updated-soa.out"
         cp "$metrics_out" "$artifact_dir/metrics.txt"
         cp "$summary_out" "$artifact_dir/knot-ixfr-refresh-summary.env"
     fi

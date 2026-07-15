@@ -3,7 +3,7 @@
 Status: current interface contract for `ODS-IF-HEALTH-001..006` and
 `ODS-NFR-OBS-003..009`.
 
-This document owns the concrete HTTP shape of the OxideDNS health and metrics
+This document owns the concrete HTTP shape of the BoronDNS health and metrics
 endpoint. The SRS owns the normative requirement IDs; this document keeps the
 path, body, header, rate-limit, and evidence details in one place so the SRS and
 operator guide do not duplicate them.
@@ -88,42 +88,42 @@ contains an `Accept-Encoding` value that allows `gzip`, the response includes
 The metrics endpoint exposes these implemented metric families:
 
 - configured and active zone gauges;
-- first-party metrics use the `oxidedns_` prefix; selected stable
-  SRS-facing compatibility families retain the `oxidedns_secondary_` prefix
+- first-party metrics use the `borondns_` prefix; selected stable
+  SRS-facing compatibility families retain the `borondns_secondary_` prefix
   where named below;
 - SRS v0.9.1 per-zone status series:
-  `oxidedns_secondary_zone_state`,
-  `oxidedns_secondary_zone_loading_seconds` (seconds the zone has been in
+  `borondns_secondary_zone_state`,
+  `borondns_secondary_zone_loading_seconds` (seconds the zone has been in
   LOADING state during this process uptime),
-  `oxidedns_secondary_zone_soa_serial`,
-  `oxidedns_secondary_zone_last_refresh_seconds`,
-  `oxidedns_secondary_zone_next_refresh_seconds`,
-  `oxidedns_secondary_zone_refresh_failures`, and
-  `oxidedns_secondary_queries_total{zone="..."}`;
+  `borondns_secondary_zone_soa_serial`,
+  `borondns_secondary_zone_last_refresh_seconds`,
+  `borondns_secondary_zone_next_refresh_seconds`,
+  `borondns_secondary_zone_refresh_failures`, and
+  `borondns_secondary_queries_total{zone="..."}`;
 - catalog membership gauges:
-  `oxidedns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`;
-- transfer counters (`oxidedns_transfer_sessions_started_total`,
-  `oxidedns_transfer_sessions_completed_total`,
-  `oxidedns_transfer_sessions_failed_total`), query counters, truncation
+  `borondns_catalog_member_info{catalog_zone="...",zone="...",managed="..."}`;
+- transfer counters (`borondns_transfer_sessions_started_total`,
+  `borondns_transfer_sessions_completed_total`,
+  `borondns_transfer_sessions_failed_total`), query counters, truncation
   counters, CNAME limit/loop counters, global and per-zone RCODE counters
-  (`oxidedns_query_responses_total`,
-  `oxidedns_zone_query_responses_total`,
-  `oxidedns_secondary_query_responses_total`), NOTIFY counters, TSIG
+  (`borondns_query_responses_total`,
+  `borondns_zone_query_responses_total`,
+  `borondns_secondary_query_responses_total`), NOTIFY counters, TSIG
   verification counters for authorized NOTIFY, DNS Cookie counters, RRL
-  counters, the `oxidedns_secondary_build_info` gauge, the
-  `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and
-  the `oxidedns_chaos_queries_total` outcome counter for CH-class diagnostics;
+  counters, the `borondns_secondary_build_info` gauge, the
+  `borondns_dnssec_nsec3_iterations_exceed_cap_total` DNSSEC cap counter, and
+  the `borondns_chaos_queries_total` outcome counter for CH-class diagnostics;
 - standard UDP packet I/O counters:
-  `oxidedns_udp_receive_batches_total`,
-  `oxidedns_udp_received_datagrams_total`, `oxidedns_udp_send_batches_total`,
-  and `oxidedns_udp_sent_datagrams_total`;
-- `oxidedns_secondary_query_duration_seconds` query latency histogram, with
+  `borondns_udp_receive_batches_total`,
+  `borondns_udp_received_datagrams_total`, `borondns_udp_send_batches_total`,
+  and `borondns_udp_sent_datagrams_total`;
+- `borondns_secondary_query_duration_seconds` query latency histogram, with
   up to 64 strictly increasing buckets configured by
   `[metrics].latency_histogram_buckets`;
 - opt-in active-zone shape gauges and fixed-bucket layout histograms under
-  `oxidedns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
+  `borondns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
   RDATA records per RRset, and RDATA payload bytes per RRset;
-- immutable-zone-image serving counters under `oxidedns_zone_image_serve_*`;
+- immutable-zone-image serving counters under `borondns_zone_image_serve_*`;
 - opt-in query-pipeline histograms and response-cache candidate counters.
 
 `[metrics].hot_path_detail = "full"` is the default and preserves all detailed
@@ -141,7 +141,7 @@ counter contention would distort packet-path results. Use external benchmark
 logs and kernel packet-drop counters as the packet-loss source of truth in this
 profile.
 
-The current `oxidedns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
+The current `borondns_dnssec_nsec3_iterations_exceed_cap_total` evidence is
 driven by lookup-time NSEC3 proof-omission observation rather than serialized
 EDE options. Over-cap NSEC3 proof omissions remain counted with
 `edns.extended_dns_errors = "off"` even when EDE INFO-CODE 27 is absent from
@@ -207,12 +207,12 @@ they are promoted into a requirement.
 ## Evidence
 
 Current code and local tests for this interface live in
-`crates/oxidedns-server/src/` (the module is declared in `lib.rs`):
+`crates/borondns-server/src/` (the module is declared in `lib.rs`):
 
-- production symbols in `crates/oxidedns-server/src/health_metrics.rs`:
+- production symbols in `crates/borondns-server/src/health_metrics.rs`:
   `health_router`, `livez`, `readyz`, `healthz`, `metrics`,
   `rate_limited_response`, and `readiness_response`;
-- tests in `crates/oxidedns-server/src/tests/health_observability_runtime.rs`:
+- tests in `crates/borondns-server/src/tests/health_observability_runtime.rs`:
   - `health_endpoint_reports_starting_until_zone_active`;
   - `health_endpoint_handles_readyz_metrics_404_and_405`;
   - `metrics_endpoint_rate_limits_per_source_without_limiting_health`;

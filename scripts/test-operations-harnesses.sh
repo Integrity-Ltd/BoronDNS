@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1
-workdir="$(mktemp -d "${TMPDIR:-/tmp}/oxidedns-operations-tests.XXXXXX")"
+export BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/borondns-operations-tests.XXXXXX")"
 # Automatic-tree journals intentionally retain unauthenticated crash evidence.
 # Keep every harness-created family below this per-run root so repeated test
 # executions cannot poison shared /tmp families or consume the production cap.
@@ -195,8 +195,10 @@ publish_test_root_runner() {
 materialize_campaign_helpers() {
     local fixture_repo="$1" relative
     for relative in scripts/campaign-env.sh scripts/campaign-lock-helper.py; do
-        if [[ ! -e "$fixture_repo/$relative" ]]; then
-            install -D -m "$(stat -c %a "$repo_root/$relative")" "$repo_root/$relative" "$fixture_repo/$relative"
+        install -D -m "$(stat -c %a "$repo_root/$relative")" "$repo_root/$relative" "$fixture_repo/$relative"
+        if git -C "$fixture_repo" ls-files --error-unmatch -- "$relative" >/dev/null 2>&1; then
+            git -C "$fixture_repo" update-index --assume-unchanged -- "$relative"
+        else
             printf '/%s\n' "$relative" >>"$fixture_repo/.git/info/exclude"
         fi
     done
@@ -282,7 +284,7 @@ make_soak_sampler_fixture() {
         "deadline_epoch_seconds=$deadline" \
         "sample_interval_seconds=$interval" >"$attempt/resource-sampler.env"
     printf '%s\n' \
-        $'timestamp_utc\tepoch_seconds\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\toxidedns_processes\ttotal_oxidedns_rss_kib' \
+        $'timestamp_utc\tepoch_seconds\tload1\tload5\tload15\tmem_available_kib\tdocker_containers\tborondns_processes\ttotal_borondns_rss_kib' \
         "$(printf '%s\t%s\t0.1\t0.1\t0.1\t1024\t0\t0\t0' "$start_utc" "$start")" \
         "$(printf '%s\t%s\t0.1\t0.1\t0.1\t1024\t0\t0\t0' "$deadline_utc" "$deadline")" \
         >"$attempt/resource-samples.tsv"
@@ -293,7 +295,7 @@ make_soak_sampler_fixture() {
         >"$attempt/resource-sampler-completed.env"
 }
 
-campaign_scp_remote_path_is_safe /tmp/oxidedns-safe/path
+campaign_scp_remote_path_is_safe /tmp/borondns-safe/path
 [[ "$(campaign_remote_copy_host host.example)" == host.example ]]
 [[ "$(campaign_remote_copy_host user@host.example)" == user@host.example ]]
 [[ "$(campaign_remote_copy_host 2001:db8::53)" == '[2001:db8::53]' ]]
@@ -359,25 +361,25 @@ if PATH="$transport_bin:$PATH" TRANSPORT_LOG="$transport_overflow_log" \
     exit 1
 fi
 if PATH="$transport_bin:$PATH" TRANSPORT_LOG="$transport_overflow_log" \
-    OXIDEDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS="$transport_overflow_value" \
+    BORONDNS_CAMPAIGN_SSH_CONNECT_TIMEOUT_SECONDS="$transport_overflow_value" \
     campaign_ssh_bounded 1 -- h1 true >/dev/null 2>&1; then
     printf 'bounded SSH transport accepted an overflow-sized connect timeout\n' >&2
     exit 1
 fi
 if PATH="$transport_bin:$PATH" TRANSPORT_LOG="$transport_overflow_log" \
-    OXIDEDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS="$transport_overflow_value" \
+    BORONDNS_CAMPAIGN_SSH_ALIVE_INTERVAL_SECONDS="$transport_overflow_value" \
     campaign_scp_bounded 1 -r -- h1:/source/. /target/ >/dev/null 2>&1; then
     printf 'bounded SCP transport accepted an overflow-sized alive interval\n' >&2
     exit 1
 fi
 if PATH="$transport_bin:$PATH" TRANSPORT_LOG="$transport_overflow_log" \
-    OXIDEDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX="$transport_overflow_value" \
+    BORONDNS_CAMPAIGN_SSH_ALIVE_COUNT_MAX="$transport_overflow_value" \
     campaign_ssh_bounded 1 -- h1 true >/dev/null 2>&1; then
     printf 'bounded SSH transport accepted an overflow-sized alive count\n' >&2
     exit 1
 fi
 if PATH="$transport_bin:$PATH" TRANSPORT_LOG="$transport_overflow_log" \
-    OXIDEDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS="$transport_overflow_value" \
+    BORONDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS="$transport_overflow_value" \
     campaign_rsync_bounded 1 -a -- h1:/source/ /target/ >/dev/null 2>&1; then
     printf 'bounded rsync transport accepted an overflow-sized idle timeout\n' >&2
     exit 1
@@ -409,7 +411,7 @@ lock_security_root="$workdir/local-lock-security"
 mkdir -m 0700 "$lock_security_root"
 lock_namespace="$lock_security_root/evidence:runner"
 lock_digest="$(printf '%s' "$lock_namespace" | sha256sum | awk '{ print $1 }')"
-lock_private_root="$lock_security_root/.oxidedns-campaign-locks"
+lock_private_root="$lock_security_root/.borondns-campaign-locks"
 mkdir -m 0700 "$lock_private_root"
 lock_path="$lock_private_root/$lock_digest.lock"
 lock_victim="$workdir/local-lock-victim"
@@ -463,8 +465,8 @@ cp "$repo_root/scripts/campaign-lock-helper.py" "$authenticated_helper_dir/campa
     # shellcheck source=/dev/null
     source <(printf '%s' "$authenticated_env_snapshot_b64" | base64 --decode)
     # shellcheck disable=SC2030 # The authenticated helper binding is intentionally local to this fixture subshell.
-    OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$authenticated_lock_snapshot_b64"
-    export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+    BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$authenticated_lock_snapshot_b64"
+    export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
     campaign_acquire_private_lock "$lock_security_root" "$lock_namespace:authenticated-fd" \
         "authenticated descriptor fixture"
     campaign_release_private_lock
@@ -477,13 +479,13 @@ if (campaign_acquire_private_lock "$writable_lock_root" "$writable_lock_root/evi
     printf 'campaign lock helper accepted a world-writable parent\n' >&2
     exit 1
 fi
-[[ ! -e "$writable_lock_root/.oxidedns-campaign-locks" ]]
+[[ ! -e "$writable_lock_root/.borondns-campaign-locks" ]]
 
 swap_lock_root="$workdir/swap-lock-root"
-mkdir -m 0700 "$swap_lock_root" "$swap_lock_root/.oxidedns-campaign-locks"
+mkdir -m 0700 "$swap_lock_root" "$swap_lock_root/.borondns-campaign-locks"
 swap_namespace="$swap_lock_root/evidence:runner"
 swap_digest="$(printf '%s' "$swap_namespace" | sha256sum | awk '{ print $1 }')"
-swap_lock="$swap_lock_root/.oxidedns-campaign-locks/$swap_digest.lock"
+swap_lock="$swap_lock_root/.borondns-campaign-locks/$swap_digest.lock"
 swap_stop="$workdir/swap-lock-stop"
 (
     while [[ ! -e "$swap_stop" ]]; do
@@ -516,7 +518,7 @@ handshake_helper="$workdir/handshake-stall-helper.py"
 printf '%s\n' 'import time' 'time.sleep(30)' >"$handshake_helper"
 chmod 0600 "$handshake_helper"
 handshake_started=$SECONDS
-if OXIDEDNS_CAMPAIGN_LOCK_HELPER="$handshake_helper" OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS=1 \
+if BORONDNS_CAMPAIGN_LOCK_HELPER="$handshake_helper" BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS=1 \
     campaign_acquire_private_lock "$broker_crash_root" handshake-stall "handshake stall fixture"; then
     printf 'campaign lock accepted a broker that stalled during handshake\n' >&2
     exit 1
@@ -614,7 +616,7 @@ sleep 30 &
 pidfd_fail_closed_child=$!
 pidfd_fail_closed_starttime=""
 campaign_process_starttime "$pidfd_fail_closed_child" pidfd_fail_closed_starttime
-if OXIDEDNS_CAMPAIGN_TEST_DISABLE_PIDFD=1 \
+if BORONDNS_CAMPAIGN_TEST_DISABLE_PIDFD=1 \
     campaign_terminate_child_before_deadline "$pidfd_fail_closed_child" \
     "$(campaign_deadline_from_timeout_seconds 2)" 'pidfd unsupported fixture' \
     "$pidfd_fail_closed_starttime"; then
@@ -639,10 +641,10 @@ wait "$pidfd_fail_closed_child" 2>/dev/null || true
 deadline_stdin_expected="$workdir/deadline-stdin.expected"
 deadline_stdin_actual="$workdir/deadline-stdin.actual"
 deadline_stdin_eof="$workdir/deadline-stdin.eof"
-python3 -c 'import os; os.write(1, b"\x00OxideDNS\xff\r\nlast")' \
+python3 -c 'import os; os.write(1, b"\x00BoronDNS\xff\r\nlast")' \
     >"$deadline_stdin_expected"
 deadline_stdin_status=0
-python3 -c 'import os; os.write(1, b"\x00OxideDNS\xff\r\nlast")' |
+python3 -c 'import os; os.write(1, b"\x00BoronDNS\xff\r\nlast")' |
     campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 5)" \
         python3 -c '
 import os
@@ -698,8 +700,8 @@ deadline_stdin_timeout_child="$(<"$deadline_stdin_timeout_pid")"
 deadline_delayed_reap_pid="$workdir/deadline-delayed-reap.pid"
 deadline_delayed_reap_started="$(date +%s%N)"
 deadline_delayed_reap_status=0
-OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
-    OXIDEDNS_CAMPAIGN_DEADLINE_TEST_DELAY_REAP=1 \
+BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
+    BORONDNS_CAMPAIGN_DEADLINE_TEST_DELAY_REAP=1 \
     campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 1)" \
     python3 -c '
 import os
@@ -749,7 +751,7 @@ printf '%s\n' \
 deadline_slow_proc_started="$(date +%s%N)"
 deadline_slow_proc_status=0
 PYTHONPATH="$deadline_slow_proc_python" \
-    OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
+    BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
     campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 1)" \
     python3 -c '
 import os
@@ -776,8 +778,8 @@ grep -Fq 'cleanup tail expired after operation deadline; SIGKILL remains pending
 # the same fail-tail path without creating millions of processes.
 deadline_proc_cap_started="$(date +%s%N)"
 deadline_proc_cap_status=0
-OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PROC_ENTRY_CAP=1 \
-    OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
+BORONDNS_CAMPAIGN_DEADLINE_TEST_PROC_ENTRY_CAP=1 \
+    BORONDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS=1 \
     campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 1)" \
     sleep 30 2>"$workdir/deadline-proc-cap.err" || deadline_proc_cap_status=$?
 deadline_proc_cap_elapsed=$((($(date +%s%N) - deadline_proc_cap_started) / 1000000))
@@ -828,9 +830,9 @@ deadline_pre_spawn_marker="$workdir/deadline-pre-spawn.marker"
 deadline_pre_spawn_continue="$workdir/deadline-pre-spawn.continue"
 deadline_pre_spawn_child="$workdir/deadline-pre-spawn-child.pid"
 (
-    OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PHASE=before-spawn \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_pre_spawn_marker" \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_pre_spawn_continue" \
+    BORONDNS_CAMPAIGN_DEADLINE_TEST_PHASE=before-spawn \
+        BORONDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_pre_spawn_marker" \
+        BORONDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_pre_spawn_continue" \
         campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 5)" \
         python3 -c '
 import os
@@ -879,10 +881,10 @@ deadline_post_wait_marker="$workdir/deadline-post-wait.marker"
 deadline_post_wait_continue="$workdir/deadline-post-wait.continue"
 deadline_post_wait_killpg="$workdir/deadline-post-wait.killpg"
 (
-    OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PHASE=after-reap-before-state \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_post_wait_marker" \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_post_wait_continue" \
-        OXIDEDNS_CAMPAIGN_DEADLINE_TEST_KILLPG_MARKER="$deadline_post_wait_killpg" \
+    BORONDNS_CAMPAIGN_DEADLINE_TEST_PHASE=after-reap-before-state \
+        BORONDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_post_wait_marker" \
+        BORONDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_post_wait_continue" \
+        BORONDNS_CAMPAIGN_DEADLINE_TEST_KILLPG_MARKER="$deadline_post_wait_killpg" \
         campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 5)" true
 ) &
 deadline_post_wait_wrapper=$!
@@ -960,7 +962,7 @@ deadline_early_failure_child="$workdir/deadline-early-failure-child"
     expected_int="$(trap -p INT)"
     expected_term="$(trap -p TERM)"
     expected_hup="$(trap -p HUP)"
-    if OXIDEDNS_CAMPAIGN_DEADLINE_OWNER_PID=invalid \
+    if BORONDNS_CAMPAIGN_DEADLINE_OWNER_PID=invalid \
         campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 5)" \
         touch "$deadline_early_failure_child"; then
         printf 'deadline wrapper accepted an invalid owner identity\n' >&2
@@ -1092,9 +1094,9 @@ deadline_missing_continue_marker="$workdir/deadline-missing-continue.marker"
 deadline_missing_continue_path="$workdir/deadline-missing-continue.never"
 deadline_missing_continue_start="$(campaign_monotonic_nanoseconds)"
 deadline_missing_continue_status=0
-OXIDEDNS_CAMPAIGN_DEADLINE_TEST_PHASE=before-spawn \
-    OXIDEDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_missing_continue_marker" \
-    OXIDEDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_missing_continue_path" \
+BORONDNS_CAMPAIGN_DEADLINE_TEST_PHASE=before-spawn \
+    BORONDNS_CAMPAIGN_DEADLINE_TEST_MARKER="$deadline_missing_continue_marker" \
+    BORONDNS_CAMPAIGN_DEADLINE_TEST_CONTINUE="$deadline_missing_continue_path" \
     campaign_run_before_deadline "$(campaign_deadline_from_timeout_seconds 1)" true ||
     deadline_missing_continue_status=$?
 deadline_missing_continue_elapsed=$(($(campaign_monotonic_nanoseconds) - deadline_missing_continue_start))
@@ -1200,8 +1202,8 @@ for marker_deadline_phase in pre-stage pre-replace; do
     marker_deadline_journal="${CAMPAIGN_CLEANUP_IDENTITIES["marker_deadline_identity:journal_path"]}"
     marker_deadline_hash="$(sha256sum "$marker_deadline_journal")"
     marker_delay_until=$((marker_deadline + 100000000))
-    if OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE="$marker_deadline_phase" \
-        OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS="$marker_delay_until" \
+    if BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE="$marker_deadline_phase" \
+        BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS="$marker_delay_until" \
         campaign_remove_private_temporary_tree "$marker_deadline_tree" \
         marker_deadline_identity "marker $marker_deadline_phase deadline tree" \
         "$marker_deadline" 2>"$workdir/marker-$marker_deadline_phase.err"; then
@@ -1250,8 +1252,8 @@ journal_exchange_delay=$(($(campaign_monotonic_nanoseconds) + 1500000000))
 ) &
 journal_exchange_attacker=$!
 lock_holder_pids+=("$journal_exchange_attacker")
-if OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE=pre-replace \
-    OXIDEDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS="$journal_exchange_delay" \
+if BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_PHASE=pre-replace \
+    BORONDNS_CAMPAIGN_MARK_REMOVING_DELAY_UNTIL_NANOSECONDS="$journal_exchange_delay" \
     campaign_remove_private_temporary_tree "$journal_exchange_tree" \
     journal_exchange_identity "automatic journal exchange race fixture" \
     "$journal_exchange_cleanup" 2>"$workdir/journal-exchange.err"; then
@@ -1327,7 +1329,7 @@ campaign_acquire_private_lock "$broker_crash_root" broker-stall "broker heartbea
 stalled_broker_pid="$campaign_lock_pid"
 kill -STOP "$stalled_broker_pid"
 heartbeat_started=$SECONDS
-if OXIDEDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS=1 campaign_assert_private_lock; then
+if BORONDNS_CAMPAIGN_LOCK_HEARTBEAT_TIMEOUT_SECONDS=1 campaign_assert_private_lock; then
     printf 'campaign mutation boundary accepted a stopped lock broker\n' >&2
     exit 1
 fi
@@ -1348,8 +1350,8 @@ replacement_lock_root="$workdir/replacement-lock-root"
 mkdir -m 0700 "$replacement_lock_root"
 campaign_acquire_private_lock "$replacement_lock_root" root-replacement "lock root replacement fixture"
 replacement_broker_pid="$campaign_lock_pid"
-mv "$replacement_lock_root/.oxidedns-campaign-locks" "$replacement_lock_root/.oxidedns-campaign-locks.detached"
-mkdir -m 0700 "$replacement_lock_root/.oxidedns-campaign-locks"
+mv "$replacement_lock_root/.borondns-campaign-locks" "$replacement_lock_root/.borondns-campaign-locks.detached"
+mkdir -m 0700 "$replacement_lock_root/.borondns-campaign-locks"
 if campaign_assert_private_lock; then
     printf 'campaign mutation boundary accepted a replaced lock directory\n' >&2
     exit 1
@@ -1366,7 +1368,7 @@ campaign_acquire_private_lock "$broker_crash_root" broker-release-stall "broker 
 release_stalled_broker_pid="$campaign_lock_pid"
 kill -STOP "$release_stalled_broker_pid"
 release_started="$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')"
-OXIDEDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS=1 campaign_release_private_lock
+BORONDNS_CAMPAIGN_LOCK_RELEASE_TIMEOUT_SECONDS=1 campaign_release_private_lock
 release_finished="$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')"
 release_elapsed_ms=$(((release_finished - release_started) / 1000000))
 ((release_elapsed_ms <= 1750)) || {
@@ -1500,7 +1502,7 @@ atomic_lock_root="$workdir/atomic-lock-root"
 mkdir "$atomic_lock_root"
 atomic_destination="$atomic_lock_root/marker.env"
 printf 'retained\n' >"$atomic_destination"
-printf 'stale\n' >"$atomic_lock_root/.marker.env.oxidedns-staged.hostile"
+printf 'stale\n' >"$atomic_lock_root/.marker.env.borondns-staged.hostile"
 campaign_release_private_lock
 campaign_acquire_private_lock "$atomic_lock_root" atomic-stale "atomic stale deletion fixture"
 campaign_atomic_replace_text_hook() {
@@ -1514,13 +1516,13 @@ if campaign_atomic_replace_text "$atomic_destination" replacement "atomic stale 
     exit 1
 fi
 grep -Fqx retained "$atomic_destination"
-[[ -f "$atomic_lock_root/.marker.env.oxidedns-staged.hostile" ]]
+[[ -f "$atomic_lock_root/.marker.env.borondns-staged.hostile" ]]
 unset -f campaign_atomic_replace_text_hook
 
 atomic_stale_parent_root="$workdir/atomic-stale-parent-root"
 atomic_stale_parent_displaced="$workdir/atomic-stale-parent-root.displaced"
 atomic_stale_parent_destination="$atomic_stale_parent_root/marker.env"
-atomic_stale_parent_name=".marker.env.oxidedns-staged.parent-swap"
+atomic_stale_parent_name=".marker.env.borondns-staged.parent-swap"
 mkdir "$atomic_stale_parent_root"
 printf 'retained\n' >"$atomic_stale_parent_destination"
 printf 'stale original\n' >"$atomic_stale_parent_root/$atomic_stale_parent_name"
@@ -1544,7 +1546,7 @@ unset -f campaign_atomic_replace_text_hook
 
 atomic_stale_name_root="$workdir/atomic-stale-name-root"
 atomic_stale_name_destination="$atomic_stale_name_root/marker.env"
-atomic_stale_name="$atomic_stale_name_root/.marker.env.oxidedns-staged.name-swap"
+atomic_stale_name="$atomic_stale_name_root/.marker.env.borondns-staged.name-swap"
 atomic_stale_name_original="$atomic_stale_name.original"
 mkdir "$atomic_stale_name_root"
 printf 'retained\n' >"$atomic_stale_name_destination"
@@ -1565,7 +1567,7 @@ grep -Fqx 'replacement name victim' "$atomic_stale_name"
 grep -Fqx retained "$atomic_stale_name_destination"
 unset -f campaign_atomic_replace_text_hook
 
-atomic_stale_fifo="$atomic_stale_name_root/.marker.env.oxidedns-staged.fifo"
+atomic_stale_fifo="$atomic_stale_name_root/.marker.env.borondns-staged.fifo"
 atomic_stale_fifo_original="$atomic_stale_fifo.original"
 printf 'captured stale file\n' >"$atomic_stale_fifo"
 atomic_stale_fifo_identity="$(stat -c '%d:%i:%u' "$atomic_stale_fifo")"
@@ -1622,13 +1624,13 @@ mkdir "$atomic_enumeration_root"
 printf 'retained enumeration destination\n' >"$atomic_enumeration_destination"
 for atomic_enumeration_index in {0..7}; do
     printf 'retained stale %s\n' "$atomic_enumeration_index" \
-        >"$atomic_enumeration_root/.marker.env.oxidedns-staged.$atomic_enumeration_index"
+        >"$atomic_enumeration_root/.marker.env.borondns-staged.$atomic_enumeration_index"
 done
 atomic_enumeration_before="$(sha256sum "$atomic_enumeration_destination" \
-    "$atomic_enumeration_root"/.marker.env.oxidedns-staged.* | sort)"
+    "$atomic_enumeration_root"/.marker.env.borondns-staged.* | sort)"
 set +e
 # shellcheck disable=SC2016 # The single-quoted body is a child-shell fixture.
-OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=4 timeout --kill-after=1 3 \
+BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=4 timeout --kill-after=1 3 \
     bash --noprofile --norc -c '
         set -euo pipefail
         source "$1/scripts/campaign-env.sh"
@@ -1646,7 +1648,7 @@ fi
 grep -Fq 'campaign directory enumeration entry cap exceeded' \
     "$workdir/atomic-enumeration.err"
 [[ "$(sha256sum "$atomic_enumeration_destination" \
-    "$atomic_enumeration_root"/.marker.env.oxidedns-staged.* | sort)" == "$atomic_enumeration_before" ]]
+    "$atomic_enumeration_root"/.marker.env.borondns-staged.* | sort)" == "$atomic_enumeration_before" ]]
 
 # Local evidence snapshotting and validation share one CLOCK_BOOTTIME deadline
 # and explicit entry/depth/per-file/total-byte caps. Every hostile shape must
@@ -1723,9 +1725,9 @@ printf x >"$collection_growth_root/a"
 printf x >"$collection_growth_root/b"
 collection_growth_deadline="$(campaign_deadline_from_timeout_seconds 10)"
 set +e
-OXIDEDNS_COLLECTION_SNAPSHOT_TEST_PHASE=after-inventory \
-    OXIDEDNS_COLLECTION_SNAPSHOT_TEST_MARKER="$collection_growth_marker" \
-    OXIDEDNS_COLLECTION_SNAPSHOT_TEST_CONTINUE="$collection_growth_continue" \
+BORONDNS_COLLECTION_SNAPSHOT_TEST_PHASE=after-inventory \
+    BORONDNS_COLLECTION_SNAPSHOT_TEST_MARKER="$collection_growth_marker" \
+    BORONDNS_COLLECTION_SNAPSHOT_TEST_CONTINUE="$collection_growth_continue" \
     python3 "$repo_root/scripts/validate-collected-campaign.py" tree-snapshot \
     "$collection_growth_root" --absolute-deadline-nanoseconds "$collection_growth_deadline" \
     --max-file-bytes 100 --max-total-bytes 100 \
@@ -1770,7 +1772,7 @@ if python3 "$repo_root/scripts/campaign-lock-helper.py" "$workdir" overflow-dead
 fi
 grep -Fq 'invalid overflow deadline fixture absolute deadline' "$workdir/overflow-deadline.err"
 
-OXIDEDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES=4 \
+BORONDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES=4 \
     campaign_prepare_collection_budget collection_bounds_deadline
 if campaign_local_tree_snapshot "$collection_bounds_root" "$collection_bounds_deadline" \
     "$repo_root/scripts/validate-collected-campaign.py" >/dev/null 2>&1; then
@@ -1782,7 +1784,7 @@ atomic_enumeration_remainder="${atomic_enumeration_identity#*:}"
 atomic_enumeration_output=caller-sentinel
 if campaign_enumerate_direct_children_bounded "$atomic_enumeration_root" \
     "${atomic_enumeration_identity%%:*}" "${atomic_enumeration_remainder%%:*}" \
-    "${atomic_enumeration_identity##*:}" '.marker.env.oxidedns-staged.' 1 \
+    "${atomic_enumeration_identity##*:}" '.marker.env.borondns-staged.' 1 \
     atomic_enumeration_output 2>"$workdir/atomic-enumeration-deadline.err"; then
     printf 'atomic stale-status enumerator accepted an expired deadline\n' >&2
     exit 1
@@ -1791,7 +1793,7 @@ grep -Fq 'campaign directory enumeration deadline expired' \
     "$workdir/atomic-enumeration-deadline.err"
 [[ "$atomic_enumeration_output" == caller-sentinel ]]
 [[ "$(sha256sum "$atomic_enumeration_destination" \
-    "$atomic_enumeration_root"/.marker.env.oxidedns-staged.* | sort)" == "$atomic_enumeration_before" ]]
+    "$atomic_enumeration_root"/.marker.env.borondns-staged.* | sort)" == "$atomic_enumeration_before" ]]
 
 campaign_acquire_private_lock "$workdir" "$workdir:atomic-identity-tests" \
     "atomic identity regression lock"
@@ -1887,9 +1889,9 @@ atomic_bound_staged_size="$(stat -c %s "$atomic_bound_staged")"
 atomic_bound_destination_identity="$(stat -c '%d:%i' "$atomic_destination")"
 atomic_bound_marker="$workdir/atomic-bound-mutation.marker"
 atomic_bound_continue="$workdir/atomic-bound-mutation.continue"
-OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-bound-move \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_bound_marker" \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_bound_continue" \
+BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-bound-move \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_bound_marker" \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_bound_continue" \
     campaign_identity_bound_replace_text "$atomic_lock_root" "$atomic_bound_staged" \
     "$atomic_destination" "${atomic_bound_parent_identity%%:*}" \
     "${atomic_bound_parent_identity#*:}" "$atomic_bound_sha256" \
@@ -1904,7 +1906,7 @@ for _ in {1..300}; do
 done
 [[ -e "$atomic_bound_marker" ]]
 atomic_bound_path="$(find "$atomic_lock_root" -maxdepth 1 -type f \
-    -name '.marker.env.oxidedns-bound.*' -print -quit)"
+    -name '.marker.env.borondns-bound.*' -print -quit)"
 [[ -n "$atomic_bound_path" ]]
 printf 'forged-bound-content\n' >"$atomic_bound_path"
 : >"$atomic_bound_continue"
@@ -1927,9 +1929,9 @@ atomic_exchange_destination_identity="$(stat -c '%d:%i' "$atomic_destination")"
 atomic_exchange_marker="$workdir/atomic-exchange-replacement.marker"
 atomic_exchange_continue="$workdir/atomic-exchange-replacement.continue"
 atomic_exchange_saved="$atomic_lock_root/displaced-destination.saved"
-OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-exchange \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_exchange_marker" \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_exchange_continue" \
+BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-exchange \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_exchange_marker" \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_exchange_continue" \
     campaign_identity_bound_replace_text "$atomic_lock_root" "$atomic_exchange_staged" \
     "$atomic_destination" "${atomic_bound_parent_identity%%:*}" \
     "${atomic_bound_parent_identity#*:}" "$atomic_exchange_sha256" \
@@ -1944,7 +1946,7 @@ for _ in {1..300}; do
 done
 [[ -e "$atomic_exchange_marker" ]]
 atomic_exchange_bound="$(find "$atomic_lock_root" -maxdepth 1 -type f \
-    -name '.marker.env.oxidedns-bound.*' -print -quit)"
+    -name '.marker.env.borondns-bound.*' -print -quit)"
 [[ -n "$atomic_exchange_bound" ]]
 mv -- "$atomic_exchange_bound" "$atomic_exchange_saved"
 printf 'foreign-exchange-content\n' >"$atomic_exchange_bound"
@@ -1973,11 +1975,11 @@ atomic_rehash_continue="$workdir/atomic-rehash-failure.continue"
 atomic_rejection_marker="$workdir/atomic-rejection-cleanup.marker"
 atomic_rejection_continue="$workdir/atomic-rejection-cleanup.continue"
 atomic_rehash_saved="$atomic_lock_root/rehash-failure.saved"
-OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-exchange \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_rehash_marker" \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_rehash_continue" \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_MARKER="$atomic_rejection_marker" \
-    OXIDEDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_CONTINUE="$atomic_rejection_continue" \
+BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_PHASE=post-exchange \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_MARKER="$atomic_rehash_marker" \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_TEST_CONTINUE="$atomic_rehash_continue" \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_MARKER="$atomic_rejection_marker" \
+    BORONDNS_CAMPAIGN_REPLACE_TEXT_REJECTION_TEST_CONTINUE="$atomic_rejection_continue" \
     campaign_identity_bound_replace_text "$atomic_lock_root" "$atomic_rehash_staged" \
     "$atomic_destination" "${atomic_bound_parent_identity%%:*}" \
     "${atomic_bound_parent_identity#*:}" "$atomic_rehash_sha256" \
@@ -2005,11 +2007,11 @@ if wait "$atomic_rehash_pid"; then
     printf 'identity-bound publication accepted a post-publication content mutation\n' >&2
     exit 1
 fi
-grep -Fqx 'oxidedns publication rejected: authenticated content changed' "$atomic_destination"
+grep -Fqx 'borondns publication rejected: authenticated content changed' "$atomic_destination"
 atomic_rejected_path="$(find "$atomic_lock_root" -maxdepth 1 -type f \
-    -name '.marker.env.oxidedns-rejected.*' -print -quit)"
+    -name '.marker.env.borondns-rejected.*' -print -quit)"
 atomic_rehash_bound="$(find "$atomic_lock_root" -maxdepth 1 -type f \
-    -name '.marker.env.oxidedns-bound.*' -print -quit)"
+    -name '.marker.env.borondns-bound.*' -print -quit)"
 [[ -n "$atomic_rejected_path" && -n "$atomic_rehash_bound" ]]
 grep -Fqx foreign-rejection-race-content "$atomic_rejected_path"
 grep -Fqx forged-published-content "$atomic_rehash_saved"
@@ -2022,8 +2024,8 @@ campaign_release_private_lock
 runner_bootstrap_target="$workdir/runner-bootstrap-target"
 mkdir "$runner_bootstrap_target"
 runner_bootstrap_target_identity="$(stat -c '%d:%i:%u:%g:%a' "$runner_bootstrap_target")"
-runner_bootstrap_base="/var/tmp/oxidedns-runner-bootstrap-$fixture_unit_suffix"
-runner_bootstrap_root="$runner_bootstrap_base/oxidedns-campaign-runners"
+runner_bootstrap_base="/var/tmp/borondns-runner-bootstrap-$fixture_unit_suffix"
+runner_bootstrap_root="$runner_bootstrap_base/borondns-campaign-runners"
 runner_bootstrap_unit="$runner_bootstrap_root/hostile.service"
 sudo rm -rf -- "$runner_bootstrap_base"
 mkdir "$runner_bootstrap_base"
@@ -2162,19 +2164,19 @@ fi
 unset -f campaign_root_atomic_text_hook
 grep -Fqx 'foreign privileged marker must survive' "$root_atomic_race_destination"
 [[ -n "$(find "$root_atomic_dir" -maxdepth 1 -type f \
-    -name '.restored.marker.oxidedns-staged.*' -print -quit)" ]]
+    -name '.restored.marker.borondns-staged.*' -print -quit)" ]]
 campaign_release_private_lock
 sudo rm -rf -- "$root_atomic_dir"
 
 privileged_candidate="$workdir/privileged-runner.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$privileged_candidate"
 chmod +x "$privileged_candidate"
-privileged_unit="oxidedns-operations-broker-traversal-$fixture_unit_suffix.service"
+privileged_unit="borondns-operations-broker-traversal-$fixture_unit_suffix.service"
 campaign_acquire_private_lock "$workdir" privileged-traversal "privileged traversal fixture"
 publish_test_root_runner "$privileged_unit" "$privileged_candidate" "privileged traversal fixture"
-privileged_tree="/var/tmp/oxidedns-campaign-runners/${privileged_unit%.service}"
+privileged_tree="/var/tmp/borondns-campaign-runners/${privileged_unit%.service}"
 
-runner_swap_unit="oxidedns-operations-runner-swap-$fixture_unit_suffix.service"
+runner_swap_unit="borondns-operations-runner-swap-$fixture_unit_suffix.service"
 runner_swap_candidate="$workdir/runner-swap.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$runner_swap_candidate"
 chmod 0700 "$runner_swap_candidate"
@@ -2192,30 +2194,30 @@ if campaign_publish_root_runner "$runner_swap_unit" "$runner_swap_candidate" \
     exit 1
 fi
 unset -f campaign_privileged_publication_hook
-[[ -z "$(find "/var/tmp/oxidedns-campaign-runners/${runner_swap_unit%.service}" -type f -name run.sh -print -quit 2>/dev/null)" ]]
+[[ -z "$(find "/var/tmp/borondns-campaign-runners/${runner_swap_unit%.service}" -type f -name run.sh -print -quit 2>/dev/null)" ]]
 campaign_remove_root_runner_tree "$runner_swap_unit" "same-UID runner swap fixture"
 
 fragment_test_root="$workdir/fragment-publication-root"
 mkdir "$fragment_test_root"
-fragment_test_destination="$fragment_test_root/oxidedns-fragment-test.service"
+fragment_test_destination="$fragment_test_root/borondns-fragment-test.service"
 fragment_test_candidate="$workdir/fragment-test.service"
 cat >"$fragment_test_candidate" <<UNIT
 [Unit]
-Description=OxideDNS publication race fixture
+Description=BoronDNS publication race fixture
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=codex
-WorkingDirectory=/home/codex/oxidedns
+WorkingDirectory=/home/codex/borondns
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LimitNOFILE=65536
 ExecStart=$campaign_published_runner
 Restart=no
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=oxidedns-fragment-test
+SyslogIdentifier=borondns-fragment-test
 KillMode=control-group
 
 [Install]
@@ -2242,7 +2244,7 @@ fi
 unset -f campaign_privileged_publication_hook
 grep -Fqx 'foreign systemd fragment must survive' "$fragment_test_destination"
 [[ -n "$(find "$fragment_test_root" -maxdepth 1 -type f \
-    -name '.oxidedns-fragment-test.service.oxidedns-staged.*' -print -quit)" ]]
+    -name '.borondns-fragment-test.service.borondns-staged.*' -print -quit)" ]]
 sudo rm -f -- "$fragment_test_destination"
 campaign_remove_systemd_fragment_staging "$fragment_test_root" "$fragment_test_destination" \
     "systemd fragment destination race fixture"
@@ -2296,8 +2298,8 @@ fi
 # ownership checks.  Privileged cleanup must refuse the replacement and retain
 # both it and the displaced, previously validated object.
 fragment_staging_root="$workdir/fragment-staging-cleanup-root"
-fragment_staging_destination="$fragment_staging_root/oxidedns-staging-cleanup.service"
-fragment_staging_file="$fragment_staging_root/.oxidedns-staging-cleanup.service.oxidedns-staged.fixture"
+fragment_staging_destination="$fragment_staging_root/borondns-staging-cleanup.service"
+fragment_staging_file="$fragment_staging_root/.borondns-staging-cleanup.service.borondns-staged.fixture"
 fragment_staging_displaced="$fragment_staging_file.displaced"
 sudo install -d -m 0755 -o root -g root -- "$fragment_staging_root"
 printf 'validated staging fragment\n' >"$workdir/fragment-staging-candidate"
@@ -2321,10 +2323,10 @@ fi
 unset -f campaign_privileged_cleanup_hook
 sudo rm -rf -- "$fragment_staging_root"
 
-runner_cleanup_swap_unit="oxidedns-operations-runner-cleanup-swap-$fixture_unit_suffix.service"
+runner_cleanup_swap_unit="borondns-operations-runner-cleanup-swap-$fixture_unit_suffix.service"
 publish_test_root_runner "$runner_cleanup_swap_unit" "$privileged_candidate" \
     "runner cleanup identity fixture"
-runner_cleanup_swap_tree="/var/tmp/oxidedns-campaign-runners/${runner_cleanup_swap_unit%.service}"
+runner_cleanup_swap_tree="/var/tmp/borondns-campaign-runners/${runner_cleanup_swap_unit%.service}"
 runner_cleanup_swap_displaced="$runner_cleanup_swap_tree.displaced"
 # shellcheck disable=SC2329 # Exported fault-injection hook consumed by campaign cleanup.
 campaign_privileged_cleanup_hook() {
@@ -2391,7 +2393,7 @@ campaign_privileged_identity_bound_remove tree "$privileged_user_root" "$privile
     "${privileged_user_tree_remainder%%:*}" "${privileged_user_tree_identity##*:}"
 [[ ! -e "$privileged_user_tree" ]]
 privileged_user_quarantine="$(find "$privileged_user_root" -mindepth 1 -maxdepth 1 \
-    -type d -name '.tree.oxidedns-remove.*' -print -quit)"
+    -type d -name '.tree.borondns-remove.*' -print -quit)"
 [[ -n "$privileged_user_quarantine" ]]
 grep -Fqx 'foreign child must survive' "$privileged_user_quarantine/child"
 grep -Fqx 'captured child' "$privileged_user_root/child.original"
@@ -2421,9 +2423,9 @@ privileged_mode_tree_remainder="${privileged_mode_tree_identity#*:}"
 ) &
 privileged_mode_swap_pid=$!
 lock_holder_pids+=("$privileged_mode_swap_pid")
-OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_PHASE=after-target-stat-before-namespace-proof \
-    OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_MARKER="$privileged_mode_marker" \
-    OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_CONTINUE="$privileged_mode_continue" \
+BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_PHASE=after-target-stat-before-namespace-proof \
+    BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_MARKER="$privileged_mode_marker" \
+    BORONDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_CONTINUE="$privileged_mode_continue" \
     campaign_privileged_identity_bound_remove tree "$privileged_mode_root" "$privileged_mode_tree" \
     "${privileged_mode_parent_identity%%:*}" "${privileged_mode_parent_remainder%%:*}" \
     "${privileged_mode_parent_identity##*:}" "${privileged_mode_tree_identity%%:*}" \
@@ -2432,7 +2434,7 @@ OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_TEST_PHASE=after-target-stat-before-namespace-
 wait "$privileged_mode_swap_pid"
 untrack_test_process "$privileged_mode_swap_pid"
 privileged_mode_quarantine="$(find "$privileged_mode_root" -mindepth 1 -maxdepth 1 \
-    -type d -name '.tree.oxidedns-remove.*' -print -quit)"
+    -type d -name '.tree.borondns-remove.*' -print -quit)"
 [[ -n "$privileged_mode_quarantine" && ! -e "$privileged_mode_tree" ]]
 grep -Fqx 'foreign child must survive' "$privileged_mode_quarantine/child"
 grep -Fqx 'captured child' "$workdir/privileged-mode-child.original"
@@ -2456,7 +2458,7 @@ if command -v setfacl >/dev/null 2>&1; then
             "${privileged_acl_parent_identity##*:}" "${privileged_acl_tree_identity%%:*}" \
             "${privileged_acl_tree_remainder%%:*}" "${privileged_acl_tree_identity##*:}"
         privileged_acl_quarantine="$(find "$privileged_acl_root" -mindepth 1 -maxdepth 1 \
-            -type d -name '.tree.oxidedns-remove.*' -print -quit)"
+            -type d -name '.tree.borondns-remove.*' -print -quit)"
         [[ -n "$privileged_acl_quarantine" && ! -e "$privileged_acl_tree" ]]
         grep -Fqx 'ACL child must survive' "$privileged_acl_quarantine/child"
     fi
@@ -2485,9 +2487,9 @@ campaign_verify_retained_cleanup_journal "$CAMPAIGN_LAST_RETAINED_JOURNAL" \
 grep -Fq $'cleanup_retained_verified\toriginal=' "$workdir/retained-mapping-verified.out"
 retained_first_journal="$CAMPAIGN_LAST_RETAINED_JOURNAL"
 retained_first_quarantine="$CAMPAIGN_LAST_RETAINED_QUARANTINE"
-retained_forged_sibling="$retained_mapping_root/.tree.oxidedns-remove.$$.0123456789abcdef01234567"
+retained_forged_sibling="$retained_mapping_root/.tree.borondns-remove.$$.0123456789abcdef01234567"
 mkdir -m 0700 "$retained_forged_sibling"
-retained_forged_journal="$retained_mapping_root/.oxidedns-retained-cleanup-forged.env"
+retained_forged_journal="$retained_mapping_root/.borondns-retained-cleanup-forged.env"
 sed "s|^quarantine_path=.*|quarantine_path=$retained_forged_sibling|" \
     "$CAMPAIGN_LAST_RETAINED_JOURNAL" >"$retained_forged_journal"
 if campaign_verify_retained_cleanup_journal "$retained_forged_journal" \
@@ -2530,7 +2532,7 @@ prepared_mapping_parent_identity="$(stat -c '%d:%i:%u' "$prepared_mapping_root")
 prepared_mapping_parent_remainder="${prepared_mapping_parent_identity#*:}"
 prepared_mapping_tree_identity="$(stat -c '%d:%i:%u' "$prepared_mapping_tree")"
 prepared_mapping_tree_remainder="${prepared_mapping_tree_identity#*:}"
-if OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE=root-quarantined \
+if BORONDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE=root-quarantined \
     campaign_retained_identity_bound_remove unprivileged tree \
     "$prepared_mapping_root" "$prepared_mapping_tree" \
     "${prepared_mapping_parent_identity%%:*}" "${prepared_mapping_parent_remainder%%:*}" \
@@ -2541,7 +2543,7 @@ if OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE=root-quarantined \
     exit 1
 fi
 prepared_mapping_journal="$(find "$prepared_mapping_root" -mindepth 1 -maxdepth 1 \
-    -type f -name '.oxidedns-retained-cleanup-tree.*.env' -print -quit)"
+    -type f -name '.borondns-retained-cleanup-tree.*.env' -print -quit)"
 [[ -n "$prepared_mapping_journal" && ! -e "$prepared_mapping_tree" ]]
 grep -Fqx phase=prepared "$prepared_mapping_journal"
 prepared_mapping_quarantine="$(sed -n 's/^quarantine_path=//p' "$prepared_mapping_journal")"
@@ -2555,7 +2557,7 @@ grep -Fqx 'prepared payload' "$prepared_mapping_quarantine/payload"
 # files must fail without blocking, and regular files must be singly linked and
 # small enough to read as one bounded snapshot before any field is trusted.
 for retained_journal_poison in fifo oversized hardlink; do
-    retained_poison_journal="$prepared_mapping_root/.oxidedns-retained-cleanup-${retained_journal_poison}.env"
+    retained_poison_journal="$prepared_mapping_root/.borondns-retained-cleanup-${retained_journal_poison}.env"
     retained_poison_alias="$retained_poison_journal.alias"
     case "$retained_journal_poison" in
     fifo)
@@ -2590,9 +2592,9 @@ for retained_journal_poison in fifo oversized hardlink; do
     rm -f -- "$retained_poison_journal" "$retained_poison_alias"
 done
 
-prepared_forged_sibling="$prepared_mapping_root/.tree.oxidedns-remove.$$.fedcba9876543210fedcba98"
+prepared_forged_sibling="$prepared_mapping_root/.tree.borondns-remove.$$.fedcba9876543210fedcba98"
 mkdir -m 0700 "$prepared_forged_sibling"
-prepared_forged_journal="$prepared_mapping_root/.oxidedns-retained-cleanup-prepared-forged.env"
+prepared_forged_journal="$prepared_mapping_root/.borondns-retained-cleanup-prepared-forged.env"
 sed "s|^quarantine_path=.*|quarantine_path=$prepared_forged_sibling|" \
     "$prepared_mapping_journal" >"$prepared_forged_journal"
 if campaign_verify_retained_cleanup_journal "$prepared_forged_journal" \
@@ -2609,7 +2611,7 @@ prepared_symlink_parent="$workdir/prepared-mapping-link"
 ln -s "$prepared_mapping_root" "$prepared_symlink_parent"
 prepared_symlink_identity="$(stat -c '%d:%i:%u' "$prepared_symlink_parent")"
 prepared_symlink_remainder="${prepared_symlink_identity#*:}"
-prepared_symlink_journal_real="$prepared_mapping_root/.oxidedns-retained-cleanup-symlink-parent.env"
+prepared_symlink_journal_real="$prepared_mapping_root/.borondns-retained-cleanup-symlink-parent.env"
 sed \
     -e "s|^original_path=$prepared_mapping_root/|original_path=$prepared_symlink_parent/|" \
     -e "s|^quarantine_path=$prepared_mapping_root/|quarantine_path=$prepared_symlink_parent/|" \
@@ -2631,7 +2633,7 @@ grep -Fq 'retained-cleanup parent is not a real directory' "$workdir/prepared-sy
 prepared_ancestor_link="$workdir/prepared-mapping-ancestor-link"
 ln -s "$workdir" "$prepared_ancestor_link"
 prepared_ancestor_parent="$prepared_ancestor_link/$(basename "$prepared_mapping_root")"
-prepared_ancestor_journal_real="$prepared_mapping_root/.oxidedns-retained-cleanup-symlink-ancestor.env"
+prepared_ancestor_journal_real="$prepared_mapping_root/.borondns-retained-cleanup-symlink-ancestor.env"
 sed \
     -e "s|^original_path=$prepared_mapping_root/|original_path=$prepared_ancestor_parent/|" \
     -e "s|^quarantine_path=$prepared_mapping_root/|quarantine_path=$prepared_ancestor_parent/|" \
@@ -2655,7 +2657,7 @@ if campaign_verify_retained_cleanup_journal \
 fi
 grep -Fq 'retained-cleanup journal path is not canonical' "$workdir/prepared-dotdot.err"
 
-prepared_relative_journal="$prepared_mapping_root/.oxidedns-retained-cleanup-relative.env"
+prepared_relative_journal="$prepared_mapping_root/.borondns-retained-cleanup-relative.env"
 sed \
     -e "s|^original_path=$prepared_mapping_root/|original_path=|" \
     -e "s|^quarantine_path=$prepared_mapping_root/|quarantine_path=|" \
@@ -2904,8 +2906,8 @@ collection_metadata_swap_marker="$collection_metadata_bounds_root/swap-opened"
 collection_metadata_swap_continue="$collection_metadata_bounds_root/swap-continue"
 printf 'trusted status bytes\n' >"$collection_metadata_swap"
 (
-    OXIDEDNS_CAMPAIGN_COLLECTION_METADATA_TEST_MARKER="$collection_metadata_swap_marker" \
-        OXIDEDNS_CAMPAIGN_COLLECTION_METADATA_TEST_CONTINUE="$collection_metadata_swap_continue" \
+    BORONDNS_CAMPAIGN_COLLECTION_METADATA_TEST_MARKER="$collection_metadata_swap_marker" \
+        BORONDNS_CAMPAIGN_COLLECTION_METADATA_TEST_CONTINUE="$collection_metadata_swap_continue" \
         campaign_collection_read_bounded_file "$collection_metadata_swap" \
         "$(campaign_deadline_from_timeout_seconds 3)" 8388608 \
         swap_digest swap_content swap_device swap_inode swap_size
@@ -3415,8 +3417,8 @@ campaign_release_private_lock
 campaign_acquire_private_lock "$workdir" "$workdir:operations-harness" "operations harness mutation lock"
 
 runner_tamper_candidate="$workdir/runner-tamper.sh"
-runner_tamper_unit="oxidedns-runner-tamper-test-$fixture_unit_suffix.service"
-runner_tamper_root="/var/tmp/oxidedns-campaign-runners/${runner_tamper_unit%.service}"
+runner_tamper_unit="borondns-runner-tamper-test-$fixture_unit_suffix.service"
+runner_tamper_root="/var/tmp/borondns-campaign-runners/${runner_tamper_unit%.service}"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$runner_tamper_candidate"
 chmod 0700 "$runner_tamper_candidate"
 publish_test_root_runner "$runner_tamper_unit" "$runner_tamper_candidate" "runner tamper fixture"
@@ -3457,9 +3459,9 @@ ln -s "$workdir" "$clear_fixture/nested/link"
 campaign_clear_owned_directory "$clear_fixture" "collection clear fixture"
 [[ ! -e "$clear_fixture/stale.txt" && ! -e "$clear_fixture/nested" ]]
 clear_retained_stale="$(find "$clear_fixture" -mindepth 1 -maxdepth 1 \
-    -name '.stale.txt.oxidedns-remove.*' -print -quit)"
+    -name '.stale.txt.borondns-remove.*' -print -quit)"
 clear_retained_nested="$(find "$clear_fixture" -mindepth 1 -maxdepth 1 \
-    -name '.nested.oxidedns-remove.*' -print -quit)"
+    -name '.nested.borondns-remove.*' -print -quit)"
 [[ -n "$clear_retained_stale" && -n "$clear_retained_nested" ]]
 grep -Fqx stale "$clear_retained_stale"
 [[ -L "$clear_retained_nested/link" ]]
@@ -3604,7 +3606,7 @@ for automatic_enumeration_case in cap deadline; do
     set +e
     if [[ "$automatic_enumeration_case" == cap ]]; then
         # shellcheck disable=SC2016 # The single-quoted body is a child-shell fixture.
-        OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=8 timeout --kill-after=1 3 \
+        BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=8 timeout --kill-after=1 3 \
             bash --noprofile --norc -c '
                 set -euo pipefail
                 source "$1/scripts/campaign-env.sh"
@@ -3615,8 +3617,8 @@ for automatic_enumeration_case in cap deadline; do
             2>"$workdir/automatic-enumeration-cap.err"
     else
         # shellcheck disable=SC2016 # The single-quoted body is a child-shell fixture.
-        OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=64 \
-            OXIDEDNS_CAMPAIGN_ENUMERATION_TEST_DELAY_NANOSECONDS=500000000 \
+        BORONDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP=64 \
+            BORONDNS_CAMPAIGN_ENUMERATION_TEST_DELAY_NANOSECONDS=500000000 \
             timeout --kill-after=1 5 \
             bash --noprofile --norc -c '
                 set -euo pipefail
@@ -3717,7 +3719,7 @@ unset -f campaign_private_temporary_tree_prepublication_hook
 [[ -f "$split_brain_parent/.automatic-recovery.lock" ]]
 [[ -f "$split_brain_parent/.automatic-recovery.lock.detached" ]]
 split_brain_retained_tree="$(find "$split_brain_parent" -mindepth 1 -maxdepth 1 -type d \
-    \( -name 'run.*' -o -name '.run.*.oxidedns-remove.*' \) -print -quit)"
+    \( -name 'run.*' -o -name '.run.*.borondns-remove.*' \) -print -quit)"
 [[ -n "$split_brain_retained_tree" ]]
 split_brain_retained_journal="$(find "$split_brain_parent" -maxdepth 1 \
     -type f -name '.automatic-run.*.env' -print -quit)"
@@ -3763,7 +3765,7 @@ if false; then
     removing_lease_quarantine=""
     campaign_mark_automatic_tree_removing "$removing_lease_tree" removing_lease_identity \
         removing_lease_quarantine "$removing_lease_deadline"
-    [[ "$removing_lease_quarantine" =~ ^\.run\.[0-9a-f]{16}\.oxidedns-remove\.[0-9]+\.[0-9a-f]{24}$ ]]
+    [[ "$removing_lease_quarantine" =~ ^\.run\.[0-9a-f]{16}\.borondns-remove\.[0-9]+\.[0-9a-f]{24}$ ]]
     grep -Fqx schema=3 "$removing_lease_journal"
     grep -Fqx phase=removing "$removing_lease_journal"
     grep -Fqx "owner_pid=$BASHPID" "$removing_lease_journal"
@@ -3859,7 +3861,7 @@ PY
         preparing-stage-fsynced preparing-published ready-stage-fsynced ready-published; do
         journal_fault_family="journal-fault-${journal_fault_phase//[^A-Za-z0-9_.-]/-}"
         set +e
-        OXIDEDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE="$journal_fault_phase" \
+        BORONDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE="$journal_fault_phase" \
             bash --noprofile --norc -c '
             set -euo pipefail
             source "$1/scripts/campaign-env.sh"
@@ -3925,7 +3927,7 @@ PY
         local recovered_tree="" recovery_identity="journal_recovery_${recovery_hook//[^A-Za-z0-9_]/_}"
 
         set +e
-        OXIDEDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE="$fault_phase" \
+        BORONDNS_CAMPAIGN_PRIVATE_TREE_FAULT_PHASE="$fault_phase" \
             bash --noprofile --norc -c '
             set -euo pipefail
             source "$1/scripts/campaign-env.sh"
@@ -3954,9 +3956,9 @@ PY
             final_sha256="$(campaign_sha256 "$final")"
         fi
 
-        OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE="$recovery_hook" \
-            OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER="$marker" \
-            OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE="$continuation" \
+        BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE="$recovery_hook" \
+            BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER="$marker" \
+            BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE="$continuation" \
             bash --noprofile --norc -c '
             set -euo pipefail
             source "$1/scripts/campaign-env.sh"
@@ -4070,9 +4072,9 @@ PY
     untrack_test_process "$child_quarantine_owner_pid"
     child_quarantine_marker="$workdir/child-quarantine.marker"
     child_quarantine_continue="$workdir/child-quarantine.continue"
-    OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE=before-child-quarantine \
-        OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER="$child_quarantine_marker" \
-        OXIDEDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE="$child_quarantine_continue" \
+    BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_PHASE=before-child-quarantine \
+        BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_MARKER="$child_quarantine_marker" \
+        BORONDNS_CAMPAIGN_JOURNAL_RECOVERY_TEST_CONTINUE="$child_quarantine_continue" \
         bash --noprofile --norc -c '
         set -euo pipefail
         source "$1/scripts/campaign-env.sh"
@@ -4093,7 +4095,7 @@ PY
     done
     child_quarantine_parent="$(dirname "$child_quarantine_tree")"
     child_quarantine_recovered_tree="$(find "$child_quarantine_parent" -maxdepth 1 -type d \
-        -name '.*.oxidedns-recovered-remove.*' -print -quit)"
+        -name '.*.borondns-recovered-remove.*' -print -quit)"
     [[ -n "$child_quarantine_recovered_tree" ]]
     mv -- "$child_quarantine_recovered_tree/payload" "$workdir/child-quarantine-trusted"
     printf 'foreign child victim must survive\n' >"$child_quarantine_recovered_tree/payload"
@@ -4114,7 +4116,7 @@ PY
     # recorded and fsynced before the rename.
     quarantine_crash_family='journal-quarantine-crash'
     set +e
-    OXIDEDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE=root-quarantined \
+    BORONDNS_CAMPAIGN_IDENTITY_REMOVE_FAULT_PHASE=root-quarantined \
         bash --noprofile --norc -c '
         set -euo pipefail
         source "$1/scripts/campaign-env.sh"
@@ -4131,12 +4133,12 @@ PY
     [[ "$quarantine_crash_status" -ne 0 ]]
     quarantine_parent="$journal_fault_base/$quarantine_crash_family-$(id -u)"
     [[ -d "$quarantine_parent" ]]
-    [[ -n "$(find "$quarantine_parent" -maxdepth 1 -type d -name '.run.*.oxidedns-remove.*' -print -quit)" ]]
+    [[ -n "$(find "$quarantine_parent" -maxdepth 1 -type d -name '.run.*.borondns-remove.*' -print -quit)" ]]
     quarantine_successor=""
     campaign_prepare_private_temporary_tree "$journal_fault_base" "$quarantine_crash_family" \
         quarantine_successor_identity quarantine_successor
     [[ -d "$quarantine_successor" ]]
-    [[ -z "$(find "$quarantine_parent" -maxdepth 1 -type d -name '.run.*.oxidedns-remove.*' -print -quit)" ]]
+    [[ -z "$(find "$quarantine_parent" -maxdepth 1 -type d -name '.run.*.borondns-remove.*' -print -quit)" ]]
     [[ "$(find "$quarantine_parent" -maxdepth 1 -type f -name '.automatic-run.*.env' | wc -l)" == 1 ]]
     campaign_forget_cleanup_identity quarantine_successor_identity
 
@@ -4260,7 +4262,7 @@ PY
     schema2_removing_journal="${CAMPAIGN_CLEANUP_IDENTITIES["operations_schema2_removing:journal_path"]}"
     schema2_removing_name="$(basename "$schema2_removing_tree")"
     sed -i -e 's/^phase=ready$/phase=removing/' \
-        -e "s/^quarantine_name=$/quarantine_name=.$schema2_removing_name.oxidedns-remove.$BASHPID.0123456789abcdef01234567/" \
+        -e "s/^quarantine_name=$/quarantine_name=.$schema2_removing_name.borondns-remove.$BASHPID.0123456789abcdef01234567/" \
         "$schema2_removing_journal"
     schema2_successor=unchanged
     if campaign_prepare_private_temporary_tree "$temporary_tree_base" operations-schema2-removing \
@@ -4780,7 +4782,7 @@ for sampler_mutation in schema cadence truncation ordering timestamp attempt-rev
             >"$mutated_sampler/resource-sampler-attempts/attempt-0001/resource-sampler-failed.env"
         ;;
     process-orphan)
-        printf '%s\n' $'1970-01-01T00:00:01Z\t2\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'1970-01-01T00:00:01Z\t2\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/process-samples.tsv"
         ;;
     process-duplicate)
@@ -4790,12 +4792,12 @@ for sampler_mutation in schema cadence truncation ordering timestamp attempt-rev
         mv "$mutated_sampler/process-hosts.new" \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/resource-samples.tsv"
         printf '%s\n' \
-            $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\toxidedns' \
-            $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+            $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\tborondns' \
+            $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/process-samples.tsv"
         ;;
     process-count)
-        printf '%s\n' $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/process-samples.tsv"
         ;;
     process-rss)
@@ -4804,7 +4806,7 @@ for sampler_mutation in schema cadence truncation ordering timestamp attempt-rev
             >"$mutated_sampler/process-hosts.new"
         mv "$mutated_sampler/process-hosts.new" \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/resource-samples.tsv"
-        printf '%s\n' $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$mutated_sampler/resource-sampler-attempts/attempt-0001/process-samples.tsv"
         ;;
     esac
@@ -4829,8 +4831,8 @@ awk -F '\t' -v OFS='\t' 'NR > 1 { $8 = 1; $9 = 2 } { print }' \
 mv "$same_pid_sampler/process-hosts.new" \
     "$same_pid_sampler/resource-sampler-attempts/attempt-0001/resource-samples.tsv"
 printf '%s\n' \
-    $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\toxidedns' \
-    $'1970-01-01T00:00:02Z\t2\t123\t0.2\t0.1\t2\t00:02\toxidedns' >> \
+    $'1970-01-01T00:00:01Z\t1\t123\t0.1\t0.1\t2\t00:01\tborondns' \
+    $'1970-01-01T00:00:02Z\t2\t123\t0.2\t0.1\t2\t00:02\tborondns' >> \
     "$same_pid_sampler/resource-sampler-attempts/attempt-0001/process-samples.tsv"
 (
     evidence_dir="$same_pid_sampler"
@@ -4972,11 +4974,11 @@ soak_final_wait_ended="$(monotonic_nanoseconds)"
 ((soak_final_wait_ended - soak_final_wait_started <= 4000000000))
 
 grep -Fq 'ulimit -n 65536' "$repo_root/scripts/interop-chaos-queries.sh"
-mapfile -t oxidedns_docker_interops < <(
+mapfile -t borondns_docker_interops < <(
     rg -l 'package-docker-image\.sh' "$repo_root"/scripts/interop-*-docker.sh "$repo_root/scripts/test-docker-image.sh"
 )
-for oxidedns_docker_interop in "${oxidedns_docker_interops[@]}"; do
-    grep -Fq -- '--ulimit nofile=65536:65536' "$oxidedns_docker_interop"
+for borondns_docker_interop in "${borondns_docker_interops[@]}"; do
+    grep -Fq -- '--ulimit nofile=65536:65536' "$borondns_docker_interop"
 done
 
 nonresume_evidence="$workdir/nonresume-existing"
@@ -5546,7 +5548,7 @@ for soak_process_mutation in orphan duplicate count rss; do
     soak_process_details="$soak_process_fixture/resource-sampler-attempts/attempt-0001/process-samples.tsv"
     case "$soak_process_mutation" in
     orphan)
-        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944001\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944001\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$soak_process_details"
         ;;
     duplicate)
@@ -5554,19 +5556,19 @@ for soak_process_mutation in orphan duplicate count rss; do
             "$soak_process_hosts" >"$soak_process_fixture/process-hosts.new"
         mv "$soak_process_fixture/process-hosts.new" "$soak_process_hosts"
         printf '%s\n' \
-            $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\toxidedns' \
-            $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+            $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\tborondns' \
+            $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$soak_process_details"
         ;;
     count)
-        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$soak_process_details"
         ;;
     rss)
         awk -F '\t' -v OFS='\t' 'NR == 2 { $8 = 1; $9 = 3 } { print }' \
             "$soak_process_hosts" >"$soak_process_fixture/process-hosts.new"
         mv "$soak_process_fixture/process-hosts.new" "$soak_process_hosts"
-        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\toxidedns' >> \
+        printf '%s\n' $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\tborondns' >> \
             "$soak_process_details"
         ;;
     esac
@@ -5588,8 +5590,8 @@ awk -F '\t' -v OFS='\t' 'NR > 1 { $8 = 1; $9 = 2 } { print }' \
     "$soak_same_pid_hosts" >"$soak_same_pid_fixture/process-hosts.new"
 mv "$soak_same_pid_fixture/process-hosts.new" "$soak_same_pid_hosts"
 printf '%s\n' \
-    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\toxidedns' \
-    $'2026-07-13T12:00:01Z\t1783944001\t123\t0.2\t0.1\t2\t00:02\toxidedns' >> \
+    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.1\t0.1\t2\t00:01\tborondns' \
+    $'2026-07-13T12:00:01Z\t1783944001\t123\t0.2\t0.1\t2\t00:02\tborondns' >> \
     "$soak_same_pid_details"
 refresh_soak_fixture_manifest "$soak_same_pid_fixture"
 python3 "$repo_root/scripts/validate-collected-campaign.py" soak-host \
@@ -6122,7 +6124,7 @@ detached_status=$?
 set -e
 [[ "$detached_status" -ne 0 ]]
 [[ ! -e "$fake_docker_state/container" ]]
-grep -Eq '^io\.oxidedns\.soak\.run=run-' "$fake_docker_state/last-label"
+grep -Eq '^io\.borondns\.soak\.run=run-' "$fake_docker_state/last-label"
 
 resume_cleanup_evidence="$workdir/resume-cleanup-evidence"
 cleanup_failure_artifact="$resume_cleanup_evidence/scenarios/cycle-0001/failure/artifacts"
@@ -6136,9 +6138,9 @@ cleanup_failure_status=$?
 set -e
 [[ "$cleanup_failure_status" -ne 0 ]]
 [[ -e "$fake_docker_state/container" ]]
-grep -Eq 'docker cleanup failed: ownership_label=io\.oxidedns\.soak\.run=run-' "$cleanup_failure_log"
+grep -Eq 'docker cleanup failed: ownership_label=io\.borondns\.soak\.run=run-' "$cleanup_failure_log"
 cleanup_failure_evidence="$cleanup_failure_artifact/docker-cleanup-failure.env"
-grep -Eq '^ownership_label=io\.oxidedns\.soak\.run=run-' "$cleanup_failure_evidence"
+grep -Eq '^ownership_label=io\.borondns\.soak\.run=run-' "$cleanup_failure_evidence"
 grep -Fqx "primary_exit_status=$cleanup_failure_status" "$cleanup_failure_evidence"
 grep -Fqx 'cleanup_exit_status=42' "$cleanup_failure_evidence"
 evidence_dir="$resume_cleanup_evidence"
@@ -6147,24 +6149,24 @@ docker_cleanup_timeout=1
 PATH="$workdir/fakebin:$PATH" FAKE_DOCKER_STATE="$fake_docker_state" \
     reconcile_retained_docker_cleanup_failures
 [[ ! -e "$fake_docker_state/container" ]]
-grep -Eq '^ownership_label=io\.oxidedns\.soak\.run=run-' \
+grep -Eq '^ownership_label=io\.borondns\.soak\.run=run-' \
     "$cleanup_failure_artifact/docker-cleanup-reconciled.env"
 
 crash_cleanup_artifact="$resume_cleanup_evidence/scenarios/cycle-0004/crash/artifacts"
 mkdir -p "$crash_cleanup_artifact"
 touch "$fake_docker_state/container"
-record_docker_cleanup_active "$crash_cleanup_artifact" 'io.oxidedns.soak.run=crash-before-cleanup'
+record_docker_cleanup_active "$crash_cleanup_artifact" 'io.borondns.soak.run=crash-before-cleanup'
 PATH="$workdir/fakebin:$PATH" FAKE_DOCKER_STATE="$fake_docker_state" \
     reconcile_retained_docker_cleanup_failures
 [[ ! -e "$fake_docker_state/container" ]]
-grep -Fqx 'ownership_label=io.oxidedns.soak.run=crash-before-cleanup' \
+grep -Fqx 'ownership_label=io.borondns.soak.run=crash-before-cleanup' \
     "$crash_cleanup_artifact/docker-cleanup-reconciled.env"
 
 persistent_cleanup_artifact="$resume_cleanup_evidence/scenarios/cycle-0002/persistent/artifacts"
 mkdir -p "$persistent_cleanup_artifact"
 touch "$fake_docker_state/container"
 record_docker_cleanup_failure "$persistent_cleanup_artifact" \
-    'io.oxidedns.soak.run=persistent-fixture' 0 42
+    'io.borondns.soak.run=persistent-fixture' 0 42
 set +e
 PATH="$workdir/fakebin:$PATH" FAKE_DOCKER_STATE="$fake_docker_state" FAKE_DOCKER_RM_FAIL=1 \
     reconcile_retained_docker_cleanup_failures >"$workdir/persistent-cleanup.log" 2>&1
@@ -6183,7 +6185,7 @@ grep -Fq 'timeout --preserve-status --kill-after=5 "$cleanup_timeout"' \
 second_persistent_artifact="$resume_cleanup_evidence/scenarios/cycle-0003/persistent-two/artifacts"
 mkdir -p "$second_persistent_artifact"
 record_docker_cleanup_failure "$second_persistent_artifact" \
-    'io.oxidedns.soak.run=persistent-fixture-two' 0 42
+    'io.borondns.soak.run=persistent-fixture-two' 0 42
 set +e
 PATH="$workdir/fakebin:$PATH" FAKE_DOCKER_STATE="$fake_docker_state" FAKE_DOCKER_RM_FAIL=1 \
     reconcile_retained_docker_cleanup_failures >/dev/null 2>&1
@@ -6198,8 +6200,8 @@ marker_failure_evidence="$workdir/marker-failure-evidence"
 marker_failure_one="$marker_failure_evidence/scenarios/cycle-0001/marker-fail/artifacts"
 marker_failure_two="$marker_failure_evidence/scenarios/cycle-0002/marker-pass/artifacts"
 mkdir -p "$marker_failure_one" "$marker_failure_two" "$workdir/marker-fail-bin"
-record_docker_cleanup_failure "$marker_failure_one" 'io.oxidedns.soak.run=marker-fail' 0 42
-record_docker_cleanup_failure "$marker_failure_two" 'io.oxidedns.soak.run=marker-pass' 0 42
+record_docker_cleanup_failure "$marker_failure_one" 'io.borondns.soak.run=marker-fail' 0 42
+record_docker_cleanup_failure "$marker_failure_two" 'io.borondns.soak.run=marker-pass' 0 42
 # shellcheck disable=SC2016
 # shellcheck disable=SC2016
 # shellcheck disable=SC2016
@@ -6225,7 +6227,7 @@ expired_cleanup_evidence="$workdir/expired-cleanup"
 expired_cleanup_artifact="$expired_cleanup_evidence/scenarios/cycle-0001/failure/artifacts"
 mkdir -p "$expired_cleanup_artifact"
 touch "$fake_docker_state/container"
-record_docker_cleanup_failure "$expired_cleanup_artifact" 'io.oxidedns.soak.run=expired-fixture' 0 42
+record_docker_cleanup_failure "$expired_cleanup_artifact" 'io.borondns.soak.run=expired-fixture' 0 42
 expired_cleanup_start=$(($(date +%s) - 120))
 printf '%s\n' \
     "created_utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
@@ -6318,9 +6320,9 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     '  done' \
     '  context="${*: -1}"' \
     '  [[ -z "${FAKE_IMAGE_BUILD_CONTEXT_FILE:-}" ]] || printf "%s\n" "$context" >"$FAKE_IMAGE_BUILD_CONTEXT_FILE"' \
-    '  recipe="$(sed -n '\''s/^LABEL io\.oxidedns\.interop\.recipe-sha256="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
-    '  base="$(sed -n '\''s/^LABEL io\.oxidedns\.interop\.base-image="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
-    '  packages="$(sed -n '\''s/^LABEL io\.oxidedns\.interop\.packages="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
+    '  recipe="$(sed -n '\''s/^LABEL io\.borondns\.interop\.recipe-sha256="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
+    '  base="$(sed -n '\''s/^LABEL io\.borondns\.interop\.base-image="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
+    '  packages="$(sed -n '\''s/^LABEL io\.borondns\.interop\.packages="\([^"]*\)"$/\1/p'\'' "$context/Dockerfile")"' \
     '  image_id="sha256:$(printf "%s" "$recipe|$base|$packages" | sha256sum | awk '\''{ print $1 }'\'')"' \
     '  key="$(printf "%s" "$tag" | sha256sum | awk '\''{ print $1 }'\'')"' \
     '  if [[ -n "${FAKE_IMAGE_BUILD_READY:-}" ]]; then' \
@@ -6338,7 +6340,7 @@ chmod +x "$image_setup_bin/docker"
 image_setup_started="$(date +%s)"
 image_setup_id="$(PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$image_setup_state" \
     XDG_RUNTIME_DIR="$image_lock_runtime" FAKE_IMAGE_INSPECT_HANG_ONCE=1 \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
     ensure_alpine_interop_image round49-fixture fixture-package)"
 image_setup_elapsed=$(($(date +%s) - image_setup_started))
 ((image_setup_elapsed <= 4))
@@ -6361,7 +6363,7 @@ signalled_image_setup_id="$(PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE
     ensure_alpine_interop_image round54-signal-cleanup fixture-package)"
 unset -f interop_image_cleanup_started_hook
 [[ -f "$image_cleanup_signal_marker" && "$signalled_image_setup_id" =~ ^sha256:[0-9a-f]{64}$ ]]
-[[ -z "$(find "$image_owner_tmp/oxidedns-interop-builds-$(id -u)" -maxdepth 1 \
+[[ -z "$(find "$image_owner_tmp/borondns-interop-builds-$(id -u)" -maxdepth 1 \
     \( -type d -name 'run.*' -o -type f -name '.automatic-run.*.env' \) -print -quit 2>/dev/null)" ]]
 image_build_count_after_signal="$(<"$image_setup_state/build-count")"
 [[ "$image_build_count_after_signal" == 2 ]]
@@ -6376,8 +6378,8 @@ cached_image_setup_id="$(PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$
 # A foreign or partially labelled image at the recipe tag is never silently
 # accepted. It is rebuilt and re-authenticated from the pinned base and recipe.
 image_setup_recipe="$(interop_image_recipe_sha256 round49-fixture \
-    "$OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" fixture-package)"
-image_setup_tag="oxidedns-interop-alpine-round49-fixture:recipe-${image_setup_recipe:0:20}"
+    "$BORONDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" fixture-package)"
+image_setup_tag="borondns-interop-alpine-round49-fixture:recipe-${image_setup_recipe:0:20}"
 image_setup_key="$(printf '%s' "$image_setup_tag" | sha256sum | awk '{ print $1 }')"
 printf '%s\t%s\t%s\t%s\n' \
     'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' \
@@ -6389,7 +6391,7 @@ rebuilt_image_setup_id="$(PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="
 
 image_setup_invocations_before="$(wc -l <"$image_setup_state/invocations")"
 if PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$image_setup_state" \
-    XDG_RUNTIME_DIR="$image_lock_runtime" OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE=alpine:latest \
+    XDG_RUNTIME_DIR="$image_lock_runtime" BORONDNS_INTEROP_ALPINE_BASE_IMAGE=alpine:latest \
     ensure_alpine_interop_image unsupported-base fixture-package >/dev/null 2>&1; then
     printf 'Docker image helper accepted an unpinned or unsupported base image\n' >&2
     exit 1
@@ -6435,9 +6437,9 @@ untrack_test_process "$paused_image_pid"
 replacement_image_ready="$workdir/replacement-image.ready"
 replacement_image_release="$workdir/replacement-image.release"
 replacement_recipe="$(interop_image_recipe_sha256 round49-replacement \
-    "$OXIDEDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" fixture-package)"
+    "$BORONDNS_INTEROP_ALPINE_BASE_IMAGE_EXPECTED" fixture-package)"
 replacement_lock_digest="$(printf '%s' "interop-image:$replacement_recipe" | sha256sum | awk '{ print $1 }')"
-replacement_lock="/tmp/oxidedns-interop-image-locks-$(id -u)/.oxidedns-campaign-locks/$replacement_lock_digest.lock"
+replacement_lock="/tmp/borondns-interop-image-locks-$(id -u)/.borondns-campaign-locks/$replacement_lock_digest.lock"
 (
     PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$image_setup_state" \
         XDG_RUNTIME_DIR="$image_lock_runtime" FAKE_IMAGE_BUILD_READY="$replacement_image_ready" \
@@ -6459,8 +6461,8 @@ chmod 0600 "$replacement_lock"
 # build by locking the replacement inode.
 if PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$image_setup_state" \
     XDG_RUNTIME_DIR="$image_lock_runtime" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=3 \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=3 \
     ensure_alpine_interop_image round49-replacement fixture-package >/dev/null 2>&1; then
     printf 'replacement lock inode admitted a split-brain interop image builder\n' >&2
     exit 1
@@ -6532,8 +6534,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'sleep 300' >"$image_setup_bin/docker"
 chmod +x "$image_setup_bin/docker"
 image_deadline_started="$(date +%s)"
 if PATH="$image_setup_bin:$PATH" XDG_RUNTIME_DIR="$image_lock_runtime" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=30 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=2 \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=30 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=2 \
     ensure_alpine_interop_image round49-deadline fixture-package >/dev/null; then
     printf 'Docker image setup accepted an exhausted absolute deadline\n' >&2
     exit 1
@@ -6556,9 +6558,9 @@ image_clock_started="$(/usr/bin/date +%s)"
 if PATH="$image_clock_bin:$image_setup_bin:$PATH" \
     FAKE_IMAGE_REALTIME="$((image_clock_started - 86400))" \
     XDG_RUNTIME_DIR="$image_lock_runtime" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=30 \
-    OXIDEDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS=30 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=2 \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=30 \
+    BORONDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS=30 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=2 \
     ensure_alpine_interop_image round51-monotonic-deadline fixture-package >/dev/null; then
     printf 'Docker image setup accepted a monotonic deadline exhaustion\n' >&2
     exit 1
@@ -6574,9 +6576,9 @@ chmod +x "$image_setup_bin/docker"
 stalled_image_lock_helper="$(printf '%s' 'import time; time.sleep(300)' | base64 -w0)"
 image_lock_deadline_started="$(/usr/bin/date +%s)"
 if PATH="$image_setup_bin:$PATH" \
-    OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$stalled_image_lock_helper" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=3 \
+    BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$stalled_image_lock_helper" \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=3 \
     ensure_alpine_interop_image round52-stalled-lock fixture-package >/dev/null 2>&1; then
     printf 'Docker image setup accepted a stalled lock broker\n' >&2
     exit 1
@@ -6598,9 +6600,9 @@ stopped_ignoring_broker_helper="$(printf '%s\n' \
 stopped_ignoring_broker_started="$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')"
 if PATH="$image_setup_bin:$PATH" \
     FAKE_STOPPED_BROKER_PID_FILE="$stopped_ignoring_broker_pid_file" \
-    OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$stopped_ignoring_broker_helper" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=4 \
+    BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$stopped_ignoring_broker_helper" \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=4 \
     ensure_alpine_interop_image round53-stopped-ignoring-broker fixture-package >/dev/null 2>&1; then
     printf 'Docker image setup accepted a stopped TERM-ignoring lock broker\n' >&2
     exit 1
@@ -6637,8 +6639,8 @@ chmod +x "$stopped_creator_bin/python3"
 stopped_creator_started="$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns())')"
 if PATH="$stopped_creator_bin:$image_setup_bin:$PATH" \
     FAKE_STOPPED_CREATOR_PID_FILE="$stopped_creator_pid_file" \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=4 \
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=4 \
     ensure_alpine_interop_image round53-stopped-ignoring-creator fixture-package >/dev/null 2>&1; then
     printf 'Docker image setup accepted a stopped TERM-ignoring private-tree creator\n' >&2
     exit 1
@@ -6660,7 +6662,7 @@ fi
 # before touching Docker or allocating a build context.
 image_setup_invocations_before="$(wc -l <"$image_setup_state/invocations")"
 if PATH="$image_setup_bin:$PATH" FAKE_IMAGE_SETUP_STATE="$image_setup_state" \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=1 \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS=1 \
     ensure_alpine_interop_image round52-no-cleanup-reserve fixture-package >/dev/null 2>&1; then
     printf 'Docker image setup accepted a budget with no safe cleanup reserve\n' >&2
     exit 1
@@ -6668,9 +6670,9 @@ fi
 [[ "$(wc -l <"$image_setup_state/invocations")" == "$image_setup_invocations_before" ]]
 
 for oversized_timeout_name in \
-    OXIDEDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS \
-    OXIDEDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS \
-    OXIDEDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS; do
+    BORONDNS_INTEROP_DOCKER_INSPECT_TIMEOUT_SECONDS \
+    BORONDNS_INTEROP_DOCKER_BUILD_TIMEOUT_SECONDS \
+    BORONDNS_INTEROP_DOCKER_SETUP_TIMEOUT_SECONDS; do
     if (
         export "$oversized_timeout_name=999999999999999999999999999999"
         ensure_alpine_interop_image "oversized-${oversized_timeout_name##*_}" fixture-package
@@ -6738,8 +6740,8 @@ printf '%s\n' '#!/usr/bin/env bash' 'sleep 30' >"$blocking_rustup_bin/rustup"
 chmod +x "$blocking_rustup_bin/rustup"
 blocking_rustup_started="$SECONDS"
 blocking_rustup_plan="$workdir/blocking-rustup-plan"
-if PATH="$blocking_rustup_bin:$PATH" OXIDEDNS_LARGE_SOAK_PREFLIGHT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_LARGE_SOAK_PREFLIGHT_KILL_AFTER_SECONDS=1 \
+if PATH="$blocking_rustup_bin:$PATH" BORONDNS_LARGE_SOAK_PREFLIGHT_TIMEOUT_SECONDS=1 \
+    BORONDNS_LARGE_SOAK_PREFLIGHT_KILL_AFTER_SECONDS=1 \
     "$repo_root/scripts/large-surface-soak-campaign.sh" plan \
     --evidence-dir "$blocking_rustup_plan" --campaign-id blocking-rustup \
     --host fake-host --duration 1; then
@@ -6777,7 +6779,7 @@ chmod +x "$source_preflight_bin/git"
 source_preflight_head="$(git -C "$repo_root" rev-parse HEAD)"
 for source_preflight_mode in dirty invalid-head; do
     source_preflight_root="$workdir/large-source-preflight-$source_preflight_mode"
-    if env -u OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY \
+    if env -u BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY \
         PATH="$source_preflight_bin:$PATH" FAKE_GIT_HEAD="$source_preflight_head" \
         FAKE_GIT_SOURCE_MODE="$source_preflight_mode" \
         "$repo_root/scripts/large-surface-soak-campaign.sh" plan \
@@ -6793,7 +6795,7 @@ done
 
 stop_test_campaign_lock "$plan_lock_release" "$plan_holder_pid"
 # The private lock inode remains, but no process owns its flock.
-[[ -n "$(find "$workdir/.oxidedns-campaign-locks" -type f -name '*.lock' -print -quit)" ]]
+[[ -n "$(find "$workdir/.borondns-campaign-locks" -type f -name '*.lock' -print -quit)" ]]
 "$repo_root/scripts/large-surface-soak-campaign.sh" plan \
     --evidence-dir "$plan_dir" --campaign-id operations-test --host fake-host --duration 60
 [[ -f "$plan_dir/plan-complete" ]]
@@ -6840,7 +6842,7 @@ command_file="$plan_dir/commands/fake-host-launch.sh"
 grep -Fq 'resume_arg=--resume' "$command_file"
 grep -Fq -- '--scenario-kill-after' "$command_file"
 grep -Fq 'remote_runner=' "$command_file"
-grep -Fq 'remote_build_root=/var/tmp/oxidedns-large-' "$command_file"
+grep -Fq 'remote_build_root=/var/tmp/borondns-large-' "$command_file"
 # shellcheck disable=SC2016
 grep -Fq 'export CARGO_TARGET_DIR="\$build_dir"' "$command_file"
 grep -Fq '/launch/' "$command_file"
@@ -6855,7 +6857,7 @@ grep -Fq 'docker_command=(sudo /usr/bin/docker)' "$command_file"
 # shellcheck disable=SC2016
 grep -Fq 'sudo install -m 0555 -o root -g root -- "$docker_wrapper_candidate" "$authenticated_tool_dir/docker"' \
     "$command_file"
-grep -Fq 'OXIDEDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM=' "$command_file"
+grep -Fq 'BORONDNS_LARGE_SOAK_AUTHENTICATED_DOCKER_SHIM=' "$command_file"
 grep -Fq 'SupplementaryGroups=docker' "$command_file"
 # The generated unit must use the fully derived worst-case cleanup and sampler
 # budgets, not a single Docker timeout or an unrelated fixed stop timeout.
@@ -6874,12 +6876,12 @@ helper_source_line="$(grep -nF 'source <(printf '\''%s'\'' "$campaign_env_snapsh
 # shellcheck disable=SC2016
 grep -Fq 'campaign_lock_helper_snapshot_b64=' "$command_file"
 # shellcheck disable=SC2016
-grep -Fq 'OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$command_file"
+grep -Fq 'BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$command_file"
 if grep -Fq 'usermod -aG docker' "$command_file"; then
     printf 'large-soak prerequisite plan persistently mutates docker group membership\n' >&2
     exit 1
 fi
-grep -Fq 'OXIDEDNS_LARGE_SOAK_AUTHENTICATED_CARGO=' "$command_file"
+grep -Fq 'BORONDNS_LARGE_SOAK_AUTHENTICATED_CARGO=' "$command_file"
 grep -Fq 'exec 7<' "$command_file"
 
 blocking_probe_bin="$workdir/blocking-large-probe-bin"
@@ -6890,8 +6892,8 @@ chmod +x "$blocking_probe_bin/docker"
 # The single-quoted program is intentionally evaluated by the isolated child shell.
 # shellcheck disable=SC2016
 if timeout 5 env PATH="$blocking_probe_bin:$PATH" \
-    OXIDEDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS=1 \
+    BORONDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS=1 \
+    BORONDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS=1 \
     bash --noprofile --norc -c '
         source "$1/scripts/large-surface-soak.sh"
         evidence_dir="$2"
@@ -6904,8 +6906,8 @@ fi
 # The single-quoted program is intentionally evaluated by the isolated child shell.
 # shellcheck disable=SC2016
 if timeout 5 env \
-    OXIDEDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS=1 \
+    BORONDNS_LARGE_SOAK_HOST_PROBE_TIMEOUT_SECONDS=1 \
+    BORONDNS_LARGE_SOAK_HOST_PROBE_KILL_AFTER_SECONDS=1 \
     bash --noprofile --norc -c '
         source "$1/scripts/large-surface-soak.sh"
         (trap "" TERM; sleep 30) &
@@ -7034,7 +7036,7 @@ fi
 large_unit_plan="$workdir/large-unit-plan"
 "$repo_root/scripts/large-surface-soak-campaign.sh" plan \
     --evidence-dir "$large_unit_plan" --campaign-id unit-test --host h1 --duration 60
-awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $3="oxidedns-soak-unit-test-wrong.service" } { print }' \
+awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $3="borondns-soak-unit-test-wrong.service" } { print }' \
     "$large_unit_plan/assignments.tsv" >"$large_unit_plan/assignments.tsv.mutated"
 mv "$large_unit_plan/assignments.tsv.mutated" "$large_unit_plan/assignments.tsv"
 campaign_manifest_write "$large_unit_plan"
@@ -7068,7 +7070,7 @@ concurrent_remote_evidence="$workdir/concurrent-remote-evidence"
 concurrent_plan="$workdir/concurrent-plan"
 concurrent_state="$workdir/concurrent-state"
 concurrent_bin="$workdir/concurrent-bin"
-remove_readonly_test_tree /var/tmp/oxidedns-large-concurrent-resume
+remove_readonly_test_tree /var/tmp/borondns-large-concurrent-resume
 git clone -q --no-hardlinks "$repo_root" "$concurrent_remote_repo"
 materialize_campaign_helpers "$concurrent_remote_repo"
 mkdir -p "$concurrent_state/units" "$concurrent_bin"
@@ -7085,15 +7087,15 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
 # shellcheck disable=SC2016
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'if [[ "${1:-}" == tee ]]; then cat >"$2"; exit 0; fi' \
-    'case "${1:-}" in install|chown|chmod|rm|mktemp|mv|cmp|ln|python3) exec /usr/bin/sudo -n "$@" ;; esac' \
+    'case "${1:-}" in install|chown|chmod|rm|mkdir|mktemp|mv|cmp|ln|python3) exec /usr/bin/sudo -n "$@" ;; esac' \
     'exec "$@"' >"$concurrent_bin/sudo"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$concurrent_bin/docker"
 chmod +x "$concurrent_bin/systemctl" "$concurrent_bin/sudo" "$concurrent_bin/docker"
 concurrent_command="$concurrent_plan/commands/fake-host-launch.sh"
-PATH="$concurrent_bin:$PATH" CONCURRENT_STATE="$concurrent_state" OXIDEDNS_CAMPAIGN_UNIT_ROOT="$concurrent_state/units" OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 \
+PATH="$concurrent_bin:$PATH" CONCURRENT_STATE="$concurrent_state" BORONDNS_CAMPAIGN_UNIT_ROOT="$concurrent_state/units" BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 \
     "$concurrent_command" >"$workdir/concurrent-one.log" 2>&1 &
 concurrent_one=$!
-PATH="$concurrent_bin:$PATH" CONCURRENT_STATE="$concurrent_state" OXIDEDNS_CAMPAIGN_UNIT_ROOT="$concurrent_state/units" OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 \
+PATH="$concurrent_bin:$PATH" CONCURRENT_STATE="$concurrent_state" BORONDNS_CAMPAIGN_UNIT_ROOT="$concurrent_state/units" BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 \
     "$concurrent_command" >"$workdir/concurrent-two.log" 2>&1 &
 concurrent_two=$!
 set +e
@@ -7111,13 +7113,13 @@ fi
 cat "$workdir/concurrent-one.log" "$workdir/concurrent-two.log" |
     grep -Fq 'another process holds remote large-soak campaign lock'
 grep -Fqx '1' "$concurrent_state/start-count"
-concurrent_runner="$(find "$concurrent_remote_evidence/launch/oxidedns-soak-concurrent-resume-fake-host-attempts" \
+concurrent_runner="$(find "$concurrent_remote_evidence/launch/borondns-soak-concurrent-resume-fake-host-attempts" \
     -mindepth 2 -maxdepth 2 -type f -name run.sh | head -1)"
 # The first-stage remote script must render a real variable reference into the
 # systemd runner, not a backslash-literal placeholder.
 # shellcheck disable=SC2016
 grep -Fq 'export CARGO_TARGET_DIR="$build_dir"' "$concurrent_runner"
-immutable_source="$(find /var/tmp/oxidedns-large-concurrent-resume/fake-host -mindepth 1 -maxdepth 1 -type d -name 'source-*' -print -quit)"
+immutable_source="$(find /var/tmp/borondns-large-concurrent-resume/fake-host -mindepth 1 -maxdepth 1 -type d -name 'source-*' -print -quit)"
 immutable_probe="$immutable_source/Cargo.toml"
 [[ "$(stat -c %u "$immutable_source")" == 0 && "$(stat -c %u "$(dirname "$immutable_source")")" == 0 ]]
 if chmod u+w "$immutable_probe" 2>/dev/null || printf '\n# hostile edit\n' >>"$immutable_probe" 2>/dev/null; then
@@ -7131,10 +7133,10 @@ fi
 immutable_runtime_link="$immutable_source/target"
 immutable_runtime="$(realpath -e "$immutable_runtime_link")"
 [[ -L "$immutable_runtime_link" && "$(stat -c %u "$immutable_runtime_link")" == 0 ]]
-[[ "$immutable_runtime" == /var/tmp/oxidedns-large-concurrent-resume/fake-host/targets/target.* ]]
+[[ "$immutable_runtime" == /var/tmp/borondns-large-concurrent-resume/fake-host/targets/target.* ]]
 printf 'writable runtime sentinel\n' >"$immutable_runtime/interop-runtime-sentinel"
 grep -Fqx 'writable runtime sentinel' "$immutable_source/target/interop-runtime-sentinel"
-authenticated_tool_dir="$(find /var/tmp/oxidedns-large-concurrent-resume/fake-host -mindepth 1 -maxdepth 1 \
+authenticated_tool_dir="$(find /var/tmp/borondns-large-concurrent-resume/fake-host -mindepth 1 -maxdepth 1 \
     -type d -name 'tools-attempt.*' -print -quit)"
 [[ -d "$authenticated_tool_dir" && "$(stat -c %u "$authenticated_tool_dir")" == 0 &&
 "$(stat -c %a "$authenticated_tool_dir")" == 555 ]]
@@ -7153,7 +7155,7 @@ chmod +x "$fd_tool_fixture/trusted-cargo" "$fd_tool_fixture/poison/cargo"
     FD_TOOL_LOG="$fd_tool_fixture/result" PATH="$fd_tool_fixture/exact:$fd_tool_fixture/poison:/usr/bin:/bin" cargo
 )
 grep -Fqx trusted "$fd_tool_fixture/result"
-remove_readonly_test_tree /var/tmp/oxidedns-large-concurrent-resume
+remove_readonly_test_tree /var/tmp/borondns-large-concurrent-resume
 partial_plan="$workdir/partial-plan"
 mkdir -p "$partial_plan"
 cp "$plan_dir/campaign.env" "$partial_plan/campaign.env"
@@ -7171,10 +7173,10 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >"$FAKE_SSH_LOG"' \
 chmod +x "$workdir/fakebin/ssh"
 PATH="$workdir/fakebin:$PATH" FAKE_SSH_LOG="$workdir/ssh.log" FAKE_SSH_STDIN="$workdir/ssh.stdin" \
     "$repo_root/scripts/large-surface-soak-campaign.sh" resume --evidence-dir "$plan_dir"
-grep -Fq 'OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s' "$workdir/ssh.log"
+grep -Fq 'BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s' "$workdir/ssh.log"
 # This is a literal fragment of the generated remote script.
 # shellcheck disable=SC2016
-grep -Fq 'remote_lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"' "$workdir/ssh.stdin"
+grep -Fq 'remote_lock_root="/tmp/borondns-campaign-locks-$(id -u)"' "$workdir/ssh.stdin"
 grep -Fq -- '--resume' "$workdir/ssh.stdin"
 PATH="$workdir/fakebin:$PATH" FAKE_SSH_LOG="$workdir/ssh.log" FAKE_SSH_STDIN="$workdir/ssh.stdin" \
     FAKE_SSH_RESULTS_MISSING=1 "$repo_root/scripts/large-surface-soak-campaign.sh" resume \
@@ -7202,7 +7204,7 @@ fi
 fuzz_existing="$workdir/fuzz-existing"
 mkdir -p "$fuzz_existing"
 printf 'operator sentinel\n' >"$fuzz_existing/sentinel.txt"
-if OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+if BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --dry-run --duration 1 --target dns_datagram \
     --evidence-dir "$fuzz_existing"; then
     printf 'fuzz runner accepted a non-empty evidence directory\n' >&2
@@ -7213,7 +7215,7 @@ grep -Fqx 'operator sentinel' "$fuzz_existing/sentinel.txt"
 
 duplicate_fuzz_evidence="$workdir/duplicate-fuzz-evidence"
 duplicate_fuzz_build="$workdir/duplicate-fuzz-build"
-if OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 CARGO_TARGET_DIR="$duplicate_fuzz_build" \
+if BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 CARGO_TARGET_DIR="$duplicate_fuzz_build" \
     "$repo_root/scripts/fuzz-campaign.sh" \
     --dry-run --duration 1 --target dns_datagram --target dns_datagram \
     --evidence-dir "$duplicate_fuzz_evidence"; then
@@ -7225,7 +7227,7 @@ fi
 fuzz_symlink_victim="$workdir/fuzz-symlink-victim"
 mkdir "$fuzz_symlink_victim"
 ln -s "$fuzz_symlink_victim" "$workdir/fuzz-symlink-evidence"
-if OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+if BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --dry-run --duration 1 --target dns_datagram \
     --evidence-dir "$workdir/fuzz-symlink-evidence"; then
     printf 'fuzz runner accepted a symlinked evidence directory\n' >&2
@@ -7235,7 +7237,7 @@ fi
 fuzz_build_victim="$workdir/fuzz-build-victim"
 mkdir "$fuzz_build_victim"
 ln -s "$fuzz_build_victim" "$workdir/fuzz-build-link"
-if OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 CARGO_TARGET_DIR="$workdir/fuzz-build-link" \
+if BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 CARGO_TARGET_DIR="$workdir/fuzz-build-link" \
     "$repo_root/scripts/fuzz-campaign.sh" \
     --dry-run --duration 1 --target dns_datagram --evidence-dir "$workdir/fuzz-build-evidence"; then
     printf 'fuzz runner accepted a symlinked build directory\n' >&2
@@ -7250,7 +7252,7 @@ cp "$repo_root/scripts/fuzz-campaign.sh" "$poison_repo/scripts/fuzz-campaign.sh"
 cp "$repo_root/scripts/campaign-env.sh" "$poison_repo/scripts/campaign-env.sh"
 cp "$repo_root/scripts/campaign-lock-helper.py" "$poison_repo/scripts/campaign-lock-helper.py"
 git -C "$poison_repo" add -f scripts/fuzz-campaign.sh scripts/campaign-env.sh scripts/campaign-lock-helper.py
-git -C "$poison_repo" -c user.name=OxideDNS -c user.email=tests@oxidedns.invalid \
+git -C "$poison_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
     commit -qm 'materialize current fuzz campaign harness'
 mkdir -p "$poison_repo/target" "$poison_repo/fuzz/target" "$workdir/poison-build" "$workdir/poison-evidence" "$workdir/poison-bin" "$workdir/trusted-fuzz-bin"
 touch "$poison_repo/target/operator-sentinel" "$poison_repo/fuzz/target/operator-sentinel"
@@ -7489,7 +7491,7 @@ fi
 grep -Fq 'refusing fuzz campaign from dirty or untracked source' "$workdir/dirty-fuzz-default.stderr"
 [[ ! -e "$dirty_fuzz_evidence" ]]
 
-if GITHUB_ACTIONS=true OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+if GITHUB_ACTIONS=true BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     PATH="$workdir/trusted-fuzz-bin:$workdir/poison-bin:$PATH" CARGO="$workdir/poison-bin/cargo" \
     TRUSTED_FUZZ_LOG="$workdir/dirty-fuzz-ci.log" MALICIOUS_FUZZ_LOG="$workdir/malicious-cargo-fuzz.log" \
     CARGO_TARGET_DIR="$dirty_fuzz_build" \
@@ -7502,7 +7504,7 @@ grep -Fq 'dirty-source fuzz override is forbidden in CI and release contexts' "$
 [[ ! -e "$dirty_fuzz_ci_evidence" ]]
 
 set +e
-OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     PATH="$workdir/trusted-fuzz-bin:$workdir/poison-bin:$PATH" CARGO="$workdir/poison-bin/cargo" \
     TRUSTED_FUZZ_LOG="$workdir/dirty-fuzz-override.log" MALICIOUS_FUZZ_LOG="$workdir/malicious-cargo-fuzz.log" \
     CARGO_TARGET_DIR="$dirty_fuzz_build" \
@@ -7547,8 +7549,8 @@ chmod +x "$bounded_fuzz_bin/cargo-fuzz"
 bounded_fuzz_started="$SECONDS"
 set +e
 PATH="$bounded_fuzz_bin:$workdir/poison-bin:$PATH" CARGO="$workdir/poison-bin/cargo" \
-    CARGO_TARGET_DIR="$bounded_fuzz_build" OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS=1 \
-    OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS=1 \
+    CARGO_TARGET_DIR="$bounded_fuzz_build" BORONDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS=1 \
+    BORONDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS=1 \
     "$poison_repo/scripts/fuzz-campaign.sh" --duration 1 --target dns_datagram \
     --evidence-dir "$bounded_fuzz_evidence"
 bounded_fuzz_status=$?
@@ -7570,8 +7572,8 @@ chmod +x "$preflight_hang_bin/cargo-fuzz"
 preflight_hang_started="$SECONDS"
 set +e
 PATH="$preflight_hang_bin:$workdir/poison-bin:$PATH" CARGO="$workdir/poison-bin/cargo" \
-    CARGO_TARGET_DIR="$preflight_hang_build" OXIDEDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS=1 \
-    OXIDEDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS=1 \
+    CARGO_TARGET_DIR="$preflight_hang_build" BORONDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS=1 \
+    BORONDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS=1 \
     "$poison_repo/scripts/fuzz-campaign.sh" --duration 1 --target dns_datagram \
     --evidence-dir "$preflight_hang_evidence" >/dev/null 2>&1
 preflight_hang_status=$?
@@ -7591,7 +7593,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
     'printf "fake rustup %s\\n" "$*"' 'exit 0' >"$provenance_bin/rustup"
 chmod +x "$provenance_bin/selected-cargo" "$provenance_bin/selected-rustc" "$provenance_bin/rustup"
 PATH="$provenance_bin:$PATH" PROVENANCE_BIN="$provenance_bin" CARGO_TARGET_DIR="$provenance_build" \
-    OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --toolchain nightly --dry-run --duration 1 \
     --target dns_datagram --evidence-dir "$provenance_evidence"
 grep -Fqx "cargo_path=$provenance_bin/selected-cargo" "$provenance_evidence/tool-versions.txt"
@@ -7607,13 +7609,13 @@ automatic_fuzz_tmp="$workdir/automatic-fuzz-tmp"
 automatic_fuzz_evidence="$workdir/automatic-fuzz-evidence"
 mkdir -m 0700 "$automatic_fuzz_tmp"
 TMPDIR="$automatic_fuzz_tmp" PATH="$provenance_bin:$PATH" PROVENANCE_BIN="$provenance_bin" \
-    OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --toolchain nightly --dry-run --duration 1 \
     --target dns_datagram --evidence-dir "$automatic_fuzz_evidence"
 automatic_fuzz_build="$(sed -n 's/^cargo_target_dir=//p' "$automatic_fuzz_evidence/config.txt")"
-[[ "$automatic_fuzz_build" == "$automatic_fuzz_tmp/oxidedns-fuzz-builds-$(id -u)/run."* ]]
+[[ "$automatic_fuzz_build" == "$automatic_fuzz_tmp/borondns-fuzz-builds-$(id -u)/run."* ]]
 [[ ! -e "$automatic_fuzz_build" ]]
-[[ -z "$(find "$automatic_fuzz_tmp/oxidedns-fuzz-builds-$(id -u)" \
+[[ -z "$(find "$automatic_fuzz_tmp/borondns-fuzz-builds-$(id -u)" \
     -mindepth 1 -maxdepth 1 -name 'run.*' -print -quit)" ]]
 
 automatic_fuzz_failure_tmp="$workdir/automatic-fuzz-failure-tmp"
@@ -7622,14 +7624,14 @@ mkdir -m 0700 "$automatic_fuzz_failure_tmp" "$automatic_fuzz_failure_evidence"
 printf 'operator-owned evidence\n' >"$automatic_fuzz_failure_evidence/sentinel"
 set +e
 TMPDIR="$automatic_fuzz_failure_tmp" PATH="$provenance_bin:$PATH" PROVENANCE_BIN="$provenance_bin" \
-    OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --toolchain nightly --dry-run --duration 1 \
     --target dns_datagram --evidence-dir "$automatic_fuzz_failure_evidence" >/dev/null 2>&1
 automatic_fuzz_failure_status=$?
 set -e
 [[ "$automatic_fuzz_failure_status" -ne 0 ]]
 grep -Fqx 'operator-owned evidence' "$automatic_fuzz_failure_evidence/sentinel"
-[[ -z "$(find "$automatic_fuzz_failure_tmp/oxidedns-fuzz-builds-$(id -u)" \
+[[ -z "$(find "$automatic_fuzz_failure_tmp/borondns-fuzz-builds-$(id -u)" \
     -mindepth 1 -maxdepth 1 -name 'run.*' -print -quit)" ]]
 
 provenance_saved_path="$PATH"
@@ -7651,7 +7653,7 @@ materialize_campaign_helpers "$fuzz_remote_repo"
 
 for source_preflight_mode in dirty invalid-head; do
     source_preflight_root="$workdir/fuzz-source-preflight-$source_preflight_mode"
-    if env -u OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY \
+    if env -u BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY \
         PATH="$source_preflight_bin:$PATH" FAKE_GIT_HEAD="$source_preflight_head" \
         FAKE_GIT_SOURCE_MODE="$source_preflight_mode" \
         "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
@@ -7702,7 +7704,7 @@ for rejected_fuzz_duration in \
     9223372036854775807 \
     "$((9223372036854775807 - $(date +%s)))"; do
     rejected_fuzz_evidence="$workdir/rejected-fuzz-$rejected_fuzz_duration"
-    if OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+    if BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
         "$repo_root/scripts/fuzz-campaign.sh" --list-targets --duration "$rejected_fuzz_duration" \
         --evidence-dir "$rejected_fuzz_evidence" >/dev/null; then
         printf 'direct fuzz runner accepted unsupported duration: %s\n' "$rejected_fuzz_duration" >&2
@@ -7711,7 +7713,7 @@ for rejected_fuzz_duration in \
     [[ ! -e "$rejected_fuzz_evidence" ]]
 done
 largest_fuzz_boundary_evidence="$workdir/largest-fuzz-boundary"
-OXIDEDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
+BORONDNS_FUZZ_ALLOW_DIRTY_NON_RELEASE=1 \
     "$repo_root/scripts/fuzz-campaign.sh" --list-targets --duration 9223372036 \
     --evidence-dir "$largest_fuzz_boundary_evidence" >/dev/null
 [[ ! -e "$largest_fuzz_boundary_evidence" ]]
@@ -7812,13 +7814,13 @@ mkdir "$expired_window_bin"
 # shellcheck disable=SC2016
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'input="$(mktemp)"; trap '\''rm -f "$input"'\'' EXIT; cat >"$input"' \
-    'if [[ "$*" == *OXIDEDNS_CAMPAIGN_CLASSIFY_ONLY=1* ]]; then if grep -Fq -- "-host-sampler-" "$input"; then printf "sampler\n" >>"$EXPIRED_WINDOW_SSH_LOG"; printf "sampler_resume_classification=%s\n" "$EXPIRED_WINDOW_SAMPLER_CLASSIFICATION"; else printf "target\n" >>"$EXPIRED_WINDOW_SSH_LOG"; printf "target_resume_classification=%s\n" "$EXPIRED_WINDOW_TARGET_CLASSIFICATION"; fi; else printf "mutation\n" >>"$EXPIRED_WINDOW_MUTATION_LOG"; fi' \
+    'if [[ "$*" == *BORONDNS_CAMPAIGN_CLASSIFY_ONLY=1* ]]; then if grep -Fq -- "-host-sampler-" "$input"; then printf "sampler\n" >>"$EXPIRED_WINDOW_SSH_LOG"; printf "sampler_resume_classification=%s\n" "$EXPIRED_WINDOW_SAMPLER_CLASSIFICATION"; else printf "target\n" >>"$EXPIRED_WINDOW_SSH_LOG"; printf "target_resume_classification=%s\n" "$EXPIRED_WINDOW_TARGET_CLASSIFICATION"; fi; else printf "mutation\n" >>"$EXPIRED_WINDOW_MUTATION_LOG"; fi' \
     >"$expired_window_bin/ssh"
 chmod +x "$expired_window_bin/ssh"
 expired_launch_plan="$workdir/expired-fuzz-launch-plan"
 if PATH="$expired_window_bin:$PATH" \
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
-    OXIDEDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$expired_fuzz_created_utc" \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+    BORONDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$expired_fuzz_created_utc" \
     EXPIRED_WINDOW_SSH_LOG="$expired_window_ssh_log" \
     EXPIRED_WINDOW_MUTATION_LOG="$expired_window_mutation_log" \
     EXPIRED_WINDOW_SAMPLER_CLASSIFICATION=active \
@@ -7833,14 +7835,14 @@ fi
 [[ ! -e "$expired_window_ssh_log" && ! -e "$expired_window_mutation_log" ]]
 
 expired_resume_plan="$workdir/expired-fuzz-resume-plan"
-OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
-    OXIDEDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$expired_fuzz_created_utc" \
+BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+    BORONDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$expired_fuzz_created_utc" \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
     --evidence-dir "$expired_resume_plan" --campaign-id expired-resume --host fake-host \
     --remote-repo "$fuzz_remote_repo" --remote-evidence "$workdir/expired-resume-remote" \
     --duration 1 --target dns_datagram
 if PATH="$expired_window_bin:$PATH" \
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
     EXPIRED_WINDOW_SSH_LOG="$expired_window_ssh_log" \
     EXPIRED_WINDOW_MUTATION_LOG="$expired_window_mutation_log" \
     EXPIRED_WINDOW_SAMPLER_CLASSIFICATION=active \
@@ -7855,7 +7857,7 @@ grep -Fqx target "$expired_window_ssh_log"
 [[ ! -e "$expired_window_mutation_log" ]]
 rm "$expired_window_ssh_log"
 PATH="$expired_window_bin:$PATH" \
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
     EXPIRED_WINDOW_SSH_LOG="$expired_window_ssh_log" \
     EXPIRED_WINDOW_MUTATION_LOG="$expired_window_mutation_log" \
     EXPIRED_WINDOW_SAMPLER_CLASSIFICATION=active \
@@ -7866,7 +7868,7 @@ PATH="$expired_window_bin:$PATH" \
 for expired_sampler_state in absent failed hard-stopped; do
     rm "$expired_window_ssh_log"
     if PATH="$expired_window_bin:$PATH" \
-        OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+        BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
         EXPIRED_WINDOW_SSH_LOG="$expired_window_ssh_log" \
         EXPIRED_WINDOW_MUTATION_LOG="$expired_window_mutation_log" \
         EXPIRED_WINDOW_SAMPLER_CLASSIFICATION="$expired_sampler_state" \
@@ -7880,7 +7882,7 @@ for expired_sampler_state in absent failed hard-stopped; do
 done
 rm "$expired_window_ssh_log"
 PATH="$expired_window_bin:$PATH" \
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 \
     EXPIRED_WINDOW_SSH_LOG="$expired_window_ssh_log" \
     EXPIRED_WINDOW_MUTATION_LOG="$expired_window_mutation_log" \
     EXPIRED_WINDOW_SAMPLER_CLASSIFICATION=complete \
@@ -7997,7 +7999,7 @@ fuzz_unit_plan="$workdir/fuzz-unit-plan"
 "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
     --evidence-dir "$fuzz_unit_plan" --campaign-id fuzz-unit-test --host h1 \
     --duration 1 --target dns_datagram --no-sampler
-awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $5="oxidedns-fuzz-fuzz-unit-test-0-wrong.service" } { print }' \
+awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $5="borondns-fuzz-fuzz-unit-test-0-wrong.service" } { print }' \
     "$fuzz_unit_plan/assignments.tsv" >"$fuzz_unit_plan/assignments.tsv.mutated"
 mv "$fuzz_unit_plan/assignments.tsv.mutated" "$fuzz_unit_plan/assignments.tsv"
 campaign_manifest_write "$fuzz_unit_plan"
@@ -8019,7 +8021,7 @@ fuzz_sampler_unit_plan="$workdir/fuzz-sampler-unit-plan"
 "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
     --evidence-dir "$fuzz_sampler_unit_plan" --campaign-id fuzz-sampler-unit-test --host h1 \
     --duration 1 --target dns_datagram
-awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $3="oxidedns-fuzz-fuzz-sampler-unit-test-wrong.service" } { print }' \
+awk -F '\t' 'BEGIN { OFS="\t" } NR == 2 { $3="borondns-fuzz-fuzz-sampler-unit-test-wrong.service" } { print }' \
     "$fuzz_sampler_unit_plan/host-samplers.tsv" >"$fuzz_sampler_unit_plan/host-samplers.tsv.mutated"
 mv "$fuzz_sampler_unit_plan/host-samplers.tsv.mutated" "$fuzz_sampler_unit_plan/host-samplers.tsv"
 campaign_manifest_write "$fuzz_sampler_unit_plan"
@@ -8103,12 +8105,12 @@ grep -Fq 'campaign_lock_helper_snapshot_b64=' "$fuzz_command_file"
 grep -Fq 'campaign_env_snapshot_b64=' "$fuzz_sampler_command_file"
 grep -Fq 'campaign_lock_helper_snapshot_b64=' "$fuzz_sampler_command_file"
 # shellcheck disable=SC2016 # Literal fragments of the generated remote scripts.
-grep -Fq 'OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$fuzz_command_file"
+grep -Fq 'BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$fuzz_command_file"
 # shellcheck disable=SC2016
-grep -Fq 'OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$fuzz_sampler_command_file"
+grep -Fq 'BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"' "$fuzz_sampler_command_file"
 [[ "$(grep -Fc 'TimeoutStopSec=30' "$fuzz_command_file")" -eq 1 ]]
 [[ "$(grep -Fc 'TimeoutStopSec=30' "$fuzz_sampler_command_file")" -eq 1 ]]
-grep -Fq 'OXIDEDNS_FUZZ_AUTHENTICATED_CARGO=' "$fuzz_command_file"
+grep -Fq 'BORONDNS_FUZZ_AUTHENTICATED_CARGO=' "$fuzz_command_file"
 grep -Fq 'exec 9<' "$fuzz_command_file"
 if grep -Fq 'Environment=PATH=/home/codex/.cargo/bin:' "$fuzz_command_file"; then
     printf 'fuzz unit retained a user-writable executable search path\n' >&2
@@ -8120,7 +8122,7 @@ grep -Fq 'timeout --preserve-status --signal=KILL "$probe_timeout" systemctl is-
     "$fuzz_sampler_command_file"
 # This is a literal fragment of the generated remote script.
 # shellcheck disable=SC2016
-grep -Fq 'lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"' "$fuzz_command_file"
+grep -Fq 'lock_root="/tmp/borondns-campaign-locks-$(id -u)"' "$fuzz_command_file"
 # shellcheck disable=SC2016
 grep -Fq 'campaign_acquire_private_lock "$lock_root" "$systemd_unit:campaign"' "$fuzz_command_file"
 PATH="$workdir/fakebin:$PATH" FAKE_SSH_LOG="$workdir/ssh.log" FAKE_SSH_STDIN="$workdir/ssh.stdin" \
@@ -8139,7 +8141,7 @@ first_remote_write_line="$(grep -nF 'ensure_owned_dir "$remote_parent" "$remote_
 ((dirty_check_line < helper_source_line))
 [[ "$(grep -c 'actual_commit=.*rev-parse HEAD' "$fuzz_command_file")" -eq 2 ]]
 grep -Fq 'immutable fuzz snapshot is dirty; refusing evidence writes' "$fuzz_command_file"
-grep -Fq 'remote_build_root=/var/tmp/oxidedns-fuzz-' "$fuzz_command_file"
+grep -Fq 'remote_build_root=/var/tmp/borondns-fuzz-' "$fuzz_command_file"
 # shellcheck disable=SC2016
 grep -Fq 'export CARGO_TARGET_DIR="$target_dir"' "$fuzz_command_file"
 active_check_line="$(grep -n 'unit_is_exactly_active.*systemd_unit' "$fuzz_command_file" | head -1 | cut -d: -f1)"
@@ -8211,7 +8213,7 @@ if "$large_failed_plan/commands/h1-launch.sh"; then
 fi
 [[ -z "$(find "$large_host_victim" -mindepth 1 -print -quit)" ]]
 rm "$large_failed_remote/host/h1"
-large_build_parent=/var/tmp/oxidedns-large-failed-remote-status
+large_build_parent=/var/tmp/borondns-large-failed-remote-status
 large_build_victim="$workdir/large-build-victim"
 remove_readonly_test_tree "$large_build_parent"
 mkdir "$large_build_victim"
@@ -8240,7 +8242,7 @@ if "$fuzz_sampler_command_file"; then
 fi
 [[ ! -e "$fuzz_remote_evidence" ]]
 rm -f "$fuzz_remote_repo/untracked-fixture"
-git -C "$fuzz_remote_repo" -c user.name=OxideDNS -c user.email=tests@oxidedns.invalid \
+git -C "$fuzz_remote_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
     commit -qm 'mismatch fixture' --allow-empty
 if "$fuzz_command_file"; then
     printf 'fuzz launch accepted a mismatched remote commit\n' >&2
@@ -8253,6 +8255,7 @@ if "$fuzz_sampler_command_file"; then
 fi
 [[ ! -e "$fuzz_remote_evidence" ]]
 git -C "$fuzz_remote_repo" reset -q --hard "$source_commit"
+materialize_campaign_helpers "$fuzz_remote_repo"
 
 fake_sampler_bin="$workdir/fake-sampler-bin"
 fake_sampler_state="$workdir/fake-sampler-state"
@@ -8269,18 +8272,18 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
 printf '%s\n' '#!/usr/bin/env bash' \
     'if [[ "${1:-}" == show ]]; then' \
     '  if [[ "${FAKE_SYSTEMCTL_PROBE_FAIL:-0}" == 1 ]]; then exit 71; fi' \
-    '  unit="$2"; fragment="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}/$unit"; active="$FAKE_SAMPLER_STATE/active-${unit//\//_}"; loaded_state="$FAKE_SAMPLER_STATE/loaded-${unit//\//_}"' \
+    '  unit="$2"; fragment="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}/$unit"; active="$FAKE_SAMPLER_STATE/active-${unit//\//_}"; loaded_state="$FAKE_SAMPLER_STATE/loaded-${unit//\//_}"' \
     '  if [[ "${FAKE_SYSTEMCTL_CLEANUP_LOADED:-0}" == 1 ]]; then if [[ -f "$fragment" ]]; then runner="$(sed -n "s/^ExecStart=//p" "$fragment")"; printf "%s\n" "$runner" >"$loaded_state"; elif [[ -f "$loaded_state" ]]; then runner="$(cat "$loaded_state")"; else runner=""; fi; if [[ "${FAKE_SYSTEMCTL_POST_ACTIVE:-0}" == 1 && -f "$FAKE_SAMPLER_STATE/daemon-reloaded" && -z "$runner" ]]; then printf "LoadState=not-found\nActiveState=active\nSubState=running\nMainPID=4242\nControlPID=0\nJob=\nControlGroup=\nFragmentPath=\nExecStart=\n"; elif [[ -n "$runner" ]]; then printf "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\nControlPID=0\nJob=\nControlGroup=\nFragmentPath=%s\nExecStart={ path=%s ; }\n" "$fragment" "$runner"; else printf "LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0\nControlPID=0\nJob=\nControlGroup=\nFragmentPath=\nExecStart=\n"; fi; elif [[ "${FAKE_SYSTEMCTL_ACTIVE:-0}" == 1 ]]; then printf "LoadState=loaded\nActiveState=active\nFragmentPath=/wrong/unit\nExecStart={ path=/wrong/runner ; }\n"; elif [[ "${FAKE_SYSTEMCTL_FOREIGN_INACTIVE:-0}" == 1 ]]; then printf "LoadState=loaded\nActiveState=inactive\nFragmentPath=/wrong/unit\nExecStart={ path=/wrong/runner ; }\n"; elif [[ "${FAKE_SYSTEMCTL_LOADED_INACTIVE:-0}" == 1 ]]; then runner="$(sed -n "s/^ExecStart=//p" "$fragment")"; printf "LoadState=loaded\nActiveState=inactive\nFragmentPath=%s\nExecStart={ path=/wrapper%ssuffix ; }\n" "$fragment" "$runner"; elif [[ -e "$active" ]]; then runner="$(sed -n "s/^ExecStart=//p" "$fragment")"; if [[ "${FAKE_SYSTEMCTL_WRAPPED:-0}" == 1 ]]; then loaded="/wrapper${runner}suffix"; else loaded="$runner"; fi; printf "LoadState=loaded\nActiveState=active\nFragmentPath=%s\nExecStart={ path=%s ; }\n" "$fragment" "$loaded"; rm -f "$active"; else printf "LoadState=not-found\nActiveState=inactive\nFragmentPath=\nExecStart=\n"; fi' \
     '  exit 0' \
     'fi' \
     'exit 0' >"$fake_sampler_bin/systemctl"
 chmod +x "$fake_sampler_bin/sudo" "$fake_sampler_bin/systemctl"
 ln -s /usr/bin/true "$fake_sampler_bin/docker"
-export OXIDEDNS_CAMPAIGN_UNIT_ROOT="$fake_sampler_state/units"
+export BORONDNS_CAMPAIGN_UNIT_ROOT="$fake_sampler_state/units"
 export FAKE_SAMPLER_READY_ROOT="$fuzz_sample_dir"
-sampler_lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
-sampler_lock_namespace="oxidedns-fuzz-operations-fuzz-test-host-sampler-fake-host:setup"
-sampler_setup_lock="$sampler_lock_root/.oxidedns-campaign-locks/$(printf '%s' "$sampler_lock_namespace" | sha256sum | awk '{ print $1 }').lock"
+sampler_lock_root="/tmp/borondns-campaign-locks-$(id -u)"
+sampler_lock_namespace="borondns-fuzz-operations-fuzz-test-host-sampler-fake-host:setup"
+sampler_setup_lock="$sampler_lock_root/.borondns-campaign-locks/$(printf '%s' "$sampler_lock_namespace" | sha256sum | awk '{ print $1 }').lock"
 
 if PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" FAKE_SYSTEMCTL_ACTIVE=1 \
     "$fuzz_command_file"; then
@@ -8308,7 +8311,7 @@ for hostile_command in \
     fi
 done
 [[ ! -e "$fuzz_remote_evidence/fuzz/000-dns_datagram" ]]
-[[ ! -e "$OXIDEDNS_CAMPAIGN_UNIT_ROOT" ]]
+[[ ! -e "$BORONDNS_CAMPAIGN_UNIT_ROOT" ]]
 if PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" FAKE_SYSTEMCTL_PROBE_FAIL=1 \
     "$fuzz_command_file"; then
     printf 'fuzz launch treated a failed systemctl probe as inactivity\n' >&2
@@ -8320,14 +8323,14 @@ hostile_unit="$(tail -n +2 "$fuzz_plan_dir/assignments.tsv" | cut -f5)"
 hostile_target_root="$fuzz_remote_evidence/fuzz/000-dns_datagram"
 hostile_attempt="$hostile_target_root/attempts/attempt.hostile"
 hostile_runner="$hostile_attempt/run.sh"
-hostile_fragment="$OXIDEDNS_CAMPAIGN_UNIT_ROOT/$hostile_unit"
-mkdir -p "$hostile_attempt" "$OXIDEDNS_CAMPAIGN_UNIT_ROOT"
+hostile_fragment="$BORONDNS_CAMPAIGN_UNIT_ROOT/$hostile_unit"
+mkdir -p "$hostile_attempt" "$BORONDNS_CAMPAIGN_UNIT_ROOT"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$hostile_runner"
 chmod +x "$hostile_runner"
 printf 'ExecStart=%s\n' "$hostile_runner" >"$hostile_fragment"
 touch "$fake_sampler_state/active-${hostile_unit//\//_}"
 if PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" FAKE_SYSTEMCTL_WRAPPED=1 \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"; then
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"; then
     printf 'fuzz resume accepted a wrapper/suffix loaded ExecStart identity\n' >&2
     exit 1
 fi
@@ -8360,7 +8363,7 @@ if PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sam
 fi
 [[ -f "$hostile_fragment" && -f "$hostile_runner" ]]
 
-cleanup_lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+cleanup_lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 mkdir -p "$cleanup_lock_root"
 chmod 0700 "$cleanup_lock_root"
 cleanup_fuzz_plan="$workdir/cleanup-fuzz-plan"
@@ -8372,10 +8375,10 @@ cleanup_fuzz_remote="$workdir/cleanup-fuzz-remote"
 IFS=$'\t' read -r _ _ _ cleanup_fuzz_target_dir cleanup_fuzz_unit _ \
     < <(tail -n +2 "$cleanup_fuzz_plan/assignments.tsv")
 cleanup_fuzz_attempt="$cleanup_fuzz_target_dir/attempts/attempt.cleanup"
-cleanup_fuzz_fragment="$OXIDEDNS_CAMPAIGN_UNIT_ROOT/$cleanup_fuzz_unit"
-cleanup_fuzz_build=/var/tmp/oxidedns-fuzz-cleanup-retry/000-dns_datagram
+cleanup_fuzz_fragment="$BORONDNS_CAMPAIGN_UNIT_ROOT/$cleanup_fuzz_unit"
+cleanup_fuzz_build=/var/tmp/borondns-fuzz-cleanup-retry/000-dns_datagram
 cleanup_fuzz_loaded="$fake_sampler_state/loaded-${cleanup_fuzz_unit//\//_}"
-mkdir -p "$cleanup_fuzz_attempt" "$cleanup_fuzz_build" "$OXIDEDNS_CAMPAIGN_UNIT_ROOT"
+mkdir -p "$cleanup_fuzz_attempt" "$cleanup_fuzz_build" "$BORONDNS_CAMPAIGN_UNIT_ROOT"
 cleanup_fuzz_candidate="$cleanup_fuzz_attempt/run.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$cleanup_fuzz_candidate"
 chmod +x "$cleanup_fuzz_candidate"
@@ -8384,14 +8387,14 @@ cleanup_fuzz_runner="$campaign_published_runner"
 cleanup_fuzz_fragment_candidate="$cleanup_fuzz_attempt/unit.service"
 cat >"$cleanup_fuzz_fragment_candidate" <<UNIT
 [Unit]
-Description=OxideDNS cleanup fuzz fixture
+Description=BoronDNS cleanup fuzz fixture
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=codex
-WorkingDirectory=/home/codex/oxidedns
+WorkingDirectory=/home/codex/borondns
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LimitNOFILE=65536
 ExecStart=$cleanup_fuzz_runner
@@ -8405,7 +8408,7 @@ KillMode=control-group
 WantedBy=multi-user.target
 UNIT
 sudo -n install -m 0644 -o root -g root "$cleanup_fuzz_fragment_candidate" "$cleanup_fuzz_fragment"
-cleanup_fuzz_staged="$OXIDEDNS_CAMPAIGN_UNIT_ROOT/.$(basename "$cleanup_fuzz_fragment").oxidedns-staged.interrupted"
+cleanup_fuzz_staged="$BORONDNS_CAMPAIGN_UNIT_ROOT/.$(basename "$cleanup_fuzz_fragment").borondns-staged.interrupted"
 printf '[Unit]\nDescription=interrupted' >"$cleanup_fuzz_fragment_candidate"
 sudo -n install -m 0600 -o root -g root "$cleanup_fuzz_fragment_candidate" "$cleanup_fuzz_staged"
 touch "$cleanup_lock_root/${cleanup_fuzz_unit%.service}.campaign.lock"
@@ -8432,8 +8435,7 @@ if PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sam
 fi
 [[ ! -e "$cleanup_malicious_marker" && -f "$cleanup_fuzz_fragment" && -d "$cleanup_fuzz_build" ]]
 git -C "$fuzz_remote_repo" reset -q --hard "$source_commit"
-install -m "$(stat -c %a "$repo_root/scripts/campaign-env.sh")" \
-    "$repo_root/scripts/campaign-env.sh" "$fuzz_remote_repo/scripts/campaign-env.sh"
+materialize_campaign_helpers "$fuzz_remote_repo"
 
 mv "$cleanup_fuzz_build" "$cleanup_fuzz_build.renamed"
 if PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
@@ -8475,7 +8477,7 @@ PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sample
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" cleanup --evidence-dir "$cleanup_fuzz_plan"
 [[ ! -e "$cleanup_fuzz_loaded" ]]
 cleanup_fuzz_retained="$(find "$(dirname "$cleanup_fuzz_build")" -mindepth 1 -maxdepth 1 \
-    -type d -name '.000-dns_datagram.oxidedns-remove.*' -print -quit)"
+    -type d -name '.000-dns_datagram.borondns-remove.*' -print -quit)"
 [[ ! -e "$cleanup_fuzz_build" && -n "$cleanup_fuzz_retained" &&
     ! -e "$(dirname "$(dirname "$cleanup_fuzz_runner")")" ]]
 
@@ -8488,9 +8490,9 @@ cleanup_large_remote="$workdir/cleanup-large-remote"
 IFS=$'\t' read -r _ _ cleanup_large_unit _ \
     < <(tail -n +2 "$cleanup_large_plan/assignments.tsv")
 cleanup_large_attempt="$cleanup_large_remote/launch/${cleanup_large_unit%.service}-attempts/attempt.cleanup"
-cleanup_large_fragment="$OXIDEDNS_CAMPAIGN_UNIT_ROOT/$cleanup_large_unit"
-cleanup_large_build=/var/tmp/oxidedns-large-cleanup-large/h1
-mkdir -p "$cleanup_large_attempt" "$cleanup_large_build" "$OXIDEDNS_CAMPAIGN_UNIT_ROOT"
+cleanup_large_fragment="$BORONDNS_CAMPAIGN_UNIT_ROOT/$cleanup_large_unit"
+cleanup_large_build=/var/tmp/borondns-large-cleanup-large/h1
+mkdir -p "$cleanup_large_attempt" "$cleanup_large_build" "$BORONDNS_CAMPAIGN_UNIT_ROOT"
 sudo -n chown root:root "$cleanup_large_build"
 cleanup_large_candidate="$cleanup_large_attempt/run.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$cleanup_large_candidate"
@@ -8500,14 +8502,14 @@ cleanup_large_runner="$campaign_published_runner"
 cleanup_large_fragment_candidate="$cleanup_large_attempt/unit.service"
 cat >"$cleanup_large_fragment_candidate" <<UNIT
 [Unit]
-Description=OxideDNS cleanup large-soak fixture
+Description=BoronDNS cleanup large-soak fixture
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
 [Service]
 Type=simple
 User=codex
-WorkingDirectory=/home/codex/oxidedns
+WorkingDirectory=/home/codex/borondns
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=CARGO_HOME=/home/codex/.cargo
 Environment=RUSTUP_HOME=/home/codex/.rustup
@@ -8526,7 +8528,7 @@ UNIT
 sudo -n install -m 0644 -o root -g root "$cleanup_large_fragment_candidate" "$cleanup_large_fragment"
 touch "$cleanup_lock_root/${cleanup_large_unit}.campaign.lock"
 chmod 0600 "$cleanup_lock_root/${cleanup_large_unit}.campaign.lock"
-git -C "$fuzz_remote_repo" -c user.name=OxideDNS -c user.email=tests@oxidedns.invalid \
+git -C "$fuzz_remote_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
     commit -qm 'cleanup mismatch fixture' --allow-empty
 if PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
     FAKE_SYSTEMCTL_CLEANUP_LOADED=1 \
@@ -8536,6 +8538,7 @@ if PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sam
 fi
 [[ -f "$cleanup_large_fragment" && -d "$cleanup_large_build" && -f "$cleanup_large_runner" ]]
 git -C "$fuzz_remote_repo" reset -q --hard "$source_commit"
+materialize_campaign_helpers "$fuzz_remote_repo"
 large_status_identity_bin="$workdir/large-status-identity-bin"
 mkdir "$large_status_identity_bin"
 # shellcheck disable=SC2016
@@ -8545,7 +8548,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
 # shellcheck disable=SC2016
 printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'if [[ "${1:-}" == is-active ]]; then printf "active\n"; exit 0; fi' \
-    'if [[ "${1:-}" == show ]]; then unit="$2"; fragment="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}/$unit"; runner="$(sed -n "s/^ExecStart=//p" "$fragment")"; printf "LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nFragmentPath=%s\nExecStart={ path=%s ; }\nExecMainStatus=0\nExecMainStartTimestamp=\nExecMainExitTimestamp=\n" "$fragment" "$runner"; exit 0; fi' \
+    'if [[ "${1:-}" == show ]]; then unit="$2"; fragment="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}/$unit"; runner="$(sed -n "s/^ExecStart=//p" "$fragment")"; printf "LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nFragmentPath=%s\nExecStart={ path=%s ; }\nExecMainStatus=0\nExecMainStartTimestamp=\nExecMainExitTimestamp=\n" "$fragment" "$runner"; exit 0; fi' \
     'exit 1' >"$large_status_identity_bin/systemctl"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$large_status_identity_bin/journalctl"
 chmod +x "$large_status_identity_bin/ssh" "$large_status_identity_bin/systemctl" \
@@ -8585,7 +8588,7 @@ PATH="$cleanup_ssh_bin:$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sample
 [[ ! -e "$cleanup_large_fragment" ]]
 
 fuzz_target_dir="$fuzz_remote_evidence/fuzz/000-dns_datagram"
-fuzz_build_parent=/var/tmp/oxidedns-fuzz-operations-fuzz-test
+fuzz_build_parent=/var/tmp/borondns-fuzz-operations-fuzz-test
 rm -rf "$fuzz_remote_evidence" "$fake_sampler_state/units"
 mkdir -p "$fake_sampler_state/units"
 remove_readonly_test_tree "$fuzz_build_parent"
@@ -8607,9 +8610,9 @@ post_start_soak_status=$?
 set -e
 [[ "$post_start_soak_status" -ne 0 ]]
 large_failed_unit="$(tail -n +2 "$large_failed_plan/assignments.tsv" | cut -f3)"
-[[ -f "$OXIDEDNS_CAMPAIGN_UNIT_ROOT/$large_failed_unit" ]]
-grep -Fq "/var/tmp/oxidedns-campaign-runners/${large_failed_unit%.service}/attempt." \
-    "$OXIDEDNS_CAMPAIGN_UNIT_ROOT/$large_failed_unit"
+[[ -f "$BORONDNS_CAMPAIGN_UNIT_ROOT/$large_failed_unit" ]]
+grep -Fq "/var/tmp/borondns-campaign-runners/${large_failed_unit%.service}/attempt." \
+    "$BORONDNS_CAMPAIGN_UNIT_ROOT/$large_failed_unit"
 rm -rf "$large_failed_remote/host/h1" "$fake_sampler_state/units"
 mkdir -p "$fake_sampler_state/units"
 remove_readonly_test_tree "$large_build_parent"
@@ -8642,7 +8645,7 @@ set -e
 [[ "$target_setup_failure_status" -ne 0 ]]
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 1 ]]
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 2 ]]
 header_attempt="$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' \
     -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)"
@@ -8650,7 +8653,7 @@ mkdir "$header_attempt/evidence"
 printf 'target\tstatus\texit_status\tduration_seconds\tstarted_epoch_seconds\tended_epoch_seconds\telapsed_nanoseconds\tlog_path\tartifact_dir\tcommand_file\n' \
     >"$header_attempt/evidence/campaign-summary.tsv"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 3 ]]
 complete_attempt="$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' \
     -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)"
@@ -8660,7 +8663,7 @@ printf '%s\n' \
     $'dns_datagram\tpassed\t0\t1\t1\t2\t1000000000\tlog\tartifacts\tcommand' \
     >"$complete_attempt/evidence/campaign-summary.tsv"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 4 ]]
 complete_attempt="$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' \
     -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)"
@@ -8684,7 +8687,7 @@ printf '%s\n' \
     "artifact_manifest_sha256=$(sha256sum "$complete_attempt/evidence/artifact-manifest.sha256" | awk '{ print $1 }')" \
     >"$complete_attempt/evidence/campaign-completed.env"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 4 ]]
 outside_manifest_file="$complete_attempt/outside-fuzz-manifest.txt"
 printf 'outside evidence\n' >"$outside_manifest_file"
@@ -8698,7 +8701,7 @@ printf '%s\n' \
     "artifact_manifest_sha256=$(sha256sum "$complete_attempt/evidence/artifact-manifest.sha256" | awk '{ print $1 }')" \
     >"$complete_attempt/evidence/campaign-completed.env"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_command_file"
 [[ "$(find "$fuzz_target_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 5 ]]
 remove_readonly_test_tree "$fuzz_build_parent"
 
@@ -8707,11 +8710,11 @@ mkdir -p "$fake_sampler_state/units"
 rm -f "$sampler_setup_lock" "$fake_sampler_state"/active-* "$fake_sampler_state/sampler-start-count"
 set +e
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" FAKE_SAMPLER_START_DELAY=1 \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file" \
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file" \
     >"$workdir/concurrent-sampler-one.log" 2>&1 &
 concurrent_sampler_one=$!
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" FAKE_SAMPLER_START_DELAY=1 \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file" \
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file" \
     >"$workdir/concurrent-sampler-two.log" 2>&1 &
 concurrent_sampler_two=$!
 wait "$concurrent_sampler_one"
@@ -8776,7 +8779,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 chmod +x "$sampler_crash_bin/systemctl"
 for crash_number in 1 2; do
     sampler_crash_runner="$(sed -n 's/^ExecStart=//p' \
-        "$OXIDEDNS_CAMPAIGN_UNIT_ROOT/oxidedns-fuzz-operations-fuzz-test-host-sampler-fake-host.service")"
+        "$BORONDNS_CAMPAIGN_UNIT_ROOT/borondns-fuzz-operations-fuzz-test-host-sampler-fake-host.service")"
     sampler_crash_attempt="$(sed -n 's/^sample_dir=//p' "$sampler_crash_runner")"
     PATH="$sampler_crash_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         "$sampler_crash_runner" >"$workdir/sampler-crash-$crash_number.log" 2>&1 &
@@ -8798,7 +8801,7 @@ for crash_number in 1 2; do
     wait "$sampler_crash_pid" 2>/dev/null || true
     [[ ! -e "$sampler_crash_attempt/sampler-completed.env" && ! -e "$sampler_crash_attempt/sampler-hard-stop.env" ]]
     PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-        OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
+        BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
 done
 [[ "$(find "$fuzz_sample_dir/attempts" -mindepth 2 -maxdepth 2 -type f -name run.sh | wc -l)" == 4 ]]
 while IFS= read -r retained_deadline; do
@@ -8844,7 +8847,7 @@ for sampler_probe_status in 69 77; do
     cp "$sampler_probe_source_units" "$sampler_probe_units"
     cp "$fuzz_sampler_runner" "$sampler_probe_runner"
     sed -i -e "s|^sample_dir=.*|sample_dir=$(printf '%q' "$sampler_probe_attempt")|" "$sampler_probe_runner"
-    sampler_probe_unit="oxidedns-sampler-probe-$fixture_unit_suffix-$sampler_probe_status.service"
+    sampler_probe_unit="borondns-sampler-probe-$fixture_unit_suffix-$sampler_probe_status.service"
     publish_sampler_test_runner "$sampler_probe_unit" "$sampler_probe_runner" "$sampler_probe_units"
     sampler_probe_runner="$campaign_published_runner"
     if PATH="$sampler_probe_bin:$PATH" FAKE_PROBE_STATUS="$sampler_probe_status" \
@@ -8869,7 +8872,7 @@ sed -i \
     -e "s|^sample_dir=.*|sample_dir=$(printf '%q' "$pid_exit_attempt")|" \
     -e 's/^deadline_epoch=.*/deadline_epoch=1001/' \
     "$pid_exit_attempt/run.sh"
-pid_exit_unit="oxidedns-sampler-pid-exit-$fixture_unit_suffix.service"
+pid_exit_unit="borondns-sampler-pid-exit-$fixture_unit_suffix.service"
 publish_sampler_test_runner "$pid_exit_unit" "$pid_exit_attempt/run.sh" "$pid_exit_attempt/fuzz-units.txt"
 pid_exit_runner="$campaign_published_runner"
 # shellcheck disable=SC2016
@@ -8916,7 +8919,7 @@ sed -i \
     -e 's/^interval=.*/interval=999/' \
     -e 's/^deadline_epoch=.*/deadline_epoch=1001/' \
     "$sampler_sleep_attempt/run.sh"
-sampler_sleep_unit="oxidedns-sampler-capped-sleep-$fixture_unit_suffix.service"
+sampler_sleep_unit="borondns-sampler-capped-sleep-$fixture_unit_suffix.service"
 publish_sampler_test_runner "$sampler_sleep_unit" "$sampler_sleep_attempt/run.sh" "$sampler_sleep_attempt/fuzz-units.txt"
 sampler_sleep_runner="$campaign_published_runner"
 # shellcheck disable=SC2016
@@ -8963,7 +8966,7 @@ sed -i \
     -e 's/^interval=.*/interval=999/' \
     -e 's/^deadline_epoch=.*/deadline_epoch=1001/' \
     "$sampler_terminal_attempt/run.sh"
-sampler_terminal_unit="oxidedns-sampler-terminal-$fixture_unit_suffix.service"
+sampler_terminal_unit="borondns-sampler-terminal-$fixture_unit_suffix.service"
 publish_sampler_test_runner "$sampler_terminal_unit" "$sampler_terminal_attempt/run.sh" \
     "$sampler_terminal_attempt/fuzz-units.txt"
 sampler_terminal_runner="$campaign_published_runner"
@@ -9031,7 +9034,7 @@ printf 'timestamp_utc\tactive_units\tfuzz_processes\ttotal_fuzz_pcpu\ttotal_fuzz
     >"$sampler_header_attempt/host-samples.tsv"
 sampler_header_resume_status=0
 if (PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"); then
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"); then
     sampler_header_resume_status=0
 else
     sampler_header_resume_status=$?
@@ -9068,22 +9071,22 @@ printf '%s\n' status=passed "completed_utc=$sampler_complete_utc" \
     "deadline_epoch_seconds=$planned_sampler_deadline" "last_sample_epoch_seconds=$planned_sampler_deadline" \
     >"$sampler_complete_attempt/sampler-completed.env"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
 [[ "$(find "$fuzz_sample_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 6 ]]
 printf '%s\n' $'malformed\t0\t0\t0\t0\t0\t0\t0\t0\t0' >>"$sampler_complete_attempt/host-samples.tsv"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
 [[ "$(find "$fuzz_sample_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 7 ]]
 sed -i '$d' "$sampler_complete_attempt/host-samples.tsv"
 rm "$sampler_complete_attempt/sampler-completed.env"
 printf '%s\n' sampler_hard_stop_utc=2026-07-13T12:00:01Z active_units=1 \
     >"$sampler_complete_attempt/sampler-hard-stop.env"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
 [[ "$(find "$fuzz_sample_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 7 ]]
 printf '%s\n' unexpected_terminal_field=1 >>"$sampler_complete_attempt/sampler-hard-stop.env"
 PATH="$fake_sampler_bin:$PATH" FAKE_SAMPLER_STATE="$fake_sampler_state" \
-    OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
+    BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 "$fuzz_sampler_command_file"
 [[ "$(find "$fuzz_sample_dir/attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt.*' | wc -l)" == 8 ]]
 if "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" plan \
     --evidence-dir "$fuzz_plan_dir" --campaign-id operations-fuzz-test \
@@ -9097,13 +9100,13 @@ malicious_fuzz_plan="$workdir/malicious-fuzz-plan"
 cp -a "$fuzz_plan_dir" "$malicious_fuzz_plan"
 # Deliberately literal shell syntax must remain inert metadata.
 # shellcheck disable=SC2016
-printf 'campaign_id=$(touch /tmp/oxidedns-campaign-injection)\n' >"$malicious_fuzz_plan/campaign.env"
-rm -f /tmp/oxidedns-campaign-injection
+printf 'campaign_id=$(touch /tmp/borondns-campaign-injection)\n' >"$malicious_fuzz_plan/campaign.env"
+rm -f /tmp/borondns-campaign-injection
 if "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" status --evidence-dir "$malicious_fuzz_plan"; then
     printf 'fuzz status accepted malformed executable campaign metadata\n' >&2
     exit 1
 fi
-[[ ! -e /tmp/oxidedns-campaign-injection ]]
+[[ ! -e /tmp/borondns-campaign-injection ]]
 
 validator_fixture="$workdir/validator-fuzz-host"
 validator_attempt="$validator_fixture/fuzz/000-dns_datagram/attempts/attempt.complete/evidence"
@@ -9259,10 +9262,10 @@ printf '%s\n' \
     >"$validator_sampler_attempt/host-samples.tsv"
 printf '%s\n' \
     $'timestamp_utc\tepoch_seconds\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm' \
-    "$(printf '%s\t%s\t123\t0.00\t0.0\t1\t00:01\toxidedns' \
+    "$(printf '%s\t%s\t123\t0.00\t0.0\t1\t00:01\tborondns' \
         "$validator_target_start_utc" "$validator_target_start")" \
     >"$validator_sampler_attempt/process-samples.tsv"
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
 printf '%s\n' status=passed "completed_utc=$validator_sampler_deadline_utc" \
     "completed_epoch_seconds=$validator_sampler_deadline" active_units=0 \
     "deadline_epoch_seconds=$validator_sampler_deadline" "last_sample_epoch_seconds=$validator_sampler_deadline" \
@@ -9270,38 +9273,38 @@ printf '%s\n' status=passed "completed_utc=$validator_sampler_deadline_utc" \
 python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}" >/dev/null
-printf '%s\n' oxidedns-fuzz-fixture-99-invented.service >"$validator_sampler_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-99-invented.service >"$validator_sampler_attempt/fuzz-units.txt"
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}"; then
     printf 'sampler validator accepted an invented evidence unit\n' >&2
     exit 1
 fi
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service \
-    oxidedns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service \
+    borondns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}"; then
     printf 'sampler validator accepted duplicate evidence units\n' >&2
     exit 1
 fi
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service \
-    oxidedns-fuzz-fixture-1-transfer_stream.service >"$validator_sampler_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service \
+    borondns-fuzz-fixture-1-transfer_stream.service >"$validator_sampler_attempt/fuzz-units.txt"
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}"; then
     printf 'sampler validator accepted an extra evidence unit\n' >&2
     exit 1
 fi
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service >"$validator_sampler_attempt/fuzz-units.txt"
 validator_late_start=$((validator_target_start + 1))
 validator_late_start_utc="$(date -u -d "@$validator_late_start" '+%Y-%m-%dT%H:%M:%SZ')"
 sed -i "2s/$validator_target_start_utc/$validator_late_start_utc/;2s/$validator_target_start/$validator_late_start/" \
@@ -9309,7 +9312,7 @@ sed -i "2s/$validator_target_start_utc/$validator_late_start_utc/;2s/$validator_
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host "$validator_fixture" "$source_commit" \
     --expected-target 000-dns_datagram --expected-duration 1 --expected-sampler h1 \
     --expected-sampler-interval 1 --expected-sampler-deadline "$validator_sampler_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}"; then
     printf 'sampler validator accepted a first sample after the target execution began\n' >&2
     exit 1
@@ -9357,12 +9360,12 @@ fi
 sampler_validator_fixture="$workdir/validator-sampler-terminals"
 sampler_validator_attempt="$sampler_validator_fixture/host/h1/attempts/attempt.invalid"
 mkdir -p "$sampler_validator_fixture/fuzz/000-dns_datagram/attempts" "$sampler_validator_attempt"
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service >"$sampler_validator_attempt/fuzz-units.txt"
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service >"$sampler_validator_attempt/fuzz-units.txt"
 sampler_validator_start=1783944000
 sampler_validator_deadline=1783944001
 sampler_validator_schedule=(
     --expected-sampler-interval 1 --expected-sampler-deadline "$sampler_validator_deadline"
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service
 )
 sampler_terminal_fixture_validates() {
     python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host \
@@ -9456,9 +9459,9 @@ printf '%s\n' \
     >"$sampler_validator_attempt/host-samples.tsv"
 printf '%s\n' \
     $'timestamp_utc\tepoch_seconds\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm' \
-    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.10\t0.1\t2\t00:01\toxidedns' \
-    $'2026-07-13T12:00:00Z\t1783944000\t456\t0.20\t0.1\t2\t00:01\toxidedns' \
-    $'2026-07-13T12:00:01Z\t1783944001\t123\t0.20\t0.1\t3\t00:02\toxidedns' \
+    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.10\t0.1\t2\t00:01\tborondns' \
+    $'2026-07-13T12:00:00Z\t1783944000\t456\t0.20\t0.1\t2\t00:01\tborondns' \
+    $'2026-07-13T12:00:01Z\t1783944001\t123\t0.20\t0.1\t3\t00:02\tborondns' \
     >"$sampler_validator_attempt/process-samples.tsv"
 if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host \
     "$sampler_validator_fixture" "$source_commit" --expected-target 000-dns_datagram \
@@ -9481,7 +9484,7 @@ eval "$(sed -n '/^sampler_attempt_hard_stopped() {/,/^}/p' \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh")"
 inline_hard_stop_attempt="$workdir/inline-marker-only-hard-stop"
 mkdir "$inline_hard_stop_attempt"
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service \
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service \
     >"$inline_hard_stop_attempt/fuzz-units.txt"
 printf '%s\n' sampler_hard_stop_utc=2026-07-13T12:00:01Z active_units=2 probe_failed=1 \
     >"$inline_hard_stop_attempt/sampler-hard-stop.env"
@@ -9492,7 +9495,7 @@ fi
 sed -i 's/^active_units=2$/active_units=1/' \
     "$inline_hard_stop_attempt/sampler-hard-stop.env"
 sampler_attempt_hard_stopped "$inline_hard_stop_attempt"
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service \
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service \
     >>"$inline_hard_stop_attempt/fuzz-units.txt"
 if sampler_attempt_hard_stopped "$inline_hard_stop_attempt"; then
     printf 'inline sampler classifier accepted a duplicate unit allowlist\n' >&2
@@ -9504,7 +9507,7 @@ fi
 [[ "$(LC_ALL=C awk 'BEGIN { printf "%.2f", 0.005 }')" == 0.01 ]]
 inline_rounding_attempt="$workdir/inline-round-half-up"
 mkdir "$inline_rounding_attempt"
-printf '%s\n' oxidedns-fuzz-fixture-0-dns_datagram.service \
+printf '%s\n' borondns-fuzz-fixture-0-dns_datagram.service \
     >"$inline_rounding_attempt/fuzz-units.txt"
 printf '%s\n' \
     $'timestamp_utc\tepoch_seconds\tactive_units\tfuzz_processes\ttotal_fuzz_pcpu\ttotal_fuzz_rss_kib\tload1\tload5\tload15\tmem_available_kib' \
@@ -9512,7 +9515,7 @@ printf '%s\n' \
     >"$inline_rounding_attempt/host-samples.tsv"
 printf '%s\n' \
     $'timestamp_utc\tepoch_seconds\tpid\tpcpu\tpmem\trss_kib\tetime\tcomm' \
-    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.005\t0.1\t2\t00:01\toxidedns' \
+    $'2026-07-13T12:00:00Z\t1783944000\t123\t0.005\t0.1\t2\t00:01\tborondns' \
     >"$inline_rounding_attempt/process-samples.tsv"
 sampler_process_evidence_consistent "$inline_rounding_attempt"
 sed -i 's/\t0[.]01\t2\t/\t0.00\t2\t/' "$inline_rounding_attempt/host-samples.tsv"
@@ -9547,7 +9550,7 @@ fi
 cp "$fuzz_sampler_valid_processes" "$sampler_validator_attempt/process-samples.tsv"
 
 # Process detail must use an authenticated host timestamp+epoch key.
-printf '%s\n' $'2099-01-01T00:00:00Z\t4070908800\t999\t0.10\t0.1\t1\t00:01\toxidedns' >> \
+printf '%s\n' $'2099-01-01T00:00:00Z\t4070908800\t999\t0.10\t0.1\t1\t00:01\tborondns' >> \
     "$sampler_validator_attempt/process-samples.tsv"
 if sampler_terminal_fixture_validates; then
     printf 'sampler validator accepted a future orphan process sample\n' >&2
@@ -9643,7 +9646,7 @@ if python3 "$repo_root/scripts/validate-collected-campaign.py" fuzz-host \
     "$sampler_validator_fixture" "$source_commit" --expected-target 000-dns_datagram \
     --expected-sampler h1 --expected-duration 1 --expected-sampler-interval 1 \
     --expected-sampler-deadline "$sampler_cadence_deadline" \
-    --expected-sampler-unit oxidedns-fuzz-fixture-0-dns_datagram.service \
+    --expected-sampler-unit borondns-fuzz-fixture-0-dns_datagram.service \
     "${fuzz_validator_policy[@]}"; then
     printf 'sampler validator accepted a cadence gap beyond the authenticated bound\n' >&2
     exit 1
@@ -9774,7 +9777,7 @@ PATH="$collection_bin:$PATH" COLLECTION_SOURCE="$ipv6_large_collection_host" \
 grep -Fq $'collection\t2001_db8__53\tremote-snapshot\tincomplete' \
     "$ipv6_large_collection_plan/remotes/2001_db8__53.collection-status.tsv"
 
-grep -Fq 'rc_ulimit="-n 65536"' "$repo_root/packaging/installer/share/oxidedns/openrc/oxidedns"
+grep -Fq 'rc_ulimit="-n 65536"' "$repo_root/packaging/installer/share/borondns/openrc/borondns"
 
 no_sha_bin="$workdir/no-sha-bin"
 mkdir -p "$no_sha_bin"
@@ -9827,9 +9830,9 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'fixture_root="${fixture_manifest%/Cargo.toml}"' \
     'if [[ "$fixture_manifest" == "$fixture_main_manifest" ]]; then printf "%s\n" "$*" >>"$fixture_main_cargo_log"; fi' \
     'case "${1:-}" in' \
-    'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"oxidedns-core\",\"version\":\"0.2.0\"}]}" ;;' \
-    'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in oxidedns-cli) binary=oxidedns ;; oxide-gun) binary=oxide-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${OXIDEDNS_BUILD_COMMIT-unset}" "${OXIDEDNS_BUILD_RUST_VERSION-unset}" "${OXIDEDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == oxide-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
-    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${OXIDEDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"oxidedns\"}}}" >"$fixture_root/crates/oxidedns-cli/oxidedns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"oxide-gun\"}}}" >"$fixture_root/crates/oxide-gun/oxide-gun_bin.cdx.json" ;;' \
+    'metadata) [[ -n "$fixture_manifest" && -f "$fixture_manifest" && " $* " == *" --locked "* ]] || exit 92; printf "%s\n" "{\"packages\":[{\"name\":\"borondns-core\",\"version\":\"0.9.0\"}]}" ;;' \
+    'build) target=""; target_dir="${CARGO_TARGET_DIR:-}"; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; [[ -n "$target_dir" ]]; case "$package" in borondns-cli) binary=borondns ;; oxide-gun) binary=oxide-gun ;; *) exit 93 ;; esac; if [[ "$target_dir" == "$fixture_clean_dist"/* ]]; then printf "%s|%s|%s\n" "${BORONDNS_BUILD_COMMIT-unset}" "${BORONDNS_BUILD_RUST_VERSION-unset}" "${BORONDNS_BUILD_TIMESTAMP-unset}" >>"$fixture_build_env_log"; elif [[ "$target_dir" == "$fixture_isolated_dist_a"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_a"; elif [[ "$target_dir" == "$fixture_isolated_dist_b"/* ]]; then printf "%s\n" "${fixture_arguments[*]}" >>"$fixture_isolated_log_b"; fi; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"%s fake\\n\" \"$binary\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary"; if [[ "$package" == oxide-gun && "$target_dir" == "$fixture_mutated_installer_dist"/* ]]; then printf mutation >"$fixture_source_root/transient-build-mutation"; fi ;;' \
+    'cyclonedx) if [[ " $* " == *" --help "* || "${2:-}" == "--help" ]]; then exit 0; fi; if [[ " $* " == *" -V "* ]]; then if [[ -n "${PACKAGE_CYCLONEDX_VERSION_MARKER:-}" ]]; then : >"$PACKAGE_CYCLONEDX_VERSION_MARKER"; sleep "${PACKAGE_CYCLONEDX_VERSION_DELAY:-0}"; fi; printf "cargo-cyclonedx 0.5.9\n"; exit 0; fi; [[ -n "$fixture_manifest" && -f "$fixture_manifest" && -n "$fixture_root" ]] || exit 94; [[ -z "${PACKAGE_CYCLONEDX_STARTED_MARKER:-}" ]] || : >"$PACKAGE_CYCLONEDX_STARTED_MARKER"; active="${PACKAGE_CYCLONEDX_ACTIVE_DIR:-}"; if [[ -n "$active" ]]; then if ! mkdir "$active" 2>/dev/null; then : >"${PACKAGE_CYCLONEDX_OVERLAP:?}"; exit 99; fi; trap '\''rmdir "$active"'\'' EXIT; fi; [[ -z "${PACKAGE_CYCLONEDX_DELAY:-}" ]] || sleep "$PACKAGE_CYCLONEDX_DELAY"; if [[ "${BORONDNS_DIST_DIR:-}" == "$fixture_transient_sbom_dist" && ! -e "$fixture_transient_sbom_mutated" ]]; then : >"$fixture_transient_sbom_mutated"; printf mutation >"$fixture_root/transient-mutation"; fi; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"borondns\"}}}" >"$fixture_root/crates/borondns-cli/borondns_bin.cdx.json"; [[ "${PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST:-0}" != 1 ]] || exit 97; printf "%s\n" "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"metadata\":{\"component\":{\"name\":\"oxide-gun\"}}}" >"$fixture_root/crates/oxide-gun/oxide-gun_bin.cdx.json" ;;' \
     '*) exit 95 ;;' \
     'esac' >"$package_fake_bin/cargo"
 # shellcheck disable=SC2016
@@ -9890,7 +9893,7 @@ done
 for package_first_use_pid in "${package_first_use_pids[@]}"; do
     wait "$package_first_use_pid"
 done
-[[ "$(stat -c '%a:%u' "$package_first_use_root/.oxidedns-package-locks")" == "700:$(id -u)" ]]
+[[ "$(stat -c '%a:%u' "$package_first_use_root/.borondns-package-locks")" == "700:$(id -u)" ]]
 
 # Package writers for the same output identity must serialize before replacing
 # any stable artifact name.
@@ -9955,9 +9958,9 @@ for _ in {1..200}; do
     sleep 0.01
 done
 [[ -e "$package_split_lock_held" ]]
-mv "$package_split_lock_root/.oxidedns-package-locks" \
-    "$package_split_lock_root/.oxidedns-package-locks.detached"
-mkdir -m 0700 "$package_split_lock_root/.oxidedns-package-locks"
+mv "$package_split_lock_root/.borondns-package-locks" \
+    "$package_split_lock_root/.borondns-package-locks.detached"
+mkdir -m 0700 "$package_split_lock_root/.borondns-package-locks"
 # shellcheck disable=SC2016 # The single-quoted script expands only inside the child shell.
 if timeout 0.2 bash -c '
     set -euo pipefail
@@ -9986,9 +9989,9 @@ bash -c '
     set -euo pipefail
     source "$1"
     fd="" canonical=""
-    OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
-        oxidedns:0.2.0 fd canonical
-    [[ "$canonical" == docker.io/library/oxidedns:0.2.0 ]]
+    BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
+        borondns:0.9.0 fd canonical
+    [[ "$canonical" == docker.io/library/borondns:0.9.0 ]]
     : >"$3"
     while [[ ! -e "$4" ]]; do sleep 0.01; done
 ' package-docker-lock-first "$repo_root/scripts/package-common.sh" "$package_docker_lock_root" \
@@ -10003,8 +10006,8 @@ bash -c '
     set -euo pipefail
     source "$1"
     fd="" canonical=""
-    OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
-        docker.io/library/oxidedns:0.2.0 fd canonical
+    BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$2" package_acquire_docker_image_lock \
+        docker.io/library/borondns:0.9.0 fd canonical
     : >"$3"
 ' package-docker-lock-second "$repo_root/scripts/package-common.sh" "$package_docker_lock_root" \
     "$package_docker_lock_second" &
@@ -10023,13 +10026,13 @@ wait "$package_docker_lock_second_pid"
 # root for explicit recovery; it must never be suppressed by EXIT cleanup.
 # shellcheck source=scripts/package-common.sh
 source "$repo_root/scripts/package-common.sh"
-[[ "$(package_nonrelease_docker_image_ref oxidedns)" == 'oxidedns:latest-nonrelease-dirty' ]]
-[[ "$(package_nonrelease_docker_image_ref oxidedns:clean-nonrelease-dirty)" == 'oxidedns:clean-nonrelease-dirty-nonrelease-dirty' ]]
-if package_require_clean_docker_image_ref oxidedns:clean-nonrelease-dirty; then
+[[ "$(package_nonrelease_docker_image_ref borondns)" == 'borondns:latest-nonrelease-dirty' ]]
+[[ "$(package_nonrelease_docker_image_ref borondns:clean-nonrelease-dirty)" == 'borondns:clean-nonrelease-dirty-nonrelease-dirty' ]]
+if package_require_clean_docker_image_ref borondns:clean-nonrelease-dirty; then
     printf 'clean Docker reference entered the reserved dirty diagnostic namespace\n' >&2
     exit 1
 fi
-package_require_clean_docker_image_ref oxidedns:clean
+package_require_clean_docker_image_ref borondns:clean
 
 package_umask_root="$workdir/package-umask-root"
 mkdir -m 0700 "$package_umask_root"
@@ -10041,7 +10044,7 @@ package_acquire_publication_lock "$package_umask_root" umask-fixture package_uma
 package_after_lock_umask="$(umask)"
 umask "$package_saved_umask"
 [[ "$package_after_lock_umask" == 0000 || "$package_after_lock_umask" == 000 ]]
-[[ "$(stat -c '%a' "$package_umask_root/.oxidedns-package-locks/umask-fixture.lock")" == 600 ]]
+[[ "$(stat -c '%a' "$package_umask_root/.borondns-package-locks/umask-fixture.lock")" == 600 ]]
 
 # Package publication roots are mutation boundaries, not arbitrary output
 # paths. Reject writable or foreign-owned roots before creating staging/locks.
@@ -10574,7 +10577,7 @@ package_clean_target="$workdir/package-clean-target"
 package_clean_docker_input="$workdir/package-clean-docker-input"
 package_clean_cargo_log="$workdir/package-clean-cargo.log"
 mkdir -p "$package_dirty_repo/scripts" "$package_dirty_repo/config" \
-    "$package_dirty_repo/crates/oxidedns-cli" "$package_dirty_repo/crates/oxide-gun" "$package_clean_dist" \
+    "$package_dirty_repo/crates/borondns-cli" "$package_dirty_repo/crates/oxide-gun" "$package_clean_dist" \
     "$package_clean_target" "$package_clean_docker_input"
 cp "$repo_root/scripts/package-common.sh" "$repo_root/scripts/package-installer.sh" \
     "$repo_root/scripts/package-docker-image.sh" "$repo_root/scripts/package-sbom.sh" \
@@ -10582,7 +10585,7 @@ cp "$repo_root/scripts/package-common.sh" "$repo_root/scripts/package-installer.
     "$package_dirty_repo/scripts/"
 cp "$repo_root/Cargo.toml" "$package_dirty_repo/Cargo.toml"
 cp "$repo_root/LICENSE-MIT" "$repo_root/LICENSE-APACHE" "$package_dirty_repo/"
-cp "$repo_root/config/oxidedns.example.toml" "$package_dirty_repo/config/"
+cp "$repo_root/config/borondns.example.toml" "$package_dirty_repo/config/"
 cp -R "$repo_root/packaging" "$package_dirty_repo/packaging"
 git -C "$package_dirty_repo" init -q
 git -C "$package_dirty_repo" add .
@@ -10595,7 +10598,7 @@ git -C "$package_dirty_repo" -c user.name=Test -c user.email=test@example.invali
 package_owned_file_transition_hook() {
     [[ "$1" == after-create ]] || return 0
     case "${PACKAGE_SBOM_PLACEHOLDER_SIGNAL:?}" in
-    first) [[ "$2" == */crates/oxidedns-cli/oxidedns_bin.cdx.json ]] || return 0 ;;
+    first) [[ "$2" == */crates/borondns-cli/borondns_bin.cdx.json ]] || return 0 ;;
     second) [[ "$2" == */crates/oxide-gun/oxide-gun_bin.cdx.json ]] || return 0 ;;
     *) return 90 ;;
     esac
@@ -10610,8 +10613,8 @@ for package_sbom_placeholder_signal in first second; do
     mkdir -p "$package_sbom_signal_dist"
     set +e
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_sbom_signal_dist" \
-        OXIDEDNS_SBOM_DOCKER=0 PACKAGE_SBOM_PLACEHOLDER_SIGNAL="$package_sbom_placeholder_signal" \
+        CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_sbom_signal_dist" \
+        BORONDNS_SBOM_DOCKER=0 PACKAGE_SBOM_PLACEHOLDER_SIGNAL="$package_sbom_placeholder_signal" \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_sbom_signal_repo" \
         EXPECTED_PACKAGE_MANIFEST="$package_sbom_signal_repo/Cargo.toml" \
         "$package_sbom_signal_repo/scripts/package-sbom.sh" \
@@ -10619,17 +10622,17 @@ for package_sbom_placeholder_signal in first second; do
     package_sbom_signal_status=$?
     set -e
     [[ "$package_sbom_signal_status" == 143 ]]
-    [[ ! -e "$package_sbom_signal_repo/crates/oxidedns-cli/oxidedns_bin.cdx.json" ]]
+    [[ ! -e "$package_sbom_signal_repo/crates/borondns-cli/borondns_bin.cdx.json" ]]
     [[ ! -e "$package_sbom_signal_repo/crates/oxide-gun/oxide-gun_bin.cdx.json" ]]
     mapfile -t package_sbom_signal_quarantines < <(find "$package_sbom_signal_repo/.git" \
-        -type f -name '*_bin.cdx.json.oxidedns-remove.*' -print)
+        -type f -name '*_bin.cdx.json.borondns-remove.*' -print)
     if [[ "$package_sbom_placeholder_signal" == first ]]; then
         ((${#package_sbom_signal_quarantines[@]} == 1))
     else
         ((${#package_sbom_signal_quarantines[@]} == 2))
     fi
     [[ -z "$(find "$package_sbom_signal_dist" -mindepth 1 -maxdepth 1 \
-        -name '*.sbom-package.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+        -name '*.sbom-package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 done
 unset -f package_owned_file_transition_hook
 
@@ -10645,7 +10648,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
     'exec /usr/bin/mkdir "$@"' >"$package_early_mkdir_bin/mkdir"
 chmod +x "$package_early_mkdir_bin/mkdir"
 if PATH="$package_early_mkdir_bin:$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" \
-    RUSTC="$package_fake_bin/rustc" OXIDEDNS_DIST_DIR="$package_early_mkdir_dist" \
+    RUSTC="$package_fake_bin/rustc" BORONDNS_DIST_DIR="$package_early_mkdir_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-early-mkdir.log" 2>&1; then
@@ -10653,7 +10656,7 @@ if PATH="$package_early_mkdir_bin:$package_fake_bin:$PATH" CARGO="$package_fake_
     exit 1
 fi
 [[ -z "$(find "$package_early_mkdir_dist" -mindepth 1 -maxdepth 1 \
-    -name '*.package.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 package_early_capture_bin="$workdir/package-early-capture-bin"
 package_early_capture_dist="$workdir/package-early-capture-dist"
@@ -10666,7 +10669,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
     'exec /usr/bin/stat "$@"' >"$package_early_capture_bin/stat"
 chmod +x "$package_early_capture_bin/stat"
 if PATH="$package_early_capture_bin:$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" \
-    RUSTC="$package_fake_bin/rustc" OXIDEDNS_DIST_DIR="$package_early_capture_dist" \
+    RUSTC="$package_fake_bin/rustc" BORONDNS_DIST_DIR="$package_early_capture_dist" \
     PACKAGE_EARLY_STAT_COUNT="$workdir/package-early-stat-count" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -10675,7 +10678,7 @@ if PATH="$package_early_capture_bin:$package_fake_bin:$PATH" CARGO="$package_fak
     exit 1
 fi
 [[ -z "$(find "$package_early_capture_dist" -mindepth 1 -maxdepth 1 \
-    -name '*.package.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 package_early_signal_bin="$workdir/package-early-signal-bin"
 package_early_signal_dist="$workdir/package-early-signal-dist"
@@ -10692,7 +10695,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
     'done' >"$package_early_signal_bin/mkdir"
 chmod +x "$package_early_signal_bin/mkdir"
 if PATH="$package_early_signal_bin:$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" \
-    RUSTC="$package_fake_bin/rustc" OXIDEDNS_DIST_DIR="$package_early_signal_dist" \
+    RUSTC="$package_fake_bin/rustc" BORONDNS_DIST_DIR="$package_early_signal_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-early-signal.log" 2>&1; then
@@ -10700,7 +10703,7 @@ if PATH="$package_early_signal_bin:$package_fake_bin:$PATH" CARGO="$package_fake
     exit 1
 fi
 [[ -z "$(find "$package_early_signal_dist" -mindepth 1 -maxdepth 1 \
-    -name '*.package.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 # SBOM and Docker builders must install the same EXIT ownership before their
 # first private-root mkdir. Termination from the allocating child must not leave
@@ -10714,17 +10717,17 @@ for package_early_signal_script in sbom docker; do
         PATH="$package_early_signal_bin:$package_fake_bin:$PATH"
         CARGO="$package_fake_bin/cargo"
         RUSTC="$package_fake_bin/rustc"
-        OXIDEDNS_DIST_DIR="$package_early_signal_case_dist"
+        BORONDNS_DIST_DIR="$package_early_signal_case_dist"
         PACKAGE_CARGO_LOG="$package_clean_cargo_log"
         EXPECTED_PACKAGE_ROOT="$package_dirty_repo"
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml"
     )
     if [[ "$package_early_signal_script" == sbom ]]; then
-        package_early_signal_env+=(OXIDEDNS_SBOM_DOCKER=0)
+        package_early_signal_env+=(BORONDNS_SBOM_DOCKER=0)
         package_early_signal_command=("$package_dirty_repo/scripts/package-sbom.sh")
     else
         package_early_signal_env+=(
-            OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_early_signal_case_input"
+            BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_early_signal_case_input"
             PACKAGE_DOCKER_TAG_STATE="$package_early_signal_case/tag.state"
         )
         package_early_signal_command=("$package_dirty_repo/scripts/package-docker-image.sh")
@@ -10737,7 +10740,7 @@ for package_early_signal_script in sbom docker; do
     fi
     [[ -z "$(find "$package_early_signal_case_dist" -mindepth 1 -maxdepth 1 \
         \( -name '*.sbom-package.*' -o -name '*.docker-package.*' \) \
-        ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+        ! -name '*.borondns-remove.*' -print -quit)" ]]
 done
 
 # Docker owns a second private root on the installer-input filesystem. Its
@@ -10748,8 +10751,8 @@ package_early_input_dist="$package_early_input_case/dist"
 package_early_input_root="$package_early_input_case/input"
 mkdir -p "$package_early_input_dist" "$package_early_input_root"
 if PATH="$package_early_signal_bin:$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" \
-    RUSTC="$package_fake_bin/rustc" OXIDEDNS_DIST_DIR="$package_early_input_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_early_input_root" \
+    RUSTC="$package_fake_bin/rustc" BORONDNS_DIST_DIR="$package_early_input_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_early_input_root" \
     PACKAGE_EARLY_SIGNAL_MODE=docker-input PACKAGE_DOCKER_TAG_STATE="$package_early_input_case/tag.state" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -10758,9 +10761,9 @@ if PATH="$package_early_signal_bin:$package_fake_bin:$PATH" CARGO="$package_fake
     exit 1
 fi
 [[ -z "$(find "$package_early_input_dist" -mindepth 1 -maxdepth 1 \
-    -name '*.docker-package.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.docker-package.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 [[ -z "$(find "$package_early_input_root" -mindepth 1 -maxdepth 1 \
-    -name '*.docker-input.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.docker-input.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 # Docker must reject identical publication/input roots before it creates any
 # private run directory. This deterministic preflight failure previously left
@@ -10768,7 +10771,7 @@ fi
 package_same_root="$workdir/package-docker-same-root"
 mkdir -p "$package_same_root"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_same_root" OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_same_root" \
+    BORONDNS_DIST_DIR="$package_same_root" BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_same_root" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh" >"$workdir/package-docker-same-root.log" 2>&1; then
@@ -10779,7 +10782,7 @@ grep -Fq 'Docker installer input directory must be isolated from published dist'
     "$workdir/package-docker-same-root.log"
 [[ -z "$(find "$package_same_root" -maxdepth 1 \
     \( -name '*.docker-package.*' -o -name '*.docker-input.*' \) \
-    ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 # Recursive package cleanup must bind the private directory object, not merely
 # trust its random pathname. Exercise both the normal committed path and the
@@ -10839,7 +10842,7 @@ for package_cleanup_swap_script in installer sbom docker; do
             CARGO="$package_fake_bin/cargo"
             RUSTC="$package_fake_bin/rustc"
             CARGO_TARGET_DIR="$package_clean_target"
-            OXIDEDNS_DIST_DIR="$package_cleanup_swap_dist"
+            BORONDNS_DIST_DIR="$package_cleanup_swap_dist"
             PACKAGE_CARGO_LOG="$package_clean_cargo_log"
             EXPECTED_PACKAGE_ROOT="$package_dirty_repo"
             EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml"
@@ -10852,10 +10855,10 @@ for package_cleanup_swap_script in installer sbom docker; do
             PACKAGE_CLEANUP_SWAP_MARKER="$package_cleanup_swap_marker"
         )
         case "$package_cleanup_swap_script" in
-        sbom) package_cleanup_swap_env+=(OXIDEDNS_SBOM_DOCKER=0) ;;
+        sbom) package_cleanup_swap_env+=(BORONDNS_SBOM_DOCKER=0) ;;
         docker)
             package_cleanup_swap_env+=(
-                OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_cleanup_swap_input"
+                BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_cleanup_swap_input"
                 PACKAGE_DOCKER_TAG_STATE="$package_cleanup_swap_root/tag.state"
             )
             ;;
@@ -10896,8 +10899,8 @@ for package_cleanup_swap_phase in success failure; do
     printf 'replacement installer-publish victim\n' >"$package_cleanup_swap_victim/sentinel"
     set +e
     env PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_cleanup_swap_dist" \
-        OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_cleanup_swap_input" \
+        CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_cleanup_swap_dist" \
+        BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_cleanup_swap_input" \
         PACKAGE_DOCKER_TAG_STATE="$package_cleanup_swap_root/tag.state" \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" PACKAGE_CLEANUP_SWAP_SCRIPT=docker \
@@ -10922,17 +10925,17 @@ package_build_env_log="$workdir/package-build-env.log"
 (
     umask 000
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_clean_dist" \
-        OXIDEDNS_BUILD_COMMIT=forged OXIDEDNS_BUILD_RUST_VERSION=forged OXIDEDNS_BUILD_TIMESTAMP=forged \
+        CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
+        BORONDNS_BUILD_COMMIT=forged BORONDNS_BUILD_RUST_VERSION=forged BORONDNS_BUILD_TIMESTAMP=forged \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
         "$package_dirty_repo/scripts/package-installer.sh"
 )
-package_clean_manifest="$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl/manifest.txt"
+package_clean_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl/manifest.txt"
 grep -Fqx 'source_clean=1' "$package_clean_manifest"
 grep -Fqx 'release_eligible=1' "$package_clean_manifest"
 grep -Fqx 'dirty_source_override=0' "$package_clean_manifest"
-package_clean_prefix="$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl"
+package_clean_prefix="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
 [[ "$(stat -c '%a' "$package_clean_prefix")" == 755 ]]
 [[ "$(stat -c '%a' "$package_clean_manifest")" == 644 ]]
 [[ "$(stat -c '%a' "$package_clean_prefix.tar.xz")" == 644 ]]
@@ -10941,7 +10944,7 @@ package_clean_prefix="$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-mu
 [[ "$(stat -c '%a' "$package_clean_prefix-oxide-gun.bin")" == 755 ]]
 tar -tJvf "$package_clean_prefix.tar.xz" | awk '
     $6 ~ /\/$/ { if ($1 !~ /^drwxr-xr-x/) exit 1; next }
-    $6 ~ /\/(oxidedns|oxide-gun|install.sh)$/ { if ($1 !~ /^-rwxr-xr-x/) exit 1; next }
+    $6 ~ /\/(borondns|oxide-gun|install.sh)$/ { if ($1 !~ /^-rwxr-xr-x/) exit 1; next }
     { if ($1 !~ /^-rw-r--r--/) exit 1 }
 '
 clean_commit="$(git -C "$package_dirty_repo" rev-parse --short=12 HEAD)"
@@ -10955,19 +10958,19 @@ PY
 test "$(wc -l <"$package_build_env_log")" -eq 2
 grep -Fqx "$clean_commit|rustc 1.88.0 (fake 2025-06-23)|$clean_timestamp" "$package_build_env_log"
 if grep -Fq forged "$package_build_env_log"; then
-    printf 'package installer propagated forged OXIDEDNS_BUILD metadata\n' >&2
+    printf 'package installer propagated forged BORONDNS_BUILD metadata\n' >&2
     exit 1
 fi
 
 # cargo-cyclonedx writes fixed paths in the source workspace. A pre-existing
 # operator file must be rejected intact, while a partial output created by the
 # owned generator invocation must be removed on failure.
-package_generated_oxidedns="$package_dirty_repo/crates/oxidedns-cli/oxidedns_bin.cdx.json"
+package_generated_borondns="$package_dirty_repo/crates/borondns-cli/borondns_bin.cdx.json"
 package_generated_oxide_gun="$package_dirty_repo/crates/oxide-gun/oxide-gun_bin.cdx.json"
-printf 'operator CycloneDX sentinel\n' >"$package_generated_oxidedns"
+printf 'operator CycloneDX sentinel\n' >"$package_generated_borondns"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$workdir/package-preexisting-sbom-dist" OXIDEDNS_SBOM_DOCKER=0 \
-    OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
+    BORONDNS_DIST_DIR="$workdir/package-preexisting-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
+    BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-preexisting-sbom.log" 2>&1; then
     printf 'SBOM builder replaced a pre-existing cargo-cyclonedx output\n' >&2
@@ -10976,8 +10979,8 @@ fi
 grep -Fq 'refusing to replace pre-existing cargo-cyclonedx workspace output' \
     "$workdir/package-preexisting-sbom.log"
 
-grep -Fqx 'operator CycloneDX sentinel' "$package_generated_oxidedns"
-rm "$package_generated_oxidedns"
+grep -Fqx 'operator CycloneDX sentinel' "$package_generated_borondns"
+rm "$package_generated_borondns"
 
 # Generated cargo-cyclonedx paths remain hostile pathname boundaries after the
 # tool returns. Cleanup must remove only the two captured output inodes, never a
@@ -10995,25 +10998,25 @@ if BASH_ENV="$package_sbom_swap_env" PATH="$package_fake_bin:$PATH" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
-    OXIDEDNS_DIST_DIR="$workdir/package-swapped-sbom-dist" OXIDEDNS_SBOM_DOCKER=0 \
+    BORONDNS_DIST_DIR="$workdir/package-swapped-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-swapped-sbom.log" 2>&1; then
     printf 'SBOM cleanup accepted a generated-path replacement victim\n' >&2
     exit 1
 fi
-grep -Fqx 'generated SBOM replacement victim' "$package_generated_oxidedns"
-test -f "$package_generated_oxidedns.original"
-rm -f -- "$package_generated_oxidedns" "$package_generated_oxidedns.original" \
+grep -Fqx 'generated SBOM replacement victim' "$package_generated_borondns"
+test -f "$package_generated_borondns.original"
+rm -f -- "$package_generated_borondns" "$package_generated_borondns.original" \
     "$package_generated_oxide_gun"
 
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$workdir/package-failed-sbom-dist" OXIDEDNS_SBOM_DOCKER=0 \
+    BORONDNS_DIST_DIR="$workdir/package-failed-sbom-dist" BORONDNS_SBOM_DOCKER=0 \
     PACKAGE_CYCLONEDX_FAIL_AFTER_FIRST=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-failed-sbom.log" 2>&1; then
     printf 'SBOM builder accepted a partial cargo-cyclonedx generation\n' >&2
     exit 1
 fi
-[[ ! -e "$package_generated_oxidedns" && ! -e "$package_generated_oxide_gun" ]]
+[[ ! -e "$package_generated_borondns" && ! -e "$package_generated_oxide_gun" ]]
 package_dirty_git_root="$(git -C "$package_dirty_repo" rev-parse --absolute-git-dir)"
 mapfile -t package_failed_sbom_retained_lines < <(
     grep -F 'logical removal retained an identity-bound quarantine for privileged/manual reconciliation: path=' \
@@ -11044,7 +11047,7 @@ declare -A package_isolated_pid=()
 for isolated_name in a b; do
     isolated_dist_var="package_isolated_dist_$isolated_name"
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="${!isolated_dist_var}" \
+        CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="${!isolated_dist_var}" \
         EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
         "$package_dirty_repo/scripts/package-installer.sh" >/dev/null &
@@ -11060,25 +11063,25 @@ package_isolated_target_b="$(awk '$1 == "build" { for (field = 1; field <= NF; f
     "$package_isolated_target_a" != "$package_isolated_target_b" &&
     "$package_isolated_target_a" != "$package_clean_target" &&
     "$package_isolated_target_b" != "$package_clean_target" ]]
-[[ "$package_isolated_target_a" == "$package_isolated_dist_a"/.oxidedns-*.package.*/build-target ]]
-[[ "$package_isolated_target_b" == "$package_isolated_dist_b"/.oxidedns-*.package.*/build-target ]]
+[[ "$package_isolated_target_a" == "$package_isolated_dist_a"/.borondns-*.package.*/build-target ]]
+[[ "$package_isolated_target_b" == "$package_isolated_dist_b"/.borondns-*.package.*/build-target ]]
 
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_clean_dist" OXIDEDNS_SBOM_DOCKER=0 \
+    BORONDNS_DIST_DIR="$package_clean_dist" BORONDNS_SBOM_DOCKER=0 \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh"
-package_clean_sbom_manifest="$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-sbom-manifest.tsv"
+package_clean_sbom_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-sbom-manifest.tsv"
 grep -Fq '# source_clean=1' "$package_clean_sbom_manifest"
 grep -Fq '# release_eligible=1' "$package_clean_sbom_manifest"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_clean_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
     PACKAGE_DOCKER_SAVE_LAYOUT=oci PACKAGE_DOCKER_IID_NO_NEWLINE=1 \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh"
-package_clean_image_manifest="$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+package_clean_image_manifest="$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 grep -Fqx "image_id=$package_fake_image_id" \
     "$package_clean_image_manifest"
 grep -Fqx 'source_clean=1' "$package_clean_image_manifest"
@@ -11086,8 +11089,8 @@ grep -Fqx 'release_eligible=1' "$package_clean_image_manifest"
 grep -Fqx 'dirty_source_override=0' "$package_clean_image_manifest"
 for _ in 1 2; do
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_clean_dist" \
-        OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
+        CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
+        BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
         PACKAGE_DOCKER_SAVE_LAYOUT=oci PACKAGE_DOCKER_IID_NO_NEWLINE=1 \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
         EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11095,7 +11098,7 @@ for _ in 1 2; do
 done
 [[ -z "$(find "$package_clean_dist" "$package_clean_docker_input" -maxdepth 1 \
     \( -name '*.docker-package.*' -o -name '*.docker-input.*' -o -name '*.previous.*' \) \
-    ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 # The dynamic-link escape hatch is always diagnostic, even from a clean tree.
 # It must use an isolated name/tag namespace and carry explicit non-release
@@ -11109,13 +11112,13 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "%s: ELF 64-bit dynamically linked\\
 printf '%s\n' '#!/usr/bin/env bash' 'printf "libc.so.6 => /lib/libc.so.6\\n"' \
     >"$package_dynamic_tool_bin/ldd"
 chmod 0755 "$package_dynamic_tool_bin/file" "$package_dynamic_tool_bin/ldd"
-if OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=invalid "$package_dirty_repo/scripts/package-installer.sh" \
+if BORONDNS_PACKAGE_ALLOW_DYNAMIC=invalid "$package_dirty_repo/scripts/package-installer.sh" \
     >"$workdir/package-invalid-dynamic.log" 2>&1; then
     printf 'package installer accepted an invalid dynamic-link override\n' >&2
     exit 1
 fi
-grep -Fq 'OXIDEDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1' "$workdir/package-invalid-dynamic.log"
-if GITHUB_ACTIONS=true OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 \
+grep -Fq 'BORONDNS_PACKAGE_ALLOW_DYNAMIC must be 0 or 1' "$workdir/package-invalid-dynamic.log"
+if GITHUB_ACTIONS=true BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-dynamic-actions.log" 2>&1; then
     printf 'package installer accepted dynamic-link override in GitHub Actions\n' >&2
     exit 1
@@ -11124,31 +11127,31 @@ grep -Fq 'dynamic-link packaging override is forbidden in GitHub Actions release
     "$workdir/package-dynamic-actions.log"
 PATH="$package_dynamic_tool_bin:$package_fake_bin:$PATH" \
     CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_dynamic_dist" \
-    OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_dynamic_dist" \
+    BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh"
-package_dynamic_prefix=oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dynamic
+package_dynamic_prefix=borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dynamic
 package_dynamic_manifest="$package_dynamic_dist/$package_dynamic_prefix/manifest.txt"
 grep -Fqx 'source_clean=1' "$package_dynamic_manifest"
 grep -Fqx 'release_eligible=0' "$package_dynamic_manifest"
 grep -Fqx 'dynamic_link_override=1' "$package_dynamic_manifest"
-[[ ! -e "$package_dynamic_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz" ]]
+[[ ! -e "$package_dynamic_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz" ]]
 PATH="$package_dynamic_tool_bin:$package_fake_bin:$PATH" \
     CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_dynamic_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_dynamic_input" \
-    OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_dynamic_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_dynamic_input" \
+    BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh"
 package_dynamic_image_manifest="$package_dynamic_dist/$package_dynamic_prefix-docker-image.manifest.txt"
 grep -Fqx 'release_eligible=0' "$package_dynamic_image_manifest"
 grep -Fqx 'dynamic_link_override=1' "$package_dynamic_image_manifest"
-grep -Fq 'canonical_image_ref=docker.io/library/oxidedns:0.2.0-nonrelease-dynamic' \
+grep -Fq 'canonical_image_ref=docker.io/library/borondns:0.9.0-nonrelease-dynamic' \
     "$package_dynamic_image_manifest"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_dynamic_dist" OXIDEDNS_SBOM_DOCKER=0 \
-    OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
+    BORONDNS_DIST_DIR="$package_dynamic_dist" BORONDNS_SBOM_DOCKER=0 \
+    BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh"
 grep -Fq '# release_eligible=0' "$package_dynamic_dist/$package_dynamic_prefix-sbom-manifest.tsv"
@@ -11161,9 +11164,9 @@ package_diagnostic_input="$workdir/package-diagnostic-input"
 package_diagnostic_state="$workdir/package-diagnostic.state"
 printf 'dirty source\n' >"$package_dirty_repo/diagnostic-dirty-source"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_diagnostic_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input" \
-    OXIDEDNS_DOCKER_IMAGE_REF=oxidedns:0.2.0 OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_diagnostic_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input" \
+    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.0 BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
     PACKAGE_DOCKER_TAG_STATE="$package_diagnostic_state" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh" >/dev/null
@@ -11171,9 +11174,9 @@ grep -Fqx "$package_fake_image_id" \
     "$package_diagnostic_state"
 rm "$package_dirty_repo/diagnostic-dirty-source"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_diagnostic_dist-clean" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input-clean" \
-    OXIDEDNS_DOCKER_IMAGE_REF=oxidedns:0.2.0-nonrelease-dirty \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_diagnostic_dist-clean" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_diagnostic_input-clean" \
+    BORONDNS_DOCKER_IMAGE_REF=borondns:0.9.0-nonrelease-dirty \
     PACKAGE_DOCKER_IMAGE_ID="$package_fake_second_image_id" PACKAGE_DOCKER_CONFIG_VARIANT=second \
     PACKAGE_DOCKER_TAG_STATE="$package_diagnostic_state" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11195,7 +11198,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     >"$package_fake_bin/syft"
 chmod +x "$package_fake_bin/syft"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_clean_dist" OXIDEDNS_SBOM_DOCKER=1 \
+    BORONDNS_DIST_DIR="$package_clean_dist" BORONDNS_SBOM_DOCKER=1 \
     PACKAGE_SYFT_LOG="$package_syft_log" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh"
@@ -11208,8 +11211,8 @@ package_retag_state="$workdir/package-retag.state"
 printf '%s\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     >"$package_retag_state"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_retag_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_retag_input" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_retag_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_retag_input" \
     PACKAGE_DOCKER_TAG_STATE="$package_retag_state" PACKAGE_DOCKER_FAIL_AFTER_TAG=1 \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11220,7 +11223,7 @@ fi
 grep -Fqx 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     "$package_retag_state"
 [[ -z "$(find "$package_retag_dist" "$package_retag_input" \
-    \( -path '*/.oxidedns-package-locks' -o -name '*.oxidedns-remove.*' \) -prune -o \
+    \( -path '*/.borondns-package-locks' -o -name '*.borondns-remove.*' \) -prune -o \
     -type f -print -quit)" ]]
 
 # The package commit flag is the single commit point for both filesystem
@@ -11238,9 +11241,9 @@ package_publication_hook() {
 export -f package_publication_hook
 set +e
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_postcommit_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_postcommit_input" \
-    OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$workdir/package-postcommit-lock" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_postcommit_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_postcommit_input" \
+    BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$workdir/package-postcommit-lock" \
     PACKAGE_DOCKER_TAG_STATE="$package_postcommit_state" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11252,9 +11255,9 @@ unset -f package_publication_hook
 grep -Fqx "$package_fake_image_id" \
     "$package_postcommit_state"
 grep -Fqx "image_id=$package_fake_image_id" \
-    "$package_postcommit_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+    "$package_postcommit_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.manifest.txt"
 [[ -z "$(find "$package_postcommit_dist" "$package_postcommit_input" \
-    -name '*.previous.*' ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    -name '*.previous.*' ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 # A failed publisher must finish tag rollback while retaining the canonical
 # image-reference lock. Otherwise it can restore stale state over a later
@@ -11271,10 +11274,10 @@ package_tag_race_image_b="$package_fake_second_image_id"
 printf '%s\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     >"$package_tag_race_state"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_PACKAGE_TARGET=target-a OXIDEDNS_DIST_DIR="$package_tag_race_dist_a" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_a" \
-    OXIDEDNS_DOCKER_IMAGE_REF=shared/oxidedns:0.2.0 \
-    OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
+    BORONDNS_PACKAGE_TARGET=target-a BORONDNS_DIST_DIR="$package_tag_race_dist_a" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_a" \
+    BORONDNS_DOCKER_IMAGE_REF=shared/borondns:0.9.0 \
+    BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
     PACKAGE_DOCKER_TAG_STATE="$package_tag_race_state" \
     PACKAGE_DOCKER_TAG_READY="$package_tag_race_ready" PACKAGE_DOCKER_TAG_RELEASE="$package_tag_race_release" \
     PACKAGE_DOCKER_FAIL_AFTER_TAG=1 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
@@ -11287,10 +11290,10 @@ for _ in {1..1000}; do
 done
 [[ -e "$package_tag_race_ready" ]]
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_PACKAGE_TARGET=target-b OXIDEDNS_DIST_DIR="$package_tag_race_dist_b" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_b" \
-    OXIDEDNS_DOCKER_IMAGE_REF=docker.io/shared/oxidedns:0.2.0 \
-    OXIDEDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
+    BORONDNS_PACKAGE_TARGET=target-b BORONDNS_DIST_DIR="$package_tag_race_dist_b" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_tag_race_input_b" \
+    BORONDNS_DOCKER_IMAGE_REF=docker.io/shared/borondns:0.9.0 \
+    BORONDNS_PACKAGE_DOCKER_LOCK_ROOT="$package_tag_race_lock" \
     PACKAGE_DOCKER_IMAGE_ID="$package_tag_race_image_b" PACKAGE_DOCKER_CONFIG_VARIANT=second \
     PACKAGE_DOCKER_TAG_STATE="$package_tag_race_state" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
@@ -11309,15 +11312,15 @@ set -e
 wait "$package_tag_race_pid_b"
 grep -Fqx "$package_tag_race_image_b" "$package_tag_race_state"
 grep -Fqx "image_id=$package_tag_race_image_b" \
-    "$package_tag_race_dist_b/oxidedns-0.2.0-target-b-docker-image.manifest.txt"
+    "$package_tag_race_dist_b/borondns-0.9.0-target-b-docker-image.manifest.txt"
 
 package_mutated_installer_dist="$workdir/package-mutated-installer-dist"
 package_mutated_installer_target="$workdir/package-mutated-installer-target"
-mkdir -p "$package_mutated_installer_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl"
-printf 'prior installer tree\n' >"$package_mutated_installer_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl/prior-sentinel"
-printf 'prior installer archive\n' >"$package_mutated_installer_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz"
+mkdir -p "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
+printf 'prior installer tree\n' >"$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl/prior-sentinel"
+printf 'prior installer archive\n' >"$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_mutated_installer_target" OXIDEDNS_DIST_DIR="$package_mutated_installer_dist" \
+    CARGO_TARGET_DIR="$package_mutated_installer_target" BORONDNS_DIST_DIR="$package_mutated_installer_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-mutated-installer.log" 2>&1; then
@@ -11326,21 +11329,21 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
 fi
 grep -Fq 'installer packaging source changed at after build' "$workdir/package-mutated-installer.log"
 grep -Fqx 'prior installer tree' \
-    "$package_mutated_installer_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl/prior-sentinel"
+    "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl/prior-sentinel"
 grep -Fqx 'prior installer archive' \
-    "$package_mutated_installer_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz"
+    "$package_mutated_installer_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
 rm "$package_dirty_repo/transient-build-mutation"
 
 package_mutated_docker_dist="$workdir/package-mutated-docker-dist"
 package_mutated_docker_input="$workdir/package-mutated-docker-input"
-mkdir -p "$package_mutated_docker_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context"
+mkdir -p "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
 printf 'prior Docker context\n' \
-    >"$package_mutated_docker_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
+    >"$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
 printf 'prior Docker archive\n' \
-    >"$package_mutated_docker_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    >"$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_mutated_docker_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_mutated_docker_input" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_mutated_docker_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_mutated_docker_input" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh" >"$workdir/package-mutated-docker.log" 2>&1; then
@@ -11349,21 +11352,21 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
 fi
 grep -Fq 'Docker packaging source changed at terminal publication' "$workdir/package-mutated-docker.log"
 grep -Fqx 'prior Docker context' \
-    "$package_mutated_docker_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
+    "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context/prior-sentinel"
 grep -Fqx 'prior Docker archive' \
-    "$package_mutated_docker_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    "$package_mutated_docker_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
 [[ -z "$(find "$package_mutated_docker_input" \
-    \( -path '*/.oxidedns-package-locks' -o -name '*.oxidedns-remove.*' \) -prune -o \
+    \( -path '*/.borondns-package-locks' -o -name '*.borondns-remove.*' \) -prune -o \
     -type f -print -quit)" ]]
 rm "$package_dirty_repo/transient-docker-mutation"
 package_recursive_sentinel="$workdir/package-recursive-sentinel"
 mkdir "$package_recursive_sentinel"
 printf 'preserve recursive sentinel\n' >"$package_recursive_sentinel/sentinel"
-rm -rf "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl"
+rm -rf "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
 ln -s "$package_recursive_sentinel" \
-    "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl"
+    "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_clean_dist" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-staging-symlink.log" 2>&1; then
@@ -11371,13 +11374,13 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     exit 1
 fi
 grep -Fqx 'preserve recursive sentinel' "$package_recursive_sentinel/sentinel"
-rm "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl"
-rm -rf "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context"
+rm "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl"
+rm -rf "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
 ln -s "$package_recursive_sentinel" \
-    "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context"
+    "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    CARGO_TARGET_DIR="$package_clean_target" OXIDEDNS_DIST_DIR="$package_clean_dist" \
-    OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
+    CARGO_TARGET_DIR="$package_clean_target" BORONDNS_DIST_DIR="$package_clean_dist" \
+    BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_clean_docker_input" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-docker-image.sh" >"$workdir/package-context-symlink.log" 2>&1; then
@@ -11385,7 +11388,7 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     exit 1
 fi
 grep -Fqx 'preserve recursive sentinel' "$package_recursive_sentinel/sentinel"
-rm "$package_clean_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-context"
+rm "$package_clean_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-context"
 printf 'untracked packaging input\n' >"$package_dirty_repo/untracked-fixture"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11401,14 +11404,14 @@ if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$packag
     exit 1
 fi
 grep -Fq 'refusing Docker packaging from dirty or untracked source' "$workdir/package-dirty-docker.log"
-if GITHUB_ACTIONS=true OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+if GITHUB_ACTIONS=true BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
     "$package_dirty_repo/scripts/package-installer.sh" >"$workdir/package-dirty-actions.log" 2>&1; then
     printf 'package installer accepted dirty-source override in GitHub Actions\n' >&2
     exit 1
 fi
 grep -Fq 'dirty-source packaging override is forbidden in GitHub Actions release paths' \
     "$workdir/package-dirty-actions.log"
-if GITHUB_ACTIONS=true OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+if GITHUB_ACTIONS=true BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-dirty-sbom-actions.log" 2>&1; then
     printf 'SBOM builder accepted dirty-source override in GitHub Actions\n' >&2
     exit 1
@@ -11418,11 +11421,11 @@ grep -Fq 'dirty-source SBOM override is forbidden in GitHub Actions release path
 
 package_transient_dist="$workdir/package-transient-dist"
 rm "$package_dirty_repo/untracked-fixture"
-package_sbom_prefix=oxidedns-0.2.0-x86_64-unknown-linux-musl
+package_sbom_prefix=borondns-0.9.0-x86_64-unknown-linux-musl
 mkdir -p "$package_transient_dist"
 cp "$package_clean_dist/$package_sbom_prefix-sbom-manifest.tsv" \
-    "$package_clean_dist/$package_sbom_prefix-oxidedns.cdx.json" \
-    "$package_clean_dist/$package_sbom_prefix-oxidedns.cdx.json.sha256" \
+    "$package_clean_dist/$package_sbom_prefix-borondns.cdx.json" \
+    "$package_clean_dist/$package_sbom_prefix-borondns.cdx.json.sha256" \
     "$package_clean_dist/$package_sbom_prefix-oxide-gun.cdx.json" \
     "$package_clean_dist/$package_sbom_prefix-oxide-gun.cdx.json.sha256" \
     "$package_clean_dist/$package_sbom_prefix-docker-image.cdx.json" \
@@ -11435,8 +11438,8 @@ package_sbom_snapshot() {
         cd "$root"
         for artifact in \
             "$package_sbom_prefix-sbom-manifest.tsv" \
-            "$package_sbom_prefix-oxidedns.cdx.json" \
-            "$package_sbom_prefix-oxidedns.cdx.json.sha256" \
+            "$package_sbom_prefix-borondns.cdx.json" \
+            "$package_sbom_prefix-borondns.cdx.json.sha256" \
             "$package_sbom_prefix-oxide-gun.cdx.json" \
             "$package_sbom_prefix-oxide-gun.cdx.json.sha256" \
             "$package_sbom_prefix-docker-image.cdx.json" \
@@ -11447,7 +11450,7 @@ package_sbom_snapshot() {
 }
 package_transient_sbom_before="$(package_sbom_snapshot "$package_transient_dist")"
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_transient_dist" OXIDEDNS_SBOM_DOCKER=0 \
+    BORONDNS_DIST_DIR="$package_transient_dist" BORONDNS_SBOM_DOCKER=0 \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-transient-sbom.log" 2>&1; then
@@ -11459,7 +11462,7 @@ grep -Fq 'SBOM source changed at terminal publication' "$workdir/package-transie
 rm "$package_dirty_repo/transient-mutation"
 
 if PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_transient_dist" OXIDEDNS_SBOM_DOCKER=1 PACKAGE_SYFT_FAIL=1 \
+    BORONDNS_DIST_DIR="$package_transient_dist" BORONDNS_SBOM_DOCKER=1 PACKAGE_SYFT_FAIL=1 \
     PACKAGE_SYFT_LOG="$package_syft_log" PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
     "$package_dirty_repo/scripts/package-sbom.sh" >"$workdir/package-late-sbom.log" 2>&1; then
@@ -11472,7 +11475,7 @@ package_concurrent_sbom_dist="$workdir/package-concurrent-sbom-dist"
 package_concurrent_sbom_pids=()
 for package_concurrent_index in 1 2; do
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        OXIDEDNS_DIST_DIR="$package_concurrent_sbom_dist" OXIDEDNS_SBOM_DOCKER=0 \
+        BORONDNS_DIST_DIR="$package_concurrent_sbom_dist" BORONDNS_SBOM_DOCKER=0 \
         PACKAGE_CYCLONEDX_DELAY=0.2 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
         EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
         "$package_dirty_repo/scripts/package-sbom.sh" \
@@ -11484,10 +11487,10 @@ for package_concurrent_sbom_pid in "${package_concurrent_sbom_pids[@]}"; do
 done
 (
     cd "$package_concurrent_sbom_dist"
-    sha256sum -c "$package_sbom_prefix-oxidedns.cdx.json.sha256"
+    sha256sum -c "$package_sbom_prefix-borondns.cdx.json.sha256"
     sha256sum -c "$package_sbom_prefix-oxide-gun.cdx.json.sha256"
 )
-grep -Fq $'oxidedns\tCycloneDX 1.5 JSON' \
+grep -Fq $'borondns\tCycloneDX 1.5 JSON' \
     "$package_concurrent_sbom_dist/$package_sbom_prefix-sbom-manifest.tsv"
 
 # Different targets have different publication locks but cargo-cyclonedx writes
@@ -11500,9 +11503,9 @@ package_cyclonedx_lock_root="$workdir/package-cyclonedx-lock-root"
 package_cross_target_sbom_pids=()
 for package_cross_target in target-a target-b; do
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        OXIDEDNS_PACKAGE_TARGET="$package_cross_target" \
-        OXIDEDNS_DIST_DIR="$package_cross_target_sbom_dist" OXIDEDNS_SBOM_DOCKER=0 \
-        OXIDEDNS_CYCLONEDX_LOCK_ROOT="$package_cyclonedx_lock_root" \
+        BORONDNS_PACKAGE_TARGET="$package_cross_target" \
+        BORONDNS_DIST_DIR="$package_cross_target_sbom_dist" BORONDNS_SBOM_DOCKER=0 \
+        BORONDNS_CYCLONEDX_LOCK_ROOT="$package_cyclonedx_lock_root" \
         PACKAGE_CYCLONEDX_ACTIVE_DIR="$package_cyclonedx_active" \
         PACKAGE_CYCLONEDX_OVERLAP="$package_cyclonedx_overlap" PACKAGE_CYCLONEDX_DELAY=0.2 \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
@@ -11517,11 +11520,11 @@ for package_cross_target_sbom_pid in "${package_cross_target_sbom_pids[@]}"; do
 done
 [[ ! -e "$package_cyclonedx_overlap" && ! -e "$package_cyclonedx_active" ]]
 for package_cross_target in target-a target-b; do
-    [[ -f "$package_cross_target_sbom_dist/oxidedns-0.2.0-$package_cross_target-sbom-manifest.tsv" ]]
+    [[ -f "$package_cross_target_sbom_dist/borondns-0.9.0-$package_cross_target-sbom-manifest.tsv" ]]
     (
         cd "$package_cross_target_sbom_dist"
-        sha256sum -c "oxidedns-0.2.0-$package_cross_target-oxidedns.cdx.json.sha256"
-        sha256sum -c "oxidedns-0.2.0-$package_cross_target-oxide-gun.cdx.json.sha256"
+        sha256sum -c "borondns-0.9.0-$package_cross_target-borondns.cdx.json.sha256"
+        sha256sum -c "borondns-0.9.0-$package_cross_target-oxide-gun.cdx.json.sha256"
     )
 done
 
@@ -11534,9 +11537,9 @@ package_cross_name_cyclonedx_lock="$workdir/package-cross-name-cyclonedx-lock"
 package_cross_name_sbom_pids=()
 for package_cross_name in alpha beta; do
     PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        OXIDEDNS_PACKAGE_NAME="$package_cross_name" \
-        OXIDEDNS_DIST_DIR="$workdir/package-cross-name-$package_cross_name" OXIDEDNS_SBOM_DOCKER=0 \
-        OXIDEDNS_CYCLONEDX_LOCK_ROOT="$package_cross_name_cyclonedx_lock" \
+        BORONDNS_PACKAGE_NAME="$package_cross_name" \
+        BORONDNS_DIST_DIR="$workdir/package-cross-name-$package_cross_name" BORONDNS_SBOM_DOCKER=0 \
+        BORONDNS_CYCLONEDX_LOCK_ROOT="$package_cross_name_cyclonedx_lock" \
         PACKAGE_CYCLONEDX_ACTIVE_DIR="$package_cross_name_cyclonedx_active" \
         PACKAGE_CYCLONEDX_OVERLAP="$package_cross_name_cyclonedx_overlap" PACKAGE_CYCLONEDX_DELAY=0.2 \
         PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
@@ -11550,12 +11553,12 @@ for package_cross_name_sbom_pid in "${package_cross_name_sbom_pids[@]}"; do
 done
 [[ ! -e "$package_cross_name_cyclonedx_overlap" && ! -e "$package_cross_name_cyclonedx_active" ]]
 for package_cross_name in alpha beta; do
-    package_cross_name_prefix="$package_cross_name-0.2.0-x86_64-unknown-linux-musl"
+    package_cross_name_prefix="$package_cross_name-0.9.0-x86_64-unknown-linux-musl"
     package_cross_name_dist="$workdir/package-cross-name-$package_cross_name"
     [[ -f "$package_cross_name_dist/$package_cross_name_prefix-sbom-manifest.tsv" ]]
     (
         cd "$package_cross_name_dist"
-        sha256sum -c "$package_cross_name_prefix-oxidedns.cdx.json.sha256"
+        sha256sum -c "$package_cross_name_prefix-borondns.cdx.json.sha256"
         sha256sum -c "$package_cross_name_prefix-oxide-gun.cdx.json.sha256"
     )
 done
@@ -11569,8 +11572,8 @@ package_same_root_version_marker="$workdir/package-same-root-version-marker"
 package_same_root_second_started="$workdir/package-same-root-second-started"
 mkdir -m 0700 "$package_same_root_sbom_dist"
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_same_root_sbom_dist" OXIDEDNS_SBOM_DOCKER=0 \
-    OXIDEDNS_CYCLONEDX_LOCK_ROOT="$package_same_root_sbom_dist" \
+    BORONDNS_DIST_DIR="$package_same_root_sbom_dist" BORONDNS_SBOM_DOCKER=0 \
+    BORONDNS_CYCLONEDX_LOCK_ROOT="$package_same_root_sbom_dist" \
     PACKAGE_CYCLONEDX_VERSION_MARKER="$package_same_root_version_marker" \
     PACKAGE_CYCLONEDX_VERSION_DELAY=0.5 PACKAGE_CARGO_LOG="$package_clean_cargo_log" \
     EXPECTED_PACKAGE_ROOT="$package_dirty_repo" EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11582,8 +11585,8 @@ for _ in {1..200}; do
 done
 [[ -e "$package_same_root_version_marker" ]]
 PATH="$package_fake_bin:$PATH" CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-    OXIDEDNS_DIST_DIR="$package_same_root_sbom_dist" OXIDEDNS_SBOM_DOCKER=0 \
-    OXIDEDNS_CYCLONEDX_LOCK_ROOT="$package_same_root_sbom_dist" \
+    BORONDNS_DIST_DIR="$package_same_root_sbom_dist" BORONDNS_SBOM_DOCKER=0 \
+    BORONDNS_CYCLONEDX_LOCK_ROOT="$package_same_root_sbom_dist" \
     PACKAGE_CYCLONEDX_STARTED_MARKER="$package_same_root_second_started" \
     PACKAGE_CARGO_LOG="$package_clean_cargo_log" EXPECTED_PACKAGE_ROOT="$package_dirty_repo" \
     EXPECTED_PACKAGE_MANIFEST="$package_dirty_repo/Cargo.toml" \
@@ -11599,17 +11602,17 @@ wait "$package_same_root_second_pid"
 [[ -e "$package_same_root_second_started" ]]
 (
     cd "$package_same_root_sbom_dist"
-    sha256sum -c "$package_sbom_prefix-oxidedns.cdx.json.sha256"
+    sha256sum -c "$package_sbom_prefix-borondns.cdx.json.sha256"
     sha256sum -c "$package_sbom_prefix-oxide-gun.cdx.json.sha256"
 )
 [[ -z "$(find "$package_same_root_sbom_dist" -maxdepth 1 \
     \( -name '*.previous.*' -o -name '*.sbom-package.*' \) \
-    ! -name '*.oxidedns-remove.*' -print -quit)" ]]
+    ! -name '*.borondns-remove.*' -print -quit)" ]]
 
 package_nogit_repo="$workdir/package-nogit-repo"
 cp -a "$package_dirty_repo" "$package_nogit_repo"
 rm -rf "$package_nogit_repo/.git"
-if OXIDEDNS_DIST_DIR="$workdir/package-nogit-dist" "$package_nogit_repo/scripts/package-sbom.sh" \
+if BORONDNS_DIST_DIR="$workdir/package-nogit-dist" "$package_nogit_repo/scripts/package-sbom.sh" \
     >"$workdir/package-nogit-sbom.log" 2>&1; then
     printf 'SBOM builder accepted a non-Git source tree\n' >&2
     exit 1
@@ -11620,83 +11623,83 @@ grep -Fq 'SBOM packaging requires a Git-bound source checkout' "$workdir/package
 package_path_sentinel="$workdir/package-path-sentinel"
 printf 'preserve\n' >"$package_path_sentinel"
 for package_script in package-installer.sh package-docker-image.sh package-sbom.sh; do
-    if OXIDEDNS_PACKAGE_NAME='../package-path-sentinel' \
+    if BORONDNS_PACKAGE_NAME='../package-path-sentinel' \
         "$package_dirty_repo/scripts/$package_script" >"$workdir/$package_script-path.log" 2>&1; then
         printf '%s accepted a traversing package name\n' "$package_script" >&2
         exit 1
     fi
-    grep -Fq 'OXIDEDNS_PACKAGE_NAME must be a canonical safe basename component' \
+    grep -Fq 'BORONDNS_PACKAGE_NAME must be a canonical safe basename component' \
         "$workdir/$package_script-path.log"
     grep -Fqx preserve "$package_path_sentinel"
-    if OXIDEDNS_PACKAGE_TARGET='../package-path-sentinel' \
+    if BORONDNS_PACKAGE_TARGET='../package-path-sentinel' \
         "$package_dirty_repo/scripts/$package_script" >"$workdir/$package_script-target-path.log" 2>&1; then
         printf '%s accepted a traversing package target\n' "$package_script" >&2
         exit 1
     fi
-    grep -Fq 'OXIDEDNS_PACKAGE_TARGET must be a canonical safe basename component' \
+    grep -Fq 'BORONDNS_PACKAGE_TARGET must be a canonical safe basename component' \
         "$workdir/$package_script-target-path.log"
     grep -Fqx preserve "$package_path_sentinel"
 done
 printf 'untracked packaging input\n' >"$package_dirty_repo/untracked-fixture"
 printf 'preserved clean installer\n' \
-    >"$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz"
+    >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
 printf 'preserved clean Docker archive\n' \
-    >"$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+    >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
 (
     cd "$foreign_workspace"
     PATH="$package_fake_bin:$PATH" \
         CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_fake_target" OXIDEDNS_DIST_DIR="$package_fake_dist" \
-        OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
-        OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+        CARGO_TARGET_DIR="$package_fake_target" BORONDNS_DIST_DIR="$package_fake_dist" \
+        BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
+        BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
         EXPECTED_PACKAGE_ROOT="$repo_root" EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" \
         "$repo_root/scripts/package-installer.sh"
     set +e
     PATH="$package_fake_bin:$PATH" \
         CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        OXIDEDNS_DIST_DIR="$package_fake_dist" OXIDEDNS_SBOM_DOCKER=0 \
-        OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+        BORONDNS_DIST_DIR="$package_fake_dist" BORONDNS_SBOM_DOCKER=0 \
+        BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
         PACKAGE_CARGO_LOG="$package_cargo_log" EXPECTED_PACKAGE_ROOT="$repo_root" \
         EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" "$repo_root/scripts/package-sbom.sh"
     sbom_status=$?
     set -e
     [[ "$sbom_status" == 2 ]]
-    [[ -f "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty-sbom-manifest.tsv" ]]
+    [[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-sbom-manifest.tsv" ]]
     printf '%s\n' '#!/usr/bin/env bash' 'printf "stale substituted binary\n"' \
-        >"$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.bin"
-    chmod +x "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.bin"
+        >"$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin"
+    chmod +x "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin"
     PATH="$package_fake_bin:$PATH" \
         CARGO="$package_fake_bin/cargo" RUSTC="$package_fake_bin/rustc" \
-        CARGO_TARGET_DIR="$package_fake_target" OXIDEDNS_DIST_DIR="$package_fake_dist" \
-        OXIDEDNS_DOCKER_INSTALLER_DIST_DIR="$package_docker_input" \
-        OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
-        OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
+        CARGO_TARGET_DIR="$package_fake_target" BORONDNS_DIST_DIR="$package_fake_dist" \
+        BORONDNS_DOCKER_INSTALLER_DIST_DIR="$package_docker_input" \
+        BORONDNS_PACKAGE_ALLOW_DYNAMIC=1 PACKAGE_CARGO_LOG="$package_cargo_log" \
+        BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 \
         EXPECTED_PACKAGE_ROOT="$repo_root" EXPECTED_PACKAGE_MANIFEST="$repo_root/Cargo.toml" \
         "$repo_root/scripts/package-docker-image.sh"
 )
-[[ -f "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty.tar.xz" ]]
-[[ -f "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty-oxidedns.cdx.json" ]]
-[[ -f "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.tar.xz" ]]
+[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.tar.xz" ]]
+[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-borondns.cdx.json" ]]
+[[ -f "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.tar.xz" ]]
 grep -Fqx 'preserved clean installer' \
-    "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.tar.xz"
+    "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.tar.xz"
 grep -Fqx 'preserved clean Docker archive' \
-    "$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
-[[ "$("$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl.bin")" == "stale substituted binary" ]]
-[[ "$("$package_docker_input/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin")" == "oxidedns fake" ]]
-[[ "$("$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-context/oxidedns")" == "oxidedns fake" ]]
-package_docker_manifest="$package_docker_input/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty/manifest.txt"
-package_docker_binary_sha256="$(sha256sum "$package_docker_input/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin" | awk '{ print $1 }')"
+    "$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-docker-image.tar.xz"
+[[ "$("$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl.bin")" == "stale substituted binary" ]]
+[[ "$("$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin")" == "borondns fake" ]]
+[[ "$("$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-context/borondns")" == "borondns fake" ]]
+package_docker_manifest="$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty/manifest.txt"
+package_docker_binary_sha256="$(sha256sum "$package_docker_input/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty.bin" | awk '{ print $1 }')"
 grep -Fqx "commit=$(git -C "$repo_root" rev-parse --short=12 HEAD)" "$package_docker_manifest"
 grep -Fqx 'source_clean=0' "$package_docker_manifest"
 grep -Fqx 'release_eligible=0' "$package_docker_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_docker_manifest"
 grep -Fqx "binary_sha256=$package_docker_binary_sha256" "$package_docker_manifest"
-package_image_manifest="$package_fake_dist/oxidedns-0.2.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.manifest.txt"
+package_image_manifest="$package_fake_dist/borondns-0.9.0-x86_64-unknown-linux-musl-nonrelease-dirty-docker-image.manifest.txt"
 grep -Fqx 'source_clean=0' "$package_image_manifest"
 grep -Fqx 'release_eligible=0' "$package_image_manifest"
 grep -Fqx 'dirty_source_override=1' "$package_image_manifest"
-grep -Fqx 'image_ref=oxidedns:0.2.0-nonrelease-dirty' "$package_image_manifest"
-[[ -z "$(find "$package_fake_dist" -maxdepth 1 -name 'oxidedns-9.9.9-*' -print -quit)" ]]
+grep -Fqx 'image_ref=borondns:0.9.0-nonrelease-dirty' "$package_image_manifest"
+[[ -z "$(find "$package_fake_dist" -maxdepth 1 -name 'borondns-9.9.9-*' -print -quit)" ]]
 if grep -F 'metadata' "$package_cargo_log" | grep -Fv -- "--manifest-path $repo_root/Cargo.toml"; then
     printf 'packaging metadata escaped to the foreign caller workspace\n' >&2
     exit 1
@@ -11712,10 +11715,10 @@ printf '%s\n' '[workspace]' 'members = []' >"$repro_fixture_repo/Cargo.toml"
 printf '%s\n' '# fake lock' >"$repro_fixture_repo/Cargo.lock"
 git -C "$repro_fixture_repo" init -q
 git -C "$repro_fixture_repo" add .
-git -C "$repro_fixture_repo" -c user.name=OxideDNS -c user.email=tests@oxidedns.invalid \
+git -C "$repro_fixture_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
     commit -qm 'reproducible fixture'
 printf 'untracked source mutation\n' >"$repro_fixture_repo/untracked.txt"
-if OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_fixture_evidence" \
+if BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_fixture_evidence" \
     "$repro_fixture_repo/scripts/reproducible-build-compare.sh" >"$workdir/repro-dirty.log" 2>&1; then
     printf 'reproducible comparison accepted dirty source by default\n' >&2
     exit 1
@@ -11728,7 +11731,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
     'case "${1:-}" in' \
     '--version) printf "cargo 1.96.1 (fixture)\n" ;;' \
     'metadata) printf "%s\n" "{\"packages\":[]}" ;;' \
-    'build) target_dir=""; target=""; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; case "$package" in oxidedns-cli) binary=oxidedns ;; oxide-gun) binary=oxide-gun ;; *) exit 91 ;; esac; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"fixture $binary\\n\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary" ;;' \
+    'build) target_dir=""; target=""; package=""; while (($#)); do case "$1" in --target-dir) target_dir="$2"; shift 2 ;; --target) target="$2"; shift 2 ;; -p) package="$2"; shift 2 ;; *) shift ;; esac; done; case "$package" in borondns-cli) binary=borondns ;; oxide-gun) binary=oxide-gun ;; *) exit 91 ;; esac; mkdir -p "$target_dir/$target/release"; printf "%s\n" "#!/usr/bin/env bash" "printf \"fixture $binary\\n\"" >"$target_dir/$target/release/$binary"; chmod +x "$target_dir/$target/release/$binary" ;;' \
     '*) exit 92 ;;' \
     'esac' >"$repro_fixture_bin/cargo"
 # shellcheck disable=SC2016
@@ -11737,10 +11740,10 @@ printf '%s\n' '#!/usr/bin/env bash' \
     >"$repro_fixture_bin/rustc"
 chmod +x "$repro_fixture_bin/cargo" "$repro_fixture_bin/rustc"
 set +e
-OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 \
-    OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_fixture_evidence" \
-    OXIDEDNS_REPRODUCIBLE_BUILD_CARGO="$repro_fixture_bin/cargo" \
-    OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC="$repro_fixture_bin/rustc" \
+BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_fixture_evidence" \
+    BORONDNS_REPRODUCIBLE_BUILD_CARGO="$repro_fixture_bin/cargo" \
+    BORONDNS_REPRODUCIBLE_BUILD_RUSTC="$repro_fixture_bin/rustc" \
     "$repro_fixture_repo/scripts/reproducible-build-compare.sh" >"$workdir/repro-dirty-override.log" 2>&1
 repro_dirty_status=$?
 set -e
@@ -11755,10 +11758,10 @@ repro_stale_evidence="$workdir/repro-stale-evidence"
 mkdir "$repro_stale_evidence"
 printf 'reproducible_build_status=true\n' >"$repro_stale_evidence/reproducible-build-summary.env"
 repro_stale_hash="$(sha256sum "$repro_stale_evidence/reproducible-build-summary.env" | awk '{ print $1 }')"
-if OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 \
-    OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_stale_evidence" \
-    OXIDEDNS_REPRODUCIBLE_BUILD_CARGO="$repro_fixture_bin/cargo" \
-    OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC="$repro_fixture_bin/rustc" \
+if BORONDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 \
+    BORONDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$repro_stale_evidence" \
+    BORONDNS_REPRODUCIBLE_BUILD_CARGO="$repro_fixture_bin/cargo" \
+    BORONDNS_REPRODUCIBLE_BUILD_RUSTC="$repro_fixture_bin/rustc" \
     "$repro_fixture_repo/scripts/reproducible-build-compare.sh" >"$workdir/repro-stale.log" 2>&1; then
     printf 'reproducible comparison reused a stale evidence destination\n' >&2
     exit 1
@@ -11772,7 +11775,7 @@ mkdir -p "$format_repo"
 git -C "$format_repo" init -q
 printf '%s\n' '#!/usr/bin/env bash' 'if true;then' ' echo format-drift' 'fi' >"$format_repo/drift.sh"
 git -C "$format_repo" add drift.sh
-git -C "$format_repo" -c user.name=OxideDNS -c user.email=tests@oxidedns.invalid \
+git -C "$format_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
     commit -qm 'format drift fixture'
 format_hash_before="$(sha256sum "$format_repo/drift.sh" | awk '{ print $1 }')"
 format_status_before="$(git -C "$format_repo" status --short)"
@@ -11796,10 +11799,10 @@ if grep -Fq 'docker_wrapper_dir=' "$repo_root/scripts/large-surface-soak-campaig
     exit 1
 fi
 # shellcheck disable=SC2016
-grep -Fq 'campaign_prepare_private_temporary_tree "$plan_parent" oxidedns-fuzz-plan-staging' \
+grep -Fq 'campaign_prepare_private_temporary_tree "$plan_parent" borondns-fuzz-plan-staging' \
     "$repo_root/scripts/fuzz-soak-two-host-campaign.sh"
 # shellcheck disable=SC2016
-grep -Fq 'campaign_prepare_private_temporary_tree "$plan_parent" oxidedns-large-plan-staging' \
+grep -Fq 'campaign_prepare_private_temporary_tree "$plan_parent" borondns-large-plan-staging' \
     "$repo_root/scripts/large-surface-soak-campaign.sh"
 # shellcheck disable=SC2016
 grep -Fq 'post_active" == inactive && "$post_sub" == dead' \

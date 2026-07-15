@@ -6,12 +6,12 @@ usage() {
 Usage:
   scripts/prepare-knot-comparison-benchmark.sh querydb --zone ZONEFILE --out DIR [--limit N] [--shuffle]
   scripts/prepare-knot-comparison-benchmark.sh trace --querydb QUERYDB --out DIR
-  scripts/prepare-knot-comparison-benchmark.sh stage-knot-primary --zone ZONEFILE --out DIR [--zone-name NAME] [--knot-address IP] [--knot-port PORT] [--oxidedns-address IP] [--oxidedns-port PORT] [--health-address IP] [--health-port PORT] [--workers N] [--udp-runtime tokio|dedicated] [--udp-batch-size N] [--limit N] [--shuffle]
-  scripts/prepare-knot-comparison-benchmark.sh normalize-oxidedns --artifact DIR --out TSV
+  scripts/prepare-knot-comparison-benchmark.sh stage-knot-primary --zone ZONEFILE --out DIR [--zone-name NAME] [--knot-address IP] [--knot-port PORT] [--borondns-address IP] [--borondns-port PORT] [--health-address IP] [--health-port PORT] [--workers N] [--udp-runtime tokio|dedicated] [--udp-batch-size N] [--limit N] [--shuffle]
+  scripts/prepare-knot-comparison-benchmark.sh normalize-borondns --artifact DIR --out TSV
   scripts/prepare-knot-comparison-benchmark.sh normalize-kxdpgun --log LOG --duration SEC --out TSV
 
 The querydb, trace, and stage-knot-primary modes prepare one query mix for both
-kxdpgun and the OxideDNS dns-load-client. The normalize modes write comparable
+kxdpgun and the BoronDNS dns-load-client. The normalize modes write comparable
 throughput rows.
 EOF
 }
@@ -27,7 +27,7 @@ mode="${1:-}"
 shift || true
 
 case "$mode" in
-querydb | trace | stage-knot-primary | normalize-oxidedns | normalize-kxdpgun) ;;
+querydb | trace | stage-knot-primary | normalize-borondns | normalize-kxdpgun) ;;
 *)
     usage
     exit 64
@@ -45,8 +45,8 @@ duration=""
 shuffle="false"
 knot_address="127.0.0.1"
 knot_port="5301"
-oxidedns_address="127.0.0.1"
-oxidedns_port="5300"
+borondns_address="127.0.0.1"
+borondns_port="5300"
 health_address="127.0.0.1"
 health_port="8080"
 workers="1"
@@ -98,12 +98,12 @@ while (($# > 0)); do
         knot_port="${2:-}"
         shift 2
         ;;
-    --oxidedns-address)
-        oxidedns_address="${2:-}"
+    --borondns-address)
+        borondns_address="${2:-}"
         shift 2
         ;;
-    --oxidedns-port)
-        oxidedns_port="${2:-}"
+    --borondns-port)
+        borondns_port="${2:-}"
         shift 2
         ;;
     --health-address)
@@ -215,7 +215,7 @@ Files:
 - \`querydb\`: kxdpgun text input, \`qname qtype [flags]\`.
 
 For DNSSEC DO queries, append \` D\` to selected rows before running both
-kxdpgun and OxideDNS trace conversion.
+kxdpgun and BoronDNS trace conversion.
 EOF
     printf 'querydb=%s\n' "$out/querydb"
     ;;
@@ -256,7 +256,7 @@ stage-knot-primary)
     [[ -n "$out" ]] || die "--out is required"
     [[ "$limit" =~ ^[0-9]+$ ]] || die "--limit must be a non-negative integer"
     [[ "$knot_port" =~ ^[0-9]+$ ]] || die "--knot-port must be an integer"
-    [[ "$oxidedns_port" =~ ^[0-9]+$ ]] || die "--oxidedns-port must be an integer"
+    [[ "$borondns_port" =~ ^[0-9]+$ ]] || die "--borondns-port must be an integer"
     [[ "$health_port" =~ ^[0-9]+$ ]] || die "--health-port must be an integer"
     [[ "$workers" =~ ^[0-9]+$ ]] || die "--workers must be a positive integer"
     [[ "$udp_batch_size" =~ ^[0-9]+$ ]] || die "--udp-batch-size must be a positive integer"
@@ -267,7 +267,7 @@ stage-knot-primary)
     *) die "--udp-runtime must be tokio or dedicated" ;;
     esac
     mkdir -p "$out"
-    python3 - "$zone_file" "$out" "$zone_name" "$limit" "$shuffle" "$knot_address" "$knot_port" "$oxidedns_address" "$oxidedns_port" "$health_address" "$health_port" "$workers" "$udp_runtime" "$udp_batch_size" "$repo_root" <<'PY'
+    python3 - "$zone_file" "$out" "$zone_name" "$limit" "$shuffle" "$knot_address" "$knot_port" "$borondns_address" "$borondns_port" "$health_address" "$health_port" "$workers" "$udp_runtime" "$udp_batch_size" "$repo_root" <<'PY'
 import random
 import shutil
 import stat
@@ -281,8 +281,8 @@ limit = int(sys.argv[4])
 shuffle = sys.argv[5] == "true"
 knot_address = sys.argv[6]
 knot_port = sys.argv[7]
-oxidedns_address = sys.argv[8]
-oxidedns_port = sys.argv[9]
+borondns_address = sys.argv[8]
+borondns_port = sys.argv[9]
 health_address = sys.argv[10]
 health_port = sys.argv[11]
 workers = int(sys.argv[12])
@@ -412,14 +412,14 @@ zone:
 """
 (out / "knot.conf").write_text(knot_conf, encoding="utf-8")
 
-oxidedns_conf = f"""[server]
+borondns_conf = f"""[server]
 log_level = "info"
 log_format = "json"
 
 [interfaces]
-dns = [{{ address = "{oxidedns_address}:{oxidedns_port}", name = "bench0" }}]
+dns = [{{ address = "{borondns_address}:{borondns_port}", name = "bench0" }}]
 mgmt = ["{health_address}:{health_port}"]
-transfer = ["{oxidedns_address}:0"]
+transfer = ["{borondns_address}:0"]
 
 [health]
 bind_address = "{health_address}"
@@ -454,7 +454,7 @@ class = "IN"
 primaries = ["{knot_address}:{knot_port}"]
 notify_sources = ["{knot_address}"]
 """
-(out / "oxidedns.toml").write_text(oxidedns_conf, encoding="utf-8")
+(out / "borondns.toml").write_text(borondns_conf, encoding="utf-8")
 
 runbook = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -465,9 +465,9 @@ cd "$(dirname "$0")"
 : "${{KNOTC:=knotc}}"
 : "${{DIG:=dig}}"
 : "${{CURL:=curl}}"
-: "${{OXIDEDNS_BIN:={repo_root / 'target' / 'release' / 'oxidedns'}}}"
+: "${{BORONDNS_BIN:={repo_root / 'target' / 'release' / 'borondns'}}}"
 : "${{LOAD_CLIENT:={repo_root / 'target' / 'benchmark-tools' / 'dns-load-client'}}}"
-: "${{BENCH_ARTIFACT:=evidence/oxidedns-idle-after-knot-transfer}}"
+: "${{BENCH_ARTIFACT:=evidence/borondns-idle-after-knot-transfer}}"
 : "${{RUN_IDLE_BENCHMARK:=true}}"
 : "${{BENCH_DURATION:=15}}"
 : "${{BENCH_THREADS:=8}}"
@@ -479,9 +479,9 @@ cd "$(dirname "$0")"
 
 cleanup() {{
     local status=$?
-    if [[ -n "${{oxidedns_pid:-}}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${{borondns_pid:-}}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${{knot_pid:-}}" ]] && kill -0 "$knot_pid" 2>/dev/null; then
         kill "$knot_pid" 2>/dev/null || true
@@ -494,7 +494,7 @@ trap cleanup EXIT
 mkdir -p knot/run knot/db evidence
 
 "$KNOTC" -c knot.conf conf-check
-"$OXIDEDNS_BIN" --validate-config oxidedns.toml
+"$BORONDNS_BIN" --validate-config borondns.toml
 
 "$KNOTD" -c knot.conf -v >knot.log 2>&1 &
 knot_pid=$!
@@ -507,8 +507,8 @@ for _ in {{1..120}}; do
 done
 "$DIG" "@{knot_address}" -p "{knot_port}" "{zone_name}" AXFR +time=5 +tries=1 >primary-axfr.out
 
-"$OXIDEDNS_BIN" serve --config oxidedns.toml >oxidedns.log 2>&1 &
-oxidedns_pid=$!
+"$BORONDNS_BIN" serve --config borondns.toml >borondns.log 2>&1 &
+borondns_pid=$!
 
 for _ in {{1..180}}; do
     ready="$("$CURL" -fsS "http://{health_address}:{health_port}/readyz" 2>/dev/null || true)"
@@ -518,19 +518,19 @@ for _ in {{1..180}}; do
     sleep 0.25
 done
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after Knot AXFR" >&2
+    echo "BoronDNS did not become ready after Knot AXFR" >&2
     exit 1
 fi
 
-"$DIG" "@{oxidedns_address}" -p "{oxidedns_port}" "{zone_name}" SOA +time=2 +tries=1 +short >oxidedns-soa-before-knot-stop.out
+"$DIG" "@{borondns_address}" -p "{borondns_port}" "{zone_name}" SOA +time=2 +tries=1 +short >borondns-soa-before-knot-stop.out
 
 kill "$knot_pid"
 wait "$knot_pid" 2>/dev/null || true
 unset knot_pid
 
-"$DIG" "@{oxidedns_address}" -p "{oxidedns_port}" "{zone_name}" SOA +time=2 +tries=1 +short >oxidedns-soa-after-knot-stop.out
+"$DIG" "@{borondns_address}" -p "{borondns_port}" "{zone_name}" SOA +time=2 +tries=1 +short >borondns-soa-after-knot-stop.out
 
-echo "Knot has been stopped. OxideDNS is serving the transferred zone from its in-memory snapshot."
+echo "Knot has been stopped. BoronDNS is serving the transferred zone from its in-memory snapshot."
 if [[ "$RUN_IDLE_BENCHMARK" == "true" ]]; then
     mkdir -p "$BENCH_ARTIFACT/network"
     rustc --edition=2024 -O "{repo_root / 'tools' / 'dns-load-client.rs'}" -o "$LOAD_CLIENT"
@@ -538,8 +538,8 @@ if [[ "$RUN_IDLE_BENCHMARK" == "true" ]]; then
     "$CURL" -fsS "http://{health_address}:{health_port}/metrics" >"$BENCH_ARTIFACT/metrics-before.prom" || true
     "$LOAD_CLIENT" \
         --transport "$BENCH_TRANSPORT" \
-        --server "{oxidedns_address}" \
-        --port "{oxidedns_port}" \
+        --server "{borondns_address}" \
+        --port "{borondns_port}" \
         --bind "$BENCH_BIND" \
         --threads "$BENCH_THREADS" \
         --udp-sockets-per-thread "$BENCH_UDP_SOCKETS_PER_THREAD" \
@@ -551,7 +551,7 @@ if [[ "$RUN_IDLE_BENCHMARK" == "true" ]]; then
     cat >"$BENCH_ARTIFACT/run.env" <<EOF
 zone_name={zone_name}
 knot_primary={knot_address}:{knot_port}
-oxidedns_server={oxidedns_address}:{oxidedns_port}
+borondns_server={borondns_address}:{borondns_port}
 bench_transport=$BENCH_TRANSPORT
 bench_duration_seconds=$BENCH_DURATION
 bench_threads=$BENCH_THREADS
@@ -647,9 +647,9 @@ with (artifact / "network" / "proc-net-dev-delta.tsv").open("w", encoding="utf-8
     for key, value in sorted(deltas.items()):
         handle.write(f"{{key}}\\t{{value}}\\n")
 BENCH_PY
-    echo "OxideDNS idle benchmark artifact: $BENCH_ARTIFACT"
+    echo "BoronDNS idle benchmark artifact: $BENCH_ARTIFACT"
 else
-    echo "RUN_IDLE_BENCHMARK=false; OxideDNS readiness after Knot stop was verified but no load run was executed."
+    echo "RUN_IDLE_BENCHMARK=false; BoronDNS readiness after Knot stop was verified but no load run was executed."
 fi
 """
 runbook_path = out / "runbook.sh"
@@ -658,32 +658,32 @@ runbook_path.chmod(runbook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | s
 
 readme = f"""# Knot Primary Comparison Stage
 
-This directory stages one benchmark zone with Knot as the primary and OxideDNS
+This directory stages one benchmark zone with Knot as the primary and BoronDNS
 as a secondary.
 
 Files:
 - `primary.zone`: copied source zone.
 - `knot.conf`: Knot primary config serving `primary.zone` on `{knot_address}@{knot_port}`.
-- `oxidedns.toml`: OxideDNS secondary config transferring `{zone_name}` from Knot and serving on `{oxidedns_address}:{oxidedns_port}`.
+- `borondns.toml`: BoronDNS secondary config transferring `{zone_name}` from Knot and serving on `{borondns_address}:{borondns_port}`.
 - `querydb`: kxdpgun input generated from the zone.
-- `query-trace.tsv`: equivalent OxideDNS load-client trace.
-- `runbook.sh`: validates configs, starts Knot, waits for OxideDNS transfer readiness, stops Knot, and can run a direct load-client benchmark while OxideDNS serves the transferred snapshot.
+- `query-trace.tsv`: equivalent BoronDNS load-client trace.
+- `runbook.sh`: validates configs, starts Knot, waits for BoronDNS transfer readiness, stops Knot, and can run a direct load-client benchmark while BoronDNS serves the transferred snapshot.
 
 Use `querydb` unchanged for the Knot/kxdpgun reference run. Use
-`query-trace.tsv` for OxideDNS runs so both implementations see the same query
+`query-trace.tsv` for BoronDNS runs so both implementations see the same query
 mix.
 """
 (out / "README.md").write_text(readme, encoding="utf-8")
 PY
     printf 'stage=%s\n' "$out"
     printf 'knot_config=%s\n' "$out/knot.conf"
-    printf 'oxidedns_config=%s\n' "$out/oxidedns.toml"
+    printf 'borondns_config=%s\n' "$out/borondns.toml"
     printf 'querydb=%s\n' "$out/querydb"
     printf 'query_trace=%s\n' "$out/query-trace.tsv"
     printf 'runbook=%s\n' "$out/runbook.sh"
     ;;
-normalize-oxidedns)
-    [[ -d "$artifact" ]] || die "--artifact must name an OxideDNS benchmark artifact directory"
+normalize-borondns)
+    [[ -d "$artifact" ]] || die "--artifact must name an BoronDNS benchmark artifact directory"
     [[ -n "$out" ]] || die "--out is required"
     python3 - "$artifact/benchmark-results.tsv" "$out" <<'PY'
 import csv
@@ -741,7 +741,7 @@ fields = [
     "drops_or_lost", "errors", "throughput_scope",
 ]
 row = {
-    "implementation": "oxidedns",
+    "implementation": "borondns",
     "artifact": str(results.parent),
     "qps": values.get("responses_per_second", ""),
     "responses_per_second": values.get("responses_per_second", ""),

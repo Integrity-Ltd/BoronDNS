@@ -29,5 +29,5 @@ zone "alpha.test." IN {
     ixfr-from-differences yes;
     max-ixfr-ratio unlimited;
     notify explicit;
-    also-notify { 127.0.0.1 port __OXIDEDNS_PORT__; };
+    also-notify { 127.0.0.1 port __BORONDNS_PORT__; };
 };

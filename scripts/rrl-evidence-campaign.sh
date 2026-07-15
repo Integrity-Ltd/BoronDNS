@@ -167,7 +167,7 @@ write_git_state() {
 
 write_readme() {
     cat >"$evidence_dir/README.md" <<EOF
-# OxideDNS RRL Evidence Campaign
+# BoronDNS RRL Evidence Campaign
 
 - Created UTC: $timestamp
 - Repository: $repo_root
@@ -242,7 +242,7 @@ run_one() {
     set +e
     (
         cd "$repo_root"
-        OXIDEDNS_RRL_UDP_ARTIFACT_DIR="$artifact_dir" "${cmd[@]}"
+        BORONDNS_RRL_UDP_ARTIFACT_DIR="$artifact_dir" "${cmd[@]}"
     ) >"$run_log" 2>&1
     status=$?
     set -e

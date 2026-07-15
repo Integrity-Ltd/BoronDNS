@@ -6,19 +6,19 @@ release notes still need retained operational evidence before formal SRS
 acceptance can claim that the whole RRL threshold profile has been reviewed for
 the accepted release.
 
-The baseline follows `docs/OxideDNS-Secondary-SRS-v0.9.1.md` section 4.17 and is
-mirrored by `config/oxidedns.example.toml`.
+The baseline follows `docs/BoronDNS-Secondary-SRS-v0.9.1.md` section 4.17 and is
+mirrored by `config/borondns.example.toml`.
 
 | Setting | Baseline | SRS requirement | Release-review status |
 | --- | ---: | --- | --- |
 | RRL enabled | `true` | ODS-FR-RRL-001 | Implemented SRS body default |
 | IPv4 source prefix length | `24` | ODS-FR-RRL-002 | Implemented SRS body default |
 | IPv6 source prefix length | `56` | ODS-FR-RRL-002 | Implemented SRS body default |
-| Positive response rate | `20/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
-| NXDOMAIN response rate | `5/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
-| NODATA response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
-| Referral response rate | `10/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
-| Error response rate | `5/s` | ODS-FR-RRL-003 | OxideDNS project default, not a vendor default |
+| Positive response rate | `20/s` | ODS-FR-RRL-003 | BoronDNS project default, not a vendor default |
+| NXDOMAIN response rate | `5/s` | ODS-FR-RRL-003 | BoronDNS project default, not a vendor default |
+| NODATA response rate | `10/s` | ODS-FR-RRL-003 | BoronDNS project default, not a vendor default |
+| Referral response rate | `10/s` | ODS-FR-RRL-003 | BoronDNS project default, not a vendor default |
+| Error response rate | `5/s` | ODS-FR-RRL-003 | BoronDNS project default, not a vendor default |
 | Slip | `2` | ODS-FR-RRL-005 | Resolved SRS v0.9.1 default; retain operational evidence before formal acceptance |
 | Maximum tracked keys | `100000` | ODS-FR-RRL-010 | Implemented SRS body default |
 | Summary log interval | `60s` | ODS-FR-RRL-011 | Implemented SRS body default |

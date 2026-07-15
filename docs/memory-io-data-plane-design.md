@@ -7,13 +7,13 @@ remaining retirement work are tracked in
 
 Owner: this document owns implementation planning for a future cache-local
 authoritative query data plane. Normative DNS behavior remains owned by
-`docs/OxideDNS-Secondary-SRS-v0.9.1.md`; the current deferred-track boundary
+`docs/BoronDNS-Secondary-SRS-v0.9.1.md`; the current deferred-track boundary
 remains owned by `docs/future-optimization-tracks.md`; release evidence remains
 owned by the verification ledger and release evidence documents.
 
 ## Purpose
 
-The current OxideDNS server favors correctness, readable ownership, and broad
+The current BoronDNS server favors correctness, readable ownership, and broad
 protocol coverage. That is the right shape for transfer ingestion, validation,
 configuration, health, metrics, and release evidence. The next performance
 track should not rewrite DNS semantics. It should introduce a separate
@@ -634,7 +634,7 @@ from retained evidence rather than hand-run profiles.
 
 For hosts that block direct `perf -p` attach under the default
 `perf_event_paranoid` policy, the benchmark can optionally use the installed
-`/usr/local/libexec/oxidedns-perf-capture` helper through non-interactive
+`/usr/local/libexec/borondns-perf-capture` helper through non-interactive
 `sudo -n`. The helper is root-owned, installed by one `pkexec` setup step, and
 checks target PID ownership before running `perf stat` or `perf record`.
 
@@ -735,9 +735,9 @@ so the common DNS batch loop can later consume either ordinary socket batches
 or AF_XDP RX/TX ring batches while allowing the AF_XDP backend to own and
 release UMEM frames after each batch. Selecting `af_xdp` currently fails with
 an explicit `UdpBackendUnavailable` runtime error; without the
-`oxidedns-server/af-xdp` feature the error reports that the binary lacks AF_XDP
+`borondns-server/af-xdp` feature the error reports that the binary lacks AF_XDP
 support. With the feature, the server binds an AF_XDP socket, loads the
-project-built `oxidedns_xdp_redirect` object, configures its destination-port
+project-built `borondns_xdp_redirect` object, configures its destination-port
 selector and XSK map, and attaches the program in the configured mode. The
 feature-gated `af_xdp` helper module has safe local coverage for parsing
 Ethernet/IPv4/UDP DNS frames, extracting source/destination socket metadata,
@@ -747,12 +747,12 @@ checksum. The same module also has a tested send-side primitive that writes
 larger or smaller DNS responses into an owned AF_XDP packet, resizes the packet
 tail, and avoids transmitting stale bytes.
 
-`crates/oxidedns-server-ebpf` owns the excluded Rust eBPF redirect object, and
-`scripts/oxidedns-server-build-ebpf.sh` builds it with `bpf-linker`. The local
-root-only smoke path is `scripts/oxidedns-af-xdp-veth-smoke.sh`, which creates
+`crates/borondns-server-ebpf` owns the excluded Rust eBPF redirect object, and
+`scripts/borondns-server-build-ebpf.sh` builds it with `bpf-linker`. The local
+root-only smoke path is `scripts/borondns-af-xdp-veth-smoke.sh`, which creates
 a veth pair and verifies generic-mode AF_XDP bind/attach startup. On
 2026-06-01 that smoke passed locally with evidence under
-`target/oxidedns-af-xdp-veth-smoke/`. This is intentional local scaffolding,
+`target/borondns-af-xdp-veth-smoke/`. This is intentional local scaffolding,
 not a packet-bypass performance result.
 
 ## Unsafe And Dependency Policy
@@ -932,7 +932,7 @@ self-check duration
 
 The runtime exposes the child fan-out, RRsets-per-owner, RDATA-per-RRset, and
 RDATA-bytes-per-RRset distributions as opt-in Prometheus gauges under
-`oxidedns_zone_shape_*` when `[metrics].zone_shape_enabled = true`. These are
+`borondns_zone_shape_*` when `[metrics].zone_shape_enabled = true`. These are
 scrape-time diagnostics for retained layout evidence and must stay disabled for
 plain throughput runs unless the run is explicitly collecting memory-layout
 data.
@@ -1200,7 +1200,7 @@ receive/send batches and retained `zone_image_serve_failures=0` with rollback
 count `0`. This keeps standard UDP batching as the local no-XDP baseline, but
 it is still loopback evidence and cannot promote a physical NIC claim.
 The same harness now has opt-in bounded UDP DNS packet capture through
-`OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED=true`. The retained
+`BORONDNS_BENCH_PACKET_CAPTURE_ENABLED=true`. The retained
 `target/evidence/udp-batch-loopback-current-32-pcap-sampled` artifact captured
 128 DNS packets on loopback with 64 queries and 64 responses, zero drops/errors,
 and `zone_image_serve_failures=0`. This closes the local sampled-response
@@ -1262,9 +1262,9 @@ mix, and zone-shape metadata is not useful for promotion decisions.
 The initial in-tree prototype benchmark is:
 
 ```sh
-OXIDEDNS_ZONE_IMAGE_BENCH_RECORDS=10000 \
-OXIDEDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES=2000 \
-OXIDEDNS_ZONE_IMAGE_BENCH_ITERATIONS=200000 \
+BORONDNS_ZONE_IMAGE_BENCH_RECORDS=10000 \
+BORONDNS_ZONE_IMAGE_BENCH_STRESS_CANDIDATES=2000 \
+BORONDNS_ZONE_IMAGE_BENCH_ITERATIONS=200000 \
 scripts/benchmark-zone-image-prototype.sh
 ```
 
@@ -1283,7 +1283,7 @@ deterministic hot-query shape
 also exercises 90 percent repeated `host0` A queries and 10 percent spread
 queries across the generated zone at both lookup and packet layers. A weighted
 reference trace fixture in
-`crates/oxidedns-core/examples/zone_image_reference_trace.tsv` covers repeated
+`crates/borondns-core/examples/zone_image_reference_trace.tsv` covers repeated
 positive A queries, spread positives, CNAME, wildcard, referral, NODATA,
 NXDOMAIN, DNAME, opaque unknown RDATA, large EDNS TXT, and signed DO packets.
 The output is tab-separated metrics for schema version, build and host
@@ -1676,7 +1676,7 @@ mixed wire ratio `0.156`, and packet ratios inside the local gates.
 | `benchmark_cpu_model` | `AMD Ryzen 9 9950X3D 16-Core Processor` |
 | `benchmark_network_device` | `not-applicable-in-process-benchmark` |
 | `benchmark_artifact` | `target/zone-image-bench/prototype-latest.tsv` |
-| `benchmark_trace` | `crates/oxidedns-core/examples/zone_image_reference_trace.tsv` |
+| `benchmark_trace` | `crates/borondns-core/examples/zone_image_reference_trace.tsv` |
 | `query_mix_direct` | `flat_positive_a` |
 | `query_mix_hot_direct` | `repeated_host0_90_percent_spread_10_percent` |
 | `query_mix_trace` | `weighted_reference_trace_tsv` |
@@ -4861,17 +4861,17 @@ checker gates. Template-backed transmission still remains separate future work.
 ### Live Loopback Serving Sample
 
 `scripts/benchmark-dns-clients.sh` can compare the current snapshot serving path
-and the default-enabled ZoneImage serving path through the actual OxideDNS runtime,
+and the default-enabled ZoneImage serving path through the actual BoronDNS runtime,
 loopback UDP/TCP sockets, AXFR load from a synthetic primary, and the checked-in
 `tools/dns-load-client.rs` load client. It can also pass an explicit query
-trace into the client with `OXIDEDNS_BENCH_TRACE_ENABLED=true` or
-`OXIDEDNS_BENCH_TRACE_FILE=/path/to/query-trace.tsv`; retained artifacts record
+trace into the client with `BORONDNS_BENCH_TRACE_ENABLED=true` or
+`BORONDNS_BENCH_TRACE_FILE=/path/to/query-trace.tsv`; retained artifacts record
 `query_mode`, `trace_queries`, and the exact `query-trace.tsv` input when trace
 mode is used. Trace rows may specify `rcode=` and `answers=` expectations so
 positive, NODATA, and NXDOMAIN rows can be validated through the same live
-client. For physical NIC evidence, the same harness can bind OxideDNS to a
-chosen address with `OXIDEDNS_BENCH_LISTEN_ADDRESS`, drive a concrete client
-destination with `OXIDEDNS_BENCH_CLIENT_SERVER`, and retain the selected or
+client. For physical NIC evidence, the same harness can bind BoronDNS to a
+chosen address with `BORONDNS_BENCH_LISTEN_ADDRESS`, drive a concrete client
+destination with `BORONDNS_BENCH_CLIENT_SERVER`, and retain the selected or
 auto-detected `network_device` in `run.env` and `benchmark-results.tsv`. Each
 run also retains a `network/` artifact directory with before/after route, link,
 `/proc/net/dev`, softirq, interrupt, optional `ethtool` snapshots, and
@@ -4885,17 +4885,17 @@ for both the current-path and ZoneImage artifacts. RX and TX packet deltas must
 also scale with the measured response count; the default threshold is `0.25`
 packets per measured response.
 Use
-`OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true` for physical-NIC evidence so
+`BORONDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE=true` for physical-NIC evidence so
 loopback or unresolved device selection fails before a run is recorded:
 
 ```sh
-OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR=target/evidence/zone-image-live-loopback \
-OXIDEDNS_BENCH_DURATION_SECONDS=3 \
-OXIDEDNS_BENCH_RECORDS=10000 \
-OXIDEDNS_BENCH_TRANSPORT=udp \
-OXIDEDNS_BENCH_SERVER_THREADS=4 \
-OXIDEDNS_BENCH_CLIENT_THREADS=8 \
-OXIDEDNS_BENCH_CLIENT_WINDOW=64 \
+BORONDNS_DNS_CLIENT_BENCHMARK_DIR=target/evidence/zone-image-live-loopback \
+BORONDNS_BENCH_DURATION_SECONDS=3 \
+BORONDNS_BENCH_RECORDS=10000 \
+BORONDNS_BENCH_TRANSPORT=udp \
+BORONDNS_BENCH_SERVER_THREADS=4 \
+BORONDNS_BENCH_CLIENT_THREADS=8 \
+BORONDNS_BENCH_CLIENT_WINDOW=64 \
 scripts/benchmark-dns-clients.sh
 ```
 
@@ -4917,7 +4917,7 @@ Retained loopback TCP samples from 2026-05-28:
 | TCP pipelined, 4 clients x window 16 | true | 839,776 | 54.8 | 129.2 | 264.3 | 0 | 0 | `target/evidence/zone-image-live-loopback-tcp-enabled` |
 
 Retained mixed-trace loopback samples from 2026-05-28, using
-`OXIDEDNS_BENCH_TRACE_ENABLED=true`, 1,000 generated A records, 263 retained
+`BORONDNS_BENCH_TRACE_ENABLED=true`, 1,000 generated A records, 263 retained
 trace rows, four clients, and window 16:
 
 | Transport | ZoneImage serving | Responses/s | p50 us | p99 us | p999 us | Dropped | Errors | Artifact |
@@ -4943,7 +4943,7 @@ errors or drops. This is useful runtime-path evidence, but it is still not
 physical NIC, multi-queue, or production-operator trace evidence.
 
 Retained delegation/DNAME stress loopback samples from 2026-05-29, using the
-same retained trace for both runs, `OXIDEDNS_BENCH_STRESS_CANDIDATES=128`,
+same retained trace for both runs, `BORONDNS_BENCH_STRESS_CANDIDATES=128`,
 1,000 generated A records, 1,517 AXFR records, 392 trace rows, four clients,
 and window 16:
 
@@ -4964,16 +4964,16 @@ The end-to-end gate wrapper
 was produced with:
 
 ```sh
-OXIDEDNS_ZONE_IMAGE_GATE_DIR=target/evidence/zone-image-evidence-gate-loopback-stress-smoke-final \
-OXIDEDNS_ZONE_IMAGE_GATE_MIN_QPS_RATIO=1.25 \
-OXIDEDNS_ZONE_IMAGE_GATE_MAX_P50_RATIO=0.75 \
-OXIDEDNS_BENCH_DURATION_SECONDS=1 \
-OXIDEDNS_BENCH_RECORDS=1000 \
-OXIDEDNS_BENCH_STRESS_CANDIDATES=128 \
-OXIDEDNS_BENCH_TRANSPORT=udp \
-OXIDEDNS_BENCH_SERVER_THREADS=4 \
-OXIDEDNS_BENCH_CLIENT_THREADS=4 \
-OXIDEDNS_BENCH_CLIENT_WINDOW=16 \
+BORONDNS_ZONE_IMAGE_GATE_DIR=target/evidence/zone-image-evidence-gate-loopback-stress-smoke-final \
+BORONDNS_ZONE_IMAGE_GATE_MIN_QPS_RATIO=1.25 \
+BORONDNS_ZONE_IMAGE_GATE_MAX_P50_RATIO=0.75 \
+BORONDNS_BENCH_DURATION_SECONDS=1 \
+BORONDNS_BENCH_RECORDS=1000 \
+BORONDNS_BENCH_STRESS_CANDIDATES=128 \
+BORONDNS_BENCH_TRANSPORT=udp \
+BORONDNS_BENCH_SERVER_THREADS=4 \
+BORONDNS_BENCH_CLIENT_THREADS=4 \
+BORONDNS_BENCH_CLIENT_WINDOW=16 \
 scripts/zone-image-evidence-gate.sh
 ```
 
@@ -4981,7 +4981,7 @@ It retained current and ZoneImage sub-artifacts plus `comparison.tsv`; the
 comparison passed with matching trace SHA-256, `2.395x` responses/s, `0.411x`
 p50, `0.516x` p99, and `0.222x` p999 latency ratios. The wrapper is the
 repeatable local promotion command; physical NIC promotion should run the same
-script with `OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true` and suitable
+script with `BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true` and suitable
 listen/client/network-device settings.
 
 After adding explicit served-path metrics, the retained
@@ -5088,8 +5088,8 @@ slice also passed:
 - `python3 scripts/check-doc-hygiene.py`;
 - `bash scripts/check-shell-scripts.sh`;
 - `cargo fmt --check`;
-- `cargo check -p oxidedns-core --example zone_image_bench`;
-- `cargo test -p oxidedns-core --lib zone::tests -- --test-threads=1`;
+- `cargo check -p borondns-core --example zone_image_bench`;
+- `cargo test -p borondns-core --lib zone::tests -- --test-threads=1`;
 - `git diff --check`.
 
 This closes the current single-device local batch-ceiling task. Further
@@ -5101,7 +5101,7 @@ checks cover the local safe-Rust, shell, unit-test, differential-correctness,
 and loopback performance gates for the immutable ZoneImage path. They do not
 replace the physical NIC promotion gate; that still requires rerunning
 `scripts/zone-image-evidence-gate.sh` with
-`OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true` and real listen/client
+`BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK=true` and real listen/client
 addresses on a suitable multi-queue host. In that mode, the comparator also
 requires the same non-loopback network device, `require_non_loopback_device=true`,
 matching listen/client provenance, matching `client_mode=ssh`, matching
@@ -5121,7 +5121,7 @@ zero ZoneImage failures unless the comparator is deliberately run with a
 non-zero `--max-zone-image-failures` threshold. ZoneImage rollback counters
 must remain zero for retirement evidence.
 
-Use `OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY=true` with the same environment to
+Use `BORONDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY=true` with the same environment to
 validate SSH reachability, remote architecture, non-loopback network settings,
 and build/toolchain provenance before starting either live benchmark run.
 

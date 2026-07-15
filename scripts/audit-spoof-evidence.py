@@ -14,8 +14,8 @@ CHECKS = [
     (
         "ODS-FR-SPOOF-001",
         [
-            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
-            REPO_ROOT / "crates/oxidedns-server/src/tests/transfer_protocol.rs",
+            REPO_ROOT / "crates/borondns-server/src/transfer.rs",
+            REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
         ],
         [
             "fn transfer_query_id() -> Result<u16, TransferError>",
@@ -27,8 +27,8 @@ CHECKS = [
     (
         "ODS-FR-SPOOF-002",
         [
-            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
-            REPO_ROOT / "crates/oxidedns-server/src/tests/transfer_protocol.rs",
+            REPO_ROOT / "crates/borondns-server/src/transfer.rs",
+            REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
         ],
         [
             "UdpSocket::bind(outbound_udp_bind_addr(primary, transfer_source))",
@@ -42,9 +42,9 @@ CHECKS = [
     (
         "ODS-FR-SPOOF-003..004",
         [
-            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
-            REPO_ROOT / "crates/oxidedns-server/src/tests/transfer_protocol.rs",
-            REPO_ROOT / "crates/oxidedns-server/src/tests/support.rs",
+            REPO_ROOT / "crates/borondns-server/src/transfer.rs",
+            REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
+            REPO_ROOT / "crates/borondns-server/src/tests/support.rs",
         ],
         [
             ".connect(primary)",
@@ -54,7 +54,7 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-005",
-        [REPO_ROOT / "crates/oxidedns-core/src/axfr.rs"],
+        [REPO_ROOT / "crates/borondns-core/src/axfr.rs"],
         [
             "if header.id != qid",
             "fn rejects_ixfr_response_with_mismatched_qid()",
@@ -64,7 +64,7 @@ CHECKS = [
     ),
     (
         "ODS-FR-SPOOF-006",
-        [REPO_ROOT / "crates/oxidedns-core/src/axfr.rs"],
+        [REPO_ROOT / "crates/borondns-core/src/axfr.rs"],
         [
             "fn validate_response_question(",
             "qname.canonical_key() != zone_apex.canonical_key()",
@@ -76,8 +76,8 @@ CHECKS = [
     (
         "ODS-FR-SPOOF-007",
         [
-            REPO_ROOT / "crates/oxidedns-server/src/transfer.rs",
-            REPO_ROOT / "crates/oxidedns-server/src/tests/transfer_protocol.rs",
+            REPO_ROOT / "crates/borondns-server/src/transfer.rs",
+            REPO_ROOT / "crates/borondns-server/src/tests/transfer_protocol.rs",
         ],
         [
             "async fn poll_soa_from_primary_records_warning_evidence_for_malformed_response()",

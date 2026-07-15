@@ -3,12 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/package-common.sh"
-target_triple="${OXIDEDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
+target_triple="${BORONDNS_PACKAGE_TARGET:-x86_64-unknown-linux-musl}"
 version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["packages"][0]["version"])')"
-dist_dir="${OXIDEDNS_DIST_DIR:-$repo_root/target/dist}"
-image_archive="${OXIDEDNS_DOCKER_IMAGE_ARCHIVE:-$dist_dir/oxidedns-$version-$target_triple-docker-image.tar.xz}"
-image_ref="${OXIDEDNS_DOCKER_IMAGE_REF:-oxidedns:$version}"
-container="oxidedns-image-smoke-$$"
+dist_dir="${BORONDNS_DIST_DIR:-$repo_root/target/dist}"
+image_archive="${BORONDNS_DOCKER_IMAGE_ARCHIVE:-$dist_dir/borondns-$version-$target_triple-docker-image.tar.xz}"
+image_ref="${BORONDNS_DOCKER_IMAGE_REF:-borondns:$version}"
+container="borondns-image-smoke-$$"
 workdir="$repo_root/target/docker-image-test/$$"
 prior_image_id=""
 prior_backup_ref=""
@@ -102,7 +102,7 @@ package_acquire_docker_image_lock "$image_ref" image_lock_fd
 if prior_image_id="$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null)"; then
     [[ "$prior_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
     for backup_attempt in {1..128}; do
-        prior_backup_ref="oxidedns-smoke-backup-$(id -u):$version-$$-$RANDOM-$backup_attempt"
+        prior_backup_ref="borondns-smoke-backup-$(id -u):$version-$$-$RANDOM-$backup_attempt"
         if ! docker image inspect "$prior_backup_ref" >/dev/null 2>&1; then
             # Arm recovery before the first daemon mutation. If docker commits
             # the tag and then reports failure or delivers a deferred signal,
@@ -148,7 +148,7 @@ loaded_image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
 
 docker run --rm "$image_ref" --version >/dev/null
 
-cat >"$workdir/oxidedns.toml" <<'EOF'
+cat >"$workdir/borondns.toml" <<'EOF'
 [server]
 log_level = "debug"
 log_format = "json"
@@ -183,7 +183,7 @@ docker run -d \
     -p "127.0.0.1::5300/udp" \
     -p "127.0.0.1::5300/tcp" \
     -p "127.0.0.1::8080/tcp" \
-    -v "$workdir/oxidedns.toml:/etc/oxidedns-secondary/config.toml:ro" \
+    -v "$workdir/borondns.toml:/etc/borondns-secondary/config.toml:ro" \
     "$image_ref" >/dev/null
 
 published_loopback_port() {
@@ -219,7 +219,7 @@ for _ in {1..100}; do
 done
 
 curl -fsS "http://127.0.0.1:$host_health_port/livez" >/dev/null
-curl -fsS "http://127.0.0.1:$host_health_port/metrics" | grep -F 'oxidedns_secondary_build_info' >/dev/null
+curl -fsS "http://127.0.0.1:$host_health_port/metrics" | grep -F 'borondns_secondary_build_info' >/dev/null
 
 python3 - "$host_dns_udp_port" "$host_dns_tcp_port" <<'PY'
 import socket
@@ -269,7 +269,7 @@ test "$(docker exec "$container" id -u)" = "53053"
 test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container")" = "true"
 docker inspect --format '{{json .HostConfig.CapDrop}}' "$container" | grep -F '"ALL"' >/dev/null
 docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container" | grep -F 'no-new-privileges' >/dev/null
-if docker exec "$container" sh -c 'touch /tmp/oxidedns-readonly-probe' >/dev/null 2>&1; then
+if docker exec "$container" sh -c 'touch /tmp/borondns-readonly-probe' >/dev/null 2>&1; then
     printf 'container accepted a write under read-only root filesystem\n' >&2
     exit 1
 fi

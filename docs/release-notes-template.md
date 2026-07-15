@@ -1,4 +1,4 @@
-# OxideDNS Release Notes Template
+# BoronDNS Release Notes Template
 
 Use this template for each release candidate. Replace every `TBD` value before
 running `scripts/check-release-notes.sh`.
@@ -9,7 +9,7 @@ running `scripts/check-release-notes.sh`.
 - Release candidate commit: TBD
 - Release date UTC: TBD
 - Evidence snapshot: TBD
-- Release artifacts: installer `.tar.xz`, static `oxidedns` binary, static
+- Release artifacts: installer `.tar.xz`, static `borondns` binary, static
   XDP-enabled `oxide-gun` binary, Alpine Docker image `.tar.xz`, CycloneDX
   SBOMs for the binaries and Docker image, SBOM manifest, and SHA256 sidecars.
 

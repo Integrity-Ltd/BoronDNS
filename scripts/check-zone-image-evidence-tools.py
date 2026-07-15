@@ -310,11 +310,11 @@ def run_gate_preflight(temp: Path, **overrides: str) -> subprocess.CompletedProc
     env = os.environ.copy()
     env.update(
         {
-            "OXIDEDNS_ZONE_IMAGE_GATE_DIR": str(temp / "gate-preflight"),
-            "OXIDEDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK": "true",
-            "OXIDEDNS_BENCH_LISTEN_ADDRESS": "192.0.2.10",
-            "OXIDEDNS_BENCH_CLIENT_SERVER": "192.0.2.10",
-            "OXIDEDNS_BENCH_NETWORK_DEVICE": "enp1s0",
+            "BORONDNS_ZONE_IMAGE_GATE_DIR": str(temp / "gate-preflight"),
+            "BORONDNS_ZONE_IMAGE_GATE_REQUIRE_NON_LOOPBACK": "true",
+            "BORONDNS_BENCH_LISTEN_ADDRESS": "192.0.2.10",
+            "BORONDNS_BENCH_CLIENT_SERVER": "192.0.2.10",
+            "BORONDNS_BENCH_NETWORK_DEVICE": "enp1s0",
         }
     )
     env.update(overrides)
@@ -331,12 +331,12 @@ def run_benchmark_preflight(temp: Path, **overrides: str) -> subprocess.Complete
     env = os.environ.copy()
     env.update(
         {
-            "OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR": str(temp / "benchmark-preflight"),
-            "OXIDEDNS_BENCH_CLIENT_MODE": "ssh",
-            "OXIDEDNS_BENCH_REMOTE_CLIENT_SSH": "bench-client.example.net",
-            "OXIDEDNS_BENCH_LISTEN_ADDRESS": "192.0.2.10",
-            "OXIDEDNS_BENCH_CLIENT_SERVER": "192.0.2.10",
-            "OXIDEDNS_BENCH_NETWORK_DEVICE": "enp1s0",
+            "BORONDNS_DNS_CLIENT_BENCHMARK_DIR": str(temp / "benchmark-preflight"),
+            "BORONDNS_BENCH_CLIENT_MODE": "ssh",
+            "BORONDNS_BENCH_REMOTE_CLIENT_SSH": "bench-client.example.net",
+            "BORONDNS_BENCH_LISTEN_ADDRESS": "192.0.2.10",
+            "BORONDNS_BENCH_CLIENT_SERVER": "192.0.2.10",
+            "BORONDNS_BENCH_NETWORK_DEVICE": "enp1s0",
         }
     )
     env.update(overrides)
@@ -353,12 +353,12 @@ def run_benchmark_local_preflight(temp: Path, **overrides: str) -> subprocess.Co
     env = os.environ.copy()
     env.update(
         {
-            "OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR": str(temp / "benchmark-local-preflight"),
-            "OXIDEDNS_BENCH_PREFLIGHT_ONLY": "true",
-            "OXIDEDNS_BENCH_CLIENT_MODE": "local",
-            "OXIDEDNS_BENCH_LISTEN_ADDRESS": "127.0.0.1",
-            "OXIDEDNS_BENCH_CLIENT_SERVER": "127.0.0.1",
-            "OXIDEDNS_BENCH_NETWORK_DEVICE": "lo",
+            "BORONDNS_DNS_CLIENT_BENCHMARK_DIR": str(temp / "benchmark-local-preflight"),
+            "BORONDNS_BENCH_PREFLIGHT_ONLY": "true",
+            "BORONDNS_BENCH_CLIENT_MODE": "local",
+            "BORONDNS_BENCH_LISTEN_ADDRESS": "127.0.0.1",
+            "BORONDNS_BENCH_CLIENT_SERVER": "127.0.0.1",
+            "BORONDNS_BENCH_NETWORK_DEVICE": "lo",
         }
     )
     env.update(overrides)
@@ -976,7 +976,7 @@ def main() -> None:
 
         result = run_benchmark_local_preflight(
             temp,
-            OXIDEDNS_BENCH_PREFLIGHT_ONLY="maybe",
+            BORONDNS_BENCH_PREFLIGHT_ONLY="maybe",
         )
         assert_status(
             "benchmark invalid-preflight-only rejection",
@@ -986,12 +986,12 @@ def main() -> None:
         assert_stderr_contains(
             "benchmark invalid-preflight-only rejection",
             result,
-            "OXIDEDNS_BENCH_PREFLIGHT_ONLY must be true or false",
+            "BORONDNS_BENCH_PREFLIGHT_ONLY must be true or false",
         )
 
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="maybe",
+            BORONDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="maybe",
         )
         assert_status(
             "physical gate invalid-preflight-only rejection",
@@ -1001,17 +1001,17 @@ def main() -> None:
         assert_stderr_contains(
             "physical gate invalid-preflight-only rejection",
             result,
-            "OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY must be true or false",
+            "BORONDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY must be true or false",
         )
 
         fake_matching_ssh_path = install_fake_arch_ssh(temp, os.uname().machine)
         server_nic = existing_non_loopback_device()
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="true",
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
-            OXIDEDNS_BENCH_NETWORK_DEVICE=server_nic,
+            BORONDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="true",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_BENCH_NETWORK_DEVICE=server_nic,
             PATH=fake_matching_ssh_path,
         )
         assert_status(
@@ -1034,10 +1034,10 @@ def main() -> None:
 
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="true",
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
-            OXIDEDNS_BENCH_NETWORK_DEVICE="definitely-missing-nic0",
+            BORONDNS_ZONE_IMAGE_GATE_PREFLIGHT_ONLY="true",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_BENCH_NETWORK_DEVICE="definitely-missing-nic0",
             PATH=fake_matching_ssh_path,
         )
         assert_status(
@@ -1051,7 +1051,7 @@ def main() -> None:
             "network_device=definitely-missing-nic0 does not exist",
         )
 
-        result = run_gate_preflight(temp, OXIDEDNS_BENCH_CLIENT_MODE="local")
+        result = run_gate_preflight(temp, BORONDNS_BENCH_CLIENT_MODE="local")
         assert_status(
             "physical gate local-client preflight rejection",
             result,
@@ -1060,10 +1060,10 @@ def main() -> None:
         assert_stderr_contains(
             "physical gate local-client preflight rejection",
             result,
-            "requires OXIDEDNS_BENCH_CLIENT_MODE=ssh",
+            "requires BORONDNS_BENCH_CLIENT_MODE=ssh",
         )
 
-        result = run_gate_preflight(temp, OXIDEDNS_BENCH_CLIENT_MODE="ssh")
+        result = run_gate_preflight(temp, BORONDNS_BENCH_CLIENT_MODE="ssh")
         assert_status(
             "physical gate missing-remote preflight rejection",
             result,
@@ -1072,14 +1072,14 @@ def main() -> None:
         assert_stderr_contains(
             "physical gate missing-remote preflight rejection",
             result,
-            "requires OXIDEDNS_BENCH_REMOTE_CLIENT_SSH",
+            "requires BORONDNS_BENCH_REMOTE_CLIENT_SSH",
         )
 
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
-            OXIDEDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS="0",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS="0",
         )
         assert_status(
             "physical gate invalid-ssh-timeout preflight rejection",
@@ -1089,14 +1089,14 @@ def main() -> None:
         assert_stderr_contains(
             "physical gate invalid-ssh-timeout preflight rejection",
             result,
-            "OXIDEDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer",
+            "BORONDNS_ZONE_IMAGE_GATE_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer",
         )
 
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH="maybe",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH="maybe",
         )
         assert_status(
             "physical gate invalid-arch-override preflight rejection",
@@ -1106,14 +1106,14 @@ def main() -> None:
         assert_stderr_contains(
             "physical gate invalid-arch-override preflight rejection",
             result,
-            "OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false",
+            "BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false",
         )
 
         fake_ssh_path = install_fake_arch_ssh(temp, "definitely-remote-arch")
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
             PATH=fake_ssh_path,
         )
         assert_status(
@@ -1129,7 +1129,7 @@ def main() -> None:
 
         result = run_benchmark_preflight(
             temp,
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS="0",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS="0",
         )
         assert_status(
             "ssh benchmark invalid-timeout preflight rejection",
@@ -1139,12 +1139,12 @@ def main() -> None:
         assert_stderr_contains(
             "ssh benchmark invalid-timeout preflight rejection",
             result,
-            "OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer",
+            "BORONDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer",
         )
 
         result = run_benchmark_preflight(
             temp,
-            OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH="maybe",
+            BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH="maybe",
         )
         assert_status(
             "ssh benchmark invalid-arch-override preflight rejection",
@@ -1154,7 +1154,7 @@ def main() -> None:
         assert_stderr_contains(
             "ssh benchmark invalid-arch-override preflight rejection",
             result,
-            "OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false",
+            "BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false",
         )
 
         result = run_benchmark_preflight(
@@ -1179,8 +1179,8 @@ def main() -> None:
         )
         result = run_gate_preflight(
             temp,
-            OXIDEDNS_BENCH_CLIENT_MODE="ssh",
-            OXIDEDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
+            BORONDNS_BENCH_CLIENT_MODE="ssh",
+            BORONDNS_BENCH_REMOTE_CLIENT_SSH="bench-client.example.net",
             PATH=fake_same_host_ssh_path,
         )
         assert_status(
@@ -1196,7 +1196,7 @@ def main() -> None:
 
         result = run_benchmark_preflight(
             temp,
-            OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE="true",
+            BORONDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE="true",
             PATH=fake_same_host_ssh_path,
         )
         assert_status(

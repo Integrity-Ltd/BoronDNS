@@ -32,9 +32,9 @@ RELEASE_REPRODUCIBILITY_VERIFIER = (
 )
 DOCKER_ARCHIVE_VERIFIER = ROOT / "scripts" / "verify-docker-archive.py"
 EXPECTED_RELEASE_HELPER_SHA256 = {
-    RELEASE_API_SUPERVISOR: "704dc598b9ec405f1995d9d8d40182412aacb85b741d2ded2d7962b7494f8d7c",
-    RELEASE_REPRODUCIBILITY_VERIFIER: "70963888336bda8b67879fd89e80477b93c9adfd9dde97efa5cb39ef3b891d8a",
-    DOCKER_ARCHIVE_VERIFIER: "81fead8c7d75ae1eab463d5360c433834ad7aa37b58187f56487319fc93996a8",
+    RELEASE_API_SUPERVISOR: "410d34b680adc816efe7e217e95f2b8573e816087c3bd71d8bd3e88fc3937b44",
+    RELEASE_REPRODUCIBILITY_VERIFIER: "a7c8d2b2a12c5a0db5744da253158c572248627a8db8d3a5449aa81e97389969",
+    DOCKER_ARCHIVE_VERIFIER: "296a393810f4dbd4f5dbb5f7fedeaa0f94b3f788f62b8701aa8b1a85d8dbaf2d",
 }
 DOCKERFILE = ROOT / "packaging" / "docker" / "Dockerfile"
 INSTALLER_README = ROOT / "packaging" / "installer" / "README.install.md"
@@ -187,23 +187,23 @@ PACKAGE_STEP_SHA256 = {
     "Verify packaging source commit": "cb5e0c0c712eb7f630af958cbf4aa76a5cc10254739e7a55adf1286c177aabf9",
     "Install packaging tools": "97f5ea4d323ca6cd52f68bf08ce1988a75a39823eace930f3a71b8ba78bd5dd1",
     "Verify packaging source remained clean": "705cfaa3e56b23bb439822adbd25857c6cca9da30ad9d80b65f653dd1da0546a",
-    "Verify current-commit reproducible release binaries": "d9ddd378d09c67ef67a6a061ead8db07e5ce9c0c6688532db60e4c0ddd962244",
-    "Build installer": "818a8860973bf22c9a8096db8f4d04f19714ffc576b58f8fb91dd319a6a7c448",
+    "Verify current-commit reproducible release binaries": "660eb4119df55ed93038cd24c3ec754fc4cab85e9fe55d0a020c54aee1c91503",
+    "Build installer": "85fd2b0830a9ca52aba45ea45bebe1401f79ad8edc60b6d7ff534432d019923c",
     "Docker installer smoke": "68a9c54f99158c2f5113d94c9fb49ae666a239bd2e609e054e567b047dd02aff",
     "Build Docker image archive": "d2ac592c0f3558bd33984484af24ec4a10ca59090211d01d613839f12b005440",
     "Docker image smoke": "ccc458342967f6faafeec9490118cfd80dab5d74d1f5922193327596e7c1dce7",
-    "Generate release SBOMs": "80ea44c4715f5a64ae489e3cf1fbdb9bd2e3d96300e9ca2503b1522e86be1281",
-    "Verify static binaries": "85e0c6aab79052c978b245d9ce721b8e77dc63e9dc5d7a54a415eda90420e965",
+    "Generate release SBOMs": "ae56cdfcbd898d778cd3eb1d0260607dbb9934434b79e93e81166d5c95d845e9",
+    "Verify static binaries": "d319a6e05624e378b0550d2ee01a14e873915b9a37526269f6b01f229b1168fa",
     "Verify packaged source remained clean": "9dfb112f73616187228d34cea7c993bc3eb919cceafe26a55927cc006e7c25cc",
-    "Prepare authenticated release handoff": "86a0515184f7bd126a07fe656d7725d59225dc5c92e414d8868b20a56cdfb588",
-    "Upload authenticated release handoff": "49eca94a62803fd43072966d0be49ee67c66e255f19038dc7805bdf1d0b40640",
+    "Prepare authenticated release handoff": "07d1c7d7c530314d4fd9b95496efacebfce5aecd6c0ad42d7f558d7670aa0abb",
+    "Upload authenticated release handoff": "034888e5028cbbd3c8c53a62fd919f820c75ae9231d920671db88b1b46c114da",
 }
 SIGN_STEP_SHA256 = {
     "Install Cosign": "51172e5bd450b07a61dccbfca6f6b00c347b56724724a93bcee6c9bb90f82f33",
-    "Download authenticated release handoff": "23bff3b4a242cd084a6005260a8436964beb7efe311a03567490d39c8ae6b1a2",
-    "Create GitHub release": "56bc0dc77d2442d759985e706cab8c16b506b11ee8851e0170c9efacf4f7762d",
+    "Download authenticated release handoff": "d3b6101b9f58903ade81d0db162303e4c5a4e7a65600664860f12ee58476033e",
+    "Create GitHub release": "98858400f4fdea5226a131288f4241f8c03f2b3d87cccae40169d11ca03bb3e9",
 }
-PACKAGE_TARGET_CONTRACT_SHA256 = "3195b5361f98fd10046ceda19f91b04cceb6980f62b6bacd9375f0e91689cdd4"
+PACKAGE_TARGET_CONTRACT_SHA256 = "f839e53c9f3fa6d7b5de6e29c9e90d850d4d2841027748ecb6d5dbf4e90c2c21"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -576,21 +576,21 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         'scripts/reproducible-build-compare.sh',
         'scripts/verify-release-reproducibility.py',
         '--require-artifacts "$evidence" "${{ needs.verify-source.outputs.source_commit }}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
         "test \"${#assets[@]}\" -eq 16",
         'LC_ALL=C /usr/bin/sha256sum -- "${assets[@]##*/}" > release-handoff.sha256',
         'LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256',
-        'name: oxidedns-release-handoff-${{ github.sha }}',
+        'name: borondns-release-handoff-${{ github.sha }}',
         "EXPECTED_HANDOFF_MANIFEST_SHA256: ${{ needs.package-release.outputs.handoff_manifest_sha256 }}",
         "EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256: ${{ needs.package-release.outputs.signing_inputs_manifest_sha256 }}",
         'printf \'%s  %s\\n\' "$EXPECTED_HANDOFF_MANIFEST_SHA256" release-handoff.sha256 | /usr/bin/sha256sum -c --strict -',
         "/usr/bin/sha256sum -c --strict release-handoff.sha256",
         "/usr/bin/sha256sum -c --strict signing-inputs.sha256",
         'python3 verify-release-reproducibility.py --require-artifacts \\\n'
-        '              --release-oxidedns "${release_oxidedns[0]}" \\\n'
+        '              --release-borondns "${release_borondns[0]}" \\\n'
         '              --release-oxide-gun "${release_oxide_gun[0]}" \\\n'
         '              . "$GITHUB_SHA"',
         '/usr/bin/sha256sum -c --strict "$checksum"',
@@ -679,7 +679,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         '          release_id=""\n',
         '          release_upload_base=""\n',
         '          release_publish_attempted=0\n',
-        '          release_transaction_marker="<!-- oxidedns-release-transaction ',
+        '          release_transaction_marker="<!-- borondns-release-transaction ',
         '          release_response_file="$(/usr/bin/mktemp ',
         '          bounded_cleanup_api() {\n',
         '            /usr/bin/timeout --preserve-status --signal=TERM --kill-after=1s 1s \\\n',
@@ -788,7 +788,7 @@ def policy_errors(text: str) -> tuple[list[str], list[str]]:
         errors.append("package-release must not trust a checksum fetched with the Syft archive")
     if "$GITHUB_ENV" in text:
         errors.append("release workflow steps must not persist mutable job environment overrides")
-    if "OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE" in text:
+    if "BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE" in text:
         errors.append("release workflow must never pass the non-release dirty packaging override")
     if text.count(CLEAN_TREE_COMMAND) != 5 or text.count('test ! -s "$git_status_file"') != 5:
         errors.append("every release clean-tree gate must fail closed on git status errors")
@@ -830,7 +830,7 @@ def package_policy_errors(text: str) -> list[str]:
     ):
         errors.append("package installer metadata must use verified Cargo and the exact repository manifest")
     required = (
-        'allow_dirty_non_release="${OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"',
+        'allow_dirty_non_release="${BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"',
         'if [[ "$allow_dirty_non_release" == 1 && "${GITHUB_ACTIONS:-false}" == true ]]; then',
         'source_commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null)"',
         'commit="${source_commit:0:12}"',
@@ -878,7 +878,7 @@ def docker_package_policy_errors(script: str, dockerfile: str) -> list[str]:
     """Require the published image to use and record one reviewed base digest."""
     errors: list[str] = []
     default_assignment = (
-        'alpine_base_image="${OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE:-'
+        'alpine_base_image="${BORONDNS_DOCKER_ALPINE_BASE_IMAGE:-'
         f'{EXPECTED_ALPINE_BASE_IMAGE}'
         '}"'
     )
@@ -906,12 +906,12 @@ def docker_package_policy_errors(script: str, dockerfile: str) -> list[str]:
         (
             "Docker isolated installer input",
             script,
-            'docker_installer_dist_dir="${OXIDEDNS_DOCKER_INSTALLER_DIST_DIR:-$repo_root/target/docker-installer-input}"',
+            'docker_installer_dist_dir="${BORONDNS_DOCKER_INSTALLER_DIST_DIR:-$repo_root/target/docker-installer-input}"',
         ),
         (
             "Docker isolated installer build",
             script,
-            'OXIDEDNS_DIST_DIR="$private_installer_dist_dir"',
+            'BORONDNS_DIST_DIR="$private_installer_dist_dir"',
         ),
         (
             "Docker installer publication separation guard",
@@ -921,7 +921,7 @@ def docker_package_policy_errors(script: str, dockerfile: str) -> list[str]:
         (
             "Docker dirty-source override declaration",
             script,
-            'allow_dirty_non_release="${OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"',
+            'allow_dirty_non_release="${BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"',
         ),
         (
             "Docker GitHub Actions override rejection",
@@ -946,18 +946,18 @@ def docker_package_policy_errors(script: str, dockerfile: str) -> list[str]:
         ),
         ("Dockerfile source-clean argument", dockerfile, "ARG SOURCE_CLEAN=unknown"),
         ("Dockerfile release eligibility argument", dockerfile, "ARG RELEASE_ELIGIBLE=unknown"),
-        ("Docker image source-clean label", dockerfile, 'io.oxidedns.source-clean="${SOURCE_CLEAN}"'),
+        ("Docker image source-clean label", dockerfile, 'io.borondns.source-clean="${SOURCE_CLEAN}"'),
         (
             "Docker image release eligibility label",
             dockerfile,
-            'io.oxidedns.release-eligible="${RELEASE_ELIGIBLE}"',
+            'io.borondns.release-eligible="${RELEASE_ELIGIBLE}"',
         ),
     ):
         if text.count(required) != 1:
             errors.append(f"{label} must contain exactly its reviewed digest-pinned form")
-    if "ALPINE_VERSION" in dockerfile or "OXIDEDNS_DOCKER_ALPINE_VERSION" in script:
+    if "ALPINE_VERSION" in dockerfile or "BORONDNS_DOCKER_ALPINE_VERSION" in script:
         errors.append("published Docker image must not fall back to a mutable Alpine version tag")
-    if 'OXIDEDNS_DIST_DIR="$dist_dir"' in script:
+    if 'BORONDNS_DIST_DIR="$dist_dir"' in script:
         errors.append("Docker packaging must not rebuild installer inputs in published dist")
     if script.count("status --porcelain=v1 --untracked-files=all --ignored=no") != 2:
         errors.append("Docker packaging must check complete source status at preflight and revalidation")
@@ -1249,10 +1249,10 @@ if args and args[0] == "verify-blob":
     count = int(count_file.read_text(encoding="ascii")) + 1 if count_file.exists() else 1
     count_file.write_text(str(count), encoding="ascii")
     if count == 34 and scenario == "post-sign-asset-mutation":
-        target = next(Path.cwd().glob("oxidedns-*-x86_64-unknown-linux-musl.tar.xz"))
+        target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz"))
         target.write_bytes(target.read_bytes() + b"post sign asset mutation\n")
     if count == 34 and scenario == "post-sign-bundle-mutation":
-        target = next(Path.cwd().glob("oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sigstore.json"))
+        target = next(Path.cwd().glob("borondns-*-x86_64-unknown-linux-musl.tar.xz.sigstore.json"))
         target.write_bytes(target.read_bytes() + b"post sign bundle mutation\n")
     print("Verified OK")
     raise SystemExit(0)
@@ -1291,7 +1291,7 @@ raise SystemExit(64)
         "success-build-metadata": (0, True, False, False),
         "preexisting-unrelated": (42, False, False, False),
     }
-    with tempfile.TemporaryDirectory(prefix="oxidedns-release-publication-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="borondns-release-publication-") as raw_tmp:
         tmp = Path(raw_tmp)
         runner_temp = tmp / "runner"
         handoff = tmp / "target" / "release-handoff"
@@ -1309,27 +1309,27 @@ raise SystemExit(64)
             write_reproducibility_fixture(handoff, commit)
             shutil.copy2(ROOT / "scripts" / "release-api-supervisor.py", handoff)
             shutil.copy2(ROOT / "scripts" / "verify-release-reproducibility.py", handoff)
-            prefix = f"oxidedns-{release_version}-{target}"
+            prefix = f"borondns-{release_version}-{target}"
             tarball = f"{prefix}.tar.xz"
             binary = f"{prefix}.bin"
             oxide_gun = f"{prefix}-oxide-gun.bin"
             docker_image = f"{prefix}-docker-image.tar.xz"
             docker_manifest = f"{prefix}-docker-image.manifest.txt"
-            oxidedns_sbom = f"{prefix}-oxidedns.cdx.json"
+            borondns_sbom = f"{prefix}-borondns.cdx.json"
             oxide_gun_sbom = f"{prefix}-oxide-gun.cdx.json"
             docker_sbom = f"{prefix}-docker-image.cdx.json"
             sbom_manifest = f"{prefix}-sbom-manifest.tsv"
             primary_assets = (
                 tarball, binary, oxide_gun, docker_image, docker_manifest,
-                oxidedns_sbom, oxide_gun_sbom, docker_sbom, sbom_manifest,
+                borondns_sbom, oxide_gun_sbom, docker_sbom, sbom_manifest,
             )
             for asset in primary_assets:
                 (handoff / asset).write_bytes(f"fixture {asset}\n".encode())
-            (handoff / binary).write_bytes(b"reproducible-oxidedns\n")
+            (handoff / binary).write_bytes(b"reproducible-borondns\n")
             (handoff / oxide_gun).write_bytes(b"reproducible-oxide-gun\n")
             checksummed = (
                 tarball, binary, oxide_gun, docker_image,
-                oxidedns_sbom, oxide_gun_sbom, docker_sbom,
+                borondns_sbom, oxide_gun_sbom, docker_sbom,
             )
             for asset in checksummed:
                 digest = hashlib.sha256((handoff / asset).read_bytes()).hexdigest()
@@ -1339,8 +1339,8 @@ raise SystemExit(64)
             handoff_assets = [
                 tarball, f"{tarball}.sha256", binary, f"{binary}.sha256",
                 oxide_gun, f"{oxide_gun}.sha256", docker_image,
-                f"{docker_image}.sha256", docker_manifest, oxidedns_sbom,
-                f"{oxidedns_sbom}.sha256", oxide_gun_sbom,
+                f"{docker_image}.sha256", docker_manifest, borondns_sbom,
+                f"{borondns_sbom}.sha256", oxide_gun_sbom,
                 f"{oxide_gun_sbom}.sha256", docker_sbom,
                 f"{docker_sbom}.sha256", sbom_manifest,
             ]
@@ -1354,8 +1354,8 @@ raise SystemExit(64)
             signing_inputs = (
                 "release-api-supervisor.py", "verify-release-reproducibility.py",
                 "reproducible-build-summary.env", "comparison.tsv",
-                "artifact-manifest.tsv", "artifacts/a/oxidedns",
-                "artifacts/a/oxide-gun", "artifacts/b/oxidedns",
+                "artifact-manifest.tsv", "artifacts/a/borondns",
+                "artifacts/a/oxide-gun", "artifacts/b/borondns",
                 "artifacts/b/oxide-gun",
             )
             signing_manifest = "".join(
@@ -1372,7 +1372,7 @@ raise SystemExit(64)
                      f"{asset}.sha256.sigstore.json")
                 )
             release_assets.extend((docker_manifest, f"{docker_manifest}.sigstore.json"))
-            for asset in (oxidedns_sbom, oxide_gun_sbom, docker_sbom):
+            for asset in (borondns_sbom, oxide_gun_sbom, docker_sbom):
                 release_assets.extend(
                     (asset, f"{asset}.sha256", f"{asset}.sigstore.json",
                      f"{asset}.sha256.sigstore.json")
@@ -1418,7 +1418,7 @@ raise SystemExit(64)
                     "FAKE_GH_SCENARIO": scenario,
                     "FAKE_GH_STATE": str(state),
                     "GITHUB_REF_NAME": f"v{release_version}",
-                    "GITHUB_REPOSITORY": "integrity/oxidedns",
+                    "GITHUB_REPOSITORY": "integrity/borondns",
                     "GITHUB_RUN_ATTEMPT": "3",
                     "GITHUB_RUN_ID": "424242",
                     "GITHUB_SHA": "a" * 40,
@@ -1505,7 +1505,7 @@ raise SystemExit(64)
                     "FAKE_GH_SCENARIO": scenario,
                     "FAKE_GH_STATE": str(state),
                     "GITHUB_REF_NAME": "v0.2.0",
-                    "GITHUB_REPOSITORY": "integrity/oxidedns",
+                    "GITHUB_REPOSITORY": "integrity/borondns",
                     "GITHUB_RUN_ATTEMPT": "3",
                     "GITHUB_RUN_ID": "424242",
                     "GITHUB_SHA": "a" * 40,
@@ -1575,9 +1575,9 @@ def run_real_gh_upload_request_regression() -> None:
     gh_path = shutil.which("gh")
     if gh_path is None:
         raise RuntimeError("release upload request regression requires the real gh CLI")
-    endpoint = "https://uploads.github.com/repos/integrity/oxidedns/releases/777/assets"
+    endpoint = "https://uploads.github.com/repos/integrity/borondns/releases/777/assets"
     asset_name = "fixture+build.bin"
-    with tempfile.TemporaryDirectory(prefix="oxidedns-real-gh-upload-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="borondns-real-gh-upload-") as raw_tmp:
         asset = Path(raw_tmp) / asset_name
         asset.write_bytes(b"fixture\n")
         environment = os.environ.copy()
@@ -1792,7 +1792,7 @@ def run_mutation_regressions(text: str) -> None:
     static_marker = "      - name: Verify static binaries\n"
     attacker_copy = text.replace(
         static_marker,
-        "      - run: cp /tmp/attacker target/dist/oxidedns-untrusted.bin\n\n"
+        "      - run: cp /tmp/attacker target/dist/borondns-untrusted.bin\n\n"
         + static_marker,
         1,
     )
@@ -2096,7 +2096,7 @@ def run_mutation_regressions(text: str) -> None:
     sign_marker = "      - name: Create GitHub release\n"
     unnamed_execution = text.replace(
         sign_marker,
-        "      - run: target/release-handoff/oxidedns-untrusted.bin --version\n\n"
+        "      - run: target/release-handoff/borondns-untrusted.bin --version\n\n"
         + sign_marker,
         1,
     )
@@ -2108,7 +2108,7 @@ def run_mutation_regressions(text: str) -> None:
     )
 
     publish_assignment = (
-        '          sbom_manifest="oxidedns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"\n'
+        '          sbom_manifest="borondns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"\n'
     )
     named_execution = text.replace(
         publish_assignment,
@@ -2171,7 +2171,7 @@ def run_mutation_regressions(text: str) -> None:
 
     dirty_package_override = text.replace(
         isolated_package,
-        '          OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 CARGO="$verified_cargo" RUSTC="$verified_rustc" CARGO_TARGET_DIR="$release_target_dir" scripts/package-installer.sh\n',
+        '          BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1 CARGO="$verified_cargo" RUSTC="$verified_rustc" CARGO_TARGET_DIR="$release_target_dir" scripts/package-installer.sh\n',
         1,
     )
     if dirty_package_override == text:
@@ -2201,15 +2201,15 @@ def run_mutation_regressions(text: str) -> None:
 def run_package_mutation_regressions(text: str) -> None:
     target_mutations = {
         "normal binary target reuse": (
-            'binary="$run_build_target/$target_triple/release/oxidedns"',
-            'binary="$repo_root/target/$target_triple/release/oxidedns"',
+            'binary="$run_build_target/$target_triple/release/borondns"',
+            'binary="$repo_root/target/$target_triple/release/borondns"',
         ),
         "OxideGun target reuse": (
             'oxide_gun_binary="$run_build_target/$target_triple/release/oxide-gun"',
             'oxide_gun_binary="$repo_root/target/$target_triple/release/oxide-gun"',
         ),
         "normal binary staging removal": (
-            'install -m 0755 "$binary" "$run_staging/bin/oxidedns"',
+            'install -m 0755 "$binary" "$run_staging/bin/borondns"',
             ': # omitted normal binary staging',
         ),
         "OxideGun staging removal": (
@@ -2257,8 +2257,8 @@ def run_package_mutation_regressions(text: str) -> None:
         raise RuntimeError("package policy checker missed PATH cargo proxy mutation")
 
     forged_build_metadata = text.replace(
-        'OXIDEDNS_BUILD_COMMIT="$commit"',
-        'OXIDEDNS_BUILD_COMMIT="${OXIDEDNS_BUILD_COMMIT:-$commit}"',
+        'BORONDNS_BUILD_COMMIT="$commit"',
+        'BORONDNS_BUILD_COMMIT="${BORONDNS_BUILD_COMMIT:-$commit}"',
         1,
     )
     if forged_build_metadata == text:
@@ -2288,7 +2288,7 @@ def run_package_mutation_regressions(text: str) -> None:
             raise RuntimeError(f"package policy checker missed {label} removal")
 
     for label, marker in (
-        ("dirty-source override declaration", 'allow_dirty_non_release="${OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"'),
+        ("dirty-source override declaration", 'allow_dirty_non_release="${BORONDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE:-0}"'),
         (
             "GitHub Actions dirty-source rejection",
             'if [[ "$allow_dirty_non_release" == 1 && "${GITHUB_ACTIONS:-false}" == true ]]; then',
@@ -2365,8 +2365,8 @@ def run_docker_package_mutation_regressions(script: str, dockerfile: str) -> Non
         (
             "Docker installer input published-dist reuse",
             script.replace(
-                'OXIDEDNS_DIST_DIR="$private_installer_dist_dir"',
-                'OXIDEDNS_DIST_DIR="$dist_dir"',
+                'BORONDNS_DIST_DIR="$private_installer_dist_dir"',
+                'BORONDNS_DIST_DIR="$dist_dir"',
                 1,
             ),
             dockerfile,
@@ -2401,7 +2401,7 @@ def run_docker_package_mutation_regressions(script: str, dockerfile: str) -> Non
         (
             "Docker source-clean image label removal",
             script,
-            dockerfile.replace('io.oxidedns.source-clean="${SOURCE_CLEAN}"', "REMOVED", 1),
+            dockerfile.replace('io.borondns.source-clean="${SOURCE_CLEAN}"', "REMOVED", 1),
         ),
         (
             "Docker supervised verified load removal",
@@ -2487,22 +2487,22 @@ def installer_readme_errors(text: str) -> list[str]:
         "sudo cosign verify-blob",
         '--bundle "$install_root/$asset.sigstore.json"',
         "--certificate-oidc-issuer https://token.actions.githubusercontent.com",
-        '--certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/'
+        '--certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/'
         'workflows/release-installer.yml@refs/tags/$tag"',
         "target_triple=x86_64-unknown-linux-musl",
-        'asset="oxidedns-${tag#v}-$target_triple.tar.xz"',
-        'install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"',
+        'asset="borondns-${tag#v}-$target_triple.tar.xz"',
+        'install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"',
         'sudo chmod 0700 "$install_root"',
         'sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"',
         '  "$install_root/$asset"',
         'sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"',
-        'sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"',
+        'sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"',
     )
     for value in required:
         if value not in text:
             errors.append(f"installer quick install is missing: {value}")
     allocate_at = text.find(
-        'install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"'
+        'install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"'
     )
     protect_at = text.find('sudo chmod 0700 "$install_root"')
     copy_at = text.find('sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"')
@@ -2511,7 +2511,7 @@ def installer_readme_errors(text: str) -> list[str]:
     extract_at = text.find(
         'sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"'
     )
-    sudo_at = text.find('sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"')
+    sudo_at = text.find('sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"')
     if min(allocate_at, protect_at, copy_at, verify_at, verify_asset_at, extract_at, sudo_at) >= 0 and not (
         allocate_at < protect_at < copy_at < verify_at < verify_asset_at < extract_at < sudo_at
     ):
@@ -2527,12 +2527,12 @@ def run_installer_readme_mutation_regressions(text: str) -> None:
         ("exact OIDC issuer", "--certificate-oidc-issuer https://token.actions.githubusercontent.com"),
         (
             "exact tagged workflow identity",
-            '--certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/'
+            '--certificate-identity "https://github.com/Integrity-Ltd/borondns/.github/'
             'workflows/release-installer.yml@refs/tags/$tag"',
         ),
         (
             "fresh root-owned extraction directory",
-            'install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"',
+            'install_root="$(sudo mktemp -d "/var/tmp/borondns-install-${tag#v}.XXXXXX")"',
         ),
         ("root-only extraction directory mode", 'sudo chmod 0700 "$install_root"'),
         (
@@ -2546,7 +2546,7 @@ def run_installer_readme_mutation_regressions(text: str) -> None:
         ),
         (
             "absolute root-owned installer invocation",
-            'sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"',
+            'sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"',
         ),
     ):
         mutated = text.replace(needle, "REMOVED", 1)
@@ -2561,8 +2561,8 @@ def run_installer_readme_mutation_regressions(text: str) -> None:
     if not installer_readme_errors(reordered):
         raise RuntimeError("installer README checker missed verification reordering")
     wrong_root = text.replace(
-        'sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"',
-        'sudo "$install_root/oxidedns-${tag#v}/install.sh"',
+        'sudo "$install_root/borondns-${tag#v}-$target_triple/install.sh"',
+        'sudo "$install_root/borondns-${tag#v}/install.sh"',
         1,
     )
     if wrong_root == text or not installer_readme_errors(wrong_root):
@@ -2645,9 +2645,9 @@ def run_release_api_supervisor_regressions() -> None:
         environment = os.environ.copy()
         environment.update(
             {
-                "OXIDEDNS_RELEASE_API_TEST_PHASE": "before-spawn",
-                "OXIDEDNS_RELEASE_API_TEST_MARKER": str(before_spawn_marker),
-                "OXIDEDNS_RELEASE_API_TEST_CONTINUE": str(continuation),
+                "BORONDNS_RELEASE_API_TEST_PHASE": "before-spawn",
+                "BORONDNS_RELEASE_API_TEST_MARKER": str(before_spawn_marker),
+                "BORONDNS_RELEASE_API_TEST_CONTINUE": str(continuation),
             }
         )
         process = subprocess.Popen(
@@ -2735,7 +2735,7 @@ def run_release_api_supervisor_regressions() -> None:
 
 def write_reproducibility_fixture(root: Path, commit: str) -> None:
     artifacts: dict[str, tuple[str, int]] = {}
-    for artifact in ("oxidedns", "oxide-gun"):
+    for artifact in ("borondns", "oxide-gun"):
         payload = f"reproducible-{artifact}\n".encode()
         digest = hashlib.sha256(payload).hexdigest()
         artifacts[artifact] = (digest, len(payload))
@@ -2764,20 +2764,20 @@ def write_reproducibility_fixture(root: Path, commit: str) -> None:
         "artifact\tbuilder\ttarget\tprofile\tfeatures\tcommit\trust_version\t"
         "build_command\tsha256\tsize_bytes\tevidence_path"
     ]
-    for artifact in ("oxidedns", "oxide-gun"):
+    for artifact in ("borondns", "oxide-gun"):
         digest, size = artifacts[artifact]
         comparison_rows.append(
             f"{artifact}\tx86_64-unknown-linux-musl\trelease\t{digest}\t{digest}\t"
             f"{size}\t{size}\ttrue\tartifacts/a/{artifact}\tartifacts/b/{artifact}"
         )
-        features = "af-xdp" if artifact == "oxidedns" else "xdp"
+        features = "af-xdp" if artifact == "borondns" else "xdp"
         for builder in ("a", "b"):
             manifest_rows.append(
                 f"{artifact}\t{builder}\tx86_64-unknown-linux-musl\trelease\t"
                 f"{features}\t{commit}\trustc 1.96.1 (fixture 1970-01-01)\t"
                 f"/fixture/cargo build --locked --release --target-dir "
                 f"<builder-target-dir> --target x86_64-unknown-linux-musl -p "
-                f"{'oxidedns-cli' if artifact == 'oxidedns' else 'oxide-gun'} "
+                f"{'borondns-cli' if artifact == 'borondns' else 'oxide-gun'} "
                 f"--features {features}\t{digest}\t"
                 f"{size}\tartifacts/{builder}/{artifact}"
             )
@@ -2792,14 +2792,14 @@ def run_release_reproducibility_regressions() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_reproducibility_fixture(root, commit)
-        release_oxidedns = root / "release-oxidedns"
+        release_borondns = root / "release-borondns"
         release_oxide_gun = root / "release-oxide-gun"
-        shutil.copyfile(root / "artifacts" / "a" / "oxidedns", release_oxidedns)
+        shutil.copyfile(root / "artifacts" / "a" / "borondns", release_borondns)
         shutil.copyfile(root / "artifacts" / "a" / "oxide-gun", release_oxide_gun)
         command = [
             sys.executable, str(RELEASE_REPRODUCIBILITY_VERIFIER),
             "--require-artifacts",
-            "--release-oxidedns", str(release_oxidedns),
+            "--release-borondns", str(release_borondns),
             "--release-oxide-gun", str(release_oxide_gun),
             str(root), commit,
         ]
@@ -2815,8 +2815,8 @@ def run_release_reproducibility_regressions() -> None:
         if tampered.returncode == 0 or "artifact size mismatch" not in tampered.stderr:
             raise RuntimeError("release reproducibility verifier accepted a changed artifact")
         artifact.write_bytes(original)
-        original_release = release_oxidedns.read_bytes()
-        release_oxidedns.write_bytes(original_release + b"unrelated-release-bytes")
+        original_release = release_borondns.read_bytes()
+        release_borondns.write_bytes(original_release + b"unrelated-release-bytes")
         unrelated_release = subprocess.run(
             command, check=False, capture_output=True, text=True
         )
@@ -2827,7 +2827,7 @@ def run_release_reproducibility_regressions() -> None:
             raise RuntimeError(
                 "release reproducibility verifier accepted an unrelated shipped binary"
             )
-        release_oxidedns.write_bytes(original_release)
+        release_borondns.write_bytes(original_release)
         summary = root / "reproducible-build-summary.env"
         original_summary = summary.read_text(encoding="utf-8")
         summary.write_text(
@@ -2851,10 +2851,10 @@ def run_release_reproducibility_regressions() -> None:
 
 def run_release_binary_binding_regressions(text: str) -> None:
     bindings = (
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
-        '/usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/borondns" "${release_borondns[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/borondns" "${release_borondns[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"',
+        '/usr/bin/cmp -- "$RUNNER_TEMP/borondns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"',
     )
     for binding in bindings:
         if text.count(binding) != 2:

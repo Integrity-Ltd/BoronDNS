@@ -3,52 +3,52 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-artifact_dir="${OXIDEDNS_DNS_CLIENT_BENCHMARK_DIR:-$repo_root/target/evidence/dns-client-benchmark-$timestamp}"
+artifact_dir="${BORONDNS_DNS_CLIENT_BENCHMARK_DIR:-$repo_root/target/evidence/dns-client-benchmark-$timestamp}"
 workdir="$repo_root/target/dns-client-benchmark/$timestamp"
 
-records="${OXIDEDNS_BENCH_RECORDS:-10000}"
-stress_candidates="${OXIDEDNS_BENCH_STRESS_CANDIDATES:-0}"
-duration="${OXIDEDNS_BENCH_DURATION_SECONDS:-10}"
-transport="${OXIDEDNS_BENCH_TRANSPORT:-udp}"
-server_threads="${OXIDEDNS_BENCH_SERVER_THREADS:-4}"
-client_threads="${OXIDEDNS_BENCH_CLIENT_THREADS:-8}"
-client_window="${OXIDEDNS_BENCH_CLIENT_WINDOW:-64}"
-udp_client_sockets_per_thread="${OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:-1}"
-udp_batch_size="${OXIDEDNS_BENCH_UDP_BATCH_SIZE:-1}"
-udp_reuseport_workers="${OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
-udp_worker_cpu_affinity="${OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
-udp_runtime="${OXIDEDNS_BENCH_UDP_RUNTIME:-tokio}"
-response_timeout_ms="${OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
-pipeline_timing_enabled="${OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
-zone_shape_metrics_enabled="${OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
-hot_path_detail="${OXIDEDNS_BENCH_HOT_PATH_DETAIL:-full}"
-requested_zone_image_serve_enabled="${OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-true}"
+records="${BORONDNS_BENCH_RECORDS:-10000}"
+stress_candidates="${BORONDNS_BENCH_STRESS_CANDIDATES:-0}"
+duration="${BORONDNS_BENCH_DURATION_SECONDS:-10}"
+transport="${BORONDNS_BENCH_TRANSPORT:-udp}"
+server_threads="${BORONDNS_BENCH_SERVER_THREADS:-4}"
+client_threads="${BORONDNS_BENCH_CLIENT_THREADS:-8}"
+client_window="${BORONDNS_BENCH_CLIENT_WINDOW:-64}"
+udp_client_sockets_per_thread="${BORONDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:-1}"
+udp_batch_size="${BORONDNS_BENCH_UDP_BATCH_SIZE:-1}"
+udp_reuseport_workers="${BORONDNS_BENCH_UDP_REUSEPORT_WORKERS:-1}"
+udp_worker_cpu_affinity="${BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY:-}"
+udp_runtime="${BORONDNS_BENCH_UDP_RUNTIME:-tokio}"
+response_timeout_ms="${BORONDNS_BENCH_RESPONSE_TIMEOUT_MS:-250}"
+pipeline_timing_enabled="${BORONDNS_BENCH_PIPELINE_TIMING_ENABLED:-false}"
+zone_shape_metrics_enabled="${BORONDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED:-false}"
+hot_path_detail="${BORONDNS_BENCH_HOT_PATH_DETAIL:-full}"
+requested_zone_image_serve_enabled="${BORONDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED:-true}"
 zone_image_serve_enabled="true"
-packet_capture_enabled="${OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED:-false}"
-packet_capture_count="${OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT:-256}"
-perf_stat_enabled="${OXIDEDNS_BENCH_PERF_STAT:-false}"
-perf_record_enabled="${OXIDEDNS_BENCH_PERF_RECORD:-false}"
-perf_frequency="${OXIDEDNS_BENCH_PERF_FREQUENCY:-99}"
-perf_events="${OXIDEDNS_BENCH_PERF_EVENTS:-cycles,instructions,branches,branch-misses}"
-perf_privileged_helper_enabled="${OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER:-false}"
-perf_helper_path="${OXIDEDNS_BENCH_PERF_HELPER_PATH:-/usr/local/libexec/oxidedns-perf-capture}"
-preflight_only="${OXIDEDNS_BENCH_PREFLIGHT_ONLY:-false}"
-trace_enabled="${OXIDEDNS_BENCH_TRACE_ENABLED:-false}"
-trace_file_override="${OXIDEDNS_BENCH_TRACE_FILE:-}"
-listen_address="${OXIDEDNS_BENCH_LISTEN_ADDRESS:-127.0.0.1}"
-client_server="${OXIDEDNS_BENCH_CLIENT_SERVER:-$listen_address}"
-client_mode="${OXIDEDNS_BENCH_CLIENT_MODE:-local}"
+packet_capture_enabled="${BORONDNS_BENCH_PACKET_CAPTURE_ENABLED:-false}"
+packet_capture_count="${BORONDNS_BENCH_PACKET_CAPTURE_COUNT:-256}"
+perf_stat_enabled="${BORONDNS_BENCH_PERF_STAT:-false}"
+perf_record_enabled="${BORONDNS_BENCH_PERF_RECORD:-false}"
+perf_frequency="${BORONDNS_BENCH_PERF_FREQUENCY:-99}"
+perf_events="${BORONDNS_BENCH_PERF_EVENTS:-cycles,instructions,branches,branch-misses}"
+perf_privileged_helper_enabled="${BORONDNS_BENCH_PERF_PRIVILEGED_HELPER:-false}"
+perf_helper_path="${BORONDNS_BENCH_PERF_HELPER_PATH:-/usr/local/libexec/borondns-perf-capture}"
+preflight_only="${BORONDNS_BENCH_PREFLIGHT_ONLY:-false}"
+trace_enabled="${BORONDNS_BENCH_TRACE_ENABLED:-false}"
+trace_file_override="${BORONDNS_BENCH_TRACE_FILE:-}"
+listen_address="${BORONDNS_BENCH_LISTEN_ADDRESS:-127.0.0.1}"
+client_server="${BORONDNS_BENCH_CLIENT_SERVER:-$listen_address}"
+client_mode="${BORONDNS_BENCH_CLIENT_MODE:-local}"
 client_bind_default="127.0.0.1:0"
 if [[ "$client_mode" == ssh ]]; then
     client_bind_default="0.0.0.0:0"
 fi
-client_bind="${OXIDEDNS_BENCH_CLIENT_BIND:-$client_bind_default}"
-network_device="${OXIDEDNS_BENCH_NETWORK_DEVICE:-auto}"
-require_non_loopback_device="${OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE:-false}"
-remote_client_ssh="${OXIDEDNS_BENCH_REMOTE_CLIENT_SSH:-}"
-remote_client_workdir="${OXIDEDNS_BENCH_REMOTE_CLIENT_WORKDIR:-/tmp/oxidedns-bench-$timestamp}"
-remote_client_ssh_connect_timeout="${OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
-remote_client_allow_arch_mismatch="${OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH:-false}"
+client_bind="${BORONDNS_BENCH_CLIENT_BIND:-$client_bind_default}"
+network_device="${BORONDNS_BENCH_NETWORK_DEVICE:-auto}"
+require_non_loopback_device="${BORONDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE:-false}"
+remote_client_ssh="${BORONDNS_BENCH_REMOTE_CLIENT_SSH:-}"
+remote_client_workdir="${BORONDNS_BENCH_REMOTE_CLIENT_WORKDIR:-/tmp/borondns-bench-$timestamp}"
+remote_client_ssh_connect_timeout="${BORONDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS:-5}"
+remote_client_allow_arch_mismatch="${BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH:-false}"
 remote_client_local_arch="none"
 remote_client_remote_arch="none"
 remote_client_local_host_id="none"
@@ -122,97 +122,97 @@ require_nonnegative_integer() {
 }
 
 for pair in \
-    "OXIDEDNS_BENCH_RECORDS:$records" \
-    "OXIDEDNS_BENCH_DURATION_SECONDS:$duration" \
-    "OXIDEDNS_BENCH_SERVER_THREADS:$server_threads" \
-    "OXIDEDNS_BENCH_CLIENT_THREADS:$client_threads" \
-    "OXIDEDNS_BENCH_CLIENT_WINDOW:$client_window" \
-    "OXIDEDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:$udp_client_sockets_per_thread" \
-    "OXIDEDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
-    "OXIDEDNS_BENCH_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
-    "OXIDEDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
+    "BORONDNS_BENCH_RECORDS:$records" \
+    "BORONDNS_BENCH_DURATION_SECONDS:$duration" \
+    "BORONDNS_BENCH_SERVER_THREADS:$server_threads" \
+    "BORONDNS_BENCH_CLIENT_THREADS:$client_threads" \
+    "BORONDNS_BENCH_CLIENT_WINDOW:$client_window" \
+    "BORONDNS_BENCH_UDP_CLIENT_SOCKETS_PER_THREAD:$udp_client_sockets_per_thread" \
+    "BORONDNS_BENCH_UDP_BATCH_SIZE:$udp_batch_size" \
+    "BORONDNS_BENCH_UDP_REUSEPORT_WORKERS:$udp_reuseport_workers" \
+    "BORONDNS_BENCH_RESPONSE_TIMEOUT_MS:$response_timeout_ms"; do
     require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
 if [[ -n "$udp_worker_cpu_affinity" ]]; then
     if [[ "$udp_runtime" != dedicated ]]; then
-        printf 'OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY requires OXIDEDNS_BENCH_UDP_RUNTIME=dedicated\n' >&2
+        printf 'BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY requires BORONDNS_BENCH_UDP_RUNTIME=dedicated\n' >&2
         exit 64
     fi
     IFS=',' read -r -a udp_worker_cpus <<<"$udp_worker_cpu_affinity"
     if [[ "${#udp_worker_cpus[@]}" -ne "$udp_reuseport_workers" ]]; then
-        printf 'OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY must contain one comma-separated CPU per UDP reuseport worker\n' >&2
+        printf 'BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY must contain one comma-separated CPU per UDP reuseport worker\n' >&2
         exit 64
     fi
     for cpu in "${udp_worker_cpus[@]}"; do
-        require_nonnegative_integer "OXIDEDNS_BENCH_UDP_WORKER_CPU_AFFINITY" "$cpu"
+        require_nonnegative_integer "BORONDNS_BENCH_UDP_WORKER_CPU_AFFINITY" "$cpu"
     done
 fi
-require_nonnegative_integer "OXIDEDNS_BENCH_STRESS_CANDIDATES" "$stress_candidates"
+require_nonnegative_integer "BORONDNS_BENCH_STRESS_CANDIDATES" "$stress_candidates"
 case "$udp_runtime" in
 tokio | dedicated) ;;
 *)
-    printf 'OXIDEDNS_BENCH_UDP_RUNTIME must be tokio or dedicated, got %q\n' "$udp_runtime" >&2
+    printf 'BORONDNS_BENCH_UDP_RUNTIME must be tokio or dedicated, got %q\n' "$udp_runtime" >&2
     exit 64
     ;;
 esac
 case "$transport" in
 udp | tcp) ;;
 *)
-    printf 'OXIDEDNS_BENCH_TRANSPORT must be udp or tcp, got %q\n' "$transport" >&2
+    printf 'BORONDNS_BENCH_TRANSPORT must be udp or tcp, got %q\n' "$transport" >&2
     exit 64
     ;;
 esac
 case "$pipeline_timing_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PIPELINE_TIMING_ENABLED must be true or false, got %q\n' "$pipeline_timing_enabled" >&2
+    printf 'BORONDNS_BENCH_PIPELINE_TIMING_ENABLED must be true or false, got %q\n' "$pipeline_timing_enabled" >&2
     exit 64
     ;;
 esac
 case "$zone_shape_metrics_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED must be true or false, got %q\n' "$zone_shape_metrics_enabled" >&2
+    printf 'BORONDNS_BENCH_ZONE_SHAPE_METRICS_ENABLED must be true or false, got %q\n' "$zone_shape_metrics_enabled" >&2
     exit 64
     ;;
 esac
 case "$hot_path_detail" in
 full | reduced | off) ;;
 *)
-    printf 'OXIDEDNS_BENCH_HOT_PATH_DETAIL must be full, reduced, or off, got %q\n' "$hot_path_detail" >&2
+    printf 'BORONDNS_BENCH_HOT_PATH_DETAIL must be full, reduced, or off, got %q\n' "$hot_path_detail" >&2
     exit 64
     ;;
 esac
 case "$packet_capture_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PACKET_CAPTURE_ENABLED must be true or false, got %q\n' "$packet_capture_enabled" >&2
+    printf 'BORONDNS_BENCH_PACKET_CAPTURE_ENABLED must be true or false, got %q\n' "$packet_capture_enabled" >&2
     exit 64
     ;;
 esac
-require_positive_integer "OXIDEDNS_BENCH_PACKET_CAPTURE_COUNT" "$packet_capture_count"
+require_positive_integer "BORONDNS_BENCH_PACKET_CAPTURE_COUNT" "$packet_capture_count"
 case "$perf_stat_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PERF_STAT must be true or false, got %q\n' "$perf_stat_enabled" >&2
+    printf 'BORONDNS_BENCH_PERF_STAT must be true or false, got %q\n' "$perf_stat_enabled" >&2
     exit 64
     ;;
 esac
 case "$perf_record_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PERF_RECORD must be true or false, got %q\n' "$perf_record_enabled" >&2
+    printf 'BORONDNS_BENCH_PERF_RECORD must be true or false, got %q\n' "$perf_record_enabled" >&2
     exit 64
     ;;
 esac
 case "$perf_privileged_helper_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PERF_PRIVILEGED_HELPER must be true or false, got %q\n' "$perf_privileged_helper_enabled" >&2
+    printf 'BORONDNS_BENCH_PERF_PRIVILEGED_HELPER must be true or false, got %q\n' "$perf_privileged_helper_enabled" >&2
     exit 64
     ;;
 esac
-require_positive_integer "OXIDEDNS_BENCH_PERF_FREQUENCY" "$perf_frequency"
+require_positive_integer "BORONDNS_BENCH_PERF_FREQUENCY" "$perf_frequency"
 if [[ "$perf_stat_enabled" == true || "$perf_record_enabled" == true ]]; then
     if [[ "$perf_privileged_helper_enabled" == true ]]; then
         if ! command -v sudo >/dev/null 2>&1; then
@@ -221,7 +221,7 @@ if [[ "$perf_stat_enabled" == true || "$perf_record_enabled" == true ]]; then
         fi
         if [[ ! -x "$perf_helper_path" ]]; then
             printf 'privileged perf helper requested but helper is not executable: %s\n' "$perf_helper_path" >&2
-            printf 'Install it with scripts/install-oxidedns-perf-helper.sh\n' >&2
+            printf 'Install it with scripts/install-borondns-perf-helper.sh\n' >&2
             exit 64
         fi
     elif ! command -v perf >/dev/null 2>&1; then
@@ -230,45 +230,45 @@ if [[ "$perf_stat_enabled" == true || "$perf_record_enabled" == true ]]; then
     fi
 fi
 if [[ "$requested_zone_image_serve_enabled" != true ]]; then
-    printf 'OXIDEDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false was retired with the live snapshot-serving rollback path; ZoneImage serving is always enabled.\n' >&2
+    printf 'BORONDNS_BENCH_ZONE_IMAGE_SERVE_ENABLED=false was retired with the live snapshot-serving rollback path; ZoneImage serving is always enabled.\n' >&2
     exit 64
 fi
 case "$preflight_only" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_PREFLIGHT_ONLY must be true or false, got %q\n' "$preflight_only" >&2
+    printf 'BORONDNS_BENCH_PREFLIGHT_ONLY must be true or false, got %q\n' "$preflight_only" >&2
     exit 64
     ;;
 esac
 case "$trace_enabled" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_TRACE_ENABLED must be true or false, got %q\n' "$trace_enabled" >&2
+    printf 'BORONDNS_BENCH_TRACE_ENABLED must be true or false, got %q\n' "$trace_enabled" >&2
     exit 64
     ;;
 esac
 case "$client_mode" in
 local | ssh) ;;
 *)
-    printf 'OXIDEDNS_BENCH_CLIENT_MODE must be local or ssh, got %q\n' "$client_mode" >&2
+    printf 'BORONDNS_BENCH_CLIENT_MODE must be local or ssh, got %q\n' "$client_mode" >&2
     exit 64
     ;;
 esac
 case "$require_non_loopback_device" in
 true | false) ;;
 *)
-    printf 'OXIDEDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE must be true or false, got %q\n' "$require_non_loopback_device" >&2
+    printf 'BORONDNS_BENCH_REQUIRE_NON_LOOPBACK_DEVICE must be true or false, got %q\n' "$require_non_loopback_device" >&2
     exit 64
     ;;
 esac
 if [[ -n "$trace_file_override" && ! -f "$trace_file_override" ]]; then
-    printf 'OXIDEDNS_BENCH_TRACE_FILE does not exist: %s\n' "$trace_file_override" >&2
+    printf 'BORONDNS_BENCH_TRACE_FILE does not exist: %s\n' "$trace_file_override" >&2
     exit 64
 fi
 for pair in \
-    "OXIDEDNS_BENCH_LISTEN_ADDRESS:$listen_address" \
-    "OXIDEDNS_BENCH_CLIENT_SERVER:$client_server" \
-    "OXIDEDNS_BENCH_CLIENT_BIND:$client_bind"; do
+    "BORONDNS_BENCH_LISTEN_ADDRESS:$listen_address" \
+    "BORONDNS_BENCH_CLIENT_SERVER:$client_server" \
+    "BORONDNS_BENCH_CLIENT_BIND:$client_bind"; do
     if [[ "${pair#*:}" =~ [[:space:]] || -z "${pair#*:}" ]]; then
         printf '%s must be non-empty and contain no whitespace, got %q\n' "${pair%%:*}" "${pair#*:}" >&2
         exit 64
@@ -278,26 +278,26 @@ if [[ "$client_mode" == ssh ]]; then
     case "$remote_client_allow_arch_mismatch" in
     true | false) ;;
     *)
-        printf 'OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false, got %q\n' "$remote_client_allow_arch_mismatch" >&2
+        printf 'BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH must be true or false, got %q\n' "$remote_client_allow_arch_mismatch" >&2
         exit 64
         ;;
     esac
     if [[ -z "$remote_client_ssh" || "$remote_client_ssh" =~ [[:space:]] ]]; then
-        printf 'OXIDEDNS_BENCH_REMOTE_CLIENT_SSH must be non-empty and contain no whitespace when OXIDEDNS_BENCH_CLIENT_MODE=ssh\n' >&2
+        printf 'BORONDNS_BENCH_REMOTE_CLIENT_SSH must be non-empty and contain no whitespace when BORONDNS_BENCH_CLIENT_MODE=ssh\n' >&2
         exit 64
     fi
     if [[ -z "$remote_client_workdir" || "$remote_client_workdir" =~ [[:space:]] ]]; then
-        printf 'OXIDEDNS_BENCH_REMOTE_CLIENT_WORKDIR must be non-empty and contain no whitespace when OXIDEDNS_BENCH_CLIENT_MODE=ssh\n' >&2
+        printf 'BORONDNS_BENCH_REMOTE_CLIENT_WORKDIR must be non-empty and contain no whitespace when BORONDNS_BENCH_CLIENT_MODE=ssh\n' >&2
         exit 64
     fi
     for tool in ssh scp; do
         if ! command -v "$tool" >/dev/null 2>&1; then
-            printf 'OXIDEDNS_BENCH_CLIENT_MODE=ssh requires %s on PATH\n' "$tool" >&2
+            printf 'BORONDNS_BENCH_CLIENT_MODE=ssh requires %s on PATH\n' "$tool" >&2
             exit 69
         fi
     done
     if ! [[ "$remote_client_ssh_connect_timeout" =~ ^[1-9][0-9]*$ ]]; then
-        printf 'OXIDEDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer, got %q\n' "$remote_client_ssh_connect_timeout" >&2
+        printf 'BORONDNS_BENCH_REMOTE_CLIENT_SSH_CONNECT_TIMEOUT_SECONDS must be a positive integer, got %q\n' "$remote_client_ssh_connect_timeout" >&2
         exit 64
     fi
     if ! ssh -o BatchMode=yes -o "ConnectTimeout=$remote_client_ssh_connect_timeout" "$remote_client_ssh" true; then
@@ -314,7 +314,7 @@ if [[ "$client_mode" == ssh ]]; then
         exit 69
     fi
     if [[ "$remote_client_local_arch" != "$remote_client_remote_arch" && "$remote_client_allow_arch_mismatch" != true ]]; then
-        printf 'remote benchmark client architecture mismatch: local=%q remote=%q. The benchmark copies the local dns-load-client binary to the remote host; set OXIDEDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true only if you will replace or run a compatible remote binary manually.\n' "$remote_client_local_arch" "$remote_client_remote_arch" >&2
+        printf 'remote benchmark client architecture mismatch: local=%q remote=%q. The benchmark copies the local dns-load-client binary to the remote host; set BORONDNS_BENCH_REMOTE_CLIENT_ALLOW_ARCH_MISMATCH=true only if you will replace or run a compatible remote binary manually.\n' "$remote_client_local_arch" "$remote_client_remote_arch" >&2
         exit 69
     fi
     remote_client_local_host_raw="$(local_host_identity | tr -d '\r')"
@@ -334,14 +334,14 @@ if [[ "$client_mode" == ssh ]]; then
         remote_client_same_host="false"
     fi
     if [[ "$require_non_loopback_device" == true && "$remote_client_same_host" == true ]]; then
-        printf 'physical NIC evidence requested, but OXIDEDNS_BENCH_REMOTE_CLIENT_SSH appears to resolve to the local server host\n' >&2
+        printf 'physical NIC evidence requested, but BORONDNS_BENCH_REMOTE_CLIENT_SSH appears to resolve to the local server host\n' >&2
         exit 64
     fi
 fi
 
 if [[ "$network_device" == auto ]]; then
     if [[ "$client_server" == "0.0.0.0" || "$client_server" == "::" ]]; then
-        printf 'OXIDEDNS_BENCH_CLIENT_SERVER must be a concrete address when OXIDEDNS_BENCH_LISTEN_ADDRESS is wildcard\n' >&2
+        printf 'BORONDNS_BENCH_CLIENT_SERVER must be a concrete address when BORONDNS_BENCH_LISTEN_ADDRESS is wildcard\n' >&2
         exit 64
     fi
     if [[ "$client_mode" == ssh && "$listen_address" != "0.0.0.0" && "$listen_address" != "::" ]] && command -v ip >/dev/null 2>&1; then
@@ -368,7 +368,7 @@ if [[ "$require_non_loopback_device" == true ]]; then
         fi
     fi
     if [[ "$client_server" == "127.0.0.1" || "$client_server" == "localhost" || "$client_server" == "::1" ]]; then
-        printf 'physical NIC evidence requested, but OXIDEDNS_BENCH_CLIENT_SERVER=%q is loopback\n' "$client_server" >&2
+        printf 'physical NIC evidence requested, but BORONDNS_BENCH_CLIENT_SERVER=%q is loopback\n' "$client_server" >&2
         exit 64
     fi
 fi
@@ -423,9 +423,9 @@ cleanup() {
         kill "$packet_capture_pid" 2>/dev/null || true
         wait "$packet_capture_pid" 2>/dev/null || true
     fi
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${primary_pid:-}" ]] && kill -0 "$primary_pid" 2>/dev/null; then
         kill "$primary_pid" 2>/dev/null || true
@@ -436,9 +436,9 @@ cleanup() {
             echo "---- fake-primary.log ----" >&2
             tail -120 "$artifact_dir/fake-primary.log" >&2
         }
-        [[ -f "$artifact_dir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$artifact_dir/oxidedns.log" >&2
+        [[ -f "$artifact_dir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$artifact_dir/borondns.log" >&2
         }
         [[ -f "$artifact_dir/client.log" ]] && {
             echo "---- client.log ----" >&2
@@ -462,10 +462,10 @@ PY
 )
 
 fake_primary="$workdir/fake-primary.py"
-config="$workdir/oxidedns.toml"
+config="$workdir/borondns.toml"
 client_bin="$repo_root/target/benchmark-tools/dns-load-client"
 primary_log="$artifact_dir/fake-primary.log"
-server_log="$artifact_dir/oxidedns.log"
+server_log="$artifact_dir/borondns.log"
 client_log="$artifact_dir/client.log"
 network_dir="$artifact_dir/network"
 packet_capture_dir="$artifact_dir/packet-capture"
@@ -745,13 +745,13 @@ start_perf_capture() {
         if [[ "$perf_privileged_helper_enabled" == true ]]; then
             # shellcheck disable=SC2024 # stdout/stderr artifacts are intentionally owned by the invoking user.
             sudo -n "$perf_helper_path" stat \
-                --pid "$oxidedns_pid" \
+                --pid "$borondns_pid" \
                 --duration "$duration" \
                 --events "$perf_events" \
                 --output "$artifact_dir/perf-stat.txt" \
                 >"$artifact_dir/perf-stat.stdout" 2>"$artifact_dir/perf-stat.stderr" &
         else
-            perf stat -e "$perf_events" -p "$oxidedns_pid" -o "$artifact_dir/perf-stat.txt" -- sleep "$duration" \
+            perf stat -e "$perf_events" -p "$borondns_pid" -o "$artifact_dir/perf-stat.txt" -- sleep "$duration" \
                 >"$artifact_dir/perf-stat.stdout" 2>"$artifact_dir/perf-stat.stderr" &
         fi
         perf_stat_pid=$!
@@ -761,13 +761,13 @@ start_perf_capture() {
         if [[ "$perf_privileged_helper_enabled" == true ]]; then
             # shellcheck disable=SC2024 # stdout/stderr artifacts are intentionally owned by the invoking user.
             sudo -n "$perf_helper_path" record \
-                --pid "$oxidedns_pid" \
+                --pid "$borondns_pid" \
                 --duration "$duration" \
                 --frequency "$perf_frequency" \
                 --output "$artifact_dir/perf.data" \
                 >"$artifact_dir/perf-record.stdout" 2>"$artifact_dir/perf-record.stderr" &
         else
-            perf record -F "$perf_frequency" -g -p "$oxidedns_pid" -o "$artifact_dir/perf.data" -- sleep "$duration" \
+            perf record -F "$perf_frequency" -g -p "$borondns_pid" -o "$artifact_dir/perf.data" -- sleep "$duration" \
                 >"$artifact_dir/perf-record.stdout" 2>"$artifact_dir/perf-record.stderr" &
         fi
         perf_record_pid=$!
@@ -1126,9 +1126,9 @@ build_profile=$build_profile
 EOF
 
 rustc --edition=2024 -O "$repo_root/tools/dns-load-client.rs" -o "$client_bin"
-cargo build --locked --release -p oxidedns-cli >/dev/null
+cargo build --locked --release -p borondns-cli >/dev/null
 client_bin_sha256="$(digest_file "$client_bin")"
-server_bin_sha256="$(digest_file "$repo_root/target/release/oxidedns")"
+server_bin_sha256="$(digest_file "$repo_root/target/release/borondns")"
 {
     printf 'client_bin_sha256=%s\n' "$client_bin_sha256"
     printf 'server_bin_sha256=%s\n' "$server_bin_sha256"
@@ -1147,7 +1147,7 @@ if ! grep -q "READY" "$primary_log" 2>/dev/null; then
     exit 1
 fi
 
-server_cmd=("$repo_root/target/release/oxidedns" serve --config "$config")
+server_cmd=("$repo_root/target/release/borondns" serve --config "$config")
 server_affinity="not-applied"
 if command -v taskset >/dev/null 2>&1 && ((server_threads > 0)); then
     last_cpu=$((server_threads - 1))
@@ -1160,7 +1160,7 @@ printf '\n' >>"$artifact_dir/server-command.txt"
 printf 'server_affinity=%s\n' "$server_affinity" >>"$artifact_dir/run.env"
 
 "${server_cmd[@]}" >"$server_log" 2>&1 &
-oxidedns_pid=$!
+borondns_pid=$!
 ready=0
 for _ in {1..400}; do
     if curl -fsS "http://127.0.0.1:$health_port/readyz" >/dev/null 2>&1; then
@@ -1170,7 +1170,7 @@ for _ in {1..400}; do
     sleep 0.05
 done
 if ((ready != 1)); then
-    echo "OxideDNS did not become ready for DNS client benchmark" >&2
+    echo "BoronDNS did not become ready for DNS client benchmark" >&2
     exit 1
 fi
 
@@ -1269,7 +1269,7 @@ packet_capture_dns_response_packets="${packet_capture_dns_response_packets:-0}"
 capture_network_snapshot after
 write_network_counter_deltas
 curl -fsS "http://127.0.0.1:$health_port/metrics" >"$artifact_dir/metrics-after.prom"
-cp "$config" "$artifact_dir/oxidedns.toml"
+cp "$config" "$artifact_dir/borondns.toml"
 
 summary="$(tail -1 "$client_log")"
 summary_value() {
@@ -1360,21 +1360,21 @@ prom_metric_value() {
     local metric="$1"
     awk -v metric="$metric" '$1 == metric { print $2; exit }' "$artifact_dir/metrics-after.prom"
 }
-zone_image_serve_hits="$(prom_metric_value oxidedns_zone_image_serve_hits_total)"
-zone_image_serve_direct_hits="$(prom_metric_value oxidedns_zone_image_serve_direct_hits_total)"
-zone_image_serve_semantic_hits="$(prom_metric_value oxidedns_zone_image_serve_semantic_hits_total)"
-zone_image_serve_failures="$(prom_metric_value oxidedns_zone_image_serve_failures_total)"
-udp_receive_batches="$(prom_metric_value oxidedns_udp_receive_batches_total)"
-udp_received_datagrams="$(prom_metric_value oxidedns_udp_received_datagrams_total)"
-udp_send_batches="$(prom_metric_value oxidedns_udp_send_batches_total)"
-udp_sent_datagrams="$(prom_metric_value oxidedns_udp_sent_datagrams_total)"
-udp_mmsg_receive_syscalls="$(prom_metric_value oxidedns_udp_mmsg_receive_syscalls_total)"
-udp_mmsg_receive_wouldblock_syscalls="$(prom_metric_value oxidedns_udp_mmsg_receive_wouldblock_syscalls_total)"
-udp_mmsg_received_datagrams="$(prom_metric_value oxidedns_udp_mmsg_received_datagrams_total)"
-udp_mmsg_send_syscalls="$(prom_metric_value oxidedns_udp_mmsg_send_syscalls_total)"
-udp_mmsg_sent_datagrams="$(prom_metric_value oxidedns_udp_mmsg_sent_datagrams_total)"
-udp_mmsg_send_partial_syscalls="$(prom_metric_value oxidedns_udp_mmsg_send_partial_syscalls_total)"
-udp_mmsg_send_wouldblock_retries="$(prom_metric_value oxidedns_udp_mmsg_send_wouldblock_retries_total)"
+zone_image_serve_hits="$(prom_metric_value borondns_zone_image_serve_hits_total)"
+zone_image_serve_direct_hits="$(prom_metric_value borondns_zone_image_serve_direct_hits_total)"
+zone_image_serve_semantic_hits="$(prom_metric_value borondns_zone_image_serve_semantic_hits_total)"
+zone_image_serve_failures="$(prom_metric_value borondns_zone_image_serve_failures_total)"
+udp_receive_batches="$(prom_metric_value borondns_udp_receive_batches_total)"
+udp_received_datagrams="$(prom_metric_value borondns_udp_received_datagrams_total)"
+udp_send_batches="$(prom_metric_value borondns_udp_send_batches_total)"
+udp_sent_datagrams="$(prom_metric_value borondns_udp_sent_datagrams_total)"
+udp_mmsg_receive_syscalls="$(prom_metric_value borondns_udp_mmsg_receive_syscalls_total)"
+udp_mmsg_receive_wouldblock_syscalls="$(prom_metric_value borondns_udp_mmsg_receive_wouldblock_syscalls_total)"
+udp_mmsg_received_datagrams="$(prom_metric_value borondns_udp_mmsg_received_datagrams_total)"
+udp_mmsg_send_syscalls="$(prom_metric_value borondns_udp_mmsg_send_syscalls_total)"
+udp_mmsg_sent_datagrams="$(prom_metric_value borondns_udp_mmsg_sent_datagrams_total)"
+udp_mmsg_send_partial_syscalls="$(prom_metric_value borondns_udp_mmsg_send_partial_syscalls_total)"
+udp_mmsg_send_wouldblock_retries="$(prom_metric_value borondns_udp_mmsg_send_wouldblock_retries_total)"
 worker_metric_summary() {
     local metric="$1"
     python3 - "$artifact_dir/metrics-after.prom" "$metric" <<'PY'
@@ -1399,9 +1399,9 @@ else:
 PY
 }
 IFS=$'\t' read -r udp_worker_receive_slots udp_worker_received_datagrams_min udp_worker_received_datagrams_max udp_worker_received_datagrams_imbalance_ratio \
-    <<<"$(worker_metric_summary oxidedns_udp_worker_received_datagrams_total)"
+    <<<"$(worker_metric_summary borondns_udp_worker_received_datagrams_total)"
 IFS=$'\t' read -r udp_worker_send_slots udp_worker_sent_datagrams_min udp_worker_sent_datagrams_max udp_worker_sent_datagrams_imbalance_ratio \
-    <<<"$(worker_metric_summary oxidedns_udp_worker_sent_datagrams_total)"
+    <<<"$(worker_metric_summary borondns_udp_worker_sent_datagrams_total)"
 zone_image_serve_hits="${zone_image_serve_hits:-unknown}"
 zone_image_serve_direct_hits="${zone_image_serve_direct_hits:-unknown}"
 zone_image_serve_semantic_hits="${zone_image_serve_semantic_hits:-unknown}"
@@ -1531,12 +1531,12 @@ zone_image_serve_rollbacks	$zone_image_serve_rollbacks	queries
 EOF
 
 cat >"$artifact_dir/README.md" <<EOF
-# OxideDNS DNS Client Benchmark
+# BoronDNS DNS Client Benchmark
 
 This artifact was generated by \`scripts/benchmark-dns-clients.sh\`.
 
 The run starts a synthetic TCP AXFR primary, loads \`$records\` A records into
-OxideDNS, pins OxideDNS to CPU affinity \`$server_affinity\` when \`taskset\` is
+BoronDNS, pins BoronDNS to CPU affinity \`$server_affinity\` when \`taskset\` is
 available, then drives \`$transport\` direct-hit A queries against
 \`$client_server:$dns_port\` with UDP client bind setting
 \`$client_bind_summary\`, UDP client sockets per thread

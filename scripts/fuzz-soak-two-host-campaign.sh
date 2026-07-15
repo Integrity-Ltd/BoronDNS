@@ -22,8 +22,8 @@ Commands:
 Options:
   --evidence-dir DIR       Local plan/evidence dir.
   --campaign-id ID         Campaign id used in local and remote paths.
-  --host HOST              SSH target; repeatable. Defaults to OXIDEDNS_FUZZ_SOAK_HOSTS or oxidedns-1 oxidegun-1.
-  --remote-repo DIR        Remote repo root. Default: /home/codex/oxidedns.
+  --host HOST              SSH target; repeatable. Defaults to BORONDNS_FUZZ_SOAK_HOSTS or borondns-1 oxidegun-1.
+  --remote-repo DIR        Remote repo root. Default: /home/codex/borondns.
   --remote-evidence DIR    Remote evidence root. Default: REMOTE_REPO/target/evidence/fuzz-soak-two-host-ID.
   --duration SECONDS       Per-target fuzz duration. Default: 86400.
   --target TARGET          Fuzz target; repeatable. Default: all current fuzz targets.
@@ -35,12 +35,12 @@ Options:
   -h, --help               Show this help.
 
 Environment:
-  OXIDEDNS_FUZZ_SOAK_HOSTS               Space-separated default host list.
-  OXIDEDNS_FUZZ_SOAK_REMOTE_REPO         Default remote repo root.
-  OXIDEDNS_FUZZ_SOAK_REMOTE_EVIDENCE     Default remote evidence root.
-  OXIDEDNS_FUZZ_SOAK_DURATION_SECONDS    Default per-target fuzz duration.
-  OXIDEDNS_FUZZ_SOAK_TOOLCHAIN           Default cargo-fuzz toolchain.
-  OXIDEDNS_FUZZ_SOAK_SANITIZER           Optional cargo-fuzz sanitizer mode.
+  BORONDNS_FUZZ_SOAK_HOSTS               Space-separated default host list.
+  BORONDNS_FUZZ_SOAK_REMOTE_REPO         Default remote repo root.
+  BORONDNS_FUZZ_SOAK_REMOTE_EVIDENCE     Default remote evidence root.
+  BORONDNS_FUZZ_SOAK_DURATION_SECONDS    Default per-target fuzz duration.
+  BORONDNS_FUZZ_SOAK_TOOLCHAIN           Default cargo-fuzz toolchain.
+  BORONDNS_FUZZ_SOAK_SANITIZER           Optional cargo-fuzz sanitizer mode.
 EOF
 }
 
@@ -52,14 +52,14 @@ die() {
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 campaign_id="$timestamp"
 evidence_dir=""
-remote_repo="${OXIDEDNS_FUZZ_SOAK_REMOTE_REPO:-/home/codex/oxidedns}"
-remote_evidence="${OXIDEDNS_FUZZ_SOAK_REMOTE_EVIDENCE:-}"
-duration="${OXIDEDNS_FUZZ_SOAK_DURATION_SECONDS:-86400}"
+remote_repo="${BORONDNS_FUZZ_SOAK_REMOTE_REPO:-/home/codex/borondns}"
+remote_evidence="${BORONDNS_FUZZ_SOAK_REMOTE_EVIDENCE:-}"
+duration="${BORONDNS_FUZZ_SOAK_DURATION_SECONDS:-86400}"
 duration_seconds=""
-toolchain="${OXIDEDNS_FUZZ_SOAK_TOOLCHAIN:-nightly}"
-sanitizer="${OXIDEDNS_FUZZ_SOAK_SANITIZER:-}"
+toolchain="${BORONDNS_FUZZ_SOAK_TOOLCHAIN:-nightly}"
+sanitizer="${BORONDNS_FUZZ_SOAK_SANITIZER:-}"
 target_repeat=1
-sampler_interval="${OXIDEDNS_FUZZ_SOAK_SAMPLER_INTERVAL_SECONDS:-60}"
+sampler_interval="${BORONDNS_FUZZ_SOAK_SAMPLER_INTERVAL_SECONDS:-60}"
 sampler_interval_seconds=""
 sampler_enabled=1
 hosts=()
@@ -216,7 +216,7 @@ prevalidate_plan_source() {
     preflight_source_clean=1
     if [[ -n "$preflight_source_status" ]]; then
         preflight_source_clean=0
-        [[ "${OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] || {
+        [[ "${BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] || {
             printf 'local repository is dirty; refusing campaign plan from %s\n%s\n' \
                 "$repo_root" "$preflight_source_status" >&2
             exit 1
@@ -225,7 +225,7 @@ prevalidate_plan_source() {
 }
 
 prepare_plan_timing_schedule() {
-    plan_created_utc="${OXIDEDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+    plan_created_utc="${BORONDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
     local plan_created_epoch
     plan_created_epoch="$(utc_timestamp_epoch "$plan_created_utc")" || die "invalid internal campaign creation timestamp"
     require_bounded_positive_integer "--duration" "$duration" "$max_nanosecond_seconds"
@@ -373,11 +373,11 @@ set_defaults() {
     validate_plan_fields
 
     if ((${#hosts[@]} == 0)); then
-        if [[ -n "${OXIDEDNS_FUZZ_SOAK_HOSTS:-}" ]]; then
+        if [[ -n "${BORONDNS_FUZZ_SOAK_HOSTS:-}" ]]; then
             # shellcheck disable=SC2206
-            hosts=(${OXIDEDNS_FUZZ_SOAK_HOSTS})
+            hosts=(${BORONDNS_FUZZ_SOAK_HOSTS})
         else
-            hosts=(oxidedns-1 oxidegun-1)
+            hosts=(borondns-1 oxidegun-1)
         fi
     fi
     ((${#hosts[@]} > 0)) || die "at least one host is required"
@@ -478,7 +478,7 @@ write_plan() {
     local source_clean="$preflight_source_clean"
     local final_evidence="$evidence_dir"
     plan_staging_cleanup_root="$plan_parent"
-    campaign_prepare_private_temporary_tree "$plan_parent" oxidedns-fuzz-plan-staging \
+    campaign_prepare_private_temporary_tree "$plan_parent" borondns-fuzz-plan-staging \
         fuzz_plan_staging plan_staging_dir || die "could not create identity-bound fuzz plan staging"
     local staging="$plan_staging_dir"
     mkdir -p "$staging/commands"
@@ -519,8 +519,8 @@ write_plan() {
         safe_instance="$(printf '%03d-%s' "$index" "$safe_target")"
         remote_target_dir="$remote_evidence/fuzz/$safe_instance"
         remote_log_dir="$remote_evidence/launch"
-        remote_build_root="/var/tmp/oxidedns-fuzz-$safe_campaign/$safe_instance"
-        systemd_unit="oxidedns-fuzz-$safe_campaign-$index-$safe_target"
+        remote_build_root="/var/tmp/borondns-fuzz-$safe_campaign/$safe_instance"
+        systemd_unit="borondns-fuzz-$safe_campaign-$index-$safe_target"
         command_file="$final_evidence/commands/$host-$safe_instance.sh"
         {
             printf '#!/usr/bin/env bash\n'
@@ -547,9 +547,9 @@ write_plan() {
             printf 'expected_cargo_fuzz_sha256=%q\n' "$cargo_fuzz_sha256"
             cat <<'REMOTE'
 
-require_resume="${OXIDEDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
-classify_only="${OXIDEDNS_CAMPAIGN_CLASSIFY_ONLY:-0}"
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+require_resume="${BORONDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
+classify_only="${BORONDNS_CAMPAIGN_CLASSIFY_ONLY:-0}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 require_owned_real_dir() {
 	local path="$1" label="$2" lexical real
 	[[ -d "$path" && ! -L "$path" ]] || { printf 'unsafe %s (not a real directory): %s\n' "$label" "$path" >&2; return 1; }
@@ -705,7 +705,7 @@ actual_cargo_fuzz="$(realpath -e "$actual_cargo_fuzz")" || exit 1
 [[ "$(sha256sum "$actual_rustc" | awk '{print $1}')" == "$expected_rustc_sha256" ]] || { printf 'remote rustc identity drift\n' >&2; exit 1; }
 [[ "$(sha256sum "$actual_cargo_fuzz" | awk '{print $1}')" == "$expected_cargo_fuzz_sha256" ]] || { printf 'remote cargo-fuzz identity drift\n' >&2; exit 1; }
 if [[ "$classify_only" == 1 ]]; then
-	runner_prefix="/var/tmp/oxidedns-campaign-runners/$systemd_unit/attempt."
+	runner_prefix="/var/tmp/borondns-campaign-runners/$systemd_unit/attempt."
 	unit_probe_status=0
 	unit_is_exactly_active "$systemd_unit.service" "$unit_root/$systemd_unit.service" "$runner_prefix" || unit_probe_status=$?
 	if ((unit_probe_status == 0)); then
@@ -754,7 +754,7 @@ if [[ "$classify_only" == 1 ]]; then
 	fi
 	exit 0
 fi
-lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 if [[ ! -e "$lock_root" ]]; then mkdir -m 0700 "$lock_root"; fi
 require_owned_real_dir "$lock_root" "remote campaign lock root" || exit 1
 (( (8#$(stat -c %a "$lock_root") & 077) == 0 )) || exit 1
@@ -773,10 +773,10 @@ campaign_lock_helper_snapshot_b64="$(base64 -w0 "/proc/self/fd/$campaign_lock_he
 exec {campaign_env_fd}<&-
 exec {campaign_lock_helper_fd}<&-
 source <(printf '%s' "$campaign_env_snapshot_b64" | base64 --decode)
-OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
-export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
+export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
 campaign_acquire_private_lock "$lock_root" "$systemd_unit:campaign" "remote fuzz campaign lock" || exit 1
-runner_prefix="/var/tmp/oxidedns-campaign-runners/$systemd_unit/attempt."
+runner_prefix="/var/tmp/borondns-campaign-runners/$systemd_unit/attempt."
 unit_probe_status=0
 unit_is_exactly_active "$systemd_unit.service" "$unit_root/$systemd_unit.service" "$runner_prefix" || unit_probe_status=$?
 if ((unit_probe_status == 0)); then
@@ -908,9 +908,9 @@ RUNNER_CHECK
 [[ "$(stat -c %u "$remote_build_dir")" == 0 && "$(stat -c %u "$source_dir")" == 0 ]] || { printf 'fuzz source snapshot is not root-owned: %s\n' "$source_dir" >&2; exit 1; }
 [[ "$(stat -c %u "$target_dir")" == "$(id -u)" ]] || { printf 'fuzz target directory owner mismatch: %s\n' "$target_dir" >&2; exit 1; }
 export CARGO_TARGET_DIR="$target_dir"
-export OXIDEDNS_FUZZ_AUTHENTICATED_CARGO="$authenticated_cargo"
-export OXIDEDNS_FUZZ_AUTHENTICATED_RUSTC="$authenticated_rustc"
-export OXIDEDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ="$authenticated_cargo_fuzz"
+export BORONDNS_FUZZ_AUTHENTICATED_CARGO="$authenticated_cargo"
+export BORONDNS_FUZZ_AUTHENTICATED_RUSTC="$authenticated_rustc"
+export BORONDNS_FUZZ_AUTHENTICATED_CARGO_FUZZ="$authenticated_cargo_fuzz"
 RUNNER_BUILD
     printf 'mkdir -m 0700 %q\n' "$attempt_dir/evidence"
     printf 'exec scripts/fuzz-campaign.sh --toolchain %q ' "$toolchain"
@@ -934,7 +934,7 @@ remote_runner="$campaign_published_runner"
 fragment_candidate="$(mktemp)"
 cat >"$fragment_candidate" <<UNIT
 [Unit]
-Description=OxideDNS fuzz target $target
+Description=BoronDNS fuzz target $target
 After=network-online.target
 Wants=network-online.target
 
@@ -1000,7 +1000,7 @@ scripts/fuzz-soak-two-host-campaign.sh collect --evidence-dir $(shell_quote "$fi
 EOF
 
     cat >"$staging/README.md" <<EOF
-# OxideDNS Two-Host Fuzz/Soak Campaign Plan
+# BoronDNS Two-Host Fuzz/Soak Campaign Plan
 
 Created UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 Source commit: $source_commit
@@ -1079,7 +1079,7 @@ write_sampler_plan() {
         safe_host="$(systemd_escape_fragment "$host")"
         remote_sample_dir="$remote_evidence/host/$safe_host"
         remote_log_dir="$remote_evidence/launch"
-        systemd_unit="oxidedns-fuzz-$safe_campaign-host-sampler-$safe_host"
+        systemd_unit="borondns-fuzz-$safe_campaign-host-sampler-$safe_host"
         command_file="$final_evidence/commands/$host-host-sampler.sh"
         sampler_units_planned_count="$(awk -F '\t' -v host="$host" 'NR > 1 && $1 == host { count += 1 } END { print count + 0 }' "$staging/assignments.tsv")"
         [[ "$sampler_units_planned_count" =~ ^[1-9][0-9]*$ ]] || die "sampler host has no planned fuzz units: $host"
@@ -1253,7 +1253,7 @@ sampler_attempt_hard_stopped() {
 	[[ ! -e "$1/sampler-completed.env" ]] || return 1
 	[[ -f "$marker" && ! -L "$marker" && -f "$units_file" && ! -L "$units_file" ]] || return 1
 	unit_count="$(awk '
-		!/^oxidedns-fuzz-[A-Za-z0-9_.-]+-[0-9]+-[A-Za-z0-9_.-]+[.]service$/ || seen[$0]++ { invalid = 1 }
+		!/^borondns-fuzz-[A-Za-z0-9_.-]+-[0-9]+-[A-Za-z0-9_.-]+[.]service$/ || seen[$0]++ { invalid = 1 }
 		{ count += 1 }
 		END { if (invalid || count == 0) exit 1; print count }
 	' "$units_file")" || return 1
@@ -1321,11 +1321,11 @@ if [[ -n "$sampler_setup_status" ]]; then
 	printf '%s\n' "$sampler_setup_status" >&2
 	exit 1
 fi
-require_resume="${OXIDEDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
-classify_only="${OXIDEDNS_CAMPAIGN_CLASSIFY_ONLY:-0}"
+require_resume="${BORONDNS_CAMPAIGN_REQUIRE_RESUME:-0}"
+classify_only="${BORONDNS_CAMPAIGN_CLASSIFY_ONLY:-0}"
 [[ "$require_resume" == 0 || "$require_resume" == 1 ]] || { printf 'invalid sampler resume mode\n' >&2; exit 1; }
 [[ "$classify_only" == 0 || "$classify_only" == 1 ]] || { printf 'invalid sampler classification mode\n' >&2; exit 1; }
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 # The authenticated checkout was verified clean above. Load the shared identity
 # validators before the read-only branch; classification must not create locks,
 # directories, attempts, runners, or unit fragments.
@@ -1344,9 +1344,9 @@ campaign_lock_helper_snapshot_b64="$(base64 -w0 "/proc/self/fd/$campaign_lock_he
 exec {campaign_env_fd}<&-
 exec {campaign_lock_helper_fd}<&-
 source <(printf '%s' "$campaign_env_snapshot_b64" | base64 --decode)
-OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
-export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
-runner_prefix="/var/tmp/oxidedns-campaign-runners/$systemd_unit/attempt."
+BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
+export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+runner_prefix="/var/tmp/borondns-campaign-runners/$systemd_unit/attempt."
 if [[ "$classify_only" == 1 ]]; then
 	unit_probe_status=0
 	unit_is_exactly_active "$systemd_unit.service" "$unit_root/$systemd_unit.service" "$runner_prefix" || unit_probe_status=$?
@@ -1432,7 +1432,7 @@ wait_for_sampler_first_sample() {
 	return 1
 }
 
-sampler_lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+sampler_lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 if [[ -e "$sampler_lock_root" || -L "$sampler_lock_root" ]]; then
 	require_owned_real_dir "$sampler_lock_root" "sampler lock directory" || exit 1
 else
@@ -1534,7 +1534,7 @@ sampler_terminal_reserve_seconds=$((units_expected_count * sampler_probe_budget_
 	printf 'git_path=%q\n' "$git_path"
     printf 'units_expected_sha256=%q\n' "$units_candidate_sha256"
     printf 'units_expected_count=%q\n' "$units_expected_count"
-    printf 'units_expected_prefix=%q\n' "oxidedns-fuzz-$campaign_id-"
+    printf 'units_expected_prefix=%q\n' "borondns-fuzz-$campaign_id-"
     cat <<'SAMPLER'
 runner_path="$(realpath -e "${BASH_SOURCE[0]}")" || exit 1
 units_file="$(dirname "$runner_path")/fuzz-units.txt"
@@ -1780,7 +1780,7 @@ campaign_publish_root_bound_file "$remote_runner" "$units_file" fuzz-units.txt \
 fragment_candidate="$(mktemp)"
 cat >"$fragment_candidate" <<UNIT
 [Unit]
-Description=OxideDNS fuzz campaign host sampler $campaign_id
+Description=BoronDNS fuzz campaign host sampler $campaign_id
 After=network-online.target
 Wants=network-online.target
 
@@ -1855,7 +1855,7 @@ load_plan() {
         [[ "$saved_target" =~ ^[A-Za-z0-9_-]+$ && -f "$repo_root/fuzz/fuzz_targets/$saved_target.rs" ]] ||
             die "campaign metadata names unknown fuzz target: $saved_target"
     done
-    [[ "$source_clean" == 1 || "${OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] ||
+    [[ "$source_clean" == 1 || "${BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY:-0}" == 1 ]] ||
         die "saved campaign was planned from a dirty source tree"
     local created_epoch expected_sampler_deadline
     created_epoch="$(utc_timestamp_epoch "$created_utc")" || die "invalid campaign creation timestamp"
@@ -1885,7 +1885,7 @@ load_plan() {
                 die "fuzz target repetition order drift at repeat $repeat_index index $base_index"
         done
     done
-    campaign_prepare_private_temporary_tree "${TMPDIR:-/tmp}" oxidedns-fuzz-plan-reference \
+    campaign_prepare_private_temporary_tree "${TMPDIR:-/tmp}" borondns-fuzz-plan-reference \
         fuzz_semantic_reference semantic_reference_dir ||
         die "could not create identity-bound fuzz semantic reference"
     semantic_reference_cleanup_root="$(dirname "$semantic_reference_dir")"
@@ -1905,7 +1905,7 @@ load_plan() {
     done
     [[ "$sanitizer" == cargo-fuzz-default ]] || reference_args+=(--sanitizer "$sanitizer")
     [[ "$sampler_enabled" == 1 ]] || reference_args+=(--no-sampler)
-    OXIDEDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 OXIDEDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$created_utc" \
+    BORONDNS_CAMPAIGN_TEST_ALLOW_DIRTY=1 BORONDNS_FUZZ_SOAK_INTERNAL_CREATED_UTC="$created_utc" \
         "$repo_root/scripts/fuzz-soak-two-host-campaign.sh" \
         "${reference_args[@]}" >/dev/null || die "could not regenerate fuzz campaign semantic reference"
     cmp -s "$evidence_dir/validate-collected-campaign.py" "$reference_plan/validate-collected-campaign.py" ||
@@ -1929,7 +1929,7 @@ load_plan() {
         expected_evidence="$remote_evidence/fuzz/$safe_instance"
         expected_command="$evidence_dir/commands/$row_host-$safe_instance.sh"
         [[ "$row_evidence" == "$expected_evidence" ]] || die "fuzz assignment evidence path drift at row $index"
-        expected_unit="oxidedns-fuzz-$safe_campaign-$index-$safe_target.service"
+        expected_unit="borondns-fuzz-$safe_campaign-$index-$safe_target.service"
         [[ "$row_unit" == "$expected_unit" ]] || die "fuzz assignment unit identity drift at row $index"
         [[ "$row_command" == "$expected_command" && -x "$row_command" ]] ||
             die "invalid fuzz assignment command path at row $index"
@@ -1965,7 +1965,7 @@ load_plan() {
             list_contains_word "$sampler_host" "${hosts[@]}" || die "sampler assignment names unknown host: $sampler_host"
             safe_host="$(systemd_escape_fragment "$sampler_host")"
             [[ "$sample_dir" == "$remote_evidence/host/$safe_host" ]] || die "sampler evidence path drift: $sampler_host"
-            expected_sampler_unit="oxidedns-fuzz-$safe_campaign-host-sampler-$safe_host.service"
+            expected_sampler_unit="borondns-fuzz-$safe_campaign-host-sampler-$safe_host.service"
             [[ "$sampler_unit" == "$expected_sampler_unit" ]] || die "sampler unit identity drift: $sampler_host"
             [[ "$sampler_command" == "$evidence_dir/commands/$sampler_host-host-sampler.sh" && -x "$sampler_command" ]] ||
                 die "invalid sampler command path: $sampler_host"
@@ -2019,8 +2019,8 @@ resume_window_preflight() {
         while IFS=$'\t' read -r host remote_sample_dir systemd_unit command_file _; do
             validated_command="$validated_command_dir/$(basename "$command_file")"
             if ! classification_output="$(campaign_ssh_bounded \
-                "${OXIDEDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
-                -- "$host" "OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 OXIDEDNS_CAMPAIGN_CLASSIFY_ONLY=1 bash -s" \
+                "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
+                -- "$host" "BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 BORONDNS_CAMPAIGN_CLASSIFY_ONLY=1 bash -s" \
                 <"$validated_command")"; then
                 die "read-only sampler resume classification failed: host=$host unit=$systemd_unit"
             fi
@@ -2046,8 +2046,8 @@ resume_window_preflight() {
     while IFS=$'\t' read -r host target _ remote_target_dir systemd_unit command_file; do
         validated_command="$validated_command_dir/$(basename "$command_file")"
         if ! classification_output="$(campaign_ssh_bounded \
-            "${OXIDEDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
-            -- "$host" "OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 OXIDEDNS_CAMPAIGN_CLASSIFY_ONLY=1 bash -s" \
+            "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
+            -- "$host" "BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 BORONDNS_CAMPAIGN_CLASSIFY_ONLY=1 bash -s" \
             <"$validated_command")"; then
             die "read-only resume classification failed: host=$host target=$target unit=$systemd_unit"
         fi
@@ -2098,14 +2098,14 @@ launch_plan() {
         tail -n +2 "$evidence_dir/host-samplers.tsv" | while IFS=$'\t' read -r host remote_sample_dir systemd_unit command_file _; do
             printf 'launching host=%s sampler_unit=%s evidence=%s\n' "$host" "$systemd_unit" "$remote_sample_dir"
             validated_command="$validated_command_dir/$(basename "$command_file")"
-            campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+            campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
                 -- "$host" "bash -s" <"$validated_command"
         done
     fi
     tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r host target _ remote_target_dir systemd_unit command_file; do
         printf 'launching host=%s target=%s unit=%s evidence=%s\n' "$host" "$target" "$systemd_unit" "$remote_target_dir"
         validated_command="$validated_command_dir/$(basename "$command_file")"
-        campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+        campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
             -- "$host" "bash -s" <"$validated_command"
     done
 }
@@ -2120,15 +2120,15 @@ resume_plan() {
         tail -n +2 "$evidence_dir/host-samplers.tsv" | while IFS=$'\t' read -r host remote_sample_dir systemd_unit command_file _; do
             printf 'classifying and launching sampler host=%s unit=%s under remote lock\n' "$host" "$systemd_unit"
             validated_command="$validated_command_dir/$(basename "$command_file")"
-            campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
-                -- "$host" "OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
+            campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+                -- "$host" "BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
         done
     fi
     tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r host target _ remote_target_dir systemd_unit command_file; do
         printf 'classifying and launching target=%s host=%s unit=%s under remote lock\n' "$target" "$host" "$systemd_unit"
         validated_command="$validated_command_dir/$(basename "$command_file")"
-        campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
-            -- "$host" "OXIDEDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
+        campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_LAUNCH_TIMEOUT_SECONDS:-3600}" \
+            -- "$host" "BORONDNS_CAMPAIGN_REQUIRE_RESUME=1 bash -s" <"$validated_command"
     done
 }
 
@@ -2144,7 +2144,7 @@ status_plan() {
             printf '%s\n' "-- target=$target unit=$systemd_unit --"
             helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
             [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
-            if ! campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
+            if ! campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
                 -- "$host" bash -s -- "$systemd_unit" "$remote_target_dir" "$remote_repo" "$source_commit" "$helper_sha256" <<'REMOTE'; then
 set -euo pipefail
 unit="$1"
@@ -2172,9 +2172,9 @@ else
 fi
 timeout --preserve-status --kill-after=5 30 systemctl is-active "$unit" 2>/dev/null || true
 
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 fragment_expected="$unit_root/$unit"
-runner_prefix="/var/tmp/oxidedns-campaign-runners/${unit%.service}/attempt."
+runner_prefix="/var/tmp/borondns-campaign-runners/${unit%.service}/attempt."
 unit_properties=""
 if ! unit_properties="$(timeout --preserve-status --kill-after=5 30 systemctl show "$unit" \
 	-p LoadState \
@@ -2242,7 +2242,7 @@ REMOTE
                 printf '%s\n' "-- host-sampler unit=$systemd_unit --"
                 helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
                 [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
-                if ! campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
+                if ! campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_STATUS_TIMEOUT_SECONDS:-120}" \
                     -- "$host" bash -s -- "$systemd_unit" "$remote_sample_dir" "$remote_repo" "$source_commit" "$helper_sha256" <<'REMOTE'; then
 set -euo pipefail
 unit="$1"
@@ -2269,9 +2269,9 @@ else
 	printf 'source_drift=0\n'
 fi
 timeout --preserve-status --kill-after=5 30 systemctl is-active "$unit" 2>/dev/null || true
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 fragment_expected="$unit_root/$unit"
-runner_prefix="/var/tmp/oxidedns-campaign-runners/${unit%.service}/attempt."
+runner_prefix="/var/tmp/borondns-campaign-runners/${unit%.service}/attempt."
 unit_properties=""
 if ! unit_properties="$(timeout --preserve-status --kill-after=5 30 systemctl show "$unit" -p LoadState -p ActiveState -p SubState -p Result \
 	-p FragmentPath -p ExecStart -p ExecMainStatus --no-pager 2>/dev/null)"; then
@@ -2366,9 +2366,9 @@ collect_plan() {
         }
         printf 'collecting host=%s remote=%s\n' "$host" "$remote_evidence"
         campaign_collection_phase_timeout_seconds collection_copy_timeout "$collection_deadline" \
-            "${OXIDEDNS_CAMPAIGN_REMOTE_COPY_TIMEOUT_SECONDS:-7200}" || die "fuzz collection copy budget expired: $host"
+            "${BORONDNS_CAMPAIGN_REMOTE_COPY_TIMEOUT_SECONDS:-7200}" || die "fuzz collection copy budget expired: $host"
         if command -v rsync >/dev/null 2>&1; then
-            if ! OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+            if ! BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
                 campaign_rsync_bounded "$collection_copy_timeout" \
                 -a --delete --no-links --no-devices --no-specials -- \
                 "$transport_host:$(shell_quote "$remote_evidence")/" "$staging/"; then
@@ -2384,7 +2384,7 @@ collect_plan() {
                 campaign_publish_status_text "$evidence_dir/remotes" "$status_file" $'classification\treason\ninvalid\trsync-required-for-unsafe-remote-path\n' "fuzz collection status" || true
                 die "rsync is required to collect a remote evidence path containing whitespace or shell metacharacters: $remote_evidence"
             }
-            if ! OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+            if ! BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
                 campaign_scp_bounded "$collection_copy_timeout" \
                 -r -- "$transport_host:$remote_evidence/." "$staging/"; then
                 campaign_remove_captured_cleanup_object "$staging" fuzz_collection_evidence_staging \
@@ -2486,9 +2486,9 @@ collect_plan() {
         tail -n +2 "$evidence_dir/assignments.tsv" | while IFS=$'\t' read -r row_host target _ remote_target_dir systemd_unit command_file; do
             [[ "$row_host" == "$host" ]] || continue
             campaign_collection_phase_timeout_seconds collection_journal_timeout "$collection_deadline" \
-                "${OXIDEDNS_CAMPAIGN_REMOTE_JOURNAL_TIMEOUT_SECONDS:-300}" ||
+                "${BORONDNS_CAMPAIGN_REMOTE_JOURNAL_TIMEOUT_SECONDS:-300}" ||
                 die "fuzz collection journal budget expired: $host"
-            OXIDEDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
+            BORONDNS_CAMPAIGN_ACTIVE_ABSOLUTE_DEADLINE="$collection_deadline" \
                 campaign_ssh_bounded "$collection_journal_timeout" \
                 -n -- "$host" "journalctl -u $(shell_quote "$systemd_unit") --no-pager" \
                 >"$journal_staging/$systemd_unit.log" 2>&1 || true
@@ -2517,7 +2517,7 @@ collect_plan() {
 
 cleanup_remote_job() {
     local host="$1" unit="$2" runner_prefix="$3" build_root="$4" lock_kind="$5" repo="$6" expected_commit="$7" expected_helper_sha256="$8" expected_lock_helper_sha256="$9"
-    campaign_ssh_bounded "${OXIDEDNS_CAMPAIGN_REMOTE_CLEANUP_TIMEOUT_SECONDS:-300}" \
+    campaign_ssh_bounded "${BORONDNS_CAMPAIGN_REMOTE_CLEANUP_TIMEOUT_SECONDS:-300}" \
         -- "$host" bash -s -- "$unit" "$runner_prefix" "$build_root" "$lock_kind" "$repo" "$expected_commit" "$expected_helper_sha256" "$expected_lock_helper_sha256" <<'REMOTE'
 set -euo pipefail
 unit="$1"
@@ -2528,9 +2528,9 @@ repo="$5"
 expected_commit="$6"
 expected_helper_sha256="$7"
 expected_lock_helper_sha256="$8"
-unit_root="${OXIDEDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
+unit_root="${BORONDNS_CAMPAIGN_UNIT_ROOT:-/etc/systemd/system}"
 fragment="$unit_root/$unit"
-lock_root="/tmp/oxidedns-campaign-locks-$(id -u)"
+lock_root="/tmp/borondns-campaign-locks-$(id -u)"
 [[ -d "$lock_root" && ! -L "$lock_root" ]] || { printf 'cleanup lock root is unsafe: %s\n' "$lock_root" >&2; exit 1; }
 [[ "$(realpath -ms "$lock_root")" == "$(realpath -e "$lock_root")" && "$(stat -c %u "$lock_root")" == "$(id -u)" ]] || exit 1
 lock_mode="$(stat -c %a "$lock_root")"
@@ -2578,8 +2578,8 @@ cleanup_status="$(timeout --preserve-status --kill-after=5 30 "$git_path" -C "$r
 exec {campaign_env_fd}<&-
 exec {campaign_lock_helper_fd}<&-
 source <(printf '%s' "$campaign_env_snapshot_b64" | base64 --decode)
-OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
-export OXIDEDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
+BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64="$campaign_lock_helper_snapshot_b64"
+export BORONDNS_CAMPAIGN_LOCK_HELPER_SNAPSHOT_B64
 campaign_acquire_private_lock "$lock_root" "${unit%.service}:$lock_kind" "remote cleanup lock" || exit 1
 unit_property() {
     local key="$1" data="$2" count value
@@ -2674,7 +2674,7 @@ fi
 		exit 1
 	fi
 	if [[ -n "$build_root" ]]; then
-		[[ "$build_root" == /var/tmp/oxidedns-fuzz-* && -d "$build_root" && ! -L "$build_root" ]] || exit 1
+		[[ "$build_root" == /var/tmp/borondns-fuzz-* && -d "$build_root" && ! -L "$build_root" ]] || exit 1
 		[[ "$(realpath -ms "$build_root")" == "$(realpath -e "$build_root")" && "$(stat -c %u "$build_root")" == "$(id -u)" ]] || exit 1
 		[[ -z "$(find "$build_root" -type l -print -quit)" ]] || { printf 'cleanup build root contains symlinks: %s\n' "$build_root" >&2; exit 1; }
 	build_parent="$(dirname "$build_root")"
@@ -2738,11 +2738,11 @@ cleanup_plan() {
     safe_campaign="$(systemd_escape_fragment "$campaign_id")"
     while IFS=$'\t' read -r host target _ remote_target_dir systemd_unit command_file; do
         safe_instance="$(basename "$remote_target_dir")"
-        build_root="/var/tmp/oxidedns-fuzz-$safe_campaign/$safe_instance"
+        build_root="/var/tmp/borondns-fuzz-$safe_campaign/$safe_instance"
         helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
         lock_helper_sha256="$(sed -n 's/^campaign_lock_helper_sha256=//p' "$command_file")"
         [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ && "$lock_helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
-        cleanup_remote_job "$host" "$systemd_unit" "/var/tmp/oxidedns-campaign-runners/${systemd_unit%.service}/attempt." "$build_root" campaign "$remote_repo" "$source_commit" "$helper_sha256" "$lock_helper_sha256"
+        cleanup_remote_job "$host" "$systemd_unit" "/var/tmp/borondns-campaign-runners/${systemd_unit%.service}/attempt." "$build_root" campaign "$remote_repo" "$source_commit" "$helper_sha256" "$lock_helper_sha256"
     done < <(tail -n +2 "$evidence_dir/assignments.tsv")
     if [[ -r "$evidence_dir/host-samplers.tsv" ]]; then
         local remote_sample_dir
@@ -2750,7 +2750,7 @@ cleanup_plan() {
             helper_sha256="$(sed -n 's/^campaign_helper_sha256=//p' "$command_file")"
             lock_helper_sha256="$(sed -n 's/^campaign_lock_helper_sha256=//p' "$command_file")"
             [[ "$helper_sha256" =~ ^[0-9a-f]{64}$ && "$lock_helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "invalid authenticated campaign helper digest: $command_file"
-            cleanup_remote_job "$host" "$systemd_unit" "/var/tmp/oxidedns-campaign-runners/${systemd_unit%.service}/attempt." "" setup "$remote_repo" "$source_commit" "$helper_sha256" "$lock_helper_sha256"
+            cleanup_remote_job "$host" "$systemd_unit" "/var/tmp/borondns-campaign-runners/${systemd_unit%.service}/attempt." "" setup "$remote_repo" "$source_commit" "$helper_sha256" "$lock_helper_sha256"
         done < <(tail -n +2 "$evidence_dir/host-samplers.tsv")
     fi
 }

@@ -23,9 +23,9 @@ Do not keep the abandoned draft code that added broad CLI changes, Aya dependenc
 
 ## MVP Outcome
 
-The MVP is successful when an OxideDNS engineer can run a source-varied RRL scenario on a dedicated lab interface, reproduce it from seed/config, and get JSON evidence with send rate, response classes, loss/unanswered counts, and latency percentiles.
+The MVP is successful when an BoronDNS engineer can run a source-varied RRL scenario on a dedicated lab interface, reproduce it from seed/config, and get JSON evidence with send rate, response classes, loss/unanswered counts, and latency percentiles.
 
-The MVP does not need to beat `kxdpgun` on raw PPS. It needs to do the thing `kxdpgun` does not give us cleanly: deterministic source-address control integrated with OxideDNS test workflows.
+The MVP does not need to beat `kxdpgun` on raw PPS. It needs to do the thing `kxdpgun` does not give us cleanly: deterministic source-address control integrated with BoronDNS test workflows.
 
 ## Workstream 1: Structure Before Features
 

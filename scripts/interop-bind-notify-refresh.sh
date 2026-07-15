@@ -17,25 +17,25 @@ ulimit -n 65536 2>/dev/null || true
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/interop-version-evidence.sh"
 template_file="$repo_root/tests/interop/bind/named-notify.conf.template"
-bind_cache_parent="/var/cache/bind/oxidedns-interop"
+bind_cache_parent="/var/cache/bind/borondns-interop"
 if [[ -d "$bind_cache_parent" && -w "$bind_cache_parent" ]]; then
     work_parent="$bind_cache_parent"
 else
-    work_parent="${TMPDIR:-/tmp}/oxidedns-interop"
+    work_parent="${TMPDIR:-/tmp}/borondns-interop"
 fi
 mkdir -p "$work_parent"
 chmod 1777 "$work_parent"
 workdir="$work_parent/bind-notify-refresh-$$"
-artifact_dir="${OXIDEDNS_BIND_NOTIFY_ARTIFACT_DIR:-}"
+artifact_dir="${BORONDNS_BIND_NOTIFY_ARTIFACT_DIR:-}"
 rm -rf "$workdir"
 mkdir -p "$workdir"
 chmod 0777 "$workdir"
 
 cleanup() {
     local status=$?
-    if [[ -n "${oxidedns_pid:-}" ]] && kill -0 "$oxidedns_pid" 2>/dev/null; then
-        kill "$oxidedns_pid" 2>/dev/null || true
-        wait "$oxidedns_pid" 2>/dev/null || true
+    if [[ -n "${borondns_pid:-}" ]] && kill -0 "$borondns_pid" 2>/dev/null; then
+        kill "$borondns_pid" 2>/dev/null || true
+        wait "$borondns_pid" 2>/dev/null || true
     fi
     if [[ -n "${named_pid:-}" ]] && kill -0 "$named_pid" 2>/dev/null; then
         kill "$named_pid" 2>/dev/null || true
@@ -54,15 +54,15 @@ cleanup() {
             echo "---- notify-proxy.log ----" >&2
             tail -120 "$workdir/notify-proxy.log" >&2
         }
-        [[ -f "$workdir/oxidedns.log" ]] && {
-            echo "---- oxidedns.log ----" >&2
-            tail -120 "$workdir/oxidedns.log" >&2
+        [[ -f "$workdir/borondns.log" ]] && {
+            echo "---- borondns.log ----" >&2
+            tail -120 "$workdir/borondns.log" >&2
         }
     fi
 }
 trap cleanup EXIT
 
-read -r bind_port rndc_port notify_port oxidedns_dns_port oxidedns_health_port < <(
+read -r bind_port rndc_port notify_port borondns_dns_port borondns_health_port < <(
     python3 - <<'PY'
 import socket
 
@@ -78,7 +78,7 @@ PY
 zone_file="$workdir/alpha.test.zone"
 named_conf="$workdir/named.conf"
 rndc_conf="$workdir/rndc.conf"
-oxidedns_conf="$workdir/oxidedns.toml"
+borondns_conf="$workdir/borondns.toml"
 notify_proxy="$workdir/notify-proxy.py"
 notify_proxy_log="$workdir/notify-proxy.log"
 rndc_secret="dG9wc2VjcmV0"
@@ -119,13 +119,13 @@ python3 - "$template_file" "$named_conf" "$workdir" "$bind_port" "$rndc_port" "$
 from pathlib import Path
 import sys
 
-template, output, workdir, port, rndc_port, zonefile, oxidedns_port, secret = sys.argv[1:]
+template, output, workdir, port, rndc_port, zonefile, borondns_port, secret = sys.argv[1:]
 text = Path(template).read_text()
 text = text.replace("__WORKDIR__", workdir)
 text = text.replace("__PORT__", port)
 text = text.replace("__RNDC_PORT__", rndc_port)
 text = text.replace("__ZONEFILE__", zonefile)
-text = text.replace("__OXIDEDNS_PORT__", oxidedns_port)
+text = text.replace("__BORONDNS_PORT__", borondns_port)
 text = text.replace("__RNDC_SECRET__", secret)
 Path(output).write_text(text)
 PY
@@ -185,14 +185,14 @@ while True:
         response, _ = forward.recvfrom(4096)
         if len(response) >= 4:
             _, response_flags = struct.unpack("!HH", response[:4])
-            log(f"response_from_oxidedns rcode={response_flags & 0x0F} bytes={len(response)}")
+            log(f"response_from_borondns rcode={response_flags & 0x0F} bytes={len(response)}")
         else:
-            log(f"short_response_from_oxidedns bytes={len(response)}")
+            log(f"short_response_from_borondns bytes={len(response)}")
     except TimeoutError:
-        log("response_from_oxidedns timeout")
+        log("response_from_borondns timeout")
 PY
 
-python3 "$notify_proxy" "$notify_port" "$oxidedns_dns_port" "$notify_proxy_log" &
+python3 "$notify_proxy" "$notify_port" "$borondns_dns_port" "$notify_proxy_log" &
 proxy_pid=$!
 
 cat >"$rndc_conf" <<EOF
@@ -211,11 +211,11 @@ EOF
 named-checkconf -z "$named_conf" >/dev/null
 record_bind_primary_version "$workdir" "bind-notify-refresh" "udp-notify+tcp-axfr" "none" "$named_conf" "$workdir/alpha.test.zone" "$rndc_conf"
 
-cat >"$oxidedns_conf" <<EOF
+cat >"$borondns_conf" <<EOF
 [server]
-listen_udp = ["127.0.0.1:$oxidedns_dns_port"]
-listen_tcp = ["127.0.0.1:$oxidedns_dns_port"]
-health = "127.0.0.1:$oxidedns_health_port"
+listen_udp = ["127.0.0.1:$borondns_dns_port"]
+listen_tcp = ["127.0.0.1:$borondns_dns_port"]
+health = "127.0.0.1:$borondns_health_port"
 log_level = "info"
 
 [limits]
@@ -234,20 +234,20 @@ primaries = ["127.0.0.1:$bind_port"]
 notify_sources = ["127.0.0.1"]
 EOF
 
-cargo build -p oxidedns-cli >/dev/null
-"$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
-oxidedns_pid=$!
+cargo build -p borondns-cli >/dev/null
+"$repo_root/target/debug/borondns" serve --config "$borondns_conf" >"$workdir/borondns.log" 2>&1 &
+borondns_pid=$!
 
 live=0
 for _ in {1..100}; do
-    if curl -fsS "http://127.0.0.1:$oxidedns_health_port/livez" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$borondns_health_port/livez" >/dev/null 2>&1; then
         live=1
         break
     fi
     sleep 0.1
 done
 if ((live != 1)); then
-    echo "OxideDNS did not become live before starting BIND" >&2
+    echo "BoronDNS did not become live before starting BIND" >&2
     exit 1
 fi
 
@@ -269,25 +269,25 @@ fi
 
 ready=""
 for _ in {1..100}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
+    if ready="$(curl -fsS "http://127.0.0.1:$borondns_health_port/readyz" 2>/dev/null)"; then
         [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
     fi
     sleep 0.1
 done
 
 if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial BIND AXFR" >&2
+    echo "BoronDNS did not become ready after initial BIND AXFR" >&2
     exit 1
 fi
 
-initial_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+initial_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$initial_soa" != *"2026052401"* ]]; then
-    echo "OxideDNS did not serve initial SOA serial" >&2
+    echo "BoronDNS did not serve initial SOA serial" >&2
     exit 1
 fi
 
 # BIND can keep the initial NOTIFY retry queued for a few seconds even after
-# OxideDNS has refreshed. Let that stale retry and the server dedup window drain
+# BoronDNS has refreshed. Let that stale retry and the server dedup window drain
 # before reloading the zone, otherwise the updated NOTIFY may be deduplicated
 # behind the stale serial in tight soak loops.
 sleep 6
@@ -298,7 +298,7 @@ rndc -c "$rndc_conf" notify alpha.test >/dev/null
 
 updated_answer=""
 for _ in {1..120}; do
-    updated_answer="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
+    updated_answer="$(dig "@127.0.0.1" -p "$borondns_dns_port" www.alpha.test. A +norecurse +noall +answer)"
     if [[ "$updated_answer" == *"192.0.2.42"* ]]; then
         break
     fi
@@ -306,33 +306,33 @@ for _ in {1..120}; do
 done
 
 if [[ "$updated_answer" != *"www.alpha.test."* ]] || [[ "$updated_answer" != *"192.0.2.42"* ]]; then
-    echo "OxideDNS did not publish updated A response after BIND NOTIFY" >&2
+    echo "BoronDNS did not publish updated A response after BIND NOTIFY" >&2
     exit 1
 fi
 updated_address="$(awk '/www[.]alpha[.]test[.]/ { print $NF; exit }' <<<"$updated_answer")"
 
-updated_soa="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
+updated_soa="$(dig "@127.0.0.1" -p "$borondns_dns_port" alpha.test. SOA +tcp +time=1 +tries=1 +short)"
 if [[ "$updated_soa" != *"2026052402"* ]]; then
-    echo "OxideDNS did not publish updated SOA serial after BIND NOTIFY" >&2
+    echo "BoronDNS did not publish updated SOA serial after BIND NOTIFY" >&2
     exit 1
 fi
 
-metrics="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+metrics="$(curl -fsS "http://127.0.0.1:$borondns_health_port/metrics")"
 printf '%s\n' "$metrics" >"$metrics_out"
-if [[ "$metrics" != *'oxidedns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
-    echo "OxideDNS metrics missing updated BIND NOTIFY SOA serial" >&2
+if [[ "$metrics" != *'borondns_zone_soa_serial{zone="alpha.test."} 2026052402'* ]]; then
+    echo "BoronDNS metrics missing updated BIND NOTIFY SOA serial" >&2
     exit 1
 fi
 
-notify_received="$(awk '$1 == "oxidedns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
+notify_received="$(awk '$1 == "borondns_notify_messages_received_total" { print $2 }' <<<"$metrics")"
 if [[ -z "$notify_received" ]] || ((notify_received < 1)); then
-    echo "OxideDNS metrics did not record BIND NOTIFY receipt" >&2
+    echo "BoronDNS metrics did not record BIND NOTIFY receipt" >&2
     exit 1
 fi
 
-notify_signalled="$(awk '$1 == "oxidedns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
+notify_signalled="$(awk '$1 == "borondns_notify_refresh_actions_total{action=\"signalled\"}" { print $2 }' <<<"$metrics")"
 if [[ -z "$notify_signalled" ]] || ((notify_signalled < 1)); then
-    echo "OxideDNS metrics did not record BIND NOTIFY refresh signal" >&2
+    echo "BoronDNS metrics did not record BIND NOTIFY refresh signal" >&2
     exit 1
 fi
 
@@ -341,18 +341,18 @@ if ! grep -q "notify_from_bind .* opcode=4" "$notify_proxy_log"; then
     exit 1
 fi
 
-if ! grep -q "response_from_oxidedns rcode=0" "$notify_proxy_log"; then
-    echo "BIND NOTIFY proxy did not observe a successful OxideDNS NOTIFY response" >&2
+if ! grep -q "response_from_borondns rcode=0" "$notify_proxy_log"; then
+    echo "BIND NOTIFY proxy did not observe a successful BoronDNS NOTIFY response" >&2
     exit 1
 fi
 
-if ! grep 'accepted NOTIFY' "$workdir/oxidedns.log" | grep -q 'alpha.test.'; then
-    echo "OxideDNS log missing accepted BIND NOTIFY event" >&2
+if ! grep 'accepted NOTIFY' "$workdir/borondns.log" | grep -q 'alpha.test.'; then
+    echo "BoronDNS log missing accepted BIND NOTIFY event" >&2
     exit 1
 fi
 
 {
-    printf 'primary\tinitial_primary_soa\tinitial_oxidedns_soa\tupdated_oxidedns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
+    printf 'primary\tinitial_primary_soa\tinitial_borondns_soa\tupdated_borondns_soa\tnotify_received\tnotify_signalled\tupdated_address\n'
     printf 'BIND\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$primary_soa" \
         "$initial_soa" \
@@ -364,11 +364,11 @@ fi
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_state	runtime_case	artifacts	review_note
-ODS-FR-NOTIFY-001	retained-real-primary	bind_udp_notify_reception	notify-proxy.log; primary-version.txt	The BIND primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and OxideDNS receives them on the DNS listener.
-ODS-FR-NOTIFY-006	retained-real-primary	bind_notify_response	notify-proxy.log	The forwarding proxy observes a successful OxideDNS NOTIFY response with RCODE=0 for BIND-generated NOTIFY.
-ODS-FR-NOTIFY-007	retained-real-primary	bind_refresh_signal	metrics.txt; bind-notify-refresh-summary.tsv	OxideDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
-ODS-FR-NOTIFY-010	retained-real-primary	bind_notify_logging	oxidedns.log	OxideDNS emits an accepted NOTIFY log for the real-primary BIND message, including source, zone, and refresh action.
-ODS-FR-ZSM-003	retained-real-primary	bind_notify_triggered_refresh	bind-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and OxideDNS republishes the updated SOA serial and A record.
+ODS-FR-NOTIFY-001	retained-real-primary	bind_udp_notify_reception	notify-proxy.log; primary-version.txt	The BIND primary emits OPCODE=4 NOTIFY packets observed by the forwarding proxy and BoronDNS receives them on the DNS listener.
+ODS-FR-NOTIFY-006	retained-real-primary	bind_notify_response	notify-proxy.log	The forwarding proxy observes a successful BoronDNS NOTIFY response with RCODE=0 for BIND-generated NOTIFY.
+ODS-FR-NOTIFY-007	retained-real-primary	bind_refresh_signal	metrics.txt; bind-notify-refresh-summary.tsv	BoronDNS metrics record real-primary NOTIFY receipt and refresh-signalled actions, and the served zone advances from serial 2026052401 to 2026052402.
+ODS-FR-NOTIFY-010	retained-real-primary	bind_notify_logging	borondns.log	BoronDNS emits an accepted NOTIFY log for the real-primary BIND message, including source, zone, and refresh action.
+ODS-FR-ZSM-003	retained-real-primary	bind_notify_triggered_refresh	bind-notify-refresh-summary.tsv; metrics.txt	The accepted real-primary NOTIFY triggers the refresh path and BoronDNS republishes the updated SOA serial and A record.
 EOF
 
 if [[ -n "$artifact_dir" ]]; then
@@ -376,9 +376,9 @@ if [[ -n "$artifact_dir" ]]; then
     cp "$workdir/primary-version.txt" "$artifact_dir/primary-version.txt"
     cp "$named_conf" "$artifact_dir/named.conf"
     cp "$zone_file" "$artifact_dir/alpha.test.zone"
-    cp "$oxidedns_conf" "$artifact_dir/oxidedns.toml"
+    cp "$borondns_conf" "$artifact_dir/borondns.toml"
     cp "$workdir/named.log" "$artifact_dir/named.log"
-    cp "$workdir/oxidedns.log" "$artifact_dir/oxidedns.log"
+    cp "$workdir/borondns.log" "$artifact_dir/borondns.log"
     cp "$notify_proxy_log" "$artifact_dir/notify-proxy.log"
     cp "$metrics_out" "$artifact_dir/metrics.txt"
     cp "$summary_tsv" "$artifact_dir/bind-notify-refresh-summary.tsv"
