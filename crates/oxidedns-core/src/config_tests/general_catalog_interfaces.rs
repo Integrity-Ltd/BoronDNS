@@ -36,6 +36,7 @@
         assert!(config.health_listeners().is_empty());
         assert_eq!(config.health.metrics_rate_limit_per_minute, 60);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 300);
+        assert_eq!(config.health.max_connections, DEFAULT_HEALTH_MAX_CONNECTIONS);
         assert_eq!(
             config.metrics.latency_histogram_buckets_seconds(),
             vec![
@@ -144,6 +145,10 @@
         assert!(redacted.contains("bearer_token = \"<redacted>\""));
         assert!(!redacted.contains("secret-node-token"));
         assert!(!redacted.contains("secret-operation-token"));
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("secret-node-token"));
+        assert!(!debug.contains("secret-operation-token"));
+        assert!(debug.contains("<redacted>"));
     }
 
     #[test]
@@ -167,6 +172,50 @@
     }
 
     #[test]
+    fn control_plane_node_ids_are_strict_opaque_segments() {
+        let parse = |section: &str, node_id: &str| {
+            let enabled = if section == "operations" {
+                "enabled = true"
+            } else {
+                ""
+            };
+            ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [control_plane.{section}]
+                    {enabled}
+                    endpoint_url = "https://udns.example.internal/api/v1"
+                    node_id = "{node_id}"
+                    bearer_token = "token-a"
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ))
+        };
+
+        for node_id in ["node-a", "node.a_1", "11111111-1111-1111-1111-111111111111"] {
+            assert!(parse("operations", node_id).is_ok(), "rejected {node_id:?}");
+        }
+        for section in ["telemetry", "operations"] {
+            for node_id in [
+                "", ".", "..", ".hidden", "node/a", "node?admin", "node#fragment",
+                "node%2fadmin", "node%252fadmin", "node\\nadmin", "node admin", "nøde",
+            ] {
+                let error = parse(section, node_id)
+                    .expect_err(&format!("accepted unsafe node ID {node_id:?}"));
+                assert!(
+                    error.to_string().contains("must match [A-Za-z0-9]"),
+                    "unexpected error for {section} {node_id:?}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rejects_enabled_control_plane_operations_without_credentials() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -187,6 +236,76 @@
             error
                 .to_string()
                 .contains("must be set when operations polling is enabled")
+        );
+    }
+
+    #[test]
+    fn control_plane_http_requires_explicit_loopback_only_override() {
+        let base = |endpoint: &str, override_line: &str| {
+            ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [control_plane.operations]
+                    enabled = true
+                    endpoint_url = "{endpoint}"
+                    {override_line}
+                    node_id = "node-a"
+                    bearer_token = "token-a"
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#,
+            ))
+        };
+
+        assert!(base("http://127.0.0.1:8080/api/v1", "").is_err());
+        assert!(
+            base(
+                "http://127.0.0.1:8080/api/v1",
+                "allow_insecure_loopback_http = true"
+            )
+            .is_ok()
+        );
+        assert!(
+            base(
+                "http://[::1]:8080/api/v1",
+                "allow_insecure_loopback_http = true"
+            )
+            .is_ok()
+        );
+        assert!(
+            base(
+                "http://192.0.2.1:8080/api/v1",
+                "allow_insecure_loopback_http = true"
+            )
+            .is_err()
+        );
+        assert!(
+            base(
+                "http://127.0.0.1.example:8080/api/v1",
+                "allow_insecure_loopback_http = true"
+            )
+            .is_err()
+        );
+        assert!(base("https://udns.example.internal/api/v1", "").is_ok());
+        for endpoint in [
+            "https://",
+            "https://user@udns.example.internal/api/v1",
+            "https://udns.example.internal/api/v1?redirect=1",
+            "https://udns.example.internal/api/v1#operations",
+            "ftp://udns.example.internal/api/v1",
+        ] {
+            assert!(base(endpoint, "").is_err(), "accepted {endpoint}");
+        }
+        assert!(
+            base(
+                "http://127.0.0.1:99999/api/v1",
+                "allow_insecure_loopback_http = true"
+            )
+            .is_err()
         );
     }
 

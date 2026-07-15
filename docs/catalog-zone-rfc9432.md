@@ -170,6 +170,13 @@ transfers. When `[secret_store]` is configured, new or rotated TSIG keys and
 named XoT profiles can be loaded from the filesystem snapshot and then used by
 catalog member references without restarting OxideDNS.
 
+When several configured catalogs list the same member zone, membership remains
+observable under every catalog but only one catalog owns its transfer and
+NOTIFY policy. The owner is the lexicographically smallest canonical catalog
+zone name, so snapshot arrival order cannot change the selected policy. If that
+catalog stops listing the member, ownership moves immediately to the next
+canonical catalog; OxideDNS removes the member only when no catalog lists it.
+
 The useful mental model is:
 
 - TOML says which catalogs this process trusts and what local policy applies.

@@ -1179,8 +1179,9 @@ layout can be phased out.
   898k responses/s, so affinity remains evidence-gated.
 - [x] Add local data-plane tuning observability:
   dedicated Linux UDP workers now export mmsg receive/send syscall counters,
-  mmsg datagram counters, partial-send counters, WouldBlock retry counters, and
-  labelled per-worker UDP batch/datagram counters. The DNS client benchmark
+  mmsg datagram counters, partial-send counters, separate WouldBlock,
+  interrupted, and resource-pressure retry counters, and labelled per-worker
+  UDP batch/datagram counters. The DNS client benchmark
   retains aggregate mmsg rows plus active-worker and worker-imbalance summary
   rows in `benchmark-results.tsv`.
 - [x] Add local UDP runtime sweep automation:

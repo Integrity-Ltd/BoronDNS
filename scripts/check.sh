@@ -3,6 +3,7 @@ set -euo pipefail
 
 scripts/check-test-plan.sh
 scripts/check-shell-scripts.sh
+scripts/check-github-actions.sh
 scripts/check-security-policy.sh
 python3 -m py_compile scripts/check-perf-regression.py
 python3 -m py_compile scripts/check-rrl-thresholds.py
@@ -20,12 +21,17 @@ python3 -m py_compile scripts/check-functional-requirement-references.py
 python3 -m py_compile scripts/check-rfc-compliance-assertions.py
 python3 -m py_compile scripts/check-srs-identifier-registry.py
 python3 -m py_compile scripts/check-version-consistency.py
+python3 -m py_compile scripts/check-release-signing-policy.py
+python3 -m py_compile scripts/release-api-supervisor.py
+python3 -m py_compile scripts/verify-release-reproducibility.py
+python3 -m py_compile scripts/verify-docker-archive.py
 python3 -m py_compile scripts/check-doc-hygiene.py
 python3 -m py_compile scripts/check-srs-hygiene.py
 python3 -m py_compile scripts/check-srs-review-disposition.py
 python3 -m py_compile scripts/check-zone-image-prototype-benchmark.py
 python3 -m py_compile scripts/compare-zone-image-benchmarks.py
 python3 -m py_compile scripts/check-zone-image-evidence-tools.py
+python3 -m py_compile scripts/check-fuzz-targets.py
 python3 scripts/check-operator-guide.py
 python3 scripts/check-verification-ledger.py
 python3 scripts/check-appendix-a-traceability.py
@@ -40,10 +46,12 @@ python3 scripts/check-functional-requirement-references.py
 python3 scripts/check-rfc-compliance-assertions.py
 python3 scripts/check-srs-identifier-registry.py
 python3 scripts/check-version-consistency.py
+python3 scripts/check-release-signing-policy.py
 python3 scripts/check-doc-hygiene.py
 python3 scripts/check-srs-hygiene.py
 python3 scripts/check-srs-review-disposition.py
 python3 scripts/check-zone-image-evidence-tools.py
+python3 scripts/check-fuzz-targets.py
 python3 scripts/audit-spoof-evidence.py
 python3 scripts/audit-log-fields.py
 python3 scripts/audit-log-lazy-formatting.py
@@ -84,6 +92,8 @@ bash -n scripts/interop-notify-negative.sh
 bash -n scripts/interop-chaos-queries.sh
 bash -n scripts/interop-powerdns-postgres-catalog-tsig-docker.sh
 bash -n scripts/test-docker-image.sh
+bash -n scripts/test-docker-image-daemon-state.sh
+bash -n scripts/test-package-publication-recovery.sh
 bash -n scripts/interop-dns-cookie-dig.sh
 bash -n scripts/interop-ixfr-notimp-fallback.sh
 bash -n scripts/interop-dnssec-serve.sh
@@ -99,7 +109,14 @@ scripts/capture-resource-evidence.sh
 scripts/capture-coverage-evidence.sh
 scripts/capture-interface-compatibility-evidence.sh
 scripts/fuzz-campaign.sh --dry-run --duration 1 --target dns_datagram
+scripts/test-operations-harnesses.sh
+scripts/test-docker-image-daemon-state.sh
+scripts/test-package-publication-recovery.sh
+cargo check --manifest-path fuzz/Cargo.toml
+cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace -- --test-threads=1
+cargo test --workspace --all-targets --all-features -- --test-threads=1
 cargo deny check

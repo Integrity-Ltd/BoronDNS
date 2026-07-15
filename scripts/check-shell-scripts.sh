@@ -30,7 +30,8 @@ if ((${#shell_files[@]} == 0)); then
     exit 0
 fi
 
-shfmt -w "${shell_files[@]}"
+"$repo_root/scripts/check-shell-format.sh" "${shell_files[@]}"
 shellcheck "${shell_files[@]}"
+python3 "$repo_root/scripts/check-release-signing-policy.py"
 
 printf 'shell script check passed: shfmt and shellcheck validated %s files\n' "${#shell_files[@]}"

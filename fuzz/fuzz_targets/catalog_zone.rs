@@ -94,12 +94,22 @@ fn catalog_snapshot(catalog_origin: DomainName, data: &[u8]) -> ZoneSnapshot {
             ));
         }
         if byte(data, offset + 7) & 1 != 0 {
+            let first = xfr_text(data, offset + 8);
+            let mut policies = vec![txt_rdata(first)];
+            if byte(data, offset + 7) & 2 != 0 {
+                let second = if byte(data, offset + 7) & 4 != 0 {
+                    first
+                } else {
+                    xfr_text(data, offset + 9)
+                };
+                policies.push(txt_rdata(second));
+            }
             rrsets.push(Rrset::new(
                 name(&format!("_udns-xfr.{member_node}")),
                 RecordType::Txt as u16,
                 QCLASS_IN,
                 0,
-                vec![txt_rdata(xfr_text(data, offset + 8))],
+                policies,
             ));
         }
         if byte(data, offset + 9) & 1 != 0 {
@@ -158,7 +168,7 @@ fn member_zone_wire(index: usize, data: &[u8], offset: &mut usize) -> Vec<u8> {
 }
 
 fn xfr_text(data: &[u8], offset: usize) -> &'static str {
-    match byte(data, offset) % 8 {
+    match byte(data, offset) % 12 {
         0 => "transport=tcp;port=53",
         1 => "transport=xot;port=853;server_name=primary.example",
         2 => "transport=udp;port=53",
@@ -166,6 +176,10 @@ fn xfr_text(data: &[u8], offset: usize) -> &'static str {
         4 => "server_name=bad name",
         5 => "mode=ignored;transport=tcp;port=5300",
         6 => "unknown=value;transport=xot",
+        7 => "transport=xot;transport=tcp",
+        8 => "port=853;port=853",
+        9 => "transport=xot;server_name=-primary.example",
+        10 => "transport=xot;server_name=primary.example.",
         _ => "",
     }
 }

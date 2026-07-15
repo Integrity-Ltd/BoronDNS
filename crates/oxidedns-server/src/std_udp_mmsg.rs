@@ -5,12 +5,13 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket},
 };
 
+use oxidedns_core::config::MAX_UDP_BATCH_SIZE;
+
 #[cfg(not(target_os = "linux"))]
 use crate::send_std_udp_batch_fallback_with_successes;
 use crate::udp::{UdpIoErrorAction, classify_udp_send_error};
 use crate::{UdpInbound, UdpOutbound, UdpPacketTarget};
 
-const MAX_MMSG_BATCH: usize = 1024;
 const SEND_WOULDBLOCK_RETRIES: usize = 256;
 const SEND_WOULDBLOCK_SPINS: usize = 64;
 const SEND_RESOURCE_BACKOFF_RETRIES: usize = 3;
@@ -18,6 +19,10 @@ const SEND_RESOURCE_BACKOFF_RETRIES: usize = 3;
 pub(crate) struct StdUdpMmsg {
     capacity: usize,
     stats: StdUdpMmsgStats,
+    #[cfg(all(test, target_os = "linux"))]
+    injected_sendmmsg_outcomes: Option<std::collections::VecDeque<Result<usize, libc::c_int>>>,
+    #[cfg(all(test, target_os = "linux"))]
+    injected_send_resource_backoffs: Vec<std::time::Duration>,
     #[cfg(target_os = "linux")]
     names: Vec<libc::sockaddr_storage>,
     #[cfg(target_os = "linux")]
@@ -28,10 +33,14 @@ pub(crate) struct StdUdpMmsg {
 
 impl StdUdpMmsg {
     pub(crate) fn new(batch_size: usize) -> Self {
-        let capacity = batch_size.clamp(1, MAX_MMSG_BATCH);
+        let capacity = batch_size.clamp(1, MAX_UDP_BATCH_SIZE);
         Self {
             capacity,
             stats: StdUdpMmsgStats::default(),
+            #[cfg(all(test, target_os = "linux"))]
+            injected_sendmmsg_outcomes: None,
+            #[cfg(all(test, target_os = "linux"))]
+            injected_send_resource_backoffs: Vec::new(),
             #[cfg(target_os = "linux")]
             names: zeroed_vec(capacity),
             #[cfg(target_os = "linux")]
@@ -63,19 +72,11 @@ impl StdUdpMmsg {
         }
     }
 
-    pub(crate) fn send_batch(
-        &mut self,
-        socket: &UdpSocket,
-        outbound: &[UdpOutbound],
-    ) -> io::Result<usize> {
-        Ok(self.send_batch_with_successes(socket, outbound)?.len())
-    }
-
     pub(crate) fn send_batch_with_successes(
         &mut self,
         socket: &UdpSocket,
         outbound: &[UdpOutbound],
-    ) -> io::Result<Vec<usize>> {
+    ) -> Result<Vec<usize>, StdUdpMmsgSendError> {
         if outbound.is_empty() {
             return Ok(Vec::new());
         }
@@ -192,71 +193,139 @@ impl StdUdpMmsg {
         &mut self,
         socket: &UdpSocket,
         outbound: &[UdpOutbound],
-    ) -> io::Result<Vec<usize>> {
-        use std::os::fd::AsRawFd;
-
+    ) -> Result<Vec<usize>, StdUdpMmsgSendError> {
         let mut cursor = 0usize;
         let mut sent_indices = Vec::new();
         let mut blocked_retries = 0usize;
         let mut resource_backoff_retries = 0usize;
-        while cursor < outbound.len() && blocked_retries < SEND_WOULDBLOCK_RETRIES {
+        while cursor < outbound.len() {
             let count = self.capacity.min(outbound.len() - cursor);
-            self.prepare_send_messages(&outbound[cursor..cursor + count])?;
-            // SAFETY: `socket` is a live UDP socket; `messages[..count]` has
-            // msghdr entries pointing to live response buffers and sockaddr
-            // storage owned by `self` for the duration of the call.
-            let result = unsafe {
-                libc::sendmmsg(
-                    socket.as_raw_fd(),
-                    self.messages.as_mut_ptr(),
-                    count as libc::c_uint,
-                    libc::MSG_DONTWAIT as _,
-                )
+            if let Err(error) = self.prepare_send_messages(&outbound[cursor..cursor + count]) {
+                return Err(StdUdpMmsgSendError::new(error, sent_indices));
+            }
+            let result = match self.invoke_sendmmsg(socket, count) {
+                Ok(result) => result,
+                Err(error) => {
+                    match classify_udp_send_error(&error) {
+                        UdpIoErrorAction::Continue
+                            if error.kind() == ErrorKind::WouldBlock
+                                || error.kind() == ErrorKind::Interrupted =>
+                        {
+                            if error.kind() == ErrorKind::WouldBlock {
+                                self.stats.send_wouldblock_retries += 1;
+                            } else {
+                                self.stats.send_interrupted_retries += 1;
+                            }
+                            blocked_retries += 1;
+                            if blocked_retries >= SEND_WOULDBLOCK_RETRIES {
+                                return Err(StdUdpMmsgSendError::new(error, sent_indices));
+                            }
+                            if blocked_retries <= SEND_WOULDBLOCK_SPINS {
+                                std::hint::spin_loop();
+                            } else {
+                                std::thread::yield_now();
+                            }
+                        }
+                        UdpIoErrorAction::Continue => {
+                            cursor += 1;
+                            blocked_retries = 0;
+                            resource_backoff_retries = 0;
+                        }
+                        UdpIoErrorAction::Backoff(duration) => {
+                            if resource_backoff_retries >= SEND_RESOURCE_BACKOFF_RETRIES {
+                                return Err(StdUdpMmsgSendError::new(error, sent_indices));
+                            }
+                            self.stats.send_resource_backoff_retries += 1;
+                            resource_backoff_retries += 1;
+                            self.apply_send_resource_backoff(duration);
+                        }
+                        UdpIoErrorAction::Fatal => {
+                            return Err(StdUdpMmsgSendError::new(error, sent_indices));
+                        }
+                    }
+                    continue;
+                }
             };
             if result > 0 {
                 self.stats.send_syscalls += 1;
                 self.stats.sent_datagrams += result as u64;
-                if (result as usize) < count {
+                if result < count {
                     self.stats.send_partial_syscalls += 1;
                 }
-                sent_indices.extend(cursor..cursor + result as usize);
-                cursor += result as usize;
+                sent_indices.extend(cursor..cursor + result);
+                cursor += result;
                 blocked_retries = 0;
                 resource_backoff_retries = 0;
                 continue;
             }
-
-            let error = io::Error::last_os_error();
-            match classify_udp_send_error(&error) {
-                UdpIoErrorAction::Continue
-                    if error.kind() == ErrorKind::WouldBlock
-                        || error.kind() == ErrorKind::Interrupted =>
-                {
-                    self.stats.send_wouldblock_retries += 1;
-                    blocked_retries += 1;
-                    if blocked_retries <= SEND_WOULDBLOCK_SPINS {
-                        std::hint::spin_loop();
-                    } else {
-                        std::thread::yield_now();
-                    }
-                }
-                UdpIoErrorAction::Continue => {
-                    cursor += 1;
-                    blocked_retries = 0;
-                    resource_backoff_retries = 0;
-                }
-                UdpIoErrorAction::Backoff(duration) => {
-                    self.stats.send_wouldblock_retries += 1;
-                    resource_backoff_retries += 1;
-                    if resource_backoff_retries > SEND_RESOURCE_BACKOFF_RETRIES {
-                        break;
-                    }
-                    std::thread::sleep(duration);
-                }
-                UdpIoErrorAction::Fatal => return Err(error),
-            }
+            return Err(StdUdpMmsgSendError::new(
+                io::Error::new(ErrorKind::WriteZero, "sendmmsg accepted no datagrams"),
+                sent_indices,
+            ));
         }
         Ok(sent_indices)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn invoke_sendmmsg(&mut self, socket: &UdpSocket, count: usize) -> io::Result<usize> {
+        use std::os::fd::AsRawFd;
+
+        #[cfg(test)]
+        if let Some(outcomes) = self.injected_sendmmsg_outcomes.as_mut() {
+            return outcomes
+                .pop_front()
+                .expect("injected sendmmsg outcome sequence exhausted")
+                .map_err(io::Error::from_raw_os_error)
+                .and_then(|sent| {
+                    (sent <= count).then_some(sent).ok_or_else(|| {
+                        io::Error::new(
+                            ErrorKind::InvalidData,
+                            "injected sendmmsg result exceeds submitted message count",
+                        )
+                    })
+                });
+        }
+
+        // SAFETY: `socket` is a live UDP socket; `messages[..count]` has
+        // msghdr entries pointing to live response buffers and sockaddr
+        // storage owned by `self` for the duration of the call.
+        let result = unsafe {
+            libc::sendmmsg(
+                socket.as_raw_fd(),
+                self.messages.as_mut_ptr(),
+                count as libc::c_uint,
+                libc::MSG_DONTWAIT as _,
+            )
+        };
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(result as usize)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_send_resource_backoff(&mut self, duration: std::time::Duration) {
+        #[cfg(test)]
+        if self.injected_sendmmsg_outcomes.is_some() {
+            self.injected_send_resource_backoffs.push(duration);
+            return;
+        }
+        std::thread::sleep(duration);
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn inject_sendmmsg_outcomes_for_test(
+        &mut self,
+        outcomes: impl IntoIterator<Item = Result<usize, libc::c_int>>,
+    ) {
+        self.injected_sendmmsg_outcomes = Some(outcomes.into_iter().collect());
+        self.injected_send_resource_backoffs.clear();
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn injected_send_resource_backoffs_for_test(&self) -> &[std::time::Duration] {
+        &self.injected_send_resource_backoffs
     }
 
     #[cfg(target_os = "linux")]
@@ -293,6 +362,25 @@ impl StdUdpMmsg {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct StdUdpMmsgSendError {
+    error: io::Error,
+    sent_indices: Vec<usize>,
+}
+
+impl StdUdpMmsgSendError {
+    pub(crate) fn new(error: io::Error, sent_indices: Vec<usize>) -> Self {
+        Self {
+            error,
+            sent_indices,
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<usize>, io::Error) {
+        (self.sent_indices, self.error)
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StdUdpMmsgStats {
     pub(crate) receive_syscalls: u64,
@@ -303,6 +391,8 @@ pub(crate) struct StdUdpMmsgStats {
     pub(crate) sent_datagrams: u64,
     pub(crate) send_partial_syscalls: u64,
     pub(crate) send_wouldblock_retries: u64,
+    pub(crate) send_interrupted_retries: u64,
+    pub(crate) send_resource_backoff_retries: u64,
 }
 
 #[cfg(target_os = "linux")]
@@ -526,9 +616,9 @@ mod tests {
 
         assert_eq!(
             batch
-                .send_batch(&server, &outbound)
+                .send_batch_with_successes(&server, &outbound)
                 .expect("sendmmsg batch"),
-            2
+            vec![0, 1]
         );
 
         let mut buf = [0u8; 16];
@@ -539,5 +629,130 @@ mod tests {
         let mut payloads = [first, second];
         payloads.sort();
         assert_eq!(payloads, [b"one".to_vec(), b"two".to_vec()]);
+    }
+
+    #[test]
+    fn sendmmsg_blocked_retry_exhaustion_preserves_error_and_partial_successes() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind sender");
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("bind receiver");
+        let receiver_addr = receiver.local_addr().expect("receiver address");
+        let outbound = vec![
+            UdpOutbound {
+                response: b"one".to_vec(),
+                target: UdpPacketTarget::Socket(receiver_addr),
+                query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
+            },
+            UdpOutbound {
+                response: b"two".to_vec(),
+                target: UdpPacketTarget::Socket(receiver_addr),
+                query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
+            },
+        ];
+
+        for (errno, wouldblock_retries, interrupted_retries) in
+            [(libc::EAGAIN, 256, 0), (libc::EINTR, 0, 256)]
+        {
+            let mut empty = StdUdpMmsg::new(4);
+            empty.inject_sendmmsg_outcomes_for_test(std::iter::repeat_n(
+                Err(errno),
+                SEND_WOULDBLOCK_RETRIES,
+            ));
+            let error = empty
+                .send_batch_with_successes(&socket, &outbound)
+                .expect_err("blocked retry exhaustion must preserve the terminal error");
+            let (sent_indices, error) = error.into_parts();
+            assert!(sent_indices.is_empty());
+            assert_eq!(error.raw_os_error(), Some(errno));
+            assert_eq!(
+                empty.take_stats(),
+                StdUdpMmsgStats {
+                    send_wouldblock_retries: wouldblock_retries,
+                    send_interrupted_retries: interrupted_retries,
+                    ..StdUdpMmsgStats::default()
+                }
+            );
+
+            let mut partial = StdUdpMmsg::new(4);
+            partial.inject_sendmmsg_outcomes_for_test(
+                std::iter::once(Ok(1))
+                    .chain(std::iter::repeat_n(Err(errno), SEND_WOULDBLOCK_RETRIES)),
+            );
+            let error = partial
+                .send_batch_with_successes(&socket, &outbound)
+                .expect_err("blocked retry exhaustion must preserve partial success");
+            let (sent_indices, error) = error.into_parts();
+            assert_eq!(sent_indices, vec![0]);
+            assert_eq!(error.raw_os_error(), Some(errno));
+            assert_eq!(
+                partial.take_stats(),
+                StdUdpMmsgStats {
+                    send_syscalls: 1,
+                    sent_datagrams: 1,
+                    send_partial_syscalls: 1,
+                    send_wouldblock_retries: wouldblock_retries,
+                    send_interrupted_retries: interrupted_retries,
+                    ..StdUdpMmsgStats::default()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn sendmmsg_resource_pressure_exhaustion_preserves_partial_successes_and_error() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind sender");
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("bind receiver");
+        let receiver_addr = receiver.local_addr().expect("receiver address");
+        let outbound = vec![
+            UdpOutbound {
+                response: b"one".to_vec(),
+                target: UdpPacketTarget::Socket(receiver_addr),
+                query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
+            },
+            UdpOutbound {
+                response: b"two".to_vec(),
+                target: UdpPacketTarget::Socket(receiver_addr),
+                query_metrics: None,
+                #[cfg(feature = "af-xdp")]
+                benchmark_fixed_response: false,
+            },
+        ];
+
+        for errno in [libc::ENOBUFS, libc::ENOMEM] {
+            let mut batch = StdUdpMmsg::new(4);
+            batch.inject_sendmmsg_outcomes_for_test([
+                Ok(1),
+                Err(errno),
+                Err(errno),
+                Err(errno),
+                Err(errno),
+            ]);
+
+            let error = batch
+                .send_batch_with_successes(&socket, &outbound)
+                .expect_err("resource pressure must surface after bounded retries");
+            let (sent_indices, error) = error.into_parts();
+            assert_eq!(sent_indices, vec![0]);
+            assert_eq!(error.raw_os_error(), Some(errno));
+            assert_eq!(
+                batch.injected_send_resource_backoffs_for_test(),
+                [Duration::from_millis(50); SEND_RESOURCE_BACKOFF_RETRIES]
+            );
+            assert_eq!(
+                batch.take_stats(),
+                StdUdpMmsgStats {
+                    send_syscalls: 1,
+                    sent_datagrams: 1,
+                    send_partial_syscalls: 1,
+                    send_resource_backoff_retries: SEND_RESOURCE_BACKOFF_RETRIES as u64,
+                    ..StdUdpMmsgStats::default()
+                }
+            );
+        }
     }
 }

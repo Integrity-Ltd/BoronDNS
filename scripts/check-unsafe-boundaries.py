@@ -22,6 +22,7 @@ REQUIRED_CURRENT = {
     "posix-rlimit": "crates/oxidedns-server/src/resource_limits.rs",
     "posix-privilege-drop": "crates/oxidedns-server/src/privilege.rs",
     "posix-process-hardening": "crates/oxidedns-server/src/process_hardening.rs",
+    "posix-secret-store-open": "crates/oxidedns-server/src/secret_store.rs",
 }
 
 CURRENT_SOURCE_SHAPE = {
@@ -29,7 +30,10 @@ CURRENT_SOURCE_SHAPE = {
     "posix-rlimit": "libc::getrlimit(libc::RLIMIT_NOFILE",
     "posix-privilege-drop": "libc::setresuid(uid, uid, uid)",
     "posix-process-hardening": "libc::prctl(libc::PR_SET_NO_NEW_PRIVS",
+    "posix-secret-store-open": "use rustix::fs::{Mode, OFlags, openat};",
 }
+
+SAFE_DEPENDENCY_BOUNDARY_KINDS = {"posix-safe-syscall-wrapper"}
 
 REQUIRED_DEFERRED = {
     "xdp-af-xdp",
@@ -184,7 +188,9 @@ def main() -> None:
     registry_allowlist = {
         row["path"]
         for row in registry.values()
-        if row["status"] == "current" and not row["path"].startswith("future:")
+        if row["status"] == "current"
+        and not row["path"].startswith("future:")
+        and row["boundary_kind"] not in SAFE_DEPENDENCY_BOUNDARY_KINDS
     }
     if source_allowlist != registry_allowlist:
         fail(
@@ -202,11 +208,21 @@ def main() -> None:
             fail(f"{registry_path}: {row_id} current row path does not exist: {relative_path}")
         if "test" not in row["required_tests"].lower():
             fail(f"{registry_path}: {row_id} must name adapter tests")
-        if "scripts/" not in row["evidence"] or "SAFETY" not in row["evidence"]:
+        if "scripts/" not in row["evidence"] or (
+            row["boundary_kind"] not in SAFE_DEPENDENCY_BOUNDARY_KINDS
+            and "SAFETY" not in row["evidence"]
+        ):
             fail(
                 f"{registry_path}: {row_id} must name retained script evidence "
                 "and SAFETY-rationale evidence"
             )
+        if row["boundary_kind"] in SAFE_DEPENDENCY_BOUNDARY_KINDS:
+            text = (repo_root / relative_path).read_text(encoding="utf-8")
+            if ALLOW_UNSAFE_RE.search(text) or UNSAFE_CONSTRUCT_RE.search(text):
+                fail(
+                    f"{relative_path}: safe dependency boundary {row_id} must not "
+                    "contain a first-party unsafe exception"
+                )
         assert_safety_comments(repo_root, relative_path)
         assert_current_source_shape(repo_root, row_id, relative_path)
 

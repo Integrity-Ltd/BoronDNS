@@ -6,90 +6,258 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUST_TOOLCHAIN_VERSION: "1.96.1"
   CARGO_CYCLONEDX_VERSION: "0.5.9"
   SYFT_VERSION: "v1.45.1"
+  SYFT_LINUX_AMD64_SHA256: "20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716"
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_LINUX_AMD64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  CARGO_DENY_VERSION: "0.19.8"
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+  CARGO_BLOAT_VERSION: "0.12.1"
+  CARGO_MACHETE_VERSION: "0.9.2"
 
 jobs:
-  build-installer:
-    name: Build x86_64 musl artifacts
+  verify-source:
+    name: Verify release source
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.source-commit.outputs.commit }}
+      rustc_sha256: ${{ steps.source-commit.outputs.rustc-sha256 }}
+      cargo_sha256: ${{ steps.source-commit.outputs.cargo-sha256 }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+
+      - name: Verify clean source checkout
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          git_status_file="$(/usr/bin/mktemp)"
+          if ! /usr/bin/git status --porcelain=v1 --untracked-files=all --ignored=no >"$git_status_file"; then
+            printf 'git status failed while verifying release source\n' >&2
+            exit 1
+          fi
+          test ! -s "$git_status_file"
+
+      - name: Record verified source commit
+        id: source-commit
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          rustup_bin="$HOME/.cargo/bin/rustup"
+          test -x "$rustup_bin"
+          rustc_path="$(/usr/bin/realpath -e "$("$rustup_bin" which rustc)")"
+          cargo_path="$(/usr/bin/realpath -e "$("$rustup_bin" which cargo)")"
+          test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$("$rustc_path" --version | /usr/bin/awk '{print $2}')" = "$RUST_TOOLCHAIN_VERSION"
+          printf 'commit=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          printf 'rustc-sha256=%s\n' "$(/usr/bin/sha256sum "$rustc_path" | /usr/bin/awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          printf 'cargo-sha256=%s\n' "$(/usr/bin/sha256sum "$cargo_path" | /usr/bin/awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          printf 'cargo-path=%s\n' "$cargo_path" >> "$GITHUB_OUTPUT"
+          printf 'rustc-path=%s\n' "$rustc_path" >> "$GITHUB_OUTPUT"
 
       - name: Install shell tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools shellcheck
+          sudo apt-get install -y shellcheck
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
-      - name: Install Rust target
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Install SBOM tools
+      - name: Install continuous verification tools
         run: |
-          cargo install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+          verified_cargo="${{ steps.source-commit.outputs.cargo-path }}"
+          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ steps.source-commit.outputs.cargo-sha256 }}"
+          "$HOME/.cargo/bin/rustup" component add llvm-tools-preview
+          "$verified_cargo" install --locked cargo-deny --version "$CARGO_DENY_VERSION"
+          "$verified_cargo" install --locked cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION"
+          "$verified_cargo" install --locked cargo-bloat --version "$CARGO_BLOAT_VERSION"
+          "$verified_cargo" install --locked cargo-machete --version "$CARGO_MACHETE_VERSION"
           mkdir -p "$HOME/.local/bin"
-          syft_version="${SYFT_VERSION#v}"
-          syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
-          curl -sSfL \
-            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/$syft_archive" \
-            -o "/tmp/$syft_archive"
-          curl -sSfL \
-            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/syft_${syft_version}_checksums.txt" \
-            -o /tmp/syft-checksums.txt
-          (cd /tmp && grep "  $syft_archive$" syft-checksums.txt | sha256sum -c -)
-          tar -C "$HOME/.local/bin" -xzf "/tmp/$syft_archive" syft
+          actionlint_archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          /usr/bin/curl -sSfL \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint_archive}" \
+            -o "/tmp/${actionlint_archive}"
+          printf '%s  %s\n' "$ACTIONLINT_LINUX_AMD64_SHA256" "/tmp/${actionlint_archive}" | /usr/bin/sha256sum -c -
+          /usr/bin/tar -C "$HOME/.local/bin" -xzf "/tmp/${actionlint_archive}" actionlint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Check release tag matches Cargo version
         if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          scripts/check-version-consistency.py --tag "${GITHUB_REF_NAME#v}"
+        run: scripts/check-version-consistency.py --tag "${GITHUB_REF_NAME#v}"
 
-      - name: Shell checks
-        run: scripts/check-shell-scripts.sh
+      - name: Continuous verification gate
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: scripts/check.sh
+
+      - name: Verify Continuous gate preserved clean source
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+          git_status_file="$(/usr/bin/mktemp)"
+          if ! /usr/bin/git status --porcelain=v1 --untracked-files=all --ignored=no >"$git_status_file"; then
+            printf 'git status failed while verifying release source\n' >&2
+            exit 1
+          fi
+          test ! -s "$git_status_file"
+
+  package-release:
+    name: Package verified x86_64 musl artifacts
+    needs: verify-source
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      handoff_manifest_sha256: ${{ steps.prepare-handoff.outputs.manifest-sha256 }}
+      signing_inputs_manifest_sha256: ${{ steps.prepare-handoff.outputs.signing-inputs-manifest-sha256 }}
+
+    steps:
+      - name: Checkout verified source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.verify-source.outputs.source_commit }}
+          fetch-depth: 0
+
+      - name: Verify packaging source commit
+        id: packaging-tools
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          rustup_bin="$HOME/.cargo/bin/rustup"
+          test -x "$rustup_bin"
+          verified_cargo="$(/usr/bin/realpath -e "$("$rustup_bin" which cargo)")"
+          verified_rustc="$(/usr/bin/realpath -e "$("$rustup_bin" which rustc)")"
+          test "$(/usr/bin/git rev-parse HEAD)" = "${{ needs.verify-source.outputs.source_commit }}"
+          test "$("$verified_rustc" --version | /usr/bin/awk '{print $2}')" = "$RUST_TOOLCHAIN_VERSION"
+          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
+          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
+          printf 'cargo-path=%s\n' "$verified_cargo" >> "$GITHUB_OUTPUT"
+          printf 'rustc-path=%s\n' "$verified_rustc" >> "$GITHUB_OUTPUT"
+          git_status_file="$(/usr/bin/mktemp)"
+          if ! /usr/bin/git status --porcelain=v1 --untracked-files=all --ignored=no >"$git_status_file"; then
+            printf 'git status failed while verifying release source\n' >&2
+            exit 1
+          fi
+          test ! -s "$git_status_file"
+
+      - name: Install packaging tools
+        run: |
+          verified_cargo="${{ steps.packaging-tools.outputs.cargo-path }}"
+          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          "$HOME/.cargo/bin/rustup" target add x86_64-unknown-linux-musl
+          "$verified_cargo" install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+          mkdir -p "$HOME/.local/bin"
+          syft_version="${SYFT_VERSION#v}"
+          syft_archive="syft_${syft_version}_linux_amd64.tar.gz"
+          /usr/bin/curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/$SYFT_VERSION/$syft_archive" \
+            -o "/tmp/$syft_archive"
+          printf '%s  %s\n' "$SYFT_LINUX_AMD64_SHA256" "/tmp/$syft_archive" | /usr/bin/sha256sum -c -
+          /usr/bin/tar -C "$HOME/.local/bin" -xzf "/tmp/$syft_archive" syft
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify packaging source remained clean
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(/usr/bin/git rev-parse HEAD)" = "${{ needs.verify-source.outputs.source_commit }}"
+          git_status_file="$(/usr/bin/mktemp)"
+          if ! /usr/bin/git status --porcelain=v1 --untracked-files=all --ignored=no >"$git_status_file"; then
+            printf 'git status failed while verifying release source\n' >&2
+            exit 1
+          fi
+          test ! -s "$git_status_file"
+
+      - name: Verify current-commit reproducible release binaries
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          evidence="$RUNNER_TEMP/oxidedns-release-reproducibility"
+          /usr/bin/rm -rf "$evidence"
+          OXIDEDNS_REPRODUCIBLE_BUILD_CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" \
+            OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" \
+            OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR="$evidence" \
+            scripts/reproducible-build-compare.sh
+          python3 scripts/verify-release-reproducibility.py \
+            --require-artifacts "$evidence" "${{ needs.verify-source.outputs.source_commit }}"
 
       - name: Build installer
         run: |
-          rm -rf target/dist
-          scripts/package-installer.sh
+          verified_cargo="${{ steps.packaging-tools.outputs.cargo-path }}"
+          verified_rustc="${{ steps.packaging-tools.outputs.rustc-path }}"
+          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
+          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
+          release_target_dir="$RUNNER_TEMP/oxidedns-release-target"
+          /usr/bin/rm -rf "$release_target_dir"
+          /usr/bin/mkdir -p "$release_target_dir"
+          /usr/bin/rm -rf target/dist
+          CARGO="$verified_cargo" RUSTC="$verified_rustc" CARGO_TARGET_DIR="$release_target_dir" scripts/package-installer.sh
+          shopt -s nullglob
+          release_oxidedns=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_oxidedns[@]}" -eq 1
+          test "${#release_oxide_gun[@]}" -eq 1
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          test "$(/usr/bin/sha256sum "$verified_cargo" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.cargo_sha256 }}"
+          test "$(/usr/bin/sha256sum "$verified_rustc" | /usr/bin/awk '{print $1}')" = "${{ needs.verify-source.outputs.rustc_sha256 }}"
 
       - name: Docker installer smoke
         run: scripts/test-installer-docker.sh
 
       - name: Build Docker image archive
-        run: scripts/package-docker-image.sh
+        run: CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" scripts/package-docker-image.sh
 
       - name: Docker image smoke
         run: scripts/test-docker-image.sh
 
       - name: Generate release SBOMs
-        run: OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
+        run: CARGO="${{ steps.packaging-tools.outputs.cargo-path }}" RUSTC="${{ steps.packaging-tools.outputs.rustc-path }}" OXIDEDNS_SBOM_DOCKER=1 scripts/package-sbom.sh
 
       - name: Verify static binaries
+        shell: bash
         run: |
-          ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin | tee target/dist/release-binary-ldd.txt
+          shopt -s nullglob
+          oxidedns_bins=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
+          oxide_gun_bins=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#oxidedns_bins[@]}" -eq 1
+          test "${#oxide_gun_bins[@]}" -eq 1
+          ldd "${oxidedns_bins[0]}" > target/dist/release-binary-ldd.txt 2>&1 || true
+          cat target/dist/release-binary-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-binary-ldd.txt
-          target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin --version
-          ldd target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin | tee target/dist/release-oxide-gun-ldd.txt
+          "${oxidedns_bins[0]}" --version
+          ldd "${oxide_gun_bins[0]}" > target/dist/release-oxide-gun-ldd.txt 2>&1 || true
+          cat target/dist/release-oxide-gun-ldd.txt
           grep -Eiq 'not a dynamic executable|statically linked' target/dist/release-oxide-gun-ldd.txt
-          target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin --version
+          "${oxide_gun_bins[0]}" --version
 
-      - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v5
-        with:
-          name: oxidedns-x86_64-unknown-linux-musl
-          path: |
+      - name: Verify packaged source remained clean
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(/usr/bin/git rev-parse HEAD)" = "${{ needs.verify-source.outputs.source_commit }}"
+          git_status_file="$(/usr/bin/mktemp)"
+          if ! /usr/bin/git status --porcelain=v1 --untracked-files=all --ignored=no >"$git_status_file"; then
+            printf 'git status failed while verifying release source\n' >&2
+            exit 1
+          fi
+          test ! -s "$git_status_file"
+
+      - name: Prepare authenticated release handoff
+        id: prepare-handoff
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          shopt -s nullglob
+          handoff=target/release-handoff
+          export PATH=/usr/bin:/bin
+          /usr/bin/rm -rf "$handoff"
+          /usr/bin/mkdir -p "$handoff"
+          assets=(
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin
@@ -99,7 +267,6 @@ jobs:
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.inspect.json
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
@@ -107,67 +274,535 @@ jobs:
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
             target/dist/oxidedns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl/manifest.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd-oxidedns.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl/ldd-oxide-gun.txt
-            target/dist/oxidedns-*-x86_64-unknown-linux-musl/file.txt
+          )
+          test "${#assets[@]}" -eq 16
+          release_oxidedns=(target/dist/oxidedns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(target/dist/oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_oxidedns[@]}" -eq 1
+          test "${#release_oxide_gun[@]}" -eq 1
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxidedns" "${release_oxidedns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxidedns" "${release_oxidedns[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/a/oxide-gun" "${release_oxide_gun[0]}"
+          /usr/bin/cmp -- "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/b/oxide-gun" "${release_oxide_gun[0]}"
+          for asset in "${assets[@]}"; do
+            /usr/bin/install -m 0644 "$asset" "$handoff/$(/usr/bin/basename "$asset")"
+          done
+          /usr/bin/install -m 0644 \
+            "$RUNNER_TEMP/oxidedns-release-reproducibility/reproducible-build-summary.env" \
+            "$RUNNER_TEMP/oxidedns-release-reproducibility/comparison.tsv" \
+            "$RUNNER_TEMP/oxidedns-release-reproducibility/artifact-manifest.tsv" \
+            scripts/release-api-supervisor.py scripts/verify-release-reproducibility.py \
+            "$handoff/"
+          for builder in a b; do
+            for artifact in oxidedns oxide-gun; do
+              /usr/bin/install -D -m 0555 \
+                "$RUNNER_TEMP/oxidedns-release-reproducibility/artifacts/$builder/$artifact" \
+                "$handoff/artifacts/$builder/$artifact"
+            done
+          done
+          (
+            cd "$handoff"
+            LC_ALL=C /usr/bin/sha256sum -- "${assets[@]##*/}" > release-handoff.sha256
+            signing_inputs=(
+              release-api-supervisor.py
+              verify-release-reproducibility.py
+              reproducible-build-summary.env
+              comparison.tsv
+              artifact-manifest.tsv
+              artifacts/a/oxidedns
+              artifacts/a/oxide-gun
+              artifacts/b/oxidedns
+              artifacts/b/oxide-gun
+            )
+            LC_ALL=C /usr/bin/sha256sum -- "${signing_inputs[@]}" > signing-inputs.sha256
+          )
+          test "$(/usr/bin/wc -l < "$handoff/release-handoff.sha256")" -eq 16
+          test "$(/usr/bin/wc -l < "$handoff/signing-inputs.sha256")" -eq 9
+          printf 'manifest-sha256=%s\n' \
+            "$(/usr/bin/sha256sum "$handoff/release-handoff.sha256" | /usr/bin/awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+          printf 'signing-inputs-manifest-sha256=%s\n' \
+            "$(/usr/bin/sha256sum "$handoff/signing-inputs.sha256" | /usr/bin/awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Upload authenticated release handoff
+        id: upload-handoff
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: oxidedns-release-handoff-${{ github.sha }}
+          path: target/release-handoff/
           if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  sign-release:
+    name: Sign and publish authenticated release handoff
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      EXPECTED_HANDOFF_MANIFEST_SHA256: ${{ needs.package-release.outputs.handoff_manifest_sha256 }}
+      EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256: ${{ needs.package-release.outputs.signing_inputs_manifest_sha256 }}
+
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download authenticated release handoff
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: oxidedns-release-handoff-${{ github.sha }}
+          path: target/release-handoff
 
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: /usr/bin/env -u BASH_ENV -u ENV /usr/bin/bash --noprofile --norc -euo pipefail {0}
         run: |
+          cosign_source="$(command -v cosign)"
+          cosign_source="$(/usr/bin/realpath -e "$cosign_source")"
+          case "$cosign_source" in
+            "$RUNNER_TEMP"/* | "$RUNNER_TOOL_CACHE"/*) ;;
+            *) printf 'cosign installer published an unexpected path: %s\n' "$cosign_source" >&2; exit 1 ;;
+          esac
+          gh_source="$(/usr/bin/realpath -e /usr/bin/gh)"
+          authenticated_tools="$RUNNER_TEMP/oxidedns-authenticated-release-tools"
+          export PATH=/usr/bin:/bin
+          /usr/bin/rm -rf "$authenticated_tools"
+          /usr/bin/install -d -m 0700 "$authenticated_tools"
+          /usr/bin/install -m 0500 "$cosign_source" "$authenticated_tools/cosign"
+          /usr/bin/install -m 0500 "$gh_source" "$authenticated_tools/gh"
+          cosign_path="$authenticated_tools/cosign"
+          gh_path="$authenticated_tools/gh"
+          cosign_sha256="$(/usr/bin/sha256sum "$cosign_path" | /usr/bin/awk '{print $1}')"
+          gh_sha256="$(/usr/bin/sha256sum "$gh_path" | /usr/bin/awk '{print $1}')"
+          test -n "$EXPECTED_HANDOFF_MANIFEST_SHA256"
+          test -n "$EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256"
+          cd target/release-handoff || exit 1
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
-          notes="target/dist/release-notes-$version.md"
-          tarball="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
-          binary="target/dist/oxidedns-$version-x86_64-unknown-linux-musl.bin"
-          oxide_gun="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
-          docker_image="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
-          docker_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
-          oxidedns_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxidedns.cdx.json"
-          oxide_gun_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
-          docker_sbom="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
-          sbom_manifest="target/dist/oxidedns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
+          version_without_build="${version%%+*}"
+          release_prerelease=false
+          release_make_latest=true
+          if [[ "$version_without_build" == *-* ]]; then
+            release_prerelease=true
+            release_make_latest=false
+          fi
+          notes="release-notes-$version.md"
+          tarball="oxidedns-$version-x86_64-unknown-linux-musl.tar.xz"
+          binary="oxidedns-$version-x86_64-unknown-linux-musl.bin"
+          oxide_gun="oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.bin"
+          docker_image="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.tar.xz"
+          docker_manifest="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.manifest.txt"
+          oxidedns_sbom="oxidedns-$version-x86_64-unknown-linux-musl-oxidedns.cdx.json"
+          oxide_gun_sbom="oxidedns-$version-x86_64-unknown-linux-musl-oxide-gun.cdx.json"
+          docker_sbom="oxidedns-$version-x86_64-unknown-linux-musl-docker-image.cdx.json"
+          sbom_manifest="oxidedns-$version-x86_64-unknown-linux-musl-sbom-manifest.tsv"
+          certificate_issuer="https://token.actions.githubusercontent.com"
+          certificate_identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-installer.yml@refs/tags/$tag"
+          shopt -s nullglob
+          assets=(
+            oxidedns-*-x86_64-unknown-linux-musl.tar.xz
+            oxidedns-*-x86_64-unknown-linux-musl.tar.xz.sha256
+            oxidedns-*-x86_64-unknown-linux-musl.bin
+            oxidedns-*-x86_64-unknown-linux-musl.bin.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin
+            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz
+            oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-docker-image.manifest.txt
+            oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json
+            oxidedns-*-x86_64-unknown-linux-musl-oxidedns.cdx.json.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json
+            oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.cdx.json.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json
+            oxidedns-*-x86_64-unknown-linux-musl-docker-image.cdx.json.sha256
+            oxidedns-*-x86_64-unknown-linux-musl-sbom-manifest.tsv
+            release-handoff.sha256
+          )
+          test "${#assets[@]}" -eq 17
+          release_oxidedns=(oxidedns-*-x86_64-unknown-linux-musl.bin)
+          release_oxide_gun=(oxidedns-*-x86_64-unknown-linux-musl-oxide-gun.bin)
+          test "${#release_oxidedns[@]}" -eq 1
+          test "${#release_oxide_gun[@]}" -eq 1
+
+          verify_authenticated_handoff() {
+            printf '%s  %s\n' "$EXPECTED_HANDOFF_MANIFEST_SHA256" release-handoff.sha256 | /usr/bin/sha256sum -c --strict -
+            printf '%s  %s\n' "$EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256" signing-inputs.sha256 | /usr/bin/sha256sum -c --strict -
+            /usr/bin/sha256sum -c --strict release-handoff.sha256
+            /usr/bin/sha256sum -c --strict signing-inputs.sha256
+            for checksum in *.sha256; do
+              test "$checksum" = release-handoff.sha256 && continue
+              test "$checksum" = signing-inputs.sha256 && continue
+              /usr/bin/sha256sum -c --strict "$checksum"
+            done
+            test "$(/usr/bin/wc -l < release-handoff.sha256)" -eq 16
+            test "$(/usr/bin/wc -l < signing-inputs.sha256)" -eq 9
+            test "$(/usr/bin/find . -type f -print | /usr/bin/wc -l)" -eq 27
+            python3 verify-release-reproducibility.py --require-artifacts \
+              --release-oxidedns "${release_oxidedns[0]}" \
+              --release-oxide-gun "${release_oxide_gun[0]}" \
+              . "$GITHUB_SHA"
+          }
+
+          manifest_asset_digest() {
+            local asset="$1"
+            /usr/bin/awk -v asset="$asset" '
+              $2 == asset { count += 1; digest = $1 }
+              END {
+                if (count != 1 || digest !~ /^[0-9a-f]{64}$/) exit 1
+                print digest
+              }
+            ' release-handoff.sha256
+          }
+
+          declare -A authenticated_asset_sha256 authenticated_asset_size
+          declare -A signed_bundle_sha256 signed_bundle_size bundle_subject
+          verify_authenticated_handoff
+          for asset in "${assets[@]}"; do
+            test -f "$asset"
+            test ! -L "$asset"
+            if test "$asset" = release-handoff.sha256; then
+              expected_asset_sha256="$EXPECTED_HANDOFF_MANIFEST_SHA256"
+            else
+              expected_asset_sha256="$(manifest_asset_digest "$asset")"
+            fi
+            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "$expected_asset_sha256"
+            authenticated_asset_sha256["$asset"]="$expected_asset_sha256"
+            authenticated_asset_size["$asset"]="$(/usr/bin/stat -c '%s' -- "$asset")"
+          done
+
+          verify_signed_asset() {
+            local asset="$1"
+            local bundle="$asset.sigstore.json"
+            test "$(/usr/bin/sha256sum "$cosign_path" | /usr/bin/awk '{print $1}')" = "$cosign_sha256"
+            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$asset]}"
+            test "$(/usr/bin/stat -c '%s' -- "$asset")" = "${authenticated_asset_size[$asset]}"
+            test -f "$bundle"
+            test ! -L "$bundle"
+            if test -n "${signed_bundle_sha256[$bundle]:-}"; then
+              test "$(/usr/bin/sha256sum -- "$bundle" | /usr/bin/awk '{print $1}')" = "${signed_bundle_sha256[$bundle]}"
+              test "$(/usr/bin/stat -c '%s' -- "$bundle")" = "${signed_bundle_size[$bundle]}"
+            fi
+            "$cosign_path" verify-blob --bundle "$bundle" \
+              --certificate-oidc-issuer "$certificate_issuer" \
+              --certificate-identity "$certificate_identity" "$asset"
+          }
+
+          # Repeat every authenticated handoff and reproducibility gate at the
+          # signing boundary, then retain the accepted digests in this process.
+          verify_authenticated_handoff
+          for asset in "${assets[@]}"; do
+            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$asset]}"
+            "$cosign_path" sign-blob --yes --bundle "$asset.sigstore.json" "$asset"
+            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "${authenticated_asset_sha256[$asset]}"
+            bundle="$asset.sigstore.json"
+            verify_signed_asset "$asset"
+            signed_bundle_sha256["$bundle"]="$(/usr/bin/sha256sum -- "$bundle" | /usr/bin/awk '{print $1}')"
+            signed_bundle_size["$bundle"]="$(/usr/bin/stat -c '%s' -- "$bundle")"
+            bundle_subject["$bundle"]="$asset"
+          done
+          for asset in "${assets[@]}"; do
+            verify_signed_asset "$asset"
+          done
+
+          release_cleanup_pending=0
+          release_cleanup_running=0
+          release_supervisor="$PWD/release-api-supervisor.py"
+          release_supervisor_pid=""
+          release_spawn_critical=0
+          release_pending_signal_status=0
+          release_authority_file=""
+          release_authority_fd=""
+          release_id=""
+          release_upload_base=""
+          release_publish_attempted=0
+          release_transaction_marker="<!-- oxidedns-release-transaction run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT sha=$GITHUB_SHA -->"
+          release_response_file="$(/usr/bin/mktemp "$RUNNER_TEMP/oxidedns-release-response.XXXXXX")"
+
+          bounded_cleanup_api() {
+            /usr/bin/timeout --preserve-status --signal=TERM --kill-after=1s 1s \
+              "$gh_path" api "$@"
+          }
+
+          stop_release_supervisor() {
+            test -n "$release_supervisor_pid" || return 0
+            /usr/bin/kill -TERM "$release_supervisor_pid" 2>/dev/null || true
+            wait "$release_supervisor_pid" 2>/dev/null || true
+            release_supervisor_pid=""
+          }
+
+          run_supervised_release_command() {
+            local timeout_seconds="$1"
+            shift
+            test "$(/usr/bin/sha256sum "$gh_path" | /usr/bin/awk '{print $1}')" = "$gh_sha256"
+            printf '%s  %s\n' "$EXPECTED_SIGNING_INPUTS_MANIFEST_SHA256" signing-inputs.sha256 | /usr/bin/sha256sum -c --strict - >/dev/null
+            /usr/bin/sha256sum -c --strict signing-inputs.sha256 >/dev/null
+            local authority_token="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$BASHPID:$RANDOM:$RANDOM"
+            release_authority_file="$(/usr/bin/mktemp "$RUNNER_TEMP/oxidedns-release-authority.XXXXXX")"
+            /usr/bin/chmod 0600 "$release_authority_file"
+            exec {release_authority_fd}<>"$release_authority_file"
+            release_spawn_critical=1
+            python3 "$release_supervisor" --timeout-seconds "$timeout_seconds" \
+              --termination-grace-seconds 2 --authority-fd "$release_authority_fd" \
+              --authority-token "$authority_token" -- "$@" &
+            release_supervisor_pid=$!
+            release_spawn_critical=0
+            if test "$release_pending_signal_status" != 0; then
+              local pending_status="$release_pending_signal_status"
+              release_pending_signal_status=0
+              release_signal_handler "$pending_status"
+            fi
+            printf '%s\n' "$authority_token" >&"$release_authority_fd"
+            /usr/bin/sync -f "$release_authority_file"
+            exec {release_authority_fd}>&-
+            release_authority_fd=""
+            local command_status=0
+            wait "$release_supervisor_pid" || command_status=$?
+            release_supervisor_pid=""
+            /usr/bin/rm -f -- "$release_authority_file"
+            release_authority_file=""
+            return "$command_status"
+          }
+
+          cleanup_pending_release() {
+            local status=$?
+            trap - EXIT
+            trap '' INT TERM HUP
+            stop_release_supervisor
+            if test -n "$release_authority_fd"; then
+              exec {release_authority_fd}>&- || true
+              release_authority_fd=""
+            fi
+            test -z "$release_authority_file" || /usr/bin/rm -f -- "$release_authority_file"
+            if test "$release_cleanup_pending" = 1 && test "$release_cleanup_running" = 0; then
+              release_cleanup_running=1
+              local cleanup_id="$release_id" release_candidates="" release_record=""
+              local candidate_id="" candidate_draft="" candidate_tag="" candidate_marker=""
+              local observed_id="" observed_tag="" observed_marker="" observed_draft="" owned_match_count=0
+              if ! [[ "$cleanup_id" =~ ^[1-9][0-9]*$ ]]; then
+                if ! release_candidates="$(bounded_cleanup_api --method GET \
+                  "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+                  --jq '.[] | [.id, .draft, .tag_name, ((.body // "") | split("\n")[0])] | @tsv')"; then
+                  printf 'critical: failed to list releases while locating incomplete draft: %s\n' \
+                    "$tag" >&2
+                else
+                  while IFS=$'\t' read -r candidate_id candidate_draft candidate_tag candidate_marker; do
+                    if test "$candidate_draft" = true && test "$candidate_tag" = "$tag" && \
+                      test "$candidate_marker" = "$release_transaction_marker"; then
+                      owned_match_count=$((owned_match_count + 1))
+                      cleanup_id="$candidate_id"
+                    fi
+                  done <<<"$release_candidates"
+                  if test "$owned_match_count" -eq 0; then
+                    printf 'critical: no owned incomplete draft found during cleanup: %s\n' "$tag" >&2
+                    cleanup_id=""
+                  elif test "$owned_match_count" -ne 1; then
+                    printf 'critical: ambiguous owned incomplete drafts during cleanup: tag=%s count=%s\n' \
+                      "$tag" "$owned_match_count" >&2
+                    cleanup_id=""
+                  elif ! [[ "$cleanup_id" =~ ^[1-9][0-9]*$ ]]; then
+                    printf 'critical: release listing returned an invalid immutable id: tag=%s id=%s\n' \
+                      "$tag" "$cleanup_id" >&2
+                    cleanup_id=""
+                  fi
+                fi
+              fi
+              if [[ "$cleanup_id" =~ ^[1-9][0-9]*$ ]] && ! release_record="$(bounded_cleanup_api --method GET \
+                "repos/$GITHUB_REPOSITORY/releases/$cleanup_id" \
+                --jq '[.id, .tag_name, ((.body // "") | split("\n")[0]), .draft] | @tsv')"; then
+                printf 'critical: failed to authenticate incomplete release transaction: tag=%s id=%s\n' \
+                  "$tag" "$cleanup_id" >&2
+                cleanup_id=""
+              elif [[ "$cleanup_id" =~ ^[1-9][0-9]*$ ]]; then
+                IFS=$'\t' read -r observed_id observed_tag observed_marker observed_draft <<<"$release_record"
+                if test "$observed_id" != "$cleanup_id" || test "$observed_tag" != "$tag" || \
+                  test "$observed_marker" != "$release_transaction_marker" || \
+                  { test "$observed_draft" != true && \
+                    { test "$release_publish_attempted" != 1 || test "$observed_draft" != false; }; }; then
+                  printf 'critical: refusing to delete release not owned by this transaction: tag=%s id=%s\n' \
+                    "$tag" "$cleanup_id" >&2
+                  cleanup_id=""
+                fi
+              fi
+              if [[ "$cleanup_id" =~ ^[1-9][0-9]*$ ]]; then
+                if ! bounded_cleanup_api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/releases/$cleanup_id" >/dev/null; then
+                  printf 'critical: failed to delete incomplete release transaction: tag=%s id=%s\n' \
+                    "$tag" "$cleanup_id" >&2
+                fi
+              fi
+            fi
+            /usr/bin/rm -f -- "$release_response_file"
+            exit "$status"
+          }
+          release_signal_handler() {
+            local status="$1"
+            if test "$release_spawn_critical" = 1; then
+              test "$release_pending_signal_status" != 0 || release_pending_signal_status="$status"
+              return 0
+            fi
+            stop_release_supervisor
+            exit "$status"
+          }
+          trap cleanup_pending_release EXIT
+          trap 'release_signal_handler 130' INT
+          trap 'release_signal_handler 143' TERM
+          trap 'release_signal_handler 129' HUP
 
           cat > "$notes" <<EOF
+          $release_transaction_marker
           OxideDNS $version
 
           Assets:
-          - Installer archive: $(basename "$tarball")
-          - Static OxideDNS binary: $(basename "$binary")
-          - Static XDP-enabled OxideGun binary: $(basename "$oxide_gun")
-          - Docker image archive: $(basename "$docker_image")
-          - CycloneDX SBOMs: $(basename "$oxidedns_sbom"), $(basename "$oxide_gun_sbom"), $(basename "$docker_sbom")
+          - Installer archive: $tarball
+          - Static OxideDNS binary: $binary
+          - Static XDP-enabled OxideGun binary: $oxide_gun
+          - Docker image archive: $docker_image
+          - CycloneDX SBOMs: $oxidedns_sbom, $oxide_gun_sbom, $docker_sbom
           - SHA256 files are attached for the installer, binaries, Docker image archive, and SBOMs.
-          - SBOM evidence manifest: $(basename "$sbom_manifest")
+          - The authenticated handoff manifest is release-handoff.sha256.
+          - Each published asset has a keyless Sigstore bundle named \`<asset>.sigstore.json\`.
+          - SBOM evidence manifest: $sbom_manifest
 
           Target: x86_64-unknown-linux-musl
 
           Docker image use:
-          xz -dc $(basename "$docker_image") | docker load
+          xz -dc $docker_image | docker load
           docker run --rm oxidedns:$version --version
+
+          Verify any asset after installing Cosign:
+          cosign verify-blob \\
+            --bundle <asset>.sigstore.json \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-installer.yml@refs/tags/$tag" \\
+            <asset>
           EOF
 
-          gh release create "$tag" \
-            --verify-tag \
-            --title "OxideDNS $version" \
-            --notes-file "$notes" \
-            "$tarball" \
-            "$tarball.sha256" \
-            "$binary" \
-            "$binary.sha256" \
-            "$oxide_gun" \
-            "$oxide_gun.sha256" \
-            "$docker_image" \
-            "$docker_image.sha256" \
-            "$docker_manifest" \
-            "$oxidedns_sbom" \
-            "$oxidedns_sbom.sha256" \
-            "$oxide_gun_sbom" \
-            "$oxide_gun_sbom.sha256" \
-            "$docker_sbom" \
-            "$docker_sbom.sha256" \
-            "$sbom_manifest"
+          peel_remote_tag() {
+            local output_file="$1" tag_object tag_object_type tag_object_sha tag_depth=0
+            : >"$output_file"
+            run_supervised_release_command 120 "$gh_path" api --method GET \
+              "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
+              --jq '.object.type + "\t" + .object.sha' >"$output_file"
+            tag_object="$(<"$output_file")"
+            while :; do
+              IFS=$'\t' read -r tag_object_type tag_object_sha <<<"$tag_object"
+              test -n "$tag_object_type"
+              test "$tag_object_sha" != "$tag_object_type"
+              case "$tag_object_type" in
+                commit) printf '%s\n' "$tag_object_sha" >"$output_file"; return 0 ;;
+                tag)
+                  tag_depth=$((tag_depth + 1))
+                  test "$tag_depth" -le 16
+                  : >"$output_file"
+                  run_supervised_release_command 120 "$gh_path" api --method GET \
+                    "repos/$GITHUB_REPOSITORY/git/tags/$tag_object_sha" \
+                    --jq '.object.type + "\t" + .object.sha' >"$output_file"
+                  tag_object="$(<"$output_file")"
+                  ;;
+                *) printf 'release tag resolved to unsupported object type: %s\n' "$tag_object_type" >&2; return 1 ;;
+              esac
+            done
+          }
+          peel_remote_tag "$release_response_file"
+          tag_object_sha="$(<"$release_response_file")"
+          test "$tag_object_sha" = "$GITHUB_SHA"
+
+          release_cleanup_pending=1
+          : >"$release_response_file"
+          run_supervised_release_command 120 "$gh_path" api --method POST \
+            "repos/$GITHUB_REPOSITORY/releases" \
+            -f "tag_name=$tag" -f "target_commitish=$GITHUB_SHA" \
+            -f "name=OxideDNS $version" -f "body=$(<"$notes")" -F draft=true \
+            -F "prerelease=$release_prerelease" -f "make_latest=false" \
+            --jq '[.id, .upload_url, .draft, .prerelease] | @tsv' >"$release_response_file"
+          IFS=$'\t' read -r release_id release_upload_url created_draft created_prerelease <"$release_response_file"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          test "$created_draft" = true
+          test "$created_prerelease" = "$release_prerelease"
+          release_upload_base="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets"
+          test "$release_upload_url" = "$release_upload_base{?name,label}"
+
+          release_assets=(
+            "$tarball" "$tarball.sha256"
+            "$tarball.sigstore.json" "$tarball.sha256.sigstore.json"
+            "$binary" "$binary.sha256"
+            "$binary.sigstore.json" "$binary.sha256.sigstore.json"
+            "$oxide_gun" "$oxide_gun.sha256"
+            "$oxide_gun.sigstore.json" "$oxide_gun.sha256.sigstore.json"
+            "$docker_image" "$docker_image.sha256"
+            "$docker_image.sigstore.json" "$docker_image.sha256.sigstore.json"
+            "$docker_manifest" "$docker_manifest.sigstore.json"
+            "$oxidedns_sbom" "$oxidedns_sbom.sha256"
+            "$oxidedns_sbom.sigstore.json" "$oxidedns_sbom.sha256.sigstore.json"
+            "$oxide_gun_sbom" "$oxide_gun_sbom.sha256"
+            "$oxide_gun_sbom.sigstore.json" "$oxide_gun_sbom.sha256.sigstore.json"
+            "$docker_sbom" "$docker_sbom.sha256"
+            "$docker_sbom.sigstore.json" "$docker_sbom.sha256.sigstore.json"
+            "$sbom_manifest" "$sbom_manifest.sigstore.json"
+            release-handoff.sha256 release-handoff.sha256.sigstore.json
+          )
+          test "${#release_assets[@]}" -eq 34
+          for asset in "${release_assets[@]}"; do
+            test -f "$asset"
+            test ! -L "$asset"
+            subject="$asset"
+            if test -n "${bundle_subject[$asset]+present}"; then
+              subject="${bundle_subject[$asset]}"
+            fi
+            verify_signed_asset "$subject"
+            if test "$asset" = "$subject"; then
+              expected_asset_size="${authenticated_asset_size[$asset]}"
+              expected_asset_sha256="${authenticated_asset_sha256[$asset]}"
+            else
+              expected_asset_size="${signed_bundle_size[$asset]}"
+              expected_asset_sha256="${signed_bundle_sha256[$asset]}"
+            fi
+            test "$(/usr/bin/stat -c '%s' -- "$asset")" = "$expected_asset_size"
+            test "$(/usr/bin/sha256sum -- "$asset" | /usr/bin/awk '{print $1}')" = "$expected_asset_sha256"
+            : >"$release_response_file"
+            run_supervised_release_command 600 "$gh_path" api --method POST \
+              -H 'Content-Type: application/octet-stream' \
+              "$release_upload_base" -f "name=$asset" --input "$asset" \
+              --jq '[.name, .state, .size, .digest] | @tsv' >"$release_response_file"
+            IFS=$'\t' read -r uploaded_name uploaded_state uploaded_size uploaded_digest \
+              <"$release_response_file"
+            test "$uploaded_name" = "$asset"
+            test "$uploaded_state" = uploaded
+            test "$uploaded_size" = "$expected_asset_size"
+            test "$uploaded_digest" = "sha256:$expected_asset_sha256"
+          done
+
+          post_create_tag_sha=""
+          if peel_remote_tag "$release_response_file"; then
+            post_create_tag_sha="$(<"$release_response_file")"
+          fi
+          if test "$post_create_tag_sha" != "$GITHUB_SHA"; then
+            printf 'release tag moved during publication: expected=%s actual=%s; rolling back release\n' \
+              "$GITHUB_SHA" "${post_create_tag_sha:-unresolved}" >&2
+            exit 1
+          fi
+          : >"$release_response_file"
+          release_publish_attempted=1
+          run_supervised_release_command 120 "$gh_path" api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false \
+            -F "prerelease=$release_prerelease" -f "make_latest=$release_make_latest" \
+            --jq '[.id, .draft, .prerelease] | @tsv' >"$release_response_file"
+          IFS=$'\t' read -r published_release_id published_draft published_prerelease <"$release_response_file"
+          test "$published_release_id" = "$release_id"
+          test "$published_draft" = false
+          test "$published_prerelease" = "$release_prerelease"
+          post_create_tag_sha=""
+          if peel_remote_tag "$release_response_file"; then
+            post_create_tag_sha="$(<"$release_response_file")"
+          fi
+          if test "$post_create_tag_sha" != "$GITHUB_SHA"; then
+            printf 'release tag moved after publication: expected=%s actual=%s; rolling back release\n' \
+              "$GITHUB_SHA" "${post_create_tag_sha:-unresolved}" >&2
+            exit 1
+          fi
+          release_cleanup_pending=0

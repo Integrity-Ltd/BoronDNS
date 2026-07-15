@@ -214,6 +214,81 @@
     }
 
     #[test]
+    fn accepts_tcp_inflight_query_limit_at_tokio_capacity_boundaries() {
+        for limit in [1, MAX_TOKIO_SEMAPHORE_PERMITS] {
+            let config = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_tcp = ["127.0.0.1:5300"]
+
+                    [limits]
+                    max_tcp_inflight_queries_per_connection = {limit}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect("Tokio-safe TCP in-flight capacity must validate");
+
+            assert_eq!(
+                config.limits.max_tcp_inflight_queries_per_connection,
+                limit
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_tcp_inflight_query_limit_above_tokio_capacity() {
+        let first_invalid = MAX_TOKIO_SEMAPHORE_PERMITS
+            .checked_add(1)
+            .expect("Tokio semaphore maximum leaves room for an invalid boundary");
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [limits]
+                max_tcp_inflight_queries_per_connection = {first_invalid}
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+        ))
+        .expect_err("first capacity above Tokio's bound must fail validation");
+
+        let message = error.to_string();
+        assert!(message.contains("max_tcp_inflight_queries_per_connection"));
+        assert!(message.contains("must not exceed"));
+    }
+
+    #[test]
+    fn rejects_usize_max_tcp_inflight_query_limit_when_programmatically_mutated() {
+        let mut config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_tcp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("baseline config validates");
+        config.limits.max_tcp_inflight_queries_per_connection = usize::MAX;
+
+        let error = config
+            .validate()
+            .expect_err("usize::MAX would panic Tokio's bounded primitives");
+        assert!(
+            error
+                .to_string()
+                .contains("max_tcp_inflight_queries_per_connection")
+        );
+    }
+
+    #[test]
     fn parses_notify_timing_limits() {
         let config = ServerConfig::from_toml_str(
             r#"
@@ -301,6 +376,160 @@
         .expect_err("zero graceful shutdown limit must fail");
 
         assert!(error.to_string().contains("graceful_shutdown_secs"));
+    }
+
+    #[test]
+    fn accepts_maximum_safe_runtime_durations() {
+        let max = MAX_RUNTIME_DURATION_SECS;
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [limits]
+                tcp_idle_timeout_secs = {max}
+                tcp_read_timeout_secs = {max}
+                tcp_write_timeout_secs = {max}
+                tcp_connect_timeout_secs = {max}
+                tcp_inflight_limit_timeout_secs = {max}
+                graceful_shutdown_secs = {max}
+                axfr_timeout_secs = {max}
+                ixfr_timeout_secs = {max}
+                ixfr_disabled_cooldown_secs = {max}
+                notify_dedup_secs = {max}
+                notify_log_rate_window_secs = {max}
+                zsm_min_interval_secs = {max}
+                zsm_max_interval_secs = {max}
+                zsm_initial_retry_secs = {max}
+                zsm_initial_retry_max_secs = {max}
+                zsm_loading_warning_threshold_secs = {max}
+
+                [health]
+                metrics_rate_limit_idle_seconds = {max}
+
+                [observability]
+                rate_limit_idle_seconds = {max}
+
+                [rrl]
+                summary_log_interval_secs = {max}
+
+                [cookie]
+                secret_rotation_interval_secs = {max}
+
+                [control_plane.telemetry]
+                timeout_secs = {max}
+
+                [control_plane.operations]
+                poll_interval_secs = {max}
+                lease_seconds = {max}
+                timeout_secs = {max}
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#
+        ))
+        .expect("documented maximum runtime durations are valid");
+
+        assert_eq!(config.limits.graceful_shutdown_secs, max);
+        assert_eq!(config.control_plane.operations.poll_interval_secs, max);
+        assert_eq!(config.cookie.secret_rotation_interval_secs, max);
+    }
+
+    #[test]
+    fn rejects_runtime_durations_above_safe_maximum() {
+        let over = MAX_RUNTIME_DURATION_SECS + 1;
+        let limit_cases = [
+            ("tcp_idle_timeout_secs", "tcp_idle_timeout_secs = {over}"),
+            ("tcp_read_timeout_secs", "tcp_read_timeout_secs = {over}"),
+            ("tcp_write_timeout_secs", "tcp_write_timeout_secs = {over}"),
+            (
+                "tcp_connect_timeout_secs",
+                "tcp_connect_timeout_secs = {over}",
+            ),
+            (
+                "tcp_inflight_limit_timeout_secs",
+                "tcp_inflight_limit_timeout_secs = {over}",
+            ),
+            ("graceful_shutdown_secs", "graceful_shutdown_secs = {over}"),
+            ("axfr_timeout_secs", "axfr_timeout_secs = {over}"),
+            ("ixfr_timeout_secs", "ixfr_timeout_secs = {over}"),
+            (
+                "ixfr_disabled_cooldown_secs",
+                "ixfr_disabled_cooldown_secs = {over}",
+            ),
+            ("notify_dedup_secs", "notify_dedup_secs = {over}"),
+            (
+                "notify_log_rate_window_secs",
+                "notify_log_rate_window_secs = {over}",
+            ),
+            (
+                "zsm_min_interval_secs",
+                "zsm_min_interval_secs = {over}\nzsm_max_interval_secs = {over}",
+            ),
+            ("zsm_max_interval_secs", "zsm_max_interval_secs = {over}"),
+            (
+                "zsm_initial_retry_secs",
+                "zsm_initial_retry_secs = {over}\nzsm_initial_retry_max_secs = {over}",
+            ),
+            (
+                "zsm_initial_retry_max_secs",
+                "zsm_initial_retry_max_secs = {over}",
+            ),
+            (
+                "zsm_loading_warning_threshold_secs",
+                "zsm_loading_warning_threshold_secs = {over}",
+            ),
+        ];
+        for (expected, snippet) in limit_cases {
+            let snippet = snippet.replace("{over}", &over.to_string());
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [limits]
+                    {snippet}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("over-bound runtime duration must fail validation");
+            let rendered = error.to_string();
+            assert!(rendered.contains(expected), "unexpected error: {rendered}");
+            assert!(rendered.contains("must not exceed"), "unexpected error: {rendered}");
+        }
+
+        for (section, parameter) in [
+            ("health", "metrics_rate_limit_idle_seconds"),
+            ("observability", "rate_limit_idle_seconds"),
+            ("rrl", "summary_log_interval_secs"),
+            ("cookie", "secret_rotation_interval_secs"),
+            ("control_plane.telemetry", "timeout_secs"),
+            ("control_plane.operations", "poll_interval_secs"),
+            ("control_plane.operations", "lease_seconds"),
+            ("control_plane.operations", "timeout_secs"),
+        ] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [{section}]
+                    {parameter} = {over}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("over-bound runtime duration must fail validation");
+            let rendered = error.to_string();
+            assert!(rendered.contains(parameter), "unexpected error: {rendered}");
+            assert!(rendered.contains("must not exceed"), "unexpected error: {rendered}");
+        }
     }
 
     #[test]

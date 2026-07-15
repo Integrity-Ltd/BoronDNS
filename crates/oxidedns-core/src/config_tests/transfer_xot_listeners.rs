@@ -370,6 +370,59 @@
     }
 
     #[test]
+    fn xot_transfer_primary_enforces_trust_anchor_count_limit() {
+        let anchors = std::iter::repeat_n(
+            r#""/etc/oxidedns/ca.pem""#,
+            MAX_XOT_TRUST_ANCHORS_PER_PROFILE,
+        )
+        .collect::<Vec<_>>()
+        .join(", ");
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = [{anchors}]
+            "#,
+        ))
+        .expect("exact trust-anchor count limit is accepted");
+        assert_eq!(
+            config.zones[0].transfer_primaries[0].trust_anchors.len(),
+            MAX_XOT_TRUST_ANCHORS_PER_PROFILE
+        );
+
+        let anchors = format!(r#"{anchors}, "/etc/oxidedns/extra-ca.pem""#);
+        let error = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                trust_anchors = [{anchors}]
+            "#,
+        ))
+        .expect_err("one trust anchor over the count limit is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(&MAX_XOT_TRUST_ANCHORS_PER_PROFILE.to_string())
+        );
+    }
+
+    #[test]
     fn parses_xot_transfer_primary_with_secret_store_profile() {
         let config = ServerConfig::from_toml_str(
             r#"

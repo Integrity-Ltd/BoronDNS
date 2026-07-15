@@ -6,10 +6,11 @@ use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::RecordType,
     tsig::{
-        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY, TsigAlgorithm, TsigErrorResponseFields,
-        TsigKey, append_unsigned_tsig_error, extract_tsig_mac, message_has_tsig, sign_request,
-        sign_response, sign_tcp_response_continuation, sign_tsig_error_response, verify_request,
-        verify_response, verify_tcp_response_stream,
+        DEFAULT_TSIG_FUDGE_SECS, TSIG_ERROR_BADKEY, TsigAlgorithm, TsigError,
+        TsigErrorResponseFields, TsigKey, append_unsigned_tsig_error, extract_tsig_mac,
+        message_has_tsig, sign_request, sign_response, sign_tcp_response_continuation,
+        sign_tsig_error_response, verify_request, verify_response, verify_tcp_response_stream,
+        verify_tcp_response_stream_owned, verify_tcp_response_stream_owned_at_times,
     },
 };
 
@@ -33,7 +34,19 @@ fuzz_target!(|data: &[u8]| {
     let _ = verify_response(bounded, key, request_mac, NOW_UNIX);
 
     let messages = split_messages(bounded);
-    let _ = verify_tcp_response_stream(&messages, key, request_mac, NOW_UNIX);
+    let borrowed = verify_tcp_response_stream(&messages, key, request_mac, NOW_UNIX);
+    let owned = verify_tcp_response_stream_owned(messages.clone(), key, request_mac, NOW_UNIX);
+    assert_eq!(borrowed, owned);
+    let received_at = messages
+        .clone()
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| {
+            let offset = u64::from(byte(data, index));
+            (message, NOW_UNIX.saturating_add(offset))
+        })
+        .collect();
+    let _ = verify_tcp_response_stream_owned_at_times(received_at, key, request_mac);
 
     exercise_shaped_tsig_messages(data, key);
 });
@@ -87,7 +100,75 @@ fn exercise_shaped_tsig_messages(data: &[u8], key: &TsigKey) {
                 response.clone(),
                 terminal.message.clone(),
             ];
-            let _ = verify_tcp_response_stream(&stream, key, &signed_request.mac, NOW_UNIX);
+            let borrowed = verify_tcp_response_stream(&stream, key, &signed_request.mac, NOW_UNIX);
+            let owned = verify_tcp_response_stream_owned(
+                stream.clone(),
+                key,
+                &signed_request.mac,
+                NOW_UNIX,
+            );
+            assert_eq!(borrowed, owned);
+
+            let received_at = stream
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(index, message)| (message, NOW_UNIX + index as u64))
+                .collect();
+            let timed =
+                verify_tcp_response_stream_owned_at_times(received_at, key, &signed_request.mac);
+            assert_eq!(owned, timed);
+
+            let mut trailing_terminal = terminal.message;
+            trailing_terminal.push(byte(data, 2));
+            let trailing_stream = vec![
+                signed_response.message.clone(),
+                response.clone(),
+                trailing_terminal,
+            ];
+            assert!(
+                verify_tcp_response_stream_owned_at_times(
+                    trailing_stream
+                        .into_iter()
+                        .map(|message| (message, NOW_UNIX))
+                        .collect(),
+                    key,
+                    &signed_request.mac,
+                )
+                .is_err()
+            );
+
+            let expired_at = time_signed
+                .saturating_add(u64::from(DEFAULT_TSIG_FUDGE_SECS))
+                .saturating_add(1);
+            assert_eq!(
+                verify_tcp_response_stream_owned_at_times(
+                    vec![(signed_response.message.clone(), expired_at)],
+                    key,
+                    &signed_request.mac,
+                ),
+                Err(TsigError::TimeOutsideFudge)
+            );
+
+            if let Ok(backwards) = sign_tcp_response_continuation(
+                &response,
+                key,
+                &signed_response.mac,
+                time_signed.saturating_sub(1),
+                DEFAULT_TSIG_FUDGE_SECS,
+            ) {
+                assert_eq!(
+                    verify_tcp_response_stream_owned_at_times(
+                        vec![
+                            (signed_response.message, NOW_UNIX),
+                            (backwards.message, NOW_UNIX),
+                        ],
+                        key,
+                        &signed_request.mac,
+                    ),
+                    Err(TsigError::NonMonotonicTimeSigned)
+                );
+            }
         }
     }
 

@@ -40,6 +40,10 @@ REQUIRED_TEXT = [
     "ODS-FR-XOT-012",
     "docs/operational-slos.md",
     "debian12-beta-vm-profile.md",
+    "retained_removal_quarantine_N_parent_identity",
+    "publication_recovery_root_binding=journal-parent-directory",
+    "_parent_root_relative",
+    "A path match alone",
 ]
 
 RELEASE_GUIDE_TEXT = [
@@ -57,6 +61,11 @@ RELEASE_GUIDE_TEXT = [
     "OXIDEDNS_PERF_BASELINE",
     "ODS-VER-008",
     "ODS-VER-015",
+    "`device:inode:owner:type`",
+    "unverified parent namespace",
+    "A later invocation never imports a prior",
+    "publication_recovery_root_identity",
+    "current parent directory",
 ]
 
 SLO_TEXT = [
@@ -80,7 +89,9 @@ DEBIAN_PROFILE_TEXT = [
     "docker load",
     "--network host",
     "CAP_NET_BIND_SERVICE",
-    "OXIDEDNS_DOCKER_ALPINE_VERSION",
+    "OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE",
+    "base_image_digest",
+    "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
 ]
 
 FORBIDDEN_TEXT = [

@@ -169,6 +169,11 @@ fn write_test_config() -> std::path::PathBuf {
             [limits]
             axfr_timeout_secs = 1
             graceful_shutdown_secs = 1
+            # Keep the integration fixture below constrained CI/sandbox
+            # RLIMIT_NOFILE values. Production defaults intentionally require
+            # a higher supervisor limit and are covered by the resource-limit
+            # unit tests.
+            max_tcp_connections = 16
 
             [[zones]]
             name = "example.test."

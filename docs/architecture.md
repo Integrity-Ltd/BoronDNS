@@ -44,7 +44,7 @@ accepted.
 | `crates/oxidedns-server/src/rate_limit.rs` | `ODS-FR-RRL` and NOTIFY log suppression | Response-rate limiting buckets, slip/drop decisions, RRL summaries, notify log limiting, response classification helpers, and truncated RRL response construction. |
 | `crates/oxidedns-server/src/transfer.rs` | `ODS-FR-AXFR`, `ODS-FR-IXFR`, and `ODS-FR-XOT` outbound transfer I/O | SOA polling, AXFR/IXFR TCP sessions, XoT TLS transport, TSIG transfer signing/verification, transfer query IDs, and PEM trust/client-certificate loading. |
 | `crates/oxidedns-server/src/transfer_plan.rs` | Transfer target planning and primary rotation for static and catalog zones | TSIG key resolution into transfer plans, transfer-source matching, primary rotation with rejection-sampling start index, catalog member plan derivation, and initial transfer origin ordering. |
-| `crates/oxidedns-server/src/secret_store.rs` | Reloadable transfer secret store | `SecretManager` filesystem-backed TSIG/XoT secret manifest parsing, `RwLock`-backed reload over a retained static-key snapshot baseline, and zeroized secret material. |
+| `crates/oxidedns-server/src/secret_store.rs` | Reloadable transfer secret store | `SecretManager` filesystem-backed TSIG/XoT secret manifest parsing, bounded aggregate TSIG/XoT material, `RwLock`-backed reload over a retained static-key snapshot baseline, generation-consistent certificate metadata, and zeroized secret material. |
 | `crates/oxidedns-server/src/dns_cookie.rs` | `ODS-FR-COOKIE` runtime cookie secret helpers | DNS Cookie runtime settings, process-local Server Secret generation/rotation, configured shared-secret and previous-secret rollover state, cookie context construction, secret fingerprint redaction, and source-prefix metric configuration. |
 | `crates/oxidedns-server/src/config_validation.rs` | Runtime configuration validation and warning generation | Runtime configuration checks, XoT trust-anchor/client-key validation, file-descriptor limit formula, and warning emission inputs. |
 | `crates/oxidedns-server/src/runtime_status.rs` | Runtime readiness and draining status | Shared runtime status cell used by health and shutdown paths. |
@@ -83,7 +83,7 @@ implementation code for review locality, but they are not counted toward the
 | TCP connection overload behavior | New over-limit TCP connections are accepted and immediately closed, with runtime log evidence. | `ODS-FR-TCP-005` |
 | TSIG constant-time comparison | MAC verification uses the `subtle` crate's constant-time equality path through `ct_eq`. | `ODS-FR-TSIG-008`, `ODS-NFR-SEC-001` |
 | Cryptography and TLS dependencies | HMAC/SHA via `hmac`, `sha1`, `sha2`; DNS Cookie MAC via `siphasher`; TLS via `tokio-rustls`/`rustls`; certificate parsing via `x509-parser`; secret zeroing via `zeroize`. | `ODS-NFR-SEC-006`, `ODS-FR-XOT-001..012`, `ODS-FR-COOKIE-003..004` |
-| Minimum supported Rust | Rust `1.95`, edition `2024`, workspace resolver `3`, pinned in `rust-toolchain.toml` and workspace metadata. | `ODS-NFR-PORT-001`, architecture prerequisite note |
+| Minimum supported Rust | MSRV Rust `1.95`; release/development toolchain Rust `1.96.1`, edition `2024`, workspace resolver `3`, pinned exactly in `rust-toolchain.toml` while workspace metadata retains the MSRV. | `ODS-NFR-PORT-001`, architecture prerequisite note |
 | Interface compatibility posture | Externally observable configuration, CLI, exit-code, environment, signal, metric, log-field, health, and network-role surfaces are tracked in `docs/interface-stability-baseline.tsv` under the policy in `docs/interface-compatibility-policy.md`; `scripts/check-interface-compatibility.py` checks the current baseline and can compare a previous release baseline. | `ODS-NFR-MAINT-006`, `ODS-IF-CONF-002` |
 | Reproducible build posture | `scripts/reproducible-build-compare.sh` performs two clean static-binary builds with fixed `SOURCE_DATE_EPOCH` and `OXIDEDNS_BUILD_*` values; `docs/reproducible-build-v0.2.0.md` records matching v0.2.0 `oxidedns` and `oxide-gun` musl binary digests. The handoff script still owns release-engineer sign-off and package/image artifact follow-up. | `ODS-NFR-MAINT-005`, `ODS-NFR-OBS-006` |
 | Source requirement references | Principal implementation modules carry source comments naming the section 4 functional requirement IDs they own; `scripts/check-functional-requirement-references.py` parses the SRS and checks those comments continuously. | `ODS-NFR-MAINT-004` |
@@ -184,6 +184,13 @@ dependencies so XDP/eBPF, io_uring, packed-store, or response-cache crates
 cannot enter `Cargo.lock` without an active boundary record. Current
 unsafe-prone dependencies must also declare adapter `allowed_paths`, and the
 gate rejects first-party Rust references outside those paths.
+The safe configuration helper `open_readonly_no_follow` centralizes the Unix
+`libc` open flags used for same-handle validation of static configuration and
+observability token files. Reloadable secret-store traversal has the separate
+`posix-secret-store-open` boundary: `OpenedSecretRoot` confines `rustix`
+`open`/`openat` calls to descriptor-relative, no-follow traversal in
+`crates/oxidedns-server/src/secret_store.rs`. Callers retain responsibility for
+validating each opened handle's type and permission policy before reading it.
 
 Future io_uring, packed-binary zone-store, cache backends, or production
 promotion of the feature-gated AF_XDP backend are expected to require `unsafe` or
@@ -242,6 +249,27 @@ expiry floors, and fallback behavior before production enablement.
 The project's preferred release-signing mechanism is Sigstore/Cosign with
 keyless OIDC signing. Detached OpenPGP signatures are allowed only as a fallback
 for channels where Cosign cannot be used.
+
+Tagged GitHub releases use three fixed GitHub-hosted jobs. A `contents: read`
+verification job runs Continuous and emits only the verified commit. A second,
+fresh `contents: read` runner checks out that exact commit, verifies the clean
+checkout, and performs packaging, SBOM creation, smoke tests, and binary
+execution with no environment, process, or tool state inherited from
+Continuous. It uploads a fixed release handoff whose manifest digest is carried
+separately through the authenticated Actions job-output channel. The final job
+has the narrowly scoped `contents: write` and `id-token: write` permissions. It
+installs Cosign through
+the commit-pinned official Sigstore action before downloading the handoff, then
+checks the separately conveyed manifest digest and every recorded file digest.
+No action or other executable step runs between that verification and the fixed
+signing step. The privileged job does not check out the repository, run
+repository scripts, or execute generated binaries. It produces a Sigstore
+bundle for every published binary, archive, checksum,
+manifest, and SBOM asset. The workflow attaches each bundle beside its asset and
+writes the expected workflow identity and OIDC issuer verification command into
+the generated release notes. A workflow implementation is not itself release
+evidence: each accepted release must still retain and independently verify its
+actual bundles.
 
 No formal SRS MVP or public release artifact may be treated as accepted unless
 it is signed and has verification instructions in the release notes or artifact

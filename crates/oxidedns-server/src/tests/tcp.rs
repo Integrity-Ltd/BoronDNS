@@ -79,6 +79,125 @@ async fn tcp_connection_serves_authoritative_response() {
     assert_eq!(u16::from_be_bytes([response[6], response[7]]), 1);
 }
 
+async fn handle_test_tcp_connection_until_shutdown(
+    stream: TcpStream,
+    zones: ZoneStore,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), RuntimeError> {
+    handle_tcp_connection_until(
+        stream,
+        zones,
+        std::time::Duration::from_secs(5),
+        1232,
+        8,
+        100,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(5),
+        64,
+        std::time::Duration::from_secs(5),
+        0,
+        ExtendedDnsErrorsMode::Off,
+        AnyResponseMode::Minimal,
+        Vec::new(),
+        String::new(),
+        String::new(),
+        dns_cookie_secret_store_for_test(),
+        dns_cookie_settings_for_test(DnsCookiePolicy::Lenient),
+        cookie_prefix_metrics_for_test(),
+        NotifyAuthority::default(),
+        NotifyRefreshTracker::new(std::time::Duration::from_secs(1)),
+        notify_refresh_tx(),
+        notify_log_limiter_for_test(),
+        RuntimeMetrics::new(),
+        "127.0.0.1".parse().unwrap(),
+        shutdown,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn tcp_shutdown_that_already_won_never_reads_kernel_queued_frame() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        handle_test_tcp_connection_until_shutdown(stream, ZoneStore::new(), shutdown_rx).await
+    });
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let frame = frame_tcp_message(&query(
+        b"\x03www\x07example\x04test\x00",
+        RecordType::A as u16,
+        1,
+    ));
+    client.write_all(&frame).await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), server)
+        .await
+        .expect("shutdown-ready handler must return without a socket read")
+        .expect("handler task does not panic")
+        .expect("handler closes cleanly");
+    let mut response_byte = [0u8; 1];
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        client.read(&mut response_byte),
+    )
+    .await
+    .expect("connection closes without answering")
+    .unwrap_or(0);
+    assert_eq!(read, 0, "post-boundary frame must receive no answer bytes");
+}
+
+#[tokio::test]
+async fn tcp_frame_admitted_before_shutdown_finishes_after_explicit_read_barrier() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (admitted_tx, admitted_rx) = oneshot::channel();
+    let (continue_tx, continue_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (mut reader, _) = stream.into_split();
+        let mut shutdown = Some(shutdown_rx);
+        let first = read_tcp_frame_admission(
+            &mut reader,
+            std::time::Duration::from_secs(5),
+            &mut shutdown,
+        )
+        .await
+        .expect("admission read succeeds")
+        .expect("first frame byte is admitted");
+        admitted_tx
+            .send(())
+            .expect("test observes completed user-space read");
+        continue_rx.await.expect("test releases admitted frame");
+        read_tcp_message_after_first_len_byte(
+            &mut reader,
+            first,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .expect("admitted frame read succeeds")
+        .expect("admitted frame completes")
+    });
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let frame = frame_tcp_message(&query(
+        b"\x03www\x07example\x04test\x00",
+        RecordType::A as u16,
+        1,
+    ));
+    client.write_all(&frame[..1]).await.unwrap();
+    admitted_rx
+        .await
+        .expect("first length byte completed into user space");
+    shutdown_tx.send(true).unwrap();
+    client.write_all(&frame[1..]).await.unwrap();
+    continue_tx.send(()).unwrap();
+
+    let packet = server.await.unwrap();
+    assert_eq!(packet, frame[2..]);
+}
+
 #[test]
 fn tcp_accept_errors_classify_transient_resource_and_fatal_cases() {
     assert_eq!(
@@ -579,8 +698,16 @@ async fn tcp_listener_closes_connections_over_global_limit() {
 
     assert_eq!(read, 0);
     assert_eq!(active.load(Ordering::Acquire), 1);
-    drop(first);
     server.abort();
+    let _ = server.await;
+    for _ in 0..100 {
+        if active.load(Ordering::Acquire) == 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(active.load(Ordering::Acquire), 0);
+    drop(first);
 }
 
 #[tokio::test]

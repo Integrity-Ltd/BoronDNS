@@ -1,14 +1,17 @@
 use std::{
     collections::HashSet,
-    fmt, fs,
+    fmt,
+    fs::{File, OpenOptions},
+    io::Read,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::Deref,
+    ops::{Deref, Range},
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use url::{Host, Url};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     dns::{AnyResponseMode, DomainName, ExtendedDnsErrorsMode},
@@ -17,6 +20,90 @@ use crate::{
 
 const MAX_LINUX_CPU_AFFINITY_INDEX: usize = 1024;
 const MAX_TOKIO_SEMAPHORE_PERMITS: usize = usize::MAX >> 3;
+/// Largest supported userspace UDP receive/send batch. The Linux dedicated
+/// path has the same recvmmsg/sendmmsg ceiling, and keeping every backend at
+/// this bound prevents configuration-driven multi-gigabyte packet-buffer
+/// allocation before a listener can start.
+pub const MAX_UDP_BATCH_SIZE: usize = 1024;
+/// The eBPF AF_XDP redirect map has 64 entries, and 64 reuseport workers is
+/// already well beyond the useful worker count of the supported deployment
+/// profiles. Keeping one shared ceiling also prevents pathological standard
+/// UDP configurations from reaching allocation or descriptor exhaustion
+/// before startup resource validation can report a useful error.
+pub const MAX_UDP_REUSEPORT_WORKERS: usize = 64;
+/// Maximum size of the primary TOML configuration file.
+pub const MAX_SERVER_CONFIG_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum number of TSIG keys retained in one merged secret snapshot.
+pub const MAX_TSIG_KEYS_PER_SNAPSHOT: usize = 1024;
+/// Maximum combined base64-encoded TSIG material in one merged snapshot.
+pub const MAX_TSIG_ENCODED_BYTES_PER_SNAPSHOT: usize = 4 * 1024 * 1024;
+/// Maximum combined decoded TSIG key material in one merged snapshot.
+pub const MAX_TSIG_DECODED_BYTES_PER_SNAPSHOT: usize = 3 * 1024 * 1024;
+/// Maximum encoded TSIG secret accepted from one legacy `secret_file`.
+///
+/// Practical HMAC keys are tiny; 64 KiB leaves generous interoperability
+/// headroom while preventing an accidentally mounted large file from being
+/// read and base64-decoded into multiple startup allocations.
+pub const MAX_TSIG_SECRET_FILE_BYTES: usize = 64 * 1024;
+/// Maximum certificate, trust-anchor, or private-key material accepted by one
+/// direct XoT configuration field or file.
+pub const MAX_DIRECT_XOT_TLS_MATERIAL_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum trust-anchor files accepted by one direct or named XoT profile.
+/// This bounds path-vector cloning and certificate parsing independently of the
+/// byte budget applied when the files are opened.
+pub const MAX_XOT_TRUST_ANCHORS_PER_PROFILE: usize = 64;
+/// Maximum named XoT profiles accepted in one secret-store snapshot.
+pub const MAX_XOT_PROFILES_PER_SNAPSHOT: usize = 256;
+/// Maximum combined trust-anchor, client-certificate, and private-key bytes
+/// used to construct one XoT client configuration.
+pub const MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE: usize = 16 * 1024 * 1024;
+/// Maximum combined XoT material read while constructing one secret snapshot.
+/// Per-profile limits still apply inside this aggregate snapshot ceiling.
+pub const MAX_XOT_TLS_MATERIAL_BYTES_PER_SNAPSHOT: usize = 64 * 1024 * 1024;
+/// Maximum number of operator-defined query-latency histogram boundaries.
+/// Prometheus histograms normally use fewer than twenty; 64 retains ample
+/// tuning freedom while bounding per-category counter arrays and scrape work.
+pub const MAX_LATENCY_HISTOGRAM_BUCKETS: usize = 64;
+/// Default number of health/observability HTTP connections accepted across
+/// all management listeners. Admission happens before `accept`, so this is
+/// also the exact maximum number of accepted health connection descriptors.
+pub const DEFAULT_HEALTH_MAX_CONNECTIONS: usize = 128;
+/// Number of queue slots in the shipped `OXIDEDNS_XSKS` eBPF redirect map.
+/// The eBPF crate has a compile-time contract test for the same value.
+pub const XDP_REDIRECT_MAP_CAPACITY: usize = 64;
+/// Maximum frames in one AF_XDP UMEM. With the xdp crate's 4 KiB frames this
+/// permits a 1 GiB queue-local packet pool without allowing a configuration
+/// typo to request a multi-terabyte mapping and frame freelist.
+pub const MAX_XDP_UMEM_FRAME_COUNT: u32 = 262_144;
+/// Maximum entries in each AF_XDP ring. This is substantially above the
+/// production defaults while bounding kernel ring mappings and bookkeeping.
+pub const MAX_XDP_RING_SIZE: u32 = 65_536;
+/// Maximum effective receive/send batch held by one AF_XDP worker.
+pub const MAX_XDP_BATCH_SIZE: usize = 1_024;
+/// Maximum conservative aggregate memory estimate for all effective AF_XDP
+/// queues. GX10-class 128 GiB systems retain ample headroom for zones, the
+/// runtime, and the kernel even at this intentionally generous ceiling.
+pub const MAX_XDP_ESTIMATED_MEMORY_BYTES: u128 = 32 * 1024 * 1024 * 1024;
+const XDP_UMEM_FRAME_BYTES: u128 = 4_096;
+// UdpInbound owns a maximum-size DNS datagram buffer. Round its remaining
+// metadata up so validation remains conservative and independent of the
+// server crate's concrete layout.
+const XDP_INBOUND_SLOT_ESTIMATED_BYTES: u128 = 65_536;
+// RX/TX descriptors are 16 bytes; fill/completion descriptors are smaller.
+const XDP_RING_ENTRY_ESTIMATED_BYTES: u128 = 16;
+/// Longest operator-configured runtime timer. One year is well beyond normal
+/// DNS transport, retry, and maintenance windows while remaining representable
+/// as an `Instant` deadline on supported platforms.
+pub const MAX_RUNTIME_DURATION_SECS: u64 = 365 * 24 * 60 * 60;
+
+fn validate_runtime_duration_upper_bound(parameter: &str, seconds: u64) -> Result<(), ConfigError> {
+    if seconds > MAX_RUNTIME_DURATION_SECS {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must not exceed {MAX_RUNTIME_DURATION_SECS} seconds"
+        )));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -33,7 +120,7 @@ pub enum ConfigError {
     },
 
     #[error("failed to parse TOML configuration: {0}")]
-    Parse(#[from] toml::de::Error),
+    Parse(#[from] ConfigParseError),
 
     #[error("failed to serialize TOML configuration: {0}")]
     Serialize(#[from] toml::ser::Error),
@@ -41,6 +128,43 @@ pub enum ConfigError {
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
+
+/// A TOML parse failure that deliberately does not retain or render the
+/// configuration source. `toml::de::Error` owns an `Arc<str>` copy of the
+/// complete input on parse failures, which is unsuitable for configurations
+/// containing bearer tokens, TSIG secrets, or inline private keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigParseError {
+    message: String,
+    span: Option<Range<usize>>,
+}
+
+impl From<toml::de::Error> for ConfigParseError {
+    fn from(mut error: toml::de::Error) -> Self {
+        let span = error.span();
+        // Release the parser's ordinary Arc<str> source copy before the
+        // sanitized error is rendered or crosses the configuration boundary.
+        // Without the input, toml's formatter preserves useful serde key-path
+        // context but cannot print any configuration source line.
+        error.set_input(None);
+        Self {
+            message: error.to_string().trim().to_owned(),
+            span,
+        }
+    }
+}
+
+impl fmt::Display for ConfigParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)?;
+        if let Some(span) = &self.span {
+            write!(formatter, " at byte range {}..{}", span.start, span.end)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ConfigParseError {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -100,15 +224,12 @@ pub struct ConfigWarning {
 impl ServerConfig {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
-        let text = fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
-        Self::from_toml_str(&text)
+        let text = read_config_file(path, || {})?;
+        Self::from_toml_str(text.as_str())
     }
 
     pub fn from_toml_str(text: &str) -> Result<Self, ConfigError> {
-        let config = toml::from_str::<Self>(text)?;
+        let config = toml::from_str::<Self>(text).map_err(ConfigParseError::from)?;
         config.validate()?;
         Ok(config)
     }
@@ -135,21 +256,26 @@ impl ServerConfig {
             }
         }
         for key in &mut redacted.tsig_keys {
-            if key.secret.is_some() {
-                key.secret = Some("<redacted>".to_owned());
+            if let Some(secret) = &mut key.secret {
+                secret.zeroize();
+                *secret = "<redacted>".to_owned();
             }
         }
-        if redacted.control_plane.telemetry.bearer_token.is_some() {
-            redacted.control_plane.telemetry.bearer_token = Some("<redacted>".to_owned());
+        if let Some(token) = &mut redacted.control_plane.telemetry.bearer_token {
+            token.zeroize();
+            *token = "<redacted>".to_owned();
         }
-        if redacted.control_plane.operations.bearer_token.is_some() {
-            redacted.control_plane.operations.bearer_token = Some("<redacted>".to_owned());
+        if let Some(token) = &mut redacted.control_plane.operations.bearer_token {
+            token.zeroize();
+            *token = "<redacted>".to_owned();
         }
-        if redacted.cookie.server_secret.is_some() {
-            redacted.cookie.server_secret = Some("<redacted>".to_owned());
+        if let Some(secret) = &mut redacted.cookie.server_secret {
+            secret.zeroize();
+            *secret = "<redacted>".to_owned();
         }
-        if redacted.cookie.previous_server_secret.is_some() {
-            redacted.cookie.previous_server_secret = Some("<redacted>".to_owned());
+        if let Some(secret) = &mut redacted.cookie.previous_server_secret {
+            secret.zeroize();
+            *secret = "<redacted>".to_owned();
         }
         Ok(toml::to_string_pretty(&redacted)?)
     }
@@ -186,7 +312,28 @@ impl ServerConfig {
                 "limits.udp_batch_size must be at least 1".to_owned(),
             ));
         }
-        self.xdp.validate(self.limits.udp_backend)?;
+        if self.limits.udp_batch_size > MAX_UDP_BATCH_SIZE {
+            return Err(ConfigError::Invalid(format!(
+                "limits.udp_batch_size must not exceed {MAX_UDP_BATCH_SIZE}"
+            )));
+        }
+        self.xdp
+            .validate(self.limits.udp_backend, self.limits.udp_reuseport_workers)?;
+        if self.limits.udp_backend == UdpBackend::AfXdp {
+            let listeners = self.dns_udp_listeners();
+            if listeners.len() != 1 {
+                return Err(ConfigError::Invalid(format!(
+                    "AF_XDP currently requires exactly one UDP listener on its configured interface; found {}",
+                    listeners.len()
+                )));
+            }
+            let listener = listeners[0];
+            if listener.ip().is_unspecified() {
+                return Err(ConfigError::Invalid(format!(
+                    "AF_XDP UDP listener {listener} must use a concrete local IP address; wildcard listeners can intercept non-local ingress traffic before kernel routing"
+                )));
+            }
+        }
         self.limits.validate_udp_worker_settings()?;
         if self.limits.max_cname_chain == 0 {
             return Err(ConfigError::Invalid(
@@ -213,6 +360,16 @@ impl ServerConfig {
                 "limits.tcp_connect_timeout_secs must be at least 1".to_owned(),
             ));
         }
+        if self.limits.axfr_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.axfr_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
+        if self.limits.ixfr_timeout_secs == 0 {
+            return Err(ConfigError::Invalid(
+                "limits.ixfr_timeout_secs must be at least 1".to_owned(),
+            ));
+        }
         if self.limits.max_tcp_connections == 0 {
             return Err(ConfigError::Invalid(
                 "limits.max_tcp_connections must be at least 1".to_owned(),
@@ -228,6 +385,11 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "limits.max_tcp_inflight_queries_per_connection must be at least 1".to_owned(),
             ));
+        }
+        if self.limits.max_tcp_inflight_queries_per_connection > MAX_TOKIO_SEMAPHORE_PERMITS {
+            return Err(ConfigError::Invalid(format!(
+                "limits.max_tcp_inflight_queries_per_connection must not exceed {MAX_TOKIO_SEMAPHORE_PERMITS}"
+            )));
         }
         if self.limits.tcp_inflight_limit_timeout_secs == Some(0) {
             return Err(ConfigError::Invalid(
@@ -307,6 +469,67 @@ impl ServerConfig {
             return Err(ConfigError::Invalid(
                 "limits.ixfr_disabled_cooldown_secs must be at least 1".to_owned(),
             ));
+        }
+        for (parameter, seconds) in [
+            (
+                "limits.tcp_idle_timeout_secs",
+                self.limits.tcp_idle_timeout_secs,
+            ),
+            (
+                "limits.tcp_read_timeout_secs",
+                self.limits.tcp_read_timeout_secs,
+            ),
+            (
+                "limits.tcp_write_timeout_secs",
+                self.limits.tcp_write_timeout_secs,
+            ),
+            (
+                "limits.tcp_connect_timeout_secs",
+                self.limits.tcp_connect_timeout_secs,
+            ),
+            (
+                "limits.graceful_shutdown_secs",
+                self.limits.graceful_shutdown_secs,
+            ),
+            ("limits.axfr_timeout_secs", self.limits.axfr_timeout_secs),
+            ("limits.ixfr_timeout_secs", self.limits.ixfr_timeout_secs),
+            (
+                "limits.ixfr_disabled_cooldown_secs",
+                self.limits.ixfr_disabled_cooldown_secs,
+            ),
+            ("limits.notify_dedup_secs", self.limits.notify_dedup_secs),
+            (
+                "limits.notify_log_rate_window_secs",
+                self.limits.notify_log_rate_window_secs,
+            ),
+            (
+                "limits.zsm_min_interval_secs",
+                self.limits.zsm_min_interval_secs,
+            ),
+            (
+                "limits.zsm_max_interval_secs",
+                self.limits.zsm_max_interval_secs,
+            ),
+            (
+                "limits.zsm_initial_retry_secs",
+                self.limits.zsm_initial_retry_secs,
+            ),
+            (
+                "limits.zsm_initial_retry_max_secs",
+                self.limits.zsm_initial_retry_max_secs,
+            ),
+            (
+                "limits.zsm_loading_warning_threshold_secs",
+                self.limits.zsm_loading_warning_threshold_secs,
+            ),
+        ] {
+            validate_runtime_duration_upper_bound(parameter, seconds)?;
+        }
+        if let Some(seconds) = self.limits.tcp_inflight_limit_timeout_secs {
+            validate_runtime_duration_upper_bound(
+                "limits.tcp_inflight_limit_timeout_secs",
+                seconds,
+            )?;
         }
         if self.limits.max_transfer_ingest_bytes == 0 {
             return Err(ConfigError::Invalid(
@@ -601,13 +824,31 @@ impl ServerConfig {
     }
 
     fn validate_tsig_keys(&self) -> Result<HashSet<String>, ConfigError> {
+        if self.tsig_keys.len() > MAX_TSIG_KEYS_PER_SNAPSHOT {
+            return Err(ConfigError::Invalid(format!(
+                "configuration must not contain more than {MAX_TSIG_KEYS_PER_SNAPSHOT} TSIG keys"
+            )));
+        }
         let mut names = HashSet::new();
+        let mut encoded_bytes = 0usize;
+        let mut decoded_bytes = 0usize;
         for key in &self.tsig_keys {
-            let secret = key.secret_base64()?;
+            let remaining_encoded =
+                MAX_TSIG_ENCODED_BYTES_PER_SNAPSHOT.saturating_sub(encoded_bytes);
+            let secret = key.secret_base64_bounded(remaining_encoded)?;
+            encoded_bytes = encoded_bytes.saturating_add(secret.len());
+            let decoded_len = decoded_base64_len(secret.as_str());
+            let decoded_total = decoded_bytes.saturating_add(decoded_len);
+            if decoded_total > MAX_TSIG_DECODED_BYTES_PER_SNAPSHOT {
+                return Err(ConfigError::Invalid(format!(
+                    "aggregate decoded TSIG material would reach {decoded_total} bytes, exceeding {MAX_TSIG_DECODED_BYTES_PER_SNAPSHOT} byte limit"
+                )));
+            }
             let parsed_key =
                 TsigKey::from_base64(&key.name, &key.algorithm, &secret).map_err(|error| {
                     ConfigError::Invalid(format!("invalid TSIG key {}: {error}", key.name))
                 })?;
+            decoded_bytes = decoded_total;
             if !names.insert(parsed_key.name.canonical_key()) {
                 return Err(ConfigError::Invalid(format!(
                     "duplicate TSIG key {}",
@@ -974,6 +1215,8 @@ pub struct HealthConfig {
     pub metrics_rate_limit_per_minute: u32,
     #[serde(default = "default_metrics_rate_limit_idle_seconds")]
     pub metrics_rate_limit_idle_seconds: u64,
+    #[serde(default = "default_health_max_connections")]
+    pub max_connections: usize,
 }
 
 impl Default for HealthConfig {
@@ -984,6 +1227,7 @@ impl Default for HealthConfig {
             default_port: default_health_port(),
             metrics_rate_limit_per_minute: default_metrics_rate_limit_per_minute(),
             metrics_rate_limit_idle_seconds: default_metrics_rate_limit_idle_seconds(),
+            max_connections: default_health_max_connections(),
         }
     }
 }
@@ -1010,6 +1254,20 @@ impl HealthConfig {
                 "health.metrics_rate_limit_idle_seconds must be at least 1".to_owned(),
             ));
         }
+        if self.max_connections == 0 {
+            return Err(ConfigError::Invalid(
+                "health.max_connections must be at least 1".to_owned(),
+            ));
+        }
+        if self.max_connections > MAX_TOKIO_SEMAPHORE_PERMITS {
+            return Err(ConfigError::Invalid(format!(
+                "health.max_connections must not exceed {MAX_TOKIO_SEMAPHORE_PERMITS}"
+            )));
+        }
+        validate_runtime_duration_upper_bound(
+            "health.metrics_rate_limit_idle_seconds",
+            self.metrics_rate_limit_idle_seconds,
+        )?;
         Ok(())
     }
 }
@@ -1044,6 +1302,11 @@ impl MetricsConfig {
             return Err(ConfigError::Invalid(
                 "metrics.latency_histogram_buckets must contain at least one bucket".to_owned(),
             ));
+        }
+        if self.latency_histogram_buckets.len() > MAX_LATENCY_HISTOGRAM_BUCKETS {
+            return Err(ConfigError::Invalid(format!(
+                "metrics.latency_histogram_buckets must not contain more than {MAX_LATENCY_HISTOGRAM_BUCKETS} buckets"
+            )));
         }
 
         let mut previous = None;
@@ -1152,6 +1415,17 @@ impl ObservabilityConfig {
                 "observability.path_prefix must not contain '.' or '..' path segments".to_owned(),
             ));
         }
+        if self.path_prefix.contains(['{', '}', '*'])
+            || self
+                .path_prefix
+                .split('/')
+                .any(|segment| segment.starts_with(':'))
+        {
+            return Err(ConfigError::Invalid(
+                "observability.path_prefix must be a literal HTTP path without route parameters or wildcards"
+                    .to_owned(),
+            ));
+        }
         if matches!(
             self.path_prefix.as_str(),
             "/livez" | "/healthz" | "/readyz" | "/metrics"
@@ -1171,6 +1445,10 @@ impl ObservabilityConfig {
                 "observability.rate_limit_idle_seconds must be at least 1".to_owned(),
             ));
         }
+        validate_runtime_duration_upper_bound(
+            "observability.rate_limit_idle_seconds",
+            self.rate_limit_idle_seconds,
+        )?;
         Ok(())
     }
 }
@@ -1191,7 +1469,7 @@ impl ControlPlaneConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneTelemetryConfig {
     #[serde(default)]
@@ -1200,8 +1478,40 @@ pub struct ControlPlaneTelemetryConfig {
     pub node_id: Option<String>,
     #[serde(default)]
     pub bearer_token: Option<String>,
+    /// Permit cleartext HTTP only to an IP-literal loopback endpoint. This is
+    /// intended for local development and test harnesses; production control
+    /// planes must use HTTPS.
+    #[serde(default)]
+    pub allow_insecure_loopback_http: bool,
     #[serde(default = "default_control_plane_timeout_secs")]
     pub timeout_secs: u64,
+}
+
+impl Drop for ControlPlaneTelemetryConfig {
+    fn drop(&mut self) {
+        if let Some(token) = &mut self.bearer_token {
+            token.zeroize();
+        }
+    }
+}
+
+impl fmt::Debug for ControlPlaneTelemetryConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControlPlaneTelemetryConfig")
+            .field("endpoint_url", &self.endpoint_url)
+            .field("node_id", &self.node_id)
+            .field(
+                "bearer_token",
+                &self.bearer_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "allow_insecure_loopback_http",
+                &self.allow_insecure_loopback_http,
+            )
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
 }
 
 impl Default for ControlPlaneTelemetryConfig {
@@ -1210,6 +1520,7 @@ impl Default for ControlPlaneTelemetryConfig {
             endpoint_url: None,
             node_id: None,
             bearer_token: None,
+            allow_insecure_loopback_http: false,
             timeout_secs: default_control_plane_timeout_secs(),
         }
     }
@@ -1234,27 +1545,14 @@ impl ControlPlaneTelemetryConfig {
             ));
         }
         if let Some(endpoint_url) = self.endpoint_url.as_deref() {
-            let endpoint_url = endpoint_url.trim();
-            if !(endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://")) {
-                return Err(ConfigError::Invalid(
-                    "control_plane.telemetry.endpoint_url must start with http:// or https://"
-                        .to_owned(),
-                ));
-            }
-            if endpoint_url.ends_with('/') {
-                return Err(ConfigError::Invalid(
-                    "control_plane.telemetry.endpoint_url must not end with '/'".to_owned(),
-                ));
-            }
+            validate_control_plane_endpoint_url(
+                "control_plane.telemetry.endpoint_url",
+                endpoint_url,
+                self.allow_insecure_loopback_http,
+            )?;
         }
-        if self
-            .node_id
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(ConfigError::Invalid(
-                "control_plane.telemetry.node_id must not be empty".to_owned(),
-            ));
+        if let Some(node_id) = self.node_id.as_deref() {
+            validate_control_plane_node_id("control_plane.telemetry.node_id", node_id)?;
         }
         if self
             .bearer_token
@@ -1270,6 +1568,10 @@ impl ControlPlaneTelemetryConfig {
                 "control_plane.telemetry.timeout_secs must be greater than zero".to_owned(),
             ));
         }
+        validate_runtime_duration_upper_bound(
+            "control_plane.telemetry.timeout_secs",
+            self.timeout_secs,
+        )?;
         Ok(())
     }
 }
@@ -1278,7 +1580,86 @@ fn default_control_plane_timeout_secs() -> u64 {
     5
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+fn validate_control_plane_node_id(parameter: &str, node_id: &str) -> Result<(), ConfigError> {
+    // Node IDs are opaque URL path segments. Keep the accepted grammar narrow so
+    // delimiters and their percent-encoded spellings cannot change request routing.
+    let valid = !node_id.is_empty()
+        && node_id
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && node_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    if !valid {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must match [A-Za-z0-9][A-Za-z0-9._-]*"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_control_plane_endpoint_url(
+    parameter: &str,
+    endpoint_url: &str,
+    allow_insecure_loopback_http: bool,
+) -> Result<(), ConfigError> {
+    let endpoint_url = endpoint_url.trim();
+    if endpoint_url.ends_with('/') {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must not end with '/'"
+        )));
+    }
+    let parsed = Url::parse(endpoint_url).map_err(|error| {
+        ConfigError::Invalid(format!("{parameter} must be a valid absolute URL: {error}"))
+    })?;
+    if parsed.cannot_be_a_base() || parsed.host().is_none() {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must contain an absolute HTTP(S) authority"
+        )));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must not contain URL user information"
+        )));
+    }
+    if parsed.fragment().is_some() {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must not contain a URL fragment"
+        )));
+    }
+    if parsed.query().is_some() {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must not contain a URL query"
+        )));
+    }
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+    if parsed.scheme() != "http" {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must use https://"
+        )));
+    }
+    if !allow_insecure_loopback_http {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} must use https://; set allow_insecure_loopback_http = true only for an IP-literal loopback development endpoint"
+        )));
+    }
+    let loopback = match parsed.host() {
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        Some(Host::Domain(_)) | None => false,
+    };
+    if !loopback {
+        return Err(ConfigError::Invalid(format!(
+            "{parameter} insecure HTTP endpoint must use an IP-literal loopback address"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneOperationsConfig {
     #[serde(default)]
@@ -1289,12 +1670,47 @@ pub struct ControlPlaneOperationsConfig {
     pub node_id: Option<String>,
     #[serde(default)]
     pub bearer_token: Option<String>,
+    /// Permit cleartext HTTP only to an IP-literal loopback endpoint. This is
+    /// intended for local development and test harnesses; production control
+    /// planes must use HTTPS.
+    #[serde(default)]
+    pub allow_insecure_loopback_http: bool,
     #[serde(default = "default_control_plane_poll_interval_secs")]
     pub poll_interval_secs: u64,
     #[serde(default = "default_control_plane_operation_lease_secs")]
     pub lease_seconds: u64,
     #[serde(default = "default_control_plane_timeout_secs")]
     pub timeout_secs: u64,
+}
+
+impl Drop for ControlPlaneOperationsConfig {
+    fn drop(&mut self) {
+        if let Some(token) = &mut self.bearer_token {
+            token.zeroize();
+        }
+    }
+}
+
+impl fmt::Debug for ControlPlaneOperationsConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControlPlaneOperationsConfig")
+            .field("enabled", &self.enabled)
+            .field("endpoint_url", &self.endpoint_url)
+            .field("node_id", &self.node_id)
+            .field(
+                "bearer_token",
+                &self.bearer_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "allow_insecure_loopback_http",
+                &self.allow_insecure_loopback_http,
+            )
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("lease_seconds", &self.lease_seconds)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
 }
 
 impl Default for ControlPlaneOperationsConfig {
@@ -1304,6 +1720,7 @@ impl Default for ControlPlaneOperationsConfig {
             endpoint_url: None,
             node_id: None,
             bearer_token: None,
+            allow_insecure_loopback_http: false,
             poll_interval_secs: default_control_plane_poll_interval_secs(),
             lease_seconds: default_control_plane_operation_lease_secs(),
             timeout_secs: default_control_plane_timeout_secs(),
@@ -1338,27 +1755,14 @@ impl ControlPlaneOperationsConfig {
             ));
         }
         if let Some(endpoint_url) = self.endpoint_url.as_deref() {
-            let endpoint_url = endpoint_url.trim();
-            if !(endpoint_url.starts_with("http://") || endpoint_url.starts_with("https://")) {
-                return Err(ConfigError::Invalid(
-                    "control_plane.operations.endpoint_url must start with http:// or https://"
-                        .to_owned(),
-                ));
-            }
-            if endpoint_url.ends_with('/') {
-                return Err(ConfigError::Invalid(
-                    "control_plane.operations.endpoint_url must not end with '/'".to_owned(),
-                ));
-            }
+            validate_control_plane_endpoint_url(
+                "control_plane.operations.endpoint_url",
+                endpoint_url,
+                self.allow_insecure_loopback_http,
+            )?;
         }
-        if self
-            .node_id
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(ConfigError::Invalid(
-                "control_plane.operations.node_id must not be empty".to_owned(),
-            ));
+        if let Some(node_id) = self.node_id.as_deref() {
+            validate_control_plane_node_id("control_plane.operations.node_id", node_id)?;
         }
         if self
             .bearer_token
@@ -1383,6 +1787,16 @@ impl ControlPlaneOperationsConfig {
             return Err(ConfigError::Invalid(
                 "control_plane.operations.timeout_secs must be greater than zero".to_owned(),
             ));
+        }
+        for (parameter, seconds) in [
+            (
+                "control_plane.operations.poll_interval_secs",
+                self.poll_interval_secs,
+            ),
+            ("control_plane.operations.lease_seconds", self.lease_seconds),
+            ("control_plane.operations.timeout_secs", self.timeout_secs),
+        ] {
+            validate_runtime_duration_upper_bound(parameter, seconds)?;
         }
         Ok(())
     }
@@ -1547,7 +1961,7 @@ pub enum LogFormatConfig {
     Plain,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CookieConfig {
     #[serde(default)]
@@ -1562,6 +1976,46 @@ pub struct CookieConfig {
     pub timestamp_future_tolerance_seconds: u32,
     #[serde(default)]
     pub secret_rotation_interval_secs: u64,
+}
+
+impl Drop for CookieConfig {
+    fn drop(&mut self) {
+        if let Some(secret) = &mut self.server_secret {
+            secret.zeroize();
+        }
+        if let Some(secret) = &mut self.previous_server_secret {
+            secret.zeroize();
+        }
+    }
+}
+
+impl fmt::Debug for CookieConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CookieConfig")
+            .field("policy", &self.policy)
+            .field(
+                "server_secret",
+                &self.server_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "previous_server_secret",
+                &self.previous_server_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "timestamp_past_tolerance_seconds",
+                &self.timestamp_past_tolerance_seconds,
+            )
+            .field(
+                "timestamp_future_tolerance_seconds",
+                &self.timestamp_future_tolerance_seconds,
+            )
+            .field(
+                "secret_rotation_interval_secs",
+                &self.secret_rotation_interval_secs,
+            )
+            .finish()
+    }
 }
 
 impl Default for CookieConfig {
@@ -1584,6 +2038,10 @@ impl CookieConfig {
                 "cookie.secret_rotation_interval_secs cannot be used with cookie.server_secret; rotate shared Server Secrets by setting server_secret and previous_server_secret".to_owned(),
             ));
         }
+        validate_runtime_duration_upper_bound(
+            "cookie.secret_rotation_interval_secs",
+            self.secret_rotation_interval_secs,
+        )?;
         if self.previous_server_secret.is_some() && self.server_secret.is_none() {
             return Err(ConfigError::Invalid(
                 "cookie.previous_server_secret requires cookie.server_secret".to_owned(),
@@ -1735,6 +2193,10 @@ impl RrlConfig {
                 "rrl.summary_log_interval_secs must be at least 1".to_owned(),
             ));
         }
+        validate_runtime_duration_upper_bound(
+            "rrl.summary_log_interval_secs",
+            self.summary_log_interval_secs,
+        )?;
         for prefix in &self.allowlist {
             validate_ip_prefix(prefix).map_err(|error| {
                 ConfigError::Invalid(format!("invalid rrl.allowlist entry {prefix:?}: {error}"))
@@ -1865,6 +2327,11 @@ impl Limits {
             return Err(ConfigError::Invalid(
                 "limits.udp_reuseport_workers must be at least 1".to_owned(),
             ));
+        }
+        if self.udp_reuseport_workers > MAX_UDP_REUSEPORT_WORKERS {
+            return Err(ConfigError::Invalid(format!(
+                "limits.udp_reuseport_workers must not exceed {MAX_UDP_REUSEPORT_WORKERS}"
+            )));
         }
         if self.udp_backend == UdpBackend::AfXdp && self.udp_runtime != UdpRuntime::Tokio {
             return Err(ConfigError::Invalid(
@@ -2016,7 +2483,11 @@ impl Default for XdpConfig {
 }
 
 impl XdpConfig {
-    fn validate(&self, udp_backend: UdpBackend) -> Result<(), ConfigError> {
+    fn validate(
+        &self,
+        udp_backend: UdpBackend,
+        udp_worker_count: usize,
+    ) -> Result<(), ConfigError> {
         if self.interface.as_deref().is_some_and(str::is_empty) {
             return Err(ConfigError::Invalid(
                 "xdp.interface must not be empty when configured".to_owned(),
@@ -2036,6 +2507,11 @@ impl XdpConfig {
             return Err(ConfigError::Invalid(
                 "xdp.umem_frame_count must be at least 1".to_owned(),
             ));
+        }
+        if self.umem_frame_count > MAX_XDP_UMEM_FRAME_COUNT {
+            return Err(ConfigError::Invalid(format!(
+                "xdp.umem_frame_count must not exceed {MAX_XDP_UMEM_FRAME_COUNT}"
+            )));
         }
         if self.rx_ring_size == 0 {
             return Err(ConfigError::Invalid(
@@ -2063,6 +2539,11 @@ impl XdpConfig {
             ("xdp.fill_ring_size", self.fill_ring_size),
             ("xdp.completion_ring_size", self.completion_ring_size),
         ] {
+            if value > MAX_XDP_RING_SIZE {
+                return Err(ConfigError::Invalid(format!(
+                    "{parameter} must not exceed {MAX_XDP_RING_SIZE}"
+                )));
+            }
             if !value.is_power_of_two() {
                 return Err(ConfigError::Invalid(format!(
                     "{parameter} must be a power of two"
@@ -2074,14 +2555,29 @@ impl XdpConfig {
                 "xdp.batch_size must be at least 1".to_owned(),
             ));
         }
+        if self.batch_size > MAX_XDP_BATCH_SIZE {
+            return Err(ConfigError::Invalid(format!(
+                "xdp.batch_size must not exceed {MAX_XDP_BATCH_SIZE}"
+            )));
+        }
+        let effective_batch_size = self
+            .batch_size
+            .min(self.rx_ring_size as usize)
+            .min(self.tx_ring_size as usize);
+        if (self.completion_ring_size as usize) < effective_batch_size {
+            return Err(ConfigError::Invalid(format!(
+                "xdp.completion_ring_size must be at least the effective AF_XDP batch size {effective_batch_size}"
+            )));
+        }
         if self.rx_drain_passes == 0 {
             return Err(ConfigError::Invalid(
                 "xdp.rx_drain_passes must be at least 1".to_owned(),
             ));
         }
-        if self.tx_wakeup_interval == 0 {
+        if udp_backend == UdpBackend::AfXdp && self.tx_wakeup_interval != 1 {
             return Err(ConfigError::Invalid(
-                "xdp.tx_wakeup_interval must be at least 1".to_owned(),
+                "xdp.tx_wakeup_interval must be 1 when limits.udp_backend = \"af_xdp\"; the current AF_XDP ring API does not expose the kernel needs-wakeup flag, so every non-empty TX enqueue must be kicked"
+                    .to_owned(),
             ));
         }
         if !self.queue_ids.is_empty() {
@@ -2098,7 +2594,88 @@ impl XdpConfig {
                 ));
             }
         }
+        if udp_backend == UdpBackend::AfXdp {
+            let queue_count = self.effective_queue_ids(udp_worker_count)?.len();
+            let estimated_memory = self.estimated_memory_bytes(queue_count);
+            if estimated_memory > MAX_XDP_ESTIMATED_MEMORY_BYTES {
+                return Err(ConfigError::Invalid(format!(
+                    "estimated aggregate AF_XDP memory {estimated_memory} bytes for {queue_count} queue(s) must not exceed {MAX_XDP_ESTIMATED_MEMORY_BYTES} bytes"
+                )));
+            }
+        }
         Ok(())
+    }
+
+    fn estimated_memory_bytes(&self, queue_count: usize) -> u128 {
+        let umem = u128::from(self.umem_frame_count).saturating_mul(XDP_UMEM_FRAME_BYTES);
+        let effective_batch = self
+            .batch_size
+            .min(self.rx_ring_size as usize)
+            .min(self.tx_ring_size as usize);
+        let inbound = (effective_batch as u128).saturating_mul(XDP_INBOUND_SLOT_ESTIMATED_BYTES);
+        let ring_entries = u128::from(self.rx_ring_size)
+            .saturating_add(u128::from(self.tx_ring_size))
+            .saturating_add(u128::from(self.fill_ring_size))
+            .saturating_add(u128::from(self.completion_ring_size));
+        let rings = ring_entries.saturating_mul(XDP_RING_ENTRY_ESTIMATED_BYTES);
+        (queue_count as u128).saturating_mul(umem.saturating_add(inbound).saturating_add(rings))
+    }
+
+    /// Returns the exact AF_XDP queue set used by the runtime after applying
+    /// the explicit sparse-list override or the contiguous worker range.
+    pub fn effective_queue_ids(&self, udp_worker_count: usize) -> Result<Vec<u32>, ConfigError> {
+        let queue_ids = if self.queue_ids.is_empty() {
+            let worker_count = udp_worker_count.max(1);
+            let worker_count_u32 = u32::try_from(worker_count).map_err(|_| {
+                ConfigError::Invalid(
+                    "limits.udp_reuseport_workers is too large for AF_XDP queue indexing"
+                        .to_owned(),
+                )
+            })?;
+            let last_queue_id = self
+                .queue_id
+                .checked_add(worker_count_u32.saturating_sub(1))
+                .ok_or_else(|| {
+                    ConfigError::Invalid("AF_XDP queue range overflows u32".to_owned())
+                })?;
+            (self.queue_id..=last_queue_id).collect::<Vec<_>>()
+        } else {
+            self.queue_ids.clone()
+        };
+
+        if queue_ids.len() > XDP_REDIRECT_MAP_CAPACITY {
+            return Err(ConfigError::Invalid(format!(
+                "effective AF_XDP queue count {} must not exceed redirect map capacity {XDP_REDIRECT_MAP_CAPACITY}",
+                queue_ids.len()
+            )));
+        }
+        if let Some(queue_id) = queue_ids
+            .iter()
+            .copied()
+            .find(|queue_id| (*queue_id as usize) >= XDP_REDIRECT_MAP_CAPACITY)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "AF_XDP queue id {queue_id} must be below redirect map capacity {XDP_REDIRECT_MAP_CAPACITY}"
+            )));
+        }
+        let mut unique = queue_ids.clone();
+        unique.sort_unstable();
+        if unique.windows(2).any(|window| window[0] == window[1]) {
+            return Err(ConfigError::Invalid(
+                "effective AF_XDP queue ids must not contain duplicates".to_owned(),
+            ));
+        }
+        Ok(queue_ids)
+    }
+
+    /// Exact number of XSK/UMEM workers the runtime will create. Callers use
+    /// this only after `ServerConfig::validate` has accepted the queue set.
+    pub fn effective_queue_count(&self, udp_worker_count: usize) -> usize {
+        if self.queue_ids.is_empty() {
+            udp_worker_count.max(1)
+        } else {
+            self.queue_ids.len()
+        }
     }
 }
 
@@ -2670,6 +3247,12 @@ impl TransferPrimaryConfig {
                 self.addr
             )));
         }
+        if self.trust_anchors.len() > MAX_XOT_TRUST_ANCHORS_PER_PROFILE {
+            return Err(ConfigError::Invalid(format!(
+                "zone {zone_name} XoT transfer primary {} must not configure more than {MAX_XOT_TRUST_ANCHORS_PER_PROFILE} trust anchors",
+                self.addr
+            )));
+        }
         for trust_anchor in &self.trust_anchors {
             if trust_anchor.trim().is_empty() {
                 return Err(ConfigError::Invalid(format!(
@@ -2690,6 +3273,14 @@ impl TransferPrimaryConfig {
             {
                 Err(ConfigError::Invalid(format!(
                     "zone {zone_name} XoT transfer primary {} has an empty client certificate path or inline client key",
+                    self.addr
+                )))
+            }
+            (Some(_), None, Some(key_pem))
+                if key_pem.expose_secret().len() > MAX_DIRECT_XOT_TLS_MATERIAL_BYTES =>
+            {
+                Err(ConfigError::Invalid(format!(
+                    "zone {zone_name} XoT transfer primary {} inline client private key exceeds {MAX_DIRECT_XOT_TLS_MATERIAL_BYTES} byte direct XoT material limit",
                     self.addr
                 )))
             }
@@ -2725,6 +3316,14 @@ pub struct TsigKeyConfig {
     pub secret_file: Option<String>,
 }
 
+impl Drop for TsigKeyConfig {
+    fn drop(&mut self) {
+        if let Some(secret) = &mut self.secret {
+            secret.zeroize();
+        }
+    }
+}
+
 impl fmt::Debug for TsigKeyConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2739,9 +3338,24 @@ impl fmt::Debug for TsigKeyConfig {
 
 impl TsigKeyConfig {
     pub fn secret_base64(&self) -> Result<Zeroizing<String>, ConfigError> {
+        self.secret_base64_bounded(MAX_TSIG_ENCODED_BYTES_PER_SNAPSHOT)
+    }
+
+    pub fn secret_base64_bounded(
+        &self,
+        remaining_bytes: usize,
+    ) -> Result<Zeroizing<String>, ConfigError> {
         match (&self.secret, &self.secret_file) {
-            (Some(secret), None) => Ok(Zeroizing::new(secret.clone())),
-            (None, Some(path)) => read_secret_file(path),
+            (Some(secret), None) if secret.len() <= remaining_bytes => {
+                Ok(Zeroizing::new(secret.clone()))
+            }
+            (Some(secret), None) => Err(ConfigError::Invalid(format!(
+                "TSIG key {} would raise aggregate encoded TSIG material above {MAX_TSIG_ENCODED_BYTES_PER_SNAPSHOT} byte limit ({} bytes remain, key requires {} bytes)",
+                self.name,
+                remaining_bytes,
+                secret.len()
+            ))),
+            (None, Some(path)) => read_secret_file_bounded(path, remaining_bytes),
             (Some(_), Some(_)) | (None, None) => Err(ConfigError::Invalid(format!(
                 "TSIG key {} must set exactly one of secret or secret_file",
                 self.name
@@ -2750,38 +3364,198 @@ impl TsigKeyConfig {
     }
 }
 
-fn read_secret_file(path: &str) -> Result<Zeroizing<String>, ConfigError> {
+fn read_secret_file_bounded(
+    path: &str,
+    remaining_bytes: usize,
+) -> Result<Zeroizing<String>, ConfigError> {
+    read_secret_file_with_hook(path, remaining_bytes, || {})
+}
+
+fn read_secret_file_with_hook(
+    path: &str,
+    remaining_bytes: usize,
+    after_open: impl FnOnce(),
+) -> Result<Zeroizing<String>, ConfigError> {
     if path.trim().is_empty() {
         return Err(ConfigError::Invalid(
             "TSIG secret_file path must not be empty".to_owned(),
         ));
     }
-    validate_secret_file_mode(path)?;
-    let secret = fs::read_to_string(path).map_err(|source| ConfigError::ReadSecretFile {
-        path: path.to_owned(),
-        source,
-    })?;
+    let mut file = open_secret_file(path)?;
+    after_open();
+    let read_limit = MAX_TSIG_SECRET_FILE_BYTES.min(remaining_bytes);
+    let mut secret = Zeroizing::new(String::new());
+    file.by_ref()
+        .take(read_limit.saturating_add(1) as u64)
+        .read_to_string(&mut secret)
+        .map_err(|source| ConfigError::ReadSecretFile {
+            path: path.to_owned(),
+            source,
+        })?;
+    if secret.len() > read_limit {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} exceeds {read_limit} byte remaining aggregate limit (per-file limit {MAX_TSIG_SECRET_FILE_BYTES} bytes)"
+        )));
+    }
     Ok(Zeroizing::new(secret.trim().to_owned()))
 }
 
-#[cfg(unix)]
-fn validate_secret_file_mode(path: &str) -> Result<(), ConfigError> {
-    use std::os::unix::fs::PermissionsExt;
+#[cfg(test)]
+fn static_tsig_secret_len_after_open_for_test(
+    path: &str,
+    after_open: impl FnOnce(),
+) -> Result<usize, ConfigError> {
+    read_secret_file_with_hook(path, MAX_TSIG_SECRET_FILE_BYTES, after_open)
+        .map(|secret| secret.len())
+}
 
-    let metadata = fs::metadata(path).map_err(|source| ConfigError::ReadSecretFile {
+fn decoded_base64_len(encoded: &str) -> usize {
+    let padding = encoded
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .take(2)
+        .count();
+    encoded.len().saturating_add(3) / 4 * 3 - padding
+}
+
+fn read_config_file(
+    path: &Path,
+    after_open: impl FnOnce(),
+) -> Result<Zeroizing<String>, ConfigError> {
+    let path_text = path.display().to_string();
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        // Avoid blocking on a FIFO before the same-handle regular-file check.
+        // Symlinks remain compatible for primary configuration deployment.
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path).map_err(|source| ConfigError::Read {
+        path: path_text.clone(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| ConfigError::Read {
+        path: path_text.clone(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(ConfigError::Invalid(format!(
+            "configuration file {path_text:?} must be a regular file"
+        )));
+    }
+    if metadata.len() > MAX_SERVER_CONFIG_BYTES as u64 {
+        return Err(ConfigError::Invalid(format!(
+            "configuration file {path_text:?} exceeds {MAX_SERVER_CONFIG_BYTES} byte limit"
+        )));
+    }
+    after_open();
+    let mut text = Zeroizing::new(String::new());
+    file.by_ref()
+        .take((MAX_SERVER_CONFIG_BYTES + 1) as u64)
+        .read_to_string(&mut text)
+        .map_err(|source| ConfigError::Read {
+            path: path_text.clone(),
+            source,
+        })?;
+    if text.len() > MAX_SERVER_CONFIG_BYTES {
+        return Err(ConfigError::Invalid(format!(
+            "configuration file {path_text:?} exceeds {MAX_SERVER_CONFIG_BYTES} byte limit"
+        )));
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+fn config_len_after_open_for_test(
+    path: &Path,
+    after_open: impl FnOnce(),
+) -> Result<usize, ConfigError> {
+    read_config_file(path, after_open).map(|text| text.len())
+}
+
+fn open_secret_file(path: &str) -> Result<File, ConfigError> {
+    let file = open_readonly_no_follow(path).map_err(|source| ConfigError::ReadSecretFile {
         path: path.to_owned(),
         source,
     })?;
-    if metadata.permissions().mode() & 0o004 != 0 {
+    validate_secret_file(&file, path)?;
+    Ok(file)
+}
+
+/// Opens a file for a same-handle metadata check and read without following a
+/// final-component symlink on Unix.
+///
+/// Callers must still validate the opened handle's file type and permissions
+/// before reading security-sensitive material.
+pub fn open_readonly_no_follow(path: impl AsRef<Path>) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn validate_secret_file(file: &File, path: &str) -> Result<(), ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = file
+        .metadata()
+        .map_err(|source| ConfigError::ReadSecretFile {
+            path: path.to_owned(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} must be a regular file"
+        )));
+    }
+    if metadata.len() > MAX_TSIG_SECRET_FILE_BYTES as u64 {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} exceeds {MAX_TSIG_SECRET_FILE_BYTES} byte limit"
+        )));
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o004 != 0 {
         return Err(ConfigError::Invalid(format!(
             "TSIG secret_file {path:?} must not be world-readable"
+        )));
+    }
+    if mode & 0o022 != 0 {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} must not be group- or world-writable"
         )));
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn validate_secret_file_mode(_path: &str) -> Result<(), ConfigError> {
+fn validate_secret_file(file: &File, path: &str) -> Result<(), ConfigError> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| ConfigError::ReadSecretFile {
+            path: path.to_owned(),
+            source,
+        })?;
+    if !metadata.is_file() {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} must be a regular file"
+        )));
+    }
+    if metadata.len() > MAX_TSIG_SECRET_FILE_BYTES as u64 {
+        return Err(ConfigError::Invalid(format!(
+            "TSIG secret_file {path:?} exceeds {MAX_TSIG_SECRET_FILE_BYTES} byte limit"
+        )));
+    }
     Ok(())
 }
 
@@ -2872,6 +3646,10 @@ fn default_health_port() -> u16 {
     8080
 }
 
+fn default_health_max_connections() -> usize {
+    DEFAULT_HEALTH_MAX_CONNECTIONS
+}
+
 fn socket_addr_sets_equal(left: &[SocketAddr], right: &[SocketAddr]) -> bool {
     left.len() == right.len() && left.iter().all(|addr| right.contains(addr))
 }
@@ -2914,7 +3692,7 @@ fn socket_addrs_overlap(left: SocketAddr, right: SocketAddr) -> bool {
     }
 }
 
-fn validate_xot_server_name(name: &str) -> Result<(), &'static str> {
+pub(crate) fn validate_xot_server_name(name: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 253 {
         return Err("expected non-empty DNS name of at most 253 octets");
     }
@@ -2984,7 +3762,7 @@ fn default_xdp_rx_drain_passes() -> usize {
 }
 
 fn default_xdp_tx_wakeup_interval() -> usize {
-    8
+    1
 }
 
 fn default_max_cname_chain() -> usize {

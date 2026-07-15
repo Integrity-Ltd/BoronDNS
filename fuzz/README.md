@@ -21,6 +21,20 @@ these targets:
 - `catalog_zone`: RFC 9432 catalog-zone member parsing plus the uDNS transfer
   extension records for member primaries, TSIG key names, XoT/TCP transfer
   hints, and NOTIFY source overrides.
+- `zone_store_state`: stateful sequences of publication, hiding, showing,
+  expiry, replacement, and removal. It checks query visibility, readiness
+  aggregates, exact control metadata, and the cached active count after every
+  transition.
+- `zone_store_concurrent`: four-worker adversarial publication, visibility,
+  expiry, and removal sequences against shared zones. It checks the cached
+  active count and published/control views after all concurrent mutations join.
+- `server_lifecycle`: bounded state-machine sequences through the real server
+  refresh registry, transfer-plan generations, catalog-style add/remove and
+  reassignment, catalog/scheduled/control-plane/NOTIFY dequeue validation,
+  validation-to-spawn remove/readd boundaries, request coalescing/overflow,
+  attempt success/failure/drop, and
+  expiry/scheduler transitions. It checks that removed zones cannot be
+  recreated by stale work and that queue/plan/store/registry invariants agree.
 
 Run a compile check with a nightly cargo on `PATH`, without executing a long
 fuzzing campaign:
@@ -32,12 +46,22 @@ cargo fuzz check tsig_message
 cargo fuzz check notify_edns_datagram
 cargo fuzz check zone_image_datagram
 cargo fuzz check catalog_zone
+cargo fuzz check zone_store_state
+cargo fuzz check zone_store_concurrent
+cargo fuzz check server_lifecycle
 ```
+
+The repository gate runs `scripts/check-fuzz-targets.py` before this compile
+check. It requires every `fuzz_targets/*.rs` source to have one matching Cargo
+binary and one matching default entry in the two-host long campaign, preventing
+new targets from silently falling out of continuous or soak coverage.
 
 Or, without a nightly toolchain or `cargo-fuzz` installed:
 
 ```sh
 cargo check --manifest-path fuzz/Cargo.toml
+cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
 ```
 
 For retained local evidence, use the short campaign runner from the repository
@@ -49,6 +73,26 @@ tool-version/config records under `target/fuzz-evidence/<timestamp>/`:
 scripts/fuzz-campaign.sh
 ```
 
+When `CARGO_TARGET_DIR` is unset, the runner creates a private mode-0700 build
+tree beneath `${TMPDIR:-/var/tmp}/oxidedns-fuzz-builds-<uid>/`. It captures the
+parent and tree device/inode identities and removes only that exact automatic
+tree on every normal or failed exit, after retaining the build-artifact hashes.
+It does not sweep older `/var/tmp` roots. An explicitly supplied
+`CARGO_TARGET_DIR` remains caller-owned and is never removed by the runner.
+
+The runner applies an outer wall-clock timeout as well as libFuzzer's
+`-max_total_time`, so a target that blocks inside one input cannot strand the
+campaign indefinitely. The outer limit is the requested duration plus a
+default 1800-second build/start grace; use
+`OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS` and
+`OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` to tighten it for prebuilt smoke
+tests.
+
+When Cargo is not explicitly overridden, the runner selects the installed
+`nightly` rustup toolchain because cargo-fuzz sanitizer instrumentation requires
+nightly compiler options. `--toolchain` and `CARGO_TOOLCHAIN` can select a
+different compatible nightly toolchain explicitly.
+
 Select targets and duration explicitly when needed:
 
 ```sh
@@ -56,9 +100,16 @@ scripts/fuzz-campaign.sh --duration 60 dns_datagram tsig_message
 scripts/fuzz-campaign.sh --target transfer_stream --target notify_edns_datagram
 scripts/fuzz-campaign.sh --target zone_image_datagram
 scripts/fuzz-campaign.sh --target catalog_zone
+scripts/fuzz-campaign.sh --target zone_store_state
+scripts/fuzz-campaign.sh --target zone_store_concurrent
+scripts/fuzz-campaign.sh --target server_lifecycle
 scripts/fuzz-campaign.sh --toolchain nightly --target zone_image_datagram
 scripts/fuzz-campaign.sh --toolchain nightly --sanitizer address --target dns_datagram
 ```
+
+Each explicit target may appear only once. Duplicate target arguments are
+rejected before Cargo target or evidence directories are created, so summary
+and metadata counts always describe a unique exact target set.
 
 Check the planned commands without starting a fuzzing run:
 
@@ -99,4 +150,9 @@ synthesized DNAME and wildcard answers, referral/glue and additional section
 composition, DNSSEC proof/signature augmentation, and malformed known-name
 RDATA that should safely fall back to opaque copying. The catalog target
 constructs catalog `ZoneSnapshot` values with shaped and malformed PTR/TXT/A/AAAA
-extension RRsets and calls the public catalog parser.
+extension RRsets and calls the public catalog parser. The ZoneStore state target
+drives bounded adversarial lifecycle sequences and asserts visibility and
+aggregate-state invariants after every transition.
+The concurrent ZoneStore target runs the same lifecycle boundary through four
+shared worker threads and validates that cached readiness state converges to
+the authoritative published metadata.

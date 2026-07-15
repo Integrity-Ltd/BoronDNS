@@ -22,10 +22,18 @@ fi
 
 mkdir -p "$logs_dir"
 
+git_status_output=""
+git_status_ok=1
+if ! git_status_output="$(git -C "$repo_root" status --porcelain)"; then
+    git_status_ok=0
+fi
+
 {
     printf 'captured_at_utc=%s\n' "$timestamp"
     printf 'source_commit=%s\n' "$(git -C "$repo_root" rev-parse HEAD)"
-    if [[ -z "$(git -C "$repo_root" status --porcelain)" ]]; then
+    if [[ "$git_status_ok" != 1 ]]; then
+        printf 'dirty_checkout=unknown\n'
+    elif [[ -z "$git_status_output" ]]; then
         printf 'dirty_checkout=no\n'
     else
         printf 'dirty_checkout=yes\n'

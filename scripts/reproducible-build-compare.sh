@@ -5,6 +5,54 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_dir="${OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR:-$repo_root/target/evidence/reproducible-build-$timestamp}"
 target_triple="${OXIDEDNS_REPRODUCIBLE_BUILD_TARGET:-x86_64-unknown-linux-musl}"
+allow_dirty_non_release="${OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE:-0}"
+[[ "$allow_dirty_non_release" == 0 || "$allow_dirty_non_release" == 1 ]] || {
+    printf 'OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE must be 0 or 1\n' >&2
+    exit 1
+}
+
+source_commit="$(git -C "$repo_root" rev-parse HEAD)" || {
+    printf 'failed to determine source commit\n' >&2
+    exit 1
+}
+dirty_status=""
+if ! dirty_status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all --ignored=no)"; then
+    printf 'failed to determine source-tree cleanliness\n' >&2
+    exit 1
+fi
+
+verify_source_identity() {
+    local boundary="$1"
+    local actual_commit actual_status
+    actual_commit="$(git -C "$repo_root" rev-parse HEAD)" || {
+        printf 'failed to determine source commit at %s\n' "$boundary" >&2
+        return 1
+    }
+    actual_status="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all --ignored=no)" || {
+        printf 'failed to determine source status at %s\n' "$boundary" >&2
+        return 1
+    }
+    if [[ "$actual_commit" != "$source_commit" || "$actual_status" != "$dirty_status" ]]; then
+        printf 'source identity changed during reproducible-build comparison at %s\n' "$boundary" >&2
+        printf 'expected_commit=%s actual_commit=%s\n' "$source_commit" "$actual_commit" >&2
+        return 1
+    fi
+}
+
+verify_source_identity "initial preflight"
+dirty="no"
+release_eligible="true"
+if [[ -n "$dirty_status" ]]; then
+    dirty="yes"
+    release_eligible="false"
+    if [[ "$allow_dirty_non_release" != 1 ]]; then
+        printf 'refusing reproducible-build comparison from dirty or untracked source:\n%s\n' \
+            "$dirty_status" >&2
+        printf 'use OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1 only for explicitly non-release diagnostics\n' >&2
+        exit 1
+    fi
+    printf 'warning: dirty-source override enabled; evidence will be non-release and non-passing\n' >&2
+fi
 
 missing=()
 for tool in rustc rustup sha256sum stat file; do
@@ -27,29 +75,34 @@ if [[ -z "$rustc_bin" || ! -x "$rustc_bin" ]]; then
     printf 'missing usable rustc binary; set OXIDEDNS_REPRODUCIBLE_BUILD_RUSTC\n' >&2
     exit 1
 fi
+cargo_bin="$(realpath -e "$cargo_bin")"
+rustc_bin="$(realpath -e "$rustc_bin")"
 toolchain_bin="$(dirname "$rustc_bin")"
 
 if ! rustup target list --installed | grep -Fx "$target_triple" >/dev/null 2>&1; then
     rustup target add "$target_triple"
 fi
 
-commit="$(git -C "$repo_root" rev-parse HEAD)"
-short_commit="$(git -C "$repo_root" rev-parse --short=8 HEAD)"
+commit="$source_commit"
+short_commit="${commit:0:12}"
 commit_epoch="$(git -C "$repo_root" show -s --format=%ct HEAD)"
 commit_timestamp="$(date -u -d "@$commit_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
 rust_version="$("$rustc_bin" --version)"
 cargo_version="$("$cargo_bin" --version)"
 host_triple="$("$rustc_bin" -vV | awk -F': ' '/^host:/ { print $2 }')"
-dirty_status="$(git -C "$repo_root" status --short)"
-dirty="no"
-if [[ -n "$dirty_status" ]]; then
-    dirty="yes"
-fi
-
 build_a="$evidence_dir/build-a"
 build_b="$evidence_dir/build-b"
-mkdir -p "$evidence_dir" "$evidence_dir/artifacts/a" "$evidence_dir/artifacts/b"
-rm -rf "$build_a" "$build_b"
+evidence_parent="$(dirname "$evidence_dir")"
+mkdir -p "$evidence_parent"
+if ! mkdir "$evidence_dir"; then
+    printf 'refusing to reuse an existing reproducible-build evidence destination: %s\n' "$evidence_dir" >&2
+    printf 'choose a fresh OXIDEDNS_REPRODUCIBLE_BUILD_EVIDENCE_DIR so stale success cannot survive a failed rerun\n' >&2
+    exit 1
+fi
+mkdir "$evidence_dir/artifacts" "$evidence_dir/artifacts/a" "$evidence_dir/artifacts/b"
+hermetic_home="$evidence_dir/hermetic-home"
+hermetic_cargo_home="$evidence_dir/hermetic-cargo-home"
+mkdir -m 0700 "$hermetic_home" "$hermetic_cargo_home"
 
 target_dir_arg() {
     local path="$1"
@@ -86,6 +139,7 @@ run_build() {
     target_dir_for_cargo="$(target_dir_arg "$target_dir")"
     local log="$evidence_dir/build-$label.log"
 
+    verify_source_identity "before build $label"
     {
         printf 'builder=%s\n' "$label"
         printf 'target_dir=%s\n' "$target_dir"
@@ -96,16 +150,24 @@ run_build() {
 
     (
         cd "$repo_root"
-        export CARGO_INCREMENTAL=0
-        export PATH="$toolchain_bin:$PATH"
-        export RUSTC="$rustc_bin"
-        export SOURCE_DATE_EPOCH="$commit_epoch"
-        export OXIDEDNS_BUILD_COMMIT="$short_commit"
-        export OXIDEDNS_BUILD_RUST_VERSION="$rust_version"
-        export OXIDEDNS_BUILD_TIMESTAMP="$commit_timestamp"
-        "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" --target "$target_triple" -p oxidedns-cli --features af-xdp
-        "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" --target "$target_triple" -p oxide-gun --features xdp
+        env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
+            PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+            SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
+            OXIDEDNS_BUILD_COMMIT="$short_commit" \
+            OXIDEDNS_BUILD_RUST_VERSION="$rust_version" \
+            OXIDEDNS_BUILD_TIMESTAMP="$commit_timestamp" \
+            "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
+            --target "$target_triple" -p oxidedns-cli --features af-xdp
+        env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
+            PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+            SOURCE_DATE_EPOCH="$commit_epoch" CARGO_INCREMENTAL=0 \
+            OXIDEDNS_BUILD_COMMIT="$short_commit" \
+            OXIDEDNS_BUILD_RUST_VERSION="$rust_version" \
+            OXIDEDNS_BUILD_TIMESTAMP="$commit_timestamp" \
+            "$cargo_bin" build --locked --release --target-dir "$target_dir_for_cargo" \
+            --target "$target_triple" -p oxide-gun --features xdp
     ) >>"$log" 2>&1
+    verify_source_identity "after build $label"
 }
 
 copy_artifacts() {
@@ -163,7 +225,7 @@ write_manifest_and_compare() {
     done
 
     printf 'artifact\ttarget\tprofile\tbuilder_a_sha256\tbuilder_b_sha256\tbuilder_a_size_bytes\tbuilder_b_size_bytes\tmatch\tevidence_path_a\tevidence_path_b\n' >"$comparison"
-    local all_match="true"
+    local artifact_match="true"
     for artifact in oxidedns oxide-gun; do
         local path_a="$evidence_dir/artifacts/a/$artifact"
         local path_b="$evidence_dir/artifacts/b/$artifact"
@@ -176,7 +238,7 @@ write_manifest_and_compare() {
         if [[ "$sha_a" == "$sha_b" && "$size_a" == "$size_b" ]]; then
             match="true"
         else
-            all_match="false"
+            artifact_match="false"
         fi
         printf '%s\t%s\trelease\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$artifact" \
@@ -191,8 +253,13 @@ write_manifest_and_compare() {
             >>"$comparison"
     done
 
+    local reproducible_status="$artifact_match"
+    [[ "$release_eligible" == true ]] || reproducible_status=false
     cat >"$evidence_dir/reproducible-build-summary.env" <<EOF
-reproducible_build_status=$all_match
+reproducible_build_status=$reproducible_status
+artifact_match=$artifact_match
+release_eligible=$release_eligible
+dirty_source_override=$allow_dirty_non_release
 artifact_count=2
 matched_artifact_count=$(awk -F '\t' 'NR > 1 && $8 == "true" { count++ } END { print count + 0 }' "$comparison")
 target_triple=$target_triple
@@ -201,7 +268,7 @@ source_date_epoch=$commit_epoch
 evidence_dir=$evidence_dir
 EOF
 
-    if [[ "$all_match" != "true" ]]; then
+    if [[ "$artifact_match" != "true" ]]; then
         return 1
     fi
 }
@@ -209,7 +276,7 @@ EOF
 write_traceability() {
     cat >"$evidence_dir/requirements-traceability.tsv" <<'EOF'
 requirement_id	evidence_state	artifact	note
-ODS-NFR-MAINT-005	retained-local-comparison	artifact-manifest.tsv; comparison.tsv; reproducible-build-summary.env	Two clean release builds in separate target directories produced bit-identical static musl oxidedns and oxide-gun binaries from the same commit, lockfile, toolchain, target, and fixed build metadata.
+ODS-NFR-MAINT-005	retained-local-comparison	artifact-manifest.tsv; comparison.tsv; reproducible-build-summary.env	Two builds in separate target directories are compared; reproducible-build-summary.env is authoritative for artifact match, source cleanliness, and release eligibility.
 ODS-NFR-OBS-006	retained-local-comparison	reproducible-build-env.env	The build fixed OXIDEDNS_BUILD_COMMIT, OXIDEDNS_BUILD_RUST_VERSION, OXIDEDNS_BUILD_TIMESTAMP, and SOURCE_DATE_EPOCH so embedded build-info labels are deterministic.
 ODS-INV-009	retained-local-comparison	cargo-metadata.locked.json; reproducible-build-env.env	The comparison used locked Cargo metadata and static source-tree inputs.
 ODS-VER-010	retained-local-comparison	README.md; reproducible-build-summary.env	The retained evidence directory records command, environment, digests, and comparison result for release-note publication.
@@ -237,6 +304,8 @@ Target: \`$target_triple\`
 Commit: \`$commit\`
 Rust: \`$rust_version\`
 Cargo: \`$cargo_bin\`
+Dirty source: \`$dirty\`
+Release eligible: \`$release_eligible\`
 
 The comparison fixes:
 
@@ -260,16 +329,39 @@ See:
 This local comparison does not sign artifacts and does not claim Docker image
 archive reproducibility.
 EOF
+    if [[ "$release_eligible" != true ]]; then
+        cat >>"$evidence_dir/README.md" <<'EOF'
+
+## Non-release dirty-source diagnostic
+
+This run used the explicit dirty-source override. It is intentionally marked
+`reproducible_build_status=false` and `release_eligible=false` even if the two
+diagnostic artifact digests match. It must not be used as release provenance.
+EOF
+    fi
 }
 
+verify_source_identity "before evidence initialization"
 write_env
-"$cargo_bin" metadata --locked --format-version 1 >"$evidence_dir/cargo-metadata.locked.json"
+verify_source_identity "before locked metadata capture"
+env -i HOME="$hermetic_home" CARGO_HOME="$hermetic_cargo_home" \
+    PATH="$toolchain_bin:/usr/bin:/bin" RUSTC="$rustc_bin" \
+    "$cargo_bin" metadata --locked --format-version 1 \
+    >"$evidence_dir/cargo-metadata.locked.json"
+verify_source_identity "after locked metadata capture"
 run_build a "$build_a"
 run_build b "$build_b"
+verify_source_identity "before artifact capture"
 copy_artifacts a "$build_a"
 copy_artifacts b "$build_b"
+verify_source_identity "after artifact capture"
 write_manifest_and_compare
 write_traceability
 write_readme
+verify_source_identity "terminal publication"
 
 printf 'reproducible_build_evidence_dir=%s\n' "$evidence_dir"
+if [[ "$release_eligible" != true ]]; then
+    printf 'dirty-source diagnostic evidence is never valid release provenance: %s\n' "$evidence_dir" >&2
+    exit 2
+fi

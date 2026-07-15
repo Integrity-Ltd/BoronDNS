@@ -1,3 +1,5 @@
+# The primary TOML file must be a regular file no larger than 4 MiB. OxideDNS
+# validates and reads one open handle so concurrent growth cannot bypass it.
 [server]
 # Legacy listen_udp/listen_tcp keys are still accepted. Prefer [interfaces].dns
 # for new deployments; if interfaces.dns is omitted, the SRS defaults are
@@ -54,10 +56,15 @@ default_port = 8080
 metrics_rate_limit_per_minute = 60
 # Idle seconds before a metrics rate-limit bucket can be evicted. Default: 300.
 metrics_rate_limit_idle_seconds = 300
+# Maximum accepted health/observability HTTP connections across all management
+# listeners. Excess accepted connections are closed immediately; idle listeners
+# do not reserve capacity. Default: 128.
+max_connections = 128
 
 [metrics]
 # Prometheus query-latency histogram buckets in seconds. Default:
 # [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
+# At most 64 strictly increasing boundaries may be configured.
 latency_histogram_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.1]
 # "full" keeps detailed query, rcode, latency, and cookie-prefix metrics.
 # "reduced" keeps coarse hot-path counters while skipping mutex-backed detail.
@@ -139,15 +146,19 @@ fudge_seconds = 300
 require_tsig = false
 
 [limits]
+# Runtime duration settings (`*_secs` and `*_seconds`) are capped at one year
+# (31536000 seconds) across limits, RRL, health/observability, cookie rotation,
+# and control-plane polling/timeouts so every monotonic deadline is representable.
 # EDNS UDP payload ceiling. Default: 1232.
 max_udp_payload = 1232
 # UDP datagrams to drain per standard socket readiness wakeup, or per Linux
-# recvmmsg/sendmmsg batch when udp_runtime = "dedicated". Default: 1,
-# preserving one-datagram-at-a-time behavior; raise only with retained benchmark
-# evidence for the target host.
+# recvmmsg/sendmmsg batch when udp_runtime = "dedicated". Valid range: 1..=1024.
+# Default: 1, preserving one-datagram-at-a-time behavior; raise only with
+# retained benchmark evidence for the target host.
 udp_batch_size = 1
 # Standard UDP SO_REUSEPORT worker sockets per configured UDP listener.
-# Default: 1. Raise only with retained local or physical benchmark evidence.
+# Valid range: 1..=64. Default: 1. Raise only with retained local or physical
+# benchmark evidence.
 udp_reuseport_workers = 1
 # Standard UDP runtime. "tokio" preserves the stable async socket path;
 # "dedicated" uses one blocking OS thread per UDP worker for data-plane
@@ -172,7 +183,8 @@ tcp_connect_timeout_secs = 10
 max_tcp_connections = 1024
 # Optional per-source-IP TCP connection cap. Default: unset, no per-source cap.
 #max_tcp_connections_per_source = 128
-# Per-connection DNS-over-TCP in-flight query limit. Default: 64.
+# Per-connection DNS-over-TCP in-flight query limit. Default: 64. Values above
+# the platform's Tokio bounded-primitive capacity are rejected at startup.
 max_tcp_inflight_queries_per_connection = 64
 # Seconds a connection may remain at the in-flight limit before FIN close.
 # Omit to use tcp_read_timeout_secs.
@@ -186,7 +198,9 @@ axfr_timeout_secs = 300
 ixfr_timeout_secs = 60
 # Cooldown after IXFR is found unsupported. Default: 3600 seconds.
 ixfr_disabled_cooldown_secs = 3600
-# AXFR/IXFR cumulative received payload cap. Default: 4 GiB.
+# Per-session AXFR/IXFR cumulative received payload cap. The runtime's aggregate
+# guard is derived as this value times max_concurrent_transfers, so concurrent
+# sessions do not compete for one session's allowance. Default: 4 GiB.
 max_transfer_ingest_bytes = 4294967296
 # Per-zone accepted NOTIFY deduplication window. Default: 1 second.
 notify_dedup_secs = 1
@@ -205,18 +219,43 @@ zsm_loading_warning_threshold_secs = 3600
 
 #[xdp]
 # Experimental AF_XDP backend controls. These are used only when
-# limits.udp_backend = "af_xdp".
+# limits.udp_backend = "af_xdp". Every UDP listener must use a concrete local
+# IP address in this mode; wildcard 0.0.0.0/[::] binds are rejected because XDP
+# runs before the kernel's local-destination routing decision.
 #interface = "eth0"
 #redirect_object = "/path/to/oxidedns-xdp-redirect.bpf.o"
 #queue_id = 0
-# Optional sparse AF_XDP queue list. Leave unset for the contiguous queue range
-# starting at queue_id. Do not set queue_id and queue_ids together.
+# Optional sparse AF_XDP queue list. Queue IDs must be in 0..=63 and the list
+# may contain at most 64 unique entries, matching the shipped redirect map.
+# Leave unset for the contiguous queue range starting at queue_id. Do not set
+# queue_id and queue_ids together.
 #queue_ids = [0, 1, 2, 3]
+# Per-queue packet memory and rings. Defaults are 4096 UMEM frames,
+# 1024 RX/TX entries, 2048 fill entries, 1024 completion entries, and a batch
+# of 64. Validation caps UMEM frames at 262144, every ring at 65536, and the
+# effective batch at 1024. The conservative aggregate estimate across all
+# effective queues must remain at or below 32 GiB.
+#umem_frame_count = 4096
+#rx_ring_size = 1024
+#tx_ring_size = 1024
+#fill_ring_size = 2048
+#completion_ring_size = 1024
+#batch_size = 64
+# Bound consecutive RX dequeues before publishing a partial batch or yielding
+# reject-only traffic. Default: 1.
+#rx_drain_passes = 1
+# The current xdp crate enables XDP_USE_NEED_WAKEUP but does not expose the
+# kernel ring needs-wakeup flag. OxideDNS therefore requires 1 and kicks every
+# non-empty TX enqueue so an isolated response cannot remain stranded.
+#tx_wakeup_interval = 1
 
 #[control_plane.telemetry]
 # Optional uDNS node telemetry callback. When configured, OxideDNS reports
 # transfer success/current/failure state to uDNS using the node-scoped API token.
 #endpoint_url = "https://udns.example.internal/api/v1"
+# Development tests may explicitly set allow_insecure_loopback_http = true,
+# but only IP-literal loopback HTTP endpoints are accepted in that mode.
+#allow_insecure_loopback_http = false
 #node_id = "00000000-0000-0000-0000-000000000000"
 #bearer_token = "udns-node-token"
 #timeout_secs = 5
@@ -226,6 +265,9 @@ zsm_loading_warning_threshold_secs = 3600
 # static-config based while allowing uDNS to drive durable node commands.
 #enabled = true
 #endpoint_url = "https://udns.example.internal/api/v1"
+# Development tests may explicitly set allow_insecure_loopback_http = true,
+# but only IP-literal loopback HTTP endpoints are accepted in that mode.
+#allow_insecure_loopback_http = false
 #node_id = "00000000-0000-0000-0000-000000000000"
 #bearer_token = "udns-node-token"
 #poll_interval_secs = 5
@@ -233,12 +275,21 @@ zsm_loading_warning_threshold_secs = 3600
 #timeout_secs = 5
 
 #[secret_store]
-# Optional reloadable plaintext filesystem secret snapshot. OxideDNS reads
+# Optional Unix-only reloadable plaintext filesystem secret snapshot. OxideDNS reads
 # <path>/secrets.toml at startup and when a control-plane rotate_tsig or
 # republish_feed operation requests a reload. The snapshot may define
 # [[tsig_keys]] and [[xot_profiles]] entries; catalog data and zone config
-# reference those names only. On Unix, secrets.toml and TSIG secret_file inputs
-# must not be world-readable.
+# reference those names only. Paths in secrets.toml must be normalized relative
+# paths. OxideDNS captures the root directory once per reload, so an atomic
+# `current` symlink switch selects one complete immutable generation. Files must
+# be regular, group/world write bits are rejected, final-component and nested
+# symlinks are rejected, and secret-bearing files must not be world-readable.
+# Non-Unix builds reject [secret_store] because the required descriptor-relative,
+# no-follow traversal guarantees are unavailable.
+# The manifest is limited to 1 MiB and each referenced key/certificate file to
+# 4 MiB. A merged snapshot accepts at most 1024 TSIG keys, 4 MiB of encoded
+# TSIG material, and 3 MiB decoded. Repeated file references count each use.
+# Both metadata and the actual bounded reads enforce these limits.
 #path = "/etc/oxidedns/secrets.d/current"
 
 [[zones]]
@@ -269,6 +320,7 @@ notify_sources = ["192.0.2.53"]
 #xot_profile = "default-xot"
 #client_cert = "/etc/oxidedns/xot-client.pem"
 # Use exactly one of client_key or client_key_pem when client_cert is set.
+# Each direct certificate, trust-anchor, key file, or inline key is capped at 4 MiB.
 #client_key = "/etc/oxidedns/xot-client.key"
 #client_key_pem = "<inline PEM private key>"
 
@@ -313,8 +365,10 @@ notify_sources = ["192.0.2.53"]
 #[[tsig_keys]]
 #name = "transfer-key."
 #algorithm = "hmac-sha256" # also supports "hmac-sha1", "hmac-sha384", "hmac-sha512"
-# Use exactly one of secret or secret_file. Secret files must be readable by the
-# server process and must not be world-readable.
+# Use exactly one of secret or secret_file. Secret files must be regular files
+# readable by the server process, must not be world-readable, and must not be
+# group- or world-writable. On Unix, a final-component symlink is rejected.
+# Legacy static secret_file content is capped at 64 KiB.
 #secret = "c2VjcmV0LWtleQ=="
 #secret_file = "/etc/oxidedns/tsig-transfer-key.secret"
 

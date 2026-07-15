@@ -202,6 +202,10 @@
         assert!(!dumped.contains("ffeeddccbbaa99887766554433221100"));
         assert!(dumped.contains("server_secret = \"<redacted>\""));
         assert!(dumped.contains("previous_server_secret = \"<redacted>\""));
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("00112233445566778899aabbccddeeff"));
+        assert!(!debug.contains("ffeeddccbbaa99887766554433221100"));
+        assert!(debug.contains("<redacted>"));
     }
 
     #[test]
@@ -234,6 +238,7 @@
                 [health]
                 metrics_rate_limit_per_minute = 120
                 metrics_rate_limit_idle_seconds = 45
+                max_connections = 3
 
                 [[zones]]
                 name = "example.test."
@@ -244,6 +249,7 @@
 
         assert_eq!(config.health.metrics_rate_limit_per_minute, 120);
         assert_eq!(config.health.metrics_rate_limit_idle_seconds, 45);
+        assert_eq!(config.health.max_connections, 3);
     }
 
     #[test]
@@ -348,6 +354,18 @@
             ("path_prefix = \"/obs/\"", "must not end with '/'"),
             ("path_prefix = \"/../obs\"", "must not contain"),
             (
+                "path_prefix = \"/obs/{broken\"",
+                "without route parameters or wildcards",
+            ),
+            (
+                "path_prefix = \"/obs/{*rest}\"",
+                "without route parameters or wildcards",
+            ),
+            (
+                "path_prefix = \"/:legacy\"",
+                "without route parameters or wildcards",
+            ),
+            (
                 "path_prefix = \"/metrics\"",
                 "conflicts with a built-in management route",
             ),
@@ -415,6 +433,40 @@
     }
 
     #[test]
+    fn latency_histogram_bucket_cardinality_has_exact_defensive_ceiling() {
+        let mut config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("valid base config");
+        config.metrics.latency_histogram_buckets = (1..=MAX_LATENCY_HISTOGRAM_BUCKETS)
+            .map(|value| LatencyHistogramBucketSeconds(value as f64))
+            .collect();
+        config
+            .validate()
+            .expect("exact histogram bucket cardinality limit is accepted");
+
+        config
+            .metrics
+            .latency_histogram_buckets
+            .push(LatencyHistogramBucketSeconds(
+                (MAX_LATENCY_HISTOGRAM_BUCKETS + 1) as f64,
+            ));
+        let error = config
+            .validate()
+            .expect_err("hostile programmatic bucket cardinality is rejected");
+        assert!(error
+            .to_string()
+            .contains(&MAX_LATENCY_HISTOGRAM_BUCKETS.to_string()));
+    }
+
+    #[test]
     fn rejects_zero_health_rate_limit_configuration() {
         let error = ServerConfig::from_toml_str(
             r#"
@@ -460,6 +512,52 @@
                 .to_string()
                 .contains("health.metrics_rate_limit_idle_seconds")
         );
+    }
+
+    #[test]
+    fn rejects_invalid_health_connection_limits() {
+        for value in [0usize, usize::MAX] {
+            let error = ServerConfig::from_toml_str(&format!(
+                r#"
+                    [server]
+                    listen_udp = ["127.0.0.1:5300"]
+
+                    [health]
+                    max_connections = {value}
+
+                    [[zones]]
+                    name = "example.test."
+                    primaries = ["192.0.2.53:53"]
+                "#
+            ))
+            .expect_err("invalid health connection limit must fail");
+            assert!(error.to_string().contains("health.max_connections"));
+        }
+    }
+
+    #[test]
+    fn accepts_health_connection_limit_below_listener_count() {
+        let config = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = []
+                listen_tcp = []
+
+                [interfaces]
+                dns = ["127.0.0.1:5300"]
+                mgmt = ["127.0.0.1:0", "[::1]:0"]
+
+                [health]
+                max_connections = 1
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("idle health listeners do not reserve admission slots");
+        assert_eq!(config.health_listeners().len(), 2);
+        assert_eq!(config.health.max_connections, 1);
     }
 
     #[test]

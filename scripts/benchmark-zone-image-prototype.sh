@@ -12,10 +12,15 @@ export OXIDEDNS_ZONE_IMAGE_BENCH_BUILD_PROFILE="${OXIDEDNS_ZONE_IMAGE_BENCH_BUIL
 export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_REVISION="${OXIDEDNS_ZONE_IMAGE_BENCH_GIT_REVISION:-$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')}"
 if [[ -n "${OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY:-}" ]]; then
     export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY
-elif [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-    export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="true"
 else
-    export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="false"
+    git_status_output=""
+    if ! git_status_output="$(git status --porcelain 2>/dev/null)"; then
+        export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="unknown"
+    elif [[ -n "$git_status_output" ]]; then
+        export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="true"
+    else
+        export OXIDEDNS_ZONE_IMAGE_BENCH_GIT_DIRTY="false"
+    fi
 fi
 export OXIDEDNS_ZONE_IMAGE_BENCH_KERNEL="${OXIDEDNS_ZONE_IMAGE_BENCH_KERNEL:-$(uname -srmo)}"
 export OXIDEDNS_ZONE_IMAGE_BENCH_RUSTC="${OXIDEDNS_ZONE_IMAGE_BENCH_RUSTC:-$(rustc -V)}"

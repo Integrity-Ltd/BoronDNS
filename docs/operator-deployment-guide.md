@@ -69,7 +69,7 @@ Operational state boundaries:
 
 Install prerequisites for a source build:
 
-- Rust stable toolchain (per `rust-toolchain.toml`); MSRV `1.95` declared in
+- Rust `1.96.1` toolchain (pinned by `rust-toolchain.toml`); MSRV `1.95` declared in
   `Cargo.toml`.
 - Cargo.
 - Optional validation tools used by interop scripts: `dig`, `curl`, `python3`,
@@ -104,6 +104,38 @@ binaries and Docker image. The Docker image is attached as
 `oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz`; this phase
 does not publish a registry image, so operators should load the release asset
 explicitly rather than using `docker pull`:
+
+Before extracting or installing the release archive, verify its Sigstore
+bundle against the exact GitHub Actions issuer, repository workflow, and tag:
+
+```sh
+tag=v0.2.0
+target_triple=x86_64-unknown-linux-musl
+asset="oxidedns-${tag#v}-$target_triple.tar.xz"
+install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"
+sudo chmod 0700 "$install_root"
+sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
+sudo cosign verify-blob \
+  --bundle "$install_root/$asset.sigstore.json" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  "$install_root/$asset"
+sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
+sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"
+```
+
+Installer `--bin-dir` and `--config` overrides must be normalized absolute
+paths using only ASCII letters, digits, `.`, `_`, `/`, `@`, `:`, `+`, and `-`.
+The installer rejects relative paths, traversal, whitespace, quoting characters,
+shell metacharacters, and control characters during preflight, before acquiring
+its transaction lock or changing accounts, directories, files, or services.
+Existing binary/configuration directory components must be real directories,
+not symlinks. Mutating actions additionally require a root-owned directory
+chain, reject unsafe writable namespace components, and revalidate the final
+directory identities between staging and atomic promotion.
+
+Treat any verification failure as a release-rejection condition; do not
+extract the archive or invoke its installer.
 
 ```sh
 sha256sum -c oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz.sha256
@@ -356,17 +388,35 @@ XoT-protected, and DNSSEC-served deployments. The major sections are:
   TSIG/XoT. OxideDNS rejects unsigned member AXFR to non-private primary
   addresses. Catalog transfers themselves still require TSIG.
 - `[[tsig_keys]]`: startup TSIG keys referenced by zones. Each key uses exactly
-  one of inline `secret` or filesystem `secret_file`.
-- `[secret_store]`: optional reloadable plaintext filesystem secret snapshot.
+  one of inline `secret` or filesystem `secret_file`; a static `secret_file` is
+  capped at 64 KiB with same-handle metadata and bounded-read enforcement. The
+  primary TOML file is a regular file capped at 4 MiB and is read through the
+  same handle used for validation, including a post-validation growth fence.
+- `[secret_store]`: optional Unix-only reloadable plaintext filesystem secret snapshot.
   The configured `path` points at a directory containing `secrets.toml`.
   Snapshot entries can provide TSIG keys and named XoT profiles so catalog
   members can refer to key/profile names without raw secrets in DNS data.
-  On Unix, the manifest and TSIG `secret_file` inputs must not be
-  world-readable. A failed reload keeps the previous validated snapshot.
+  Paths in `secrets.toml` must be normalized paths relative to that root. Each
+  reload captures the root directory once; operators can therefore stage an
+  immutable generation directory and atomically switch a `current` symlink
+  without mixing files from the old and new generations. The manifest and
+  referenced files must be regular files, nested/final symlinks are rejected,
+  and group/world write bits are rejected. Secret-bearing files must also not
+  be world-readable. Metadata is validated on the same open handle that is
+  read. The manifest is limited to 1 MiB and each referenced key/certificate
+  file to 4 MiB; the read itself is bounded so concurrent file growth cannot
+  bypass the metadata check. A failed or mixed reload keeps the previous
+  validated snapshot.
+  Non-Unix builds reject this backend because they cannot provide the required
+  descriptor-relative, no-follow traversal guarantee.
 - `[control_plane.telemetry]`: optional outbound callback to an external
   control plane for transfer success, skipped/current, and failure reports.
+  Endpoints must use HTTPS. Cleartext HTTP is accepted only for an IP-literal
+  loopback address when `allow_insecure_loopback_http = true` is explicitly set
+  for a local development harness.
 - `[control_plane.operations]`: optional outbound polling of external durable
-  node operations using the node-scoped API token.
+  node operations using the node-scoped API token, with the same HTTPS/default
+  and explicit loopback-only development exception.
 
 Set `[server].nsid` to a short opaque identifier when operators need RFC 5001
 NSID diagnostics for anycast or load-balanced deployments. The default is empty,
@@ -377,6 +427,10 @@ which suppresses NSID responses even when clients request the option.
 When `[control_plane.operations] enabled = true`, OxideDNS polls
 `/api/v1/secondary-nodes/{node_id}/operations` with a bounded lease and
 completes each accepted operation through the matching completion endpoint.
+Each poll response is capped at 256 KiB and 20 operation items. A malformed
+item with an identifiable operation ID is completed as failed without
+discarding valid siblings in the same batch; an oversized response or batch is
+rejected as a whole.
 The mapping is intentionally small:
 
 - `retry`: enqueue an immediate refresh for the named configured zone.
@@ -410,8 +464,11 @@ client_cert = "xot/client.pem"
 client_key = "xot/client.key"
 ```
 
-Paths inside `secrets.toml` are resolved relative to the configured
-`[secret_store].path`. Keep the directory ownership and permissions under the
+Paths inside `secrets.toml` must be normalized relative paths. They are opened
+under the single captured `[secret_store].path` generation; absolute paths and
+path traversal are rejected. Stage complete read-only generation directories,
+then atomically repoint the configured `current` symlink. Do not modify files
+inside an active generation. Keep directory ownership and permissions under the
 same operational controls as static TSIG and TLS files.
 
 See [Catalog Zone support based on RFC 9432](catalog-zone-rfc9432.md)
@@ -464,9 +521,11 @@ Production configuration notes:
 - Keep `[limits].udp_batch_size = 1` unless a local or physical benchmark
   artifact shows that the standard UDP batch path improves throughput or tail
   latency without increasing drops. Benchmark artifacts record UDP receive/send
-  batch counters for this comparison.
+  batch counters for this comparison. Values are bounded to `1..=1024` so every
+  UDP backend has the same finite userspace packet-buffer allocation ceiling.
 - Keep `[limits].udp_reuseport_workers = 1` unless a benchmark artifact shows
   that multiple standard UDP `SO_REUSEPORT` workers improve the target host.
+  Values above `64` are rejected before allocation or socket binding.
 - Keep `[limits].udp_runtime = "tokio"` unless benchmarking the dedicated
   standard UDP data-plane worker path. On Linux, dedicated workers use
   `recvmmsg`/`sendmmsg`, so larger `[limits].udp_batch_size` values such as
@@ -474,6 +533,23 @@ Production configuration notes:
   can use `[limits].udp_worker_cpu_affinity = [..]` to pin worker threads to
   explicit CPU IDs; the list length must match the worker count. Treat both
   large batches and affinity as host-specific tuning, not portable defaults.
+- AF_XDP explicit `xdp.queue_ids` are the effective XSK/UMEM worker set: at most
+  64 unique IDs are allowed, every ID must be in `0..=63`, and file-descriptor
+  preflight counts that exact set plus the shared kernel fallback UDP socket.
+- Treat AF_XDP memory tuning as per-queue sizing. `xdp.umem_frame_count` is
+  bounded to `1..=262144`, each RX/TX/fill/completion ring to `1..=65536`, and
+  `xdp.batch_size` to `1..=1024`. Startup also rejects a conservative aggregate
+  UMEM, inbound-buffer, and ring estimate above 32 GiB across the effective
+  queue set. These checks run before socket binding, UMEM mapping, or userspace
+  packet-buffer allocation; keep the defaults unless physical-NIC evidence
+  justifies larger values.
+- Keep `xdp.tx_wakeup_interval = 1`. The current AF_XDP dependency enables
+  `XDP_USE_NEED_WAKEUP` without exposing the kernel ring's needs-wakeup flag, so
+  OxideDNS rejects other values and kicks every non-empty TX enqueue. Periodic
+  counter-based kicks can strand a low-rate or isolated DNS response until
+  unrelated later traffic arrives. `xdp.rx_drain_passes` bounds receive work
+  even when every redirected packet is rejected during userspace validation;
+  reject-only exhaustion yields so shutdown and other runtime work stay fair.
 - Keep `[edns].extended_dns_errors = "off"` unless operators want RFC 8914
   diagnostic EDE options for LOADING/EXPIRED zones and NSEC3 iteration-cap
   downgrades. The `minimal` profile emits numeric EDE codes only, with no
@@ -483,13 +559,15 @@ Production configuration notes:
   Values above 100 are accepted but produce `nsec3_iterations_large`.
 - Keep `[rrl].enabled = true` for Internet-facing UDP service unless an
   upstream mitigation layer has been validated.
-- Ensure the service soft file-descriptor limit is at least
-  `2 * (limits.max_tcp_connections + limits.max_concurrent_transfers + 100)`.
+- Ensure the service soft file-descriptor limit satisfies the startup formula:
+  twice the sum of configured TCP connections, concurrent transfers, effective
+  UDP sockets/XSK workers, TCP/health listeners, and the 100-descriptor reserve.
   OxideDNS checks this at startup and exits with an OS-startup error if the limit is
   too low.
 - Keep `[limits].max_tcp_inflight_queries_per_connection` at the default 64
   unless load testing shows a need to lower per-connection memory/concurrency or
-  raise pipelined DNS-over-TCP concurrency. Omit
+  raise pipelined DNS-over-TCP concurrency. OxideDNS rejects values above the
+  platform's Tokio semaphore/channel capacity during startup validation. Omit
   `[limits].tcp_inflight_limit_timeout_secs` to close persistently saturated
   connections after the configured TCP read timeout.
 - `[limits].notify_log_rate_window_secs` controls the anti-flood window for
@@ -545,6 +623,9 @@ Notes:
   capability lines when binding high ports.
 - Keep the configured graceful shutdown timeout below `TimeoutStopSec`.
   The example config uses `[limits].graceful_shutdown_secs = 30`.
+- Listener, background, transfer, health, and telemetry task cleanup all share
+  that single deadline. Aborted tasks are reaped only while time remains, so a
+  non-cooperative task cannot extend the configured process shutdown window.
 - The process handles SIGTERM and SIGINT for graceful shutdown, ignores SIGHUP,
   and sets SIGPIPE to ignored at startup. Do not rely on SIGHUP for reload.
 - Because OxideDNS writes no operational state, read-only root filesystems and
@@ -581,6 +662,16 @@ when wiring probes, scrapers, or compatibility checks.
 `metrics_rate_limit_idle_seconds` (default `300`). Over-limit scrapes receive
 HTTP 429, a `Retry-After` header, and a JSON body; `/livez`, `/readyz`, and
 `/healthz` are not rate limited.
+
+`health.max_connections` (default `128`) bounds admitted HTTP connections
+across all health/management listeners. Admission happens immediately after
+accept; excess connections are closed, so idle listeners reserve no slots and
+one busy address can use the full global capacity. The startup descriptor
+formula additionally reserves one transient post-accept descriptor per
+management listener, and shutdown does not wait for connection capacity.
+Incomplete requests and stalled response readers are disconnected by fixed
+five-second management request-read and response-write deadlines, ensuring a
+client cannot retain one of those slots indefinitely.
 
 The per-zone metric `oxidedns_secondary_zone_loading_seconds` reports current
 process uptime for zones still in LOADING state and `0` for ACTIVE or EXPIRED
@@ -760,10 +851,16 @@ TSIG:
 - Supported configured algorithms include `hmac-sha1`, `hmac-sha256`,
   `hmac-sha384`, and `hmac-sha512`.
 - HMAC-MD5 TSIG is intentionally rejected.
-- TSIG secrets are base64 encoded. Configure exactly one of inline `secret` or
+- TSIG secrets use canonical padded Base64 (`YQ==`, not `YQ`). Configure exactly one of inline `secret` or
   `secret_file`; when using `secret_file`, the file must be readable by the
-  OxideDNS process and must not be world-readable. Secret-store manifests may
-  also contain inline TSIG material and must not be world-readable on Unix.
+  OxideDNS process, must be a regular file, must not be world-readable, and
+  must not be group- or world-writable. Final-component symlinks are rejected
+  on Unix. Static TSIG secret files are capped at 64 KiB, and concurrent growth
+  after metadata validation is caught by the bounded read. Secret-store
+  manifests may also contain inline TSIG material and follow the same file
+  rules. A merged static/runtime snapshot is capped at 1024 TSIG keys, 4 MiB
+  encoded material, and 3 MiB decoded material; every reference is charged,
+  including repeated references to the same file.
   Secret-store reload builds and validates a complete new snapshot before
   replacing the live one; failed reloads retain the previous snapshot.
 - System time must be synchronized within the TSIG fudge window; this is the
@@ -780,7 +877,8 @@ XoT:
   transfer primary entry or an `xot_profile` name resolved from `[secret_store]`.
 - Optional mutual TLS uses `client_cert` with exactly one of `client_key` file
   path or inline `client_key_pem`. `--dump-config` preserves `client_key` paths
-  and redacts inline `client_key_pem` material.
+  and redacts inline `client_key_pem` material. Each direct XoT certificate,
+  trust-anchor, private-key file, or inline private key is capped at 4 MiB.
 - Runtime validation checks TLS file readability and parses trust anchors,
   client certificates, and client private keys before binding listeners.
   Secret-store reload performs the same validation for named XoT profiles before
@@ -801,6 +899,10 @@ XoT:
 Network and process hardening:
 
 - Expose only UDP/TCP DNS listener ports publicly.
+- When explicitly testing the AF_XDP backend, configure each UDP listener with
+  a concrete IP assigned to the selected interface. Wildcard `0.0.0.0` and
+  `[::]` listeners are rejected because an XDP redirect runs before the kernel
+  decides whether an ingress destination is local.
 - Keep health and metrics private.
 - Restrict outbound transfer access to configured primaries where the platform
   firewall supports it.
@@ -815,7 +917,11 @@ Network and process hardening:
   disabling them. Core-dump suppression protects in-memory TSIG/XoT material and
   zone data from crash artifacts; on Linux, no-new-privileges is applied after
   socket binding and any configured privilege drop.
-- Store TSIG and TLS private key material outside world-readable paths.
+- Store TSIG and TLS private key material in regular, non-world-readable files.
+  Keep every secret, certificate, and trust anchor free of group/world write
+  bits. On Unix, OxideDNS rejects final-component symlinks and validates
+  permissions on the same open handle it reads; secret-store paths additionally
+  reject intermediate symlinks beneath the captured generation root.
 - Prefer read-only filesystems and minimal service capabilities.
 - `ODS-FR-XOT-012` means OxideDNS does not perform real-time XoT revocation
   checking; use short-lived certificates and automated trust-anchor rotation
@@ -915,6 +1021,94 @@ Rollback procedure:
 
 Because OxideDNS has no persistent runtime state, rollback is a binary and
 configuration rollback followed by zone reacquisition from the primary.
+
+## Campaign Cleanup Quarantines
+
+Campaign evidence/build helpers assume that another process with the campaign
+UID may rename any entry in a user-writable directory. Successful logical
+cleanup can therefore leave hidden `*.oxidedns-remove.*` trees, files,
+journals, or collection transactions. These are exact no-replace quarantines,
+not active campaign generations. Do not delete them solely by name or copy
+their metadata into a new transaction. A restarted campaign reports durable
+journals and transactions but does not use same-UID-owned disk metadata to
+authorize delete, overwrite, restore, or promotion.
+
+Automatic-tree recovery and stale-status staging discovery enumerate direct
+children under the operation's absolute CLOCK_BOOTTIME deadline. They retain
+all state and fail nonzero if a directory exceeds the explicit enumeration cap
+(`OXIDEDNS_CAMPAIGN_ENUMERATION_ENTRY_CAP`, default `4096`, supported range
+`1..65536`) or the deadline expires. Raising the cap increases only the bounded
+scan/sort memory allowance; it does not grant recovery authority. Treat either
+diagnostic as a directory-flood or unreconciled-state condition and inspect the
+namespace before retrying with a larger value.
+
+Release package builders use the same terminal-quarantine rule for private run
+roots, rollback outputs, and previous artifact backups. Their stderr diagnostic
+records each retained path, its captured `device:inode:owner:type`, its immediate
+parent path, and that parent's captured identity. Publication-recovery journals
+preserve the same four fields as `retained_removal_quarantine_N`,
+`retained_removal_quarantine_N_identity`,
+`retained_removal_quarantine_N_parent`, and
+`retained_removal_quarantine_N_parent_identity`. Journals also bind the original
+private run root as `publication_recovery_root_identity` with
+`publication_recovery_root_binding=journal-parent-directory`. For retained
+objects below that root, the indexed `_root_relative` and
+`_parent_root_relative` fields remain resolvable from the journal's current
+parent directory even if a successful same-process cleanup retry later moves
+the whole root into a terminal quarantine. Verify that current journal parent
+against `publication_recovery_root_identity` before resolving those relative
+fields; the original absolute values remain historical evidence. A later build
+uses fresh staging and quarantine names; it neither adopts nor overwrites an
+earlier retained object. A path whose post-move identity cannot be revalidated
+is reported only as an unverified parent namespace and is never described as
+the exact retained inode.
+Failed publication-recovery diagnostic writes may also retain a unique
+`.publication-recovery-incomplete-*` file under the private run root. When that
+staging inode can still be revalidated, stderr records the same object and parent
+identity fields; otherwise it reports only the unverified namespace. Treat the
+staging file as evidence, not as an active or trusted recovery journal.
+SBOM generation moves its fixed cargo-cyclonedx worktree outputs into uniquely
+named terminal quarantines under the locked Git metadata root, so they do not
+make later source verification dirty. Cross-filesystem Git metadata layouts
+fail closed and retain the source pathname instead of copying and unlinking it.
+
+Reconcile retained state from a privileged or dedicated-UID environment that
+the campaign UID cannot mutate. Verify that both the current parent and object
+match their recorded device/inode/type/owner values. A path match alone is not
+evidence: if either identity differs, preserve the current path as foreign state
+and locate the recorded inode separately. After both identities match, inspect
+retained content, then archive or remove the quarantine from that protected
+namespace. Until that authority exists,
+retention and a manual-reconciliation diagnostic are the intended fail-closed
+outcome.
+
+Two-host fuzz and large-surface cleanup persist this mapping as
+`.oxidedns-retained-cleanup-<root>.<pid>.<nonce>.env` before removing the canonical name. A
+normal completed journal has `phase=retained`; a crash after the rename may
+leave `phase=prepared`. Both contain the original and quarantine paths and the
+exact parent and target device/inode/owner triples. Source the authenticated
+campaign helper and run `campaign_verify_retained_cleanup_journal <journal>` to
+reject an existing original path, changed parent, wrong type, or forged sibling
+inode before manual inspection. It emits `cleanup_prepared_verified` only when
+the original is absent and the exact recorded quarantine identity and type are
+present; this reconciles crash evidence but grants no deletion authority. The
+verifier opens one real, non-symlink parent directory and resolves the journal,
+original, and quarantine names descriptor-relative within that bound parent; a
+symlinked parent namespace is rejected. The verifier does not delete. Because the
+journal's parent is campaign-UID-writable, separately retain its emitted
+mapping/evidence and establish a protected privileged or dedicated-UID
+namespace before granting any destructive authority.
+Each retry creates a new journal rather than overwriting or adopting an older
+mapping for the same canonical root name.
+
+In particular, sudo does not make a campaign-UID-owned fuzz build directory a
+protected namespace. Two-host fuzz cleanup quarantines that whole tree and
+returns without recursively unlinking its children. Destructive reconciliation
+requires a namespace that the campaign UID could not mutate or keep writable
+through an already-open directory descriptor.
+Even a root-owned tree is retained when a recursive directory boundary is
+group/world writable or carries a POSIX access ACL: ownership without a
+mode-and-ACL proof is not namespace authority.
 
 ## RFC Compliance Assertions
 

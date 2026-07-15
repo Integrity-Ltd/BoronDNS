@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 oxidedns-core = { path = "../crates/oxidedns-core" }
+oxidedns-server = { path = "../crates/oxidedns-server", features = ["fuzzing"] }
 
 [[bin]]
 name = "dns_datagram"
@@ -49,6 +50,27 @@ bench = false
 [[bin]]
 name = "catalog_zone"
 path = "fuzz_targets/catalog_zone.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zone_store_state"
+path = "fuzz_targets/zone_store_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zone_store_concurrent"
+path = "fuzz_targets/zone_store_concurrent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_lifecycle"
+path = "fuzz_targets/server_lifecycle.rs"
 test = false
 doc = false
 bench = false

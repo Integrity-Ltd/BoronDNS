@@ -3,9 +3,11 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
 };
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
+    config::validate_xot_server_name,
     dns::{DomainName, RecordType},
     zone::{CatalogZoneView, Rrset},
 };
@@ -20,7 +22,34 @@ use crate::{
 pub struct CatalogMember {
     pub member_node: DomainName,
     pub zone: DomainName,
-    pub transfer: Option<CatalogMemberTransfer>,
+    pub transfer: CatalogMemberTransferExtension,
+}
+
+/// Parsing state for the optional per-member transfer extension.
+///
+/// `Malformed` is deliberately distinct from `Absent`: callers may safely use
+/// their configured fallback for an absent extension, while a malformed update
+/// must not silently replace a previously accepted transfer policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogMemberTransferExtension {
+    Absent,
+    Valid(CatalogMemberTransfer),
+    Malformed,
+}
+
+impl CatalogMemberTransferExtension {
+    #[must_use]
+    pub fn valid(&self) -> Option<&CatalogMemberTransfer> {
+        match self {
+            Self::Valid(transfer) => Some(transfer),
+            Self::Absent | Self::Malformed => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_malformed(&self) -> bool {
+        matches!(self, Self::Malformed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,15 +99,42 @@ pub enum CatalogError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedCatalogMembers {
+    pub members: Vec<CatalogMember>,
+    pub dropped: usize,
+}
+
 pub fn parse_catalog_members(
     catalog_view: CatalogZoneView<'_>,
 ) -> Result<Vec<CatalogMember>, CatalogError> {
+    parse_catalog_members_bounded(catalog_view, usize::MAX).map(|parsed| parsed.members)
+}
+
+pub fn parse_catalog_members_bounded(
+    catalog_view: CatalogZoneView<'_>,
+    max_members: usize,
+) -> Result<ParsedCatalogMembers, CatalogError> {
+    parse_catalog_members_bounded_with_filter(catalog_view, max_members, |_| true)
+}
+
+pub fn parse_catalog_members_bounded_with_filter(
+    catalog_view: CatalogZoneView<'_>,
+    max_members: usize,
+    mut accept_member: impl FnMut(&DomainName) -> bool,
+) -> Result<ParsedCatalogMembers, CatalogError> {
     validate_catalog_version(&catalog_view)?;
 
     let catalog = catalog_view.origin();
     let zones_owner_key = catalog_child_owner_key("zones", catalog);
-    let mut ptr_records_by_owner = BTreeMap::<String, Vec<_>>::new();
-    let extension_rrsets_by_member = extension_rrsets_by_member(catalog_view);
+    let mut retained = BTreeMap::<String, (DomainName, DomainName)>::new();
+    // Duplicate validity applies to every structurally valid member PTR, even
+    // when policy filters it or the retention cap drops it. Keep only a fixed
+    // size collision-resistant key per PTR target: the set is bounded by the
+    // rrsets already resident in the validated snapshot, while full member and
+    // extension allocation remains O(max_members).
+    let mut seen_member_keys = HashSet::<[u8; 32]>::new();
+    let mut member_records = 0usize;
 
     for rrset in catalog_view.rrsets() {
         if rrset.class != 1 || rrset.rr_type != RecordType::Ptr as u16 {
@@ -93,71 +149,74 @@ pub fn parse_catalog_members(
         {
             continue;
         }
-        if rrset.rdatas().is_empty() {
+        let [rdata] = rrset.rdatas() else {
+            return Err(CatalogError::MalformedMemberPtr {
+                catalog: catalog.clone(),
+                owner: rrset.owner.clone(),
+            });
+        };
+        let (member, consumed) =
+            DomainName::parse(rdata, 0).map_err(|_| CatalogError::MalformedMemberPtr {
+                catalog: catalog.clone(),
+                owner: rrset.owner.clone(),
+            })?;
+        if consumed != rdata.len() {
             return Err(CatalogError::MalformedMemberPtr {
                 catalog: catalog.clone(),
                 owner: rrset.owner.clone(),
             });
         }
-        ptr_records_by_owner
-            .entry(rrset.owner.canonical_key())
-            .or_default()
-            .extend(rrset.rdatas().iter().map(|rdata| (&rrset.owner, rdata)));
-    }
-
-    let mut seen_members = HashSet::new();
-    let mut members = Vec::new();
-    for records in ptr_records_by_owner.into_values() {
-        if records.len() != 1 {
-            return Err(CatalogError::MalformedMemberPtr {
-                catalog: catalog.clone(),
-                owner: records
-                    .first()
-                    .expect("non-empty grouped PTR records")
-                    .0
-                    .clone(),
-            });
-        }
-        let (owner, rdata) = records
-            .into_iter()
-            .next()
-            .expect("single grouped PTR record");
-        let (member, consumed) =
-            DomainName::parse(rdata, 0).map_err(|_| CatalogError::MalformedMemberPtr {
-                catalog: catalog.clone(),
-                owner: owner.clone(),
-            })?;
-        if consumed != rdata.len() {
-            return Err(CatalogError::MalformedMemberPtr {
-                catalog: catalog.clone(),
-                owner: owner.clone(),
-            });
-        }
-        if !seen_members.insert(member.canonical_key()) {
+        let member_key = member.canonical_key();
+        let seen_key = Sha256::digest(member_key.as_bytes()).into();
+        if !seen_member_keys.insert(seen_key) {
             return Err(CatalogError::DuplicateMember {
                 catalog: catalog.clone(),
                 member,
             });
         }
-        members.push(CatalogMember {
-            member_node: owner.clone(),
-            zone: member,
+        if !accept_member(&member) {
+            continue;
+        }
+        member_records = member_records.saturating_add(1);
+        if retained.len() < max_members {
+            retained.insert(member_key, (rrset.owner.clone(), member));
+        } else if retained
+            .last_key_value()
+            .is_some_and(|(largest, _)| member_key < *largest)
+        {
+            retained.pop_last();
+            retained.insert(member_key, (rrset.owner.clone(), member));
+        }
+    }
+
+    let retained_node_keys = retained
+        .values()
+        .map(|(owner, _)| owner.canonical_key())
+        .collect::<HashSet<_>>();
+    let extension_rrsets_by_member = extension_rrsets_by_member(catalog_view, &retained_node_keys);
+    let members = retained
+        .into_values()
+        .map(|(owner, member)| CatalogMember {
             transfer: parse_member_transfer_extension(
-                owner,
+                &owner,
                 extension_rrsets_by_member
                     .get(owner.canonical_key().as_str())
                     .map(Vec::as_slice)
                     .unwrap_or(&[]),
             ),
-        });
-    }
-
-    members.sort_by_key(|member| member.zone.canonical_key());
-    Ok(members)
+            member_node: owner,
+            zone: member,
+        })
+        .collect::<Vec<_>>();
+    Ok(ParsedCatalogMembers {
+        dropped: member_records.saturating_sub(members.len()),
+        members,
+    })
 }
 
 fn extension_rrsets_by_member<'a>(
     catalog_view: CatalogZoneView<'a>,
+    retained_member_keys: &HashSet<String>,
 ) -> HashMap<String, Vec<&'a Rrset>> {
     let mut rrsets_by_member = HashMap::<String, Vec<&Rrset>>::new();
     for rrset in catalog_view.rrsets() {
@@ -168,28 +227,48 @@ fn extension_rrsets_by_member<'a>(
         let Some(member_key) = extension_member_key(&owner_key) else {
             continue;
         };
-        rrsets_by_member.entry(member_key).or_default().push(rrset);
+        if retained_member_keys.contains(member_key)
+            && recognized_extension_rrset(rrset, &owner_key)
+        {
+            rrsets_by_member
+                .entry(member_key.to_owned())
+                .or_default()
+                .push(rrset);
+        }
     }
     rrsets_by_member
 }
 
-fn extension_member_key(owner_key: &str) -> Option<String> {
+fn extension_member_key(owner_key: &str) -> Option<&str> {
     if let Some(rest) = owner_key.strip_prefix("primaries.ext.") {
-        return Some(rest.to_owned());
+        return Some(rest);
     }
     if let Some(rest) = owner_key.strip_prefix("_udns-xfr.") {
-        return Some(rest.to_owned());
+        return Some(rest);
     }
     if let Some(rest) = owner_key.strip_prefix("_udns-notify.") {
-        return Some(rest.to_owned());
+        return Some(rest);
     }
     None
+}
+
+fn recognized_extension_rrset(rrset: &Rrset, owner_key: &str) -> bool {
+    if owner_key.starts_with("primaries.ext.") {
+        matches!(
+            rrset.rr_type,
+            value if value == RecordType::A as u16
+                || value == RecordType::Aaaa as u16
+                || value == RecordType::Txt as u16
+        )
+    } else {
+        rrset.rr_type == RecordType::Txt as u16
+    }
 }
 
 fn parse_member_transfer_extension(
     member_node: &DomainName,
     extension_rrsets: &[&Rrset],
-) -> Option<CatalogMemberTransfer> {
+) -> CatalogMemberTransferExtension {
     let primary_base = format!("primaries.ext.{}", member_node.canonical_key());
     let xfr_owner = format!("_udns-xfr.{}", member_node.canonical_key());
     let notify_owner = format!("_udns-notify.{}", member_node.canonical_key());
@@ -260,6 +339,10 @@ fn parse_member_transfer_extension(
                     malformed = true;
                     continue;
                 };
+                if xfr.as_ref().is_some_and(|current| current != &parsed) {
+                    malformed = true;
+                    continue;
+                }
                 xfr = Some(parsed);
             }
         } else if owner_key == notify_owner && rrset.rr_type == RecordType::Txt as u16 {
@@ -278,7 +361,7 @@ fn parse_member_transfer_extension(
     }
 
     if malformed {
-        return None;
+        return CatalogMemberTransferExtension::Malformed;
     }
 
     let mut key_names = key_names_by_owner
@@ -290,7 +373,7 @@ fn parse_member_transfer_extension(
     let tsig_key_name = match key_names.as_slice() {
         [] => None,
         [name] => Some(name.clone()),
-        _ => return None,
+        _ => return CatalogMemberTransferExtension::Malformed,
     };
 
     notify_sources.sort();
@@ -298,9 +381,9 @@ fn parse_member_transfer_extension(
 
     if primaries.is_empty() && tsig_key_name.is_none() && xfr.is_none() && notify_sources.is_empty()
     {
-        None
+        CatalogMemberTransferExtension::Absent
     } else {
-        Some(CatalogMemberTransfer {
+        CatalogMemberTransferExtension::Valid(CatalogMemberTransfer {
             primaries,
             tsig_key_name,
             xfr,
@@ -317,14 +400,23 @@ fn parse_udns_xfr_txt(text: &str) -> Option<CatalogMemberXfr> {
     let mut transport = None;
     let mut port = None;
     let mut server_name = None;
+    let mut recognized_fields = HashSet::new();
     for (key, value) in parse_semicolon_fields(text) {
         match key {
-            "transport" => match value {
-                "tcp" => transport = Some(CatalogMemberTransport::Tcp),
-                "xot" => transport = Some(CatalogMemberTransport::Xot),
-                _ => return None,
-            },
+            "transport" => {
+                if !recognized_fields.insert(key) {
+                    return None;
+                }
+                match value {
+                    "tcp" => transport = Some(CatalogMemberTransport::Tcp),
+                    "xot" => transport = Some(CatalogMemberTransport::Xot),
+                    _ => return None,
+                }
+            }
             "port" => {
+                if !recognized_fields.insert(key) {
+                    return None;
+                }
                 let parsed = value.parse::<u16>().ok()?;
                 if parsed == 0 {
                     return None;
@@ -332,12 +424,16 @@ fn parse_udns_xfr_txt(text: &str) -> Option<CatalogMemberXfr> {
                 port = Some(parsed);
             }
             "server_name" => {
-                if value.is_empty() || value.contains(char::is_whitespace) {
+                if !recognized_fields.insert(key) || validate_xot_server_name(value).is_err() {
                     return None;
                 }
                 server_name = Some(value.to_owned());
             }
-            "mode" => {}
+            "mode" => {
+                if !recognized_fields.insert(key) {
+                    return None;
+                }
+            }
             "" => {}
             _ => {}
         }
@@ -462,6 +558,128 @@ mod tests {
 
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
+    }
+
+    #[test]
+    fn bounded_catalog_parse_retains_deterministic_smallest_members_and_counts_drops() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let mut rrsets = vec![Rrset::new(
+            DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+            RecordType::Txt as u16,
+            1,
+            0,
+            vec![vec![1, b'2']],
+        )];
+        for (node, member) in [
+            ("z", "zulu.example."),
+            ("c", "charlie.example."),
+            ("y", "yankee.example."),
+            ("a", "alpha.example."),
+            ("b", "bravo.example."),
+        ] {
+            rrsets.push(Rrset::new(
+                DomainName::from_absolute_str(&format!("{node}.zones.catalog.example.")).unwrap(),
+                RecordType::Ptr as u16,
+                1,
+                0,
+                vec![DomainName::from_absolute_str(member).unwrap().to_wire()],
+            ));
+        }
+        let snapshot = ZoneSnapshot::active(catalog, None, rrsets);
+
+        let parsed = parse_catalog_members_bounded(snapshot.catalog_zone_view(), 3).unwrap();
+
+        assert_eq!(parsed.dropped, 2);
+        assert_eq!(
+            parsed
+                .members
+                .iter()
+                .map(|member| member.zone.canonical_key())
+                .collect::<Vec<_>>(),
+            ["alpha.example.", "bravo.example.", "charlie.example."]
+        );
+    }
+
+    #[test]
+    fn bounded_catalog_parse_rejects_duplicate_targets_when_all_members_are_dropped() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let duplicate = DomainName::from_absolute_str("duplicate.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog.clone(),
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![duplicate.to_wire()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![duplicate.to_wire()],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            parse_catalog_members_bounded(snapshot.catalog_zone_view(), 0),
+            Err(CatalogError::DuplicateMember {
+                catalog,
+                member: duplicate,
+            })
+        );
+    }
+
+    #[test]
+    fn bounded_catalog_parse_rejects_duplicate_targets_filtered_by_policy() {
+        let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
+        let duplicate = DomainName::from_absolute_str("static.example.").unwrap();
+        let snapshot = ZoneSnapshot::active(
+            catalog.clone(),
+            None,
+            vec![
+                Rrset::new(
+                    DomainName::from_absolute_str("version.catalog.example.").unwrap(),
+                    RecordType::Txt as u16,
+                    1,
+                    0,
+                    vec![vec![1, b'2']],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("a.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![duplicate.to_wire()],
+                ),
+                Rrset::new(
+                    DomainName::from_absolute_str("b.zones.catalog.example.").unwrap(),
+                    RecordType::Ptr as u16,
+                    1,
+                    0,
+                    vec![duplicate.to_wire()],
+                ),
+            ],
+        );
+
+        assert_eq!(
+            parse_catalog_members_bounded_with_filter(snapshot.catalog_zone_view(), 1, |_| false),
+            Err(CatalogError::DuplicateMember {
+                catalog,
+                member: duplicate,
+            })
+        );
     }
 
     #[test]
@@ -626,7 +844,9 @@ mod tests {
 
         let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
 
-        let transfer = members[0].transfer.as_ref().expect("transfer extension");
+        let CatalogMemberTransferExtension::Valid(transfer) = &members[0].transfer else {
+            panic!("expected valid transfer extension");
+        };
         assert_eq!(
             transfer.primaries,
             vec![CatalogMemberPrimary {
@@ -683,11 +903,11 @@ mod tests {
         let members = parse_catalog_members(snapshot.catalog_zone_view()).unwrap();
 
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].transfer, None);
+        assert_eq!(members[0].transfer, CatalogMemberTransferExtension::Absent);
     }
 
     #[test]
-    fn ignores_malformed_member_transfer_extension_without_dropping_member() {
+    fn marks_malformed_member_transfer_extension_without_dropping_member() {
         let catalog = DomainName::from_absolute_str("catalog.example.").unwrap();
         let snapshot = ZoneSnapshot::active(
             catalog,
@@ -725,7 +945,71 @@ mod tests {
 
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].zone.canonical_key(), "alpha.example.");
-        assert_eq!(members[0].transfer, None);
+        assert_eq!(
+            members[0].transfer,
+            CatalogMemberTransferExtension::Malformed
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_xfr_txt_policies_but_accepts_identical_duplicates() {
+        let member_node =
+            DomainName::from_absolute_str("a.zones.catalog.example.").expect("member node");
+        let owner =
+            DomainName::from_absolute_str("_udns-xfr.a.zones.catalog.example.").expect("XFR owner");
+        let conflicting = Rrset::new(
+            owner.clone(),
+            RecordType::Txt as u16,
+            1,
+            0,
+            vec![
+                txt("transport=tcp;port=53"),
+                txt("transport=xot;port=853;server_name=primary.example"),
+            ],
+        );
+        assert_eq!(
+            parse_member_transfer_extension(&member_node, &[&conflicting]),
+            CatalogMemberTransferExtension::Malformed
+        );
+
+        let identical = Rrset::new(
+            owner,
+            RecordType::Txt as u16,
+            1,
+            0,
+            vec![
+                txt("transport=xot;port=853;server_name=primary.example"),
+                txt("transport=xot;port=853;server_name=primary.example"),
+            ],
+        );
+        assert!(matches!(
+            parse_member_transfer_extension(&member_node, &[&identical]),
+            CatalogMemberTransferExtension::Valid(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_xfr_fields_and_non_production_sni_names() {
+        for text in [
+            "transport=xot;transport=xot",
+            "port=853;port=853",
+            "server_name=primary.example;server_name=primary.example",
+            "mode=axfr;mode=axfr",
+            "transport=xot;server_name=-primary.example",
+            "transport=xot;server_name=primary..example",
+            "transport=xot;server_name=primary.example.",
+            "transport=xot;server_name=primary_example",
+        ] {
+            assert_eq!(parse_udns_xfr_txt(text), None, "accepted {text:?}");
+        }
+        assert_eq!(
+            parse_udns_xfr_txt("transport=xot;port=853;server_name=primary.example"),
+            Some(CatalogMemberXfr {
+                transport: Some(CatalogMemberTransport::Xot),
+                port: Some(853),
+                server_name: Some("primary.example".to_owned()),
+            })
+        );
     }
 
     #[test]

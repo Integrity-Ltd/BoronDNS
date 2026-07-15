@@ -122,7 +122,10 @@ include_config_summary = true
 # listener behind an authenticated management proxy. When set, all observability
 # endpoints require `Authorization: Bearer <token>`. The token is loaded at
 # listener startup, trimmed for surrounding ASCII whitespace, and never returned
-# by the API. Default: unset.
+# by the API. The file must be non-empty and regular; on Unix it must be
+# owner-only (for example mode 0600) and its final path component cannot be a
+# symlink. Token files are capped at 8 KiB, with the same opened handle checked
+# and bounded so concurrent growth cannot bypass the ceiling. Default: unset.
 # bearer_token_file = "/etc/oxidedns-secondary/observability.token"
 ```
 
@@ -145,7 +148,7 @@ error style unless a later interface revision defines a richer error contract.
 | `/observability/v1/runtime` | Process uptime, version/build labels, listener roles, worker mode, shutdown/drain state. |
 | `/observability/v1/resources` | Coarse local filesystem, memory, CPU, file-descriptor, and limit posture. |
 | `/observability/v1/time` | Host time-sync status from OS services and timestamp of last status refresh. |
-| `/observability/v1/certificates` | Expiry/status summary for configured XoT/mTLS trust/client material. |
+| `/observability/v1/certificates` | Expiry/status and SHA-256 fingerprint summary for configured XoT/mTLS trust/client material. |
 | `/observability/v1/zones` | Per-zone serving, serial, refresh, expire, query, and DNSSEC-serving state. |
 | `/observability/v1/zones/{zone}` | Detailed state for one configured or catalog-derived zone. |
 | `/observability/v1/catalogs` | Configured catalog zones, last transfer, member counts, caps, and reconciliation state. |
@@ -158,15 +161,23 @@ stable once implemented.
 
 The current implementation wires all paths in the table. `/resources` reads
 bounded local process and filesystem snapshots. `/time` checks host time status
-from host-local status files when available. `/certificates` inspects
-configured XoT trust-anchor and client certificate PEM files. Disabled check
-families return `disabled`; unavailable host services return `unknown`.
+from host-local status files when available. `/certificates` inspects direct
+XoT PEM files. For named secret-store profiles it reports parsed certificate
+metadata retained in the captured immutable secret generation, so filesystem
+replacement or a failed reload cannot make observability disagree with active
+transfer credentials. Disabled check families return `disabled`; unavailable
+host services return `unknown`.
 
 ## Response Principles
 
 Responses should be compact snapshots rather than event streams. OxideDNS does
 not persist transfer history or runtime state to disk; any recent-history fields
 are bounded in memory and may reset on process restart.
+
+Accepted management connections have fixed defensive request-read and
+response-write deadlines. A client that sends an incomplete request or stops
+reading a response is disconnected so it cannot retain one of the globally
+bounded health/observability connection slots indefinitely.
 
 Every response should include:
 

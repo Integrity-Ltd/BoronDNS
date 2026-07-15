@@ -317,7 +317,12 @@ log_format = "plain"
 [rrl]
 enabled = false
 
+[health]
+max_connections = 8
+
 [limits]
+max_tcp_connections = 16
+udp_reuseport_workers = 1
 max_concurrent_transfers = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600
@@ -348,7 +353,10 @@ oxidedns_cmd=("$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf"
 trace_status="not_available"
 if command -v strace >/dev/null 2>&1; then
     trace_status="captured"
-    TMPDIR="$readonly_tmp" strace -f -e trace=%file -o "$workdir/strace.log" "${oxidedns_cmd[@]}" >"$workdir/oxidedns.log" 2>&1 &
+    # Keep the traced server as this shell's direct child so `$!`, shutdown,
+    # thread accounting, and the no-child-process assertion all target the
+    # server rather than strace's supervisor process.
+    TMPDIR="$readonly_tmp" strace -D -f -e trace=%file -o "$workdir/strace.log" "${oxidedns_cmd[@]}" >"$workdir/oxidedns.log" 2>&1 &
 else
     TMPDIR="$readonly_tmp" "${oxidedns_cmd[@]}" >"$workdir/oxidedns.log" 2>&1 &
 fi
@@ -506,7 +514,12 @@ log_format = "plain"
 [rrl]
 enabled = false
 
+[health]
+max_connections = 8
+
 [limits]
+max_tcp_connections = 16
+udp_reuseport_workers = 1
 max_concurrent_transfers = 1
 zsm_min_interval_secs = 3600
 zsm_initial_retry_secs = 3600

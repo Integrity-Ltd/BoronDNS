@@ -96,6 +96,11 @@ enum Command {
         #[arg(short, long, value_name = "CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Print validated runtime readiness listeners as kind, IP, and port TSV.
+    ReadinessEndpoints {
+        #[arg(short, long, value_name = "CONFIG")]
+        config: Option<PathBuf>,
+    },
     Serve {
         #[arg(short, long, value_name = "CONFIG")]
         config: Option<PathBuf>,
@@ -169,6 +174,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             emit_config_warnings_to_stderr(&loaded.warnings);
             write_stdout_text(&loaded.config.to_redacted_toml()?).context("writing config dump")?;
         }
+        Mode::ReadinessEndpoints(config) => {
+            let loaded = load_config(&config)?;
+            emit_config_warnings_to_stderr(&loaded.warnings);
+            write_stdout_text(&readiness_endpoints_tsv(&loaded.config)?)
+                .context("writing readiness endpoint output")?;
+        }
         Mode::ExampleConfig => {
             write_stdout_text(EXAMPLE_CONFIG).context("writing example config")?;
         }
@@ -176,7 +187,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let loaded = load_config(&config)?;
             init_logging(&loaded.config)?;
             emit_config_warnings_to_log(&loaded.warnings);
-            Runtime::new(loaded.config).run().await?;
+            Runtime::new(loaded.config)?.run().await?;
         }
     }
 
@@ -189,6 +200,7 @@ enum Mode {
     CheckConfig(PathBuf),
     ValidateConfig(PathBuf),
     DumpConfig(PathBuf),
+    ReadinessEndpoints(PathBuf),
     ExampleConfig,
     Serve(PathBuf),
 }
@@ -214,6 +226,9 @@ fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
             Command::CheckConfig { config } => {
                 Mode::CheckConfig(config_path(global_config, config))
             }
+            Command::ReadinessEndpoints { config } => {
+                Mode::ReadinessEndpoints(config_path(global_config, config))
+            }
             Command::Serve { config } => Mode::Serve(config_path(global_config, config)),
         });
     }
@@ -223,6 +238,27 @@ fn selected_mode(cli: Cli) -> anyhow::Result<Mode> {
         0 => Err(anyhow!("no command-line mode selected")),
         _ => Err(anyhow!("select exactly one command-line mode")),
     }
+}
+
+fn readiness_endpoints_tsv(config: &ServerConfig) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+
+    let health = config.health_listeners();
+    let (kind, listeners) = if health.is_empty() {
+        ("tcp", config.tcp_listeners())
+    } else {
+        ("health", health)
+    };
+    if listeners.is_empty() {
+        return Err(anyhow!(
+            "validated configuration has no health or TCP listener for readiness"
+        ));
+    }
+    let mut output = String::new();
+    for listener in listeners {
+        writeln!(output, "{kind}\t{}\t{}", listener.ip(), listener.port())?;
+    }
+    Ok(output)
 }
 
 fn config_path(global_config: Option<&PathBuf>, mode_config: Option<PathBuf>) -> PathBuf {
@@ -594,7 +630,10 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | RuntimeError::ProcessHardening(_)
                 | RuntimeError::PrivilegeDrop(_) => EX_OSERR,
                 RuntimeError::UdpBackendUnavailable { .. } => EX_CONFIG_INVALID,
-                RuntimeError::Udp(_) | RuntimeError::Tcp(_) | RuntimeError::Health(_) => EX_GENERAL,
+                RuntimeError::Udp(_)
+                | RuntimeError::Tcp(_)
+                | RuntimeError::Health(_)
+                | RuntimeError::RuntimeTask { .. } => EX_GENERAL,
             };
         }
         if let Some(transfer_error) = cause.downcast_ref::<TransferError>() {
@@ -614,6 +653,7 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
                 | TransferError::Tsig(_)
                 | TransferError::TlsHandshake { .. }
                 | TransferError::IngestSizeLimit { .. }
+                | TransferError::IngestGlobalSizeLimit { .. }
                 | TransferError::IngestMessageLimit { .. }
                 | TransferError::XotAlpn { .. } => EX_GENERAL,
             };
@@ -1080,8 +1120,77 @@ mod tests {
                 assert_eq!(config, PathBuf::from("config/oxidedns.example.toml"));
             }
             Command::Serve { .. } => panic!("expected explicit serve config"),
-            Command::CheckConfig { .. } => panic!("expected serve command"),
+            Command::CheckConfig { .. } | Command::ReadinessEndpoints { .. } => {
+                panic!("expected serve command")
+            }
         }
+    }
+
+    #[test]
+    fn readiness_endpoints_are_derived_from_validated_effective_config() {
+        let legacy = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = ["127.0.0.1:5301"]
+                health = "127.0.0.1:8081"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("legacy config");
+        assert_eq!(
+            readiness_endpoints_tsv(&legacy).expect("legacy readiness"),
+            "health\t127.0.0.1\t8081\n"
+        );
+
+        let multiline_management = ServerConfig::from_toml_str(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+
+                [interfaces]
+                mgmt = [
+                    "127.0.0.2:9443",
+                    "[::1]:9443",
+                ]
+
+                [health]
+                default_port = 8084
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("multiline management config");
+        assert_eq!(
+            readiness_endpoints_tsv(&multiline_management).expect("management readiness"),
+            "health\t127.0.0.2\t8084\nhealth\t::1\t8084\n"
+        );
+
+        let structured_dns = ServerConfig::from_toml_str(
+            r#"
+                [server]
+
+                [interfaces]
+                dns = [
+                    { address = "127.0.0.3:5303", name = "dns-primary" },
+                    "[::1]:5303",
+                ]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+        )
+        .expect("structured DNS config");
+        assert_eq!(
+            readiness_endpoints_tsv(&structured_dns).expect("DNS readiness"),
+            "tcp\t127.0.0.3\t5303\ntcp\t::1\t5303\n"
+        );
     }
 
     #[test]

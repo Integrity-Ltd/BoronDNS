@@ -29,9 +29,10 @@ debug = "line-tables-only"
 strip = "none"
 
 [workspace.dependencies]
-anyhow = "1"
+anyhow = "1.0.103"
 arc-swap = "1.7"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+http-body = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 flate2 = "1"
@@ -52,6 +53,7 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+url = "2"
 x509-parser = "0.18.1"
 zeroize = "1.8"
 rcgen = "0.14.8"

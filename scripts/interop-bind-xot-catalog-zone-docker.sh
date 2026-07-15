@@ -23,6 +23,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/interop-version-evidence.sh"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
+# shellcheck source=scripts/interop-dns-assertions.sh
+source "$repo_root/scripts/interop-dns-assertions.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/bind-xot-catalog-zone-docker-$run_id"
@@ -391,16 +393,43 @@ cargo build -p oxidedns-cli >/dev/null
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
 oxidedns_pid=$!
 
-ready=""
+catalog_acquired=false
 for _ in {1..120}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-        [[ "$ready" == *'"status":"ready"'* || "$ready" == "ready" ]] && break
+    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+        catalog_acquired=true
+        break
     fi
     sleep 0.1
 done
-printf '%s\n' "$ready" >"$workdir/readyz-initial.json"
-if [[ "$ready" != *'"status":"ready"'* && "$ready" != "ready" ]]; then
-    echo "OxideDNS did not become ready after initial BIND XoT catalog transfer" >&2
+if [[ "$catalog_acquired" != "true" ]]; then
+    echo "OxideDNS did not acquire the initial hidden BIND XoT catalog zone" >&2
+    exit 1
+fi
+
+metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics_initial" >"$workdir/metrics-initial.txt"
+if [[ "$metrics_initial" != *'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052601'* ]] ||
+    [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS initial XoT metrics did not retain the hidden catalog without counting it active" >&2
+    exit 1
+fi
+
+ready_status="$(curl -sS -o "$workdir/readyz-initial.json" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$workdir/readyz-initial.json")"
+if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
+    echo "OxideDNS became ready before the BIND XoT catalog produced an active member zone" >&2
+    exit 1
+fi
+
+if ! dig_until_rcode "$workdir/catalog-hidden.out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the hidden BIND XoT catalog zone query" >&2
+    exit 1
+fi
+
+if ! dig_until_rcode "$workdir/member-before.out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE member.example before BIND XoT catalog assignment" >&2
     exit 1
 fi
 
@@ -411,9 +440,10 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_added=""
 for _ in {1..100}; do
-    member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ "$member_added" == "192.0.2.88" ]]; then
-        break
+    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+        if [[ "$member_added" == "192.0.2.88" ]]; then
+            break
+        fi
     fi
     sleep 0.25
 done
@@ -423,27 +453,38 @@ if [[ "$member_added" != "192.0.2.88" ]]; then
     exit 1
 fi
 
+ready_status="$(curl -sS -o "$workdir/readyz-after-add.json" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$workdir/readyz-after-add.json")"
+if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
+    echo "OxideDNS did not become ready after the first BIND XoT catalog member became active" >&2
+    exit 1
+fi
+
+metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics_after_add" >"$workdir/metrics-after-add.txt"
+if [[ "$metrics_after_add" != *'oxidedns_zones_active 1'* ]]; then
+    echo "OxideDNS XoT metrics did not count exactly one published active member after catalog add" >&2
+    exit 1
+fi
+
 write_catalog_zone 2026052603 no
 cp "$catalog_zone" "$workdir/catalog-removed.zone"
 docker exec "$container" named-checkzone catalog.example. /work/catalog.example.zone >/dev/null
 docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/null
 
-member_removed="192.0.2.88"
-for _ in {1..100}; do
-    member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ -z "$member_removed" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-printf '%s\n' "$member_removed" >"$workdir/member-removed.out"
-if [[ -n "$member_removed" ]]; then
-    echo "OxideDNS still served the BIND XoT catalog member after catalog removal" >&2
+if ! dig_until_rcode "$workdir/member-removed.out" REFUSED 100 0.25 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the BIND XoT catalog member after removal" >&2
     exit 1
 fi
+member_removed="REFUSED"
 
 metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$workdir/metrics-after-remove.txt"
+if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS XoT metrics after catalog removal did not return to zero published active zones" >&2
+    exit 1
+fi
 docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 {
@@ -464,7 +505,8 @@ if [[ -n "$artifact_dir" ]]; then
         named.conf.redacted rndc.conf.redacted oxidedns.toml.redacted named.log oxidedns.log primary-version.txt \
         alpn-probe.txt server-certificate.txt plain-signed-axfr.out tls-signed-catalog-axfr.out \
         catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
-        member-added.out member-removed.out metrics-after-remove.txt readyz-initial.json \
+        catalog-hidden.out member-before.out member-added.out member-removed.out metrics-initial.txt metrics-after-add.txt metrics-after-remove.txt \
+        readyz-initial.json readyz-after-add.json \
         bind-xot-catalog-zone-summary.tsv bind-xot-catalog-zone-traceability.tsv; do
         cp "$workdir/$artifact" "$artifact_dir/$artifact"
     done

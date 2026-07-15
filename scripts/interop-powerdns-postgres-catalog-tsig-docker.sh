@@ -21,6 +21,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/interop-version-evidence.sh
 source "$repo_root/scripts/interop-version-evidence.sh"
+# shellcheck source=scripts/interop-dns-assertions.sh
+source "$repo_root/scripts/interop-dns-assertions.sh"
 
 run_id="$$"
 workdir="$repo_root/target/interop/powerdns-postgres-catalog-tsig-$run_id"
@@ -90,6 +92,10 @@ member_before_out="$workdir/member-before.out"
 member_added_out="$workdir/member-added.out"
 member_updated_out="$workdir/member-updated.out"
 member_removed_out="$workdir/member-removed.out"
+readyz_initial_out="$workdir/readyz-initial.json"
+readyz_after_add_out="$workdir/readyz-after-add.json"
+readyz_after_remove_out="$workdir/readyz-after-remove.json"
+metrics_initial_out="$workdir/metrics-initial.txt"
 metrics_after_add_out="$workdir/metrics-after-add.txt"
 metrics_after_update_out="$workdir/metrics-after-update.txt"
 metrics_after_remove_out="$workdir/metrics-after-remove.txt"
@@ -256,29 +262,42 @@ cargo build -p oxidedns-cli >/dev/null
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
 oxidedns_pid=$!
 
-ready=""
+catalog_acquired=false
 for _ in {1..120}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    if metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics" 2>/dev/null)"; then
+        if [[ "$metrics_initial" == *'oxidedns_zone_soa_serial{zone="catalog.example."} '* ]]; then
+            catalog_acquired=true
+            break
+        fi
     fi
     sleep 0.1
 done
-if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after PowerDNS TSIG catalog transfer" >&2
+if [[ "$catalog_acquired" != "true" ]]; then
+    echo "OxideDNS did not acquire the initial hidden PowerDNS TSIG catalog" >&2
+    exit 1
+fi
+printf '%s\n' "$metrics_initial" >"$metrics_initial_out"
+if [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS counted the hidden empty PowerDNS catalog as an active zone" >&2
     exit 1
 fi
 
-catalog_hidden="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1)"
-printf '%s\n' "$catalog_hidden" >"$catalog_hidden_out"
-if [[ "$catalog_hidden" == *'"2"'* ]]; then
-    echo "OxideDNS served the PowerDNS catalog zone despite serve_catalog_zone=false" >&2
+ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$readyz_initial_out")"
+if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
+    echo "OxideDNS became ready before the PowerDNS catalog produced an active member" >&2
     exit 1
 fi
 
-member_before="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-printf '%s\n' "$member_before" >"$member_before_out"
-if [[ -n "$member_before" ]]; then
-    echo "OxideDNS served PowerDNS member.example before catalog assignment" >&2
+if ! dig_until_rcode "$catalog_hidden_out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the hidden PowerDNS catalog zone query" >&2
+    exit 1
+fi
+
+if ! dig_until_rcode "$member_before_out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE member.example before PowerDNS catalog assignment" >&2
     exit 1
 fi
 
@@ -306,9 +325,10 @@ fi
 
 member_added=""
 for _ in {1..120}; do
-    member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ "$member_added" == "192.0.2.88" ]]; then
-        break
+    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+        if [[ "$member_added" == "192.0.2.88" ]]; then
+            break
+        fi
     fi
     sleep 0.25
 done
@@ -318,9 +338,17 @@ if [[ "$member_added" != "192.0.2.88" ]]; then
     exit 1
 fi
 
+ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$readyz_after_add_out")"
+if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
+    echo "OxideDNS did not become ready after the first PowerDNS catalog member became active" >&2
+    exit 1
+fi
+
 metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
-if [[ "$metrics_after_add" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'* ]]; then
+if [[ "$metrics_after_add" != *'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'* ]] ||
+    [[ "$metrics_after_add" != *'oxidedns_zones_active 1'* ]]; then
     echo "OxideDNS metrics after PowerDNS catalog add missing member SOA serial" >&2
     exit 1
 fi
@@ -335,9 +363,10 @@ fi
 
 member_updated=""
 for _ in {1..120}; do
-    member_updated="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ "$member_updated" == "192.0.2.99" ]]; then
-        break
+    if member_updated="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+        if [[ "$member_updated" == "192.0.2.99" ]]; then
+            break
+        fi
     fi
     sleep 0.25
 done
@@ -376,24 +405,27 @@ if [[ "$catalog_after_remove_axfr" != *'version.catalog.example.'* ]] || [[ "$ca
     exit 1
 fi
 
-member_removed="192.0.2.88"
-for _ in {1..120}; do
-    member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ -z "$member_removed" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-printf '%s\n' "$member_removed" >"$member_removed_out"
-if [[ -n "$member_removed" ]]; then
-    echo "OxideDNS still served the PowerDNS catalog member after removal" >&2
+if ! dig_until_rcode "$member_removed_out" REFUSED 120 0.25 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the PowerDNS catalog member after removal" >&2
     exit 1
 fi
+member_removed="REFUSED"
 
 metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
 if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
     echo "OxideDNS metrics still reported removed PowerDNS catalog member zone" >&2
+    exit 1
+fi
+if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS metrics after PowerDNS catalog removal did not return to zero active zones" >&2
+    exit 1
+fi
+ready_status="$(curl -sS -o "$readyz_after_remove_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$readyz_after_remove_out")"
+if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
+    echo "OxideDNS stayed ready after the last PowerDNS catalog member was removed" >&2
     exit 1
 fi
 
@@ -420,7 +452,8 @@ if [[ -n "$artifact_dir" ]]; then
         pdns.conf oxidedns.toml catalog.example.zone member.example.zone \
         primary-version.txt pdns.log postgres.log \
         catalog-unsigned-axfr.out catalog-signed-axfr.out catalog-after-add-axfr.out \
-        catalog-after-remove-axfr.out catalog-hidden.out \
+        catalog-after-remove-axfr.out catalog-hidden.out readyz-initial.json \
+        readyz-after-add.json readyz-after-remove.json metrics-initial.txt \
         member-before.out member-added.out member-updated.out member-removed.out \
         metrics-after-add.txt metrics-after-update.txt metrics-after-remove.txt \
         pdnsutil-tsig-import.out pdnsutil-catalog-load.out pdnsutil-catalog-kind.out \

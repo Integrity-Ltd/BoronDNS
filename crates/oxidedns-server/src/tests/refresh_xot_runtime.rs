@@ -17,6 +17,192 @@ fn zsm_jitter_stays_within_ten_percent_bounds() {
 }
 
 #[test]
+fn runtime_deadlines_preserve_valid_soa_durations_and_fallback_only_on_overflow() {
+    let now = std::time::Instant::now();
+    let maximum = std::time::Duration::from_secs(MAX_RUNTIME_DURATION_SECS);
+    let two_years = std::time::Duration::from_secs(2 * MAX_RUNTIME_DURATION_SECS);
+    assert_eq!(
+        runtime_deadline(now, std::time::Duration::MAX).duration_since(now),
+        maximum
+    );
+    assert_eq!(
+        runtime_deadline(now, two_years).duration_since(now),
+        two_years
+    );
+
+    let registry = ZoneRefreshRegistry::without_jitter_with_max(
+        std::time::Duration::ZERO,
+        std::time::Duration::MAX,
+        std::time::Duration::ZERO,
+        std::time::Duration::MAX,
+        std::time::Duration::MAX,
+    );
+    let metadata = telemetry_zone_metadata(
+        Some(1),
+        Some(SoaTimers {
+            refresh: two_years.as_secs() as u32,
+            retry: two_years.as_secs() as u32,
+            expire: two_years.as_secs() as u32,
+            minimum: 1,
+        }),
+    );
+    registry.record_loading_start_at(&metadata.origin, now);
+    {
+        let statuses = registry
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        let status = statuses
+            .get(&metadata.origin_key.to_string())
+            .expect("loading status");
+        assert_eq!(
+            status
+                .next_loading_warning
+                .expect("loading warning deadline")
+                .duration_since(now),
+            maximum
+        );
+    }
+
+    registry.record_success_at_with_timestamp(&metadata, now, 1_700_000_000);
+    {
+        let statuses = registry
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        let status = statuses
+            .get(&metadata.origin_key.to_string())
+            .expect("active status");
+        assert_eq!(
+            status
+                .next_refresh
+                .expect("refresh deadline")
+                .duration_since(now),
+            two_years
+        );
+        assert_eq!(
+            status.next_refresh_unix_secs,
+            Some(1_700_000_000 + two_years.as_secs())
+        );
+        assert_eq!(
+            status
+                .expire_at
+                .expect("expiry deadline")
+                .duration_since(now),
+            two_years
+        );
+    }
+
+    registry.record_failure_at_with_timestamp(
+        &metadata.origin,
+        Some(metadata.clone()),
+        now,
+        1_700_000_000,
+    );
+    let statuses = registry
+        .statuses
+        .lock()
+        .expect("zone refresh registry lock poisoned");
+    assert_eq!(
+        statuses[metadata.origin_key.as_ref()]
+            .next_refresh
+            .expect("retry deadline")
+            .duration_since(now),
+        two_years
+    );
+    assert_eq!(
+        statuses[metadata.origin_key.as_ref()].next_refresh_unix_secs,
+        Some(1_700_000_000 + two_years.as_secs())
+    );
+}
+
+#[test]
+fn maximum_zsm_positive_jitter_keeps_monotonic_and_unix_deadlines_consistent() {
+    const JITTER_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+    const JITTER_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
+    fn state_before_sample(sample: u64) -> u64 {
+        let mut inverse = 1u64;
+        for _ in 0..6 {
+            inverse = inverse.wrapping_mul(
+                2u64.wrapping_sub(JITTER_MULTIPLIER.wrapping_mul(inverse)),
+            );
+        }
+        sample
+            .wrapping_sub(JITTER_INCREMENT)
+            .wrapping_mul(inverse)
+    }
+
+    let configured_max = std::time::Duration::from_secs(MAX_RUNTIME_DURATION_SECS);
+    let spread = configured_max.as_millis() / 10;
+    let positive_sample = (spread * 2) as u64;
+    let jittered = jitter_interval(configured_max, positive_sample);
+    assert!(jittered > configured_max);
+    let now = std::time::Instant::now();
+    let unix_secs = 1_700_000_000;
+    let (expected_deadline, effective) =
+        runtime_deadline_with_effective_duration(now, jittered);
+    assert_eq!(effective, jittered);
+
+    let registry = ZoneRefreshRegistry::new(
+        configured_max,
+        configured_max,
+        configured_max,
+        configured_max,
+        configured_max,
+    );
+    let metadata = telemetry_zone_metadata(
+        Some(1),
+        Some(SoaTimers {
+            refresh: 1,
+            retry: 1,
+            expire: 1,
+            minimum: 1,
+        }),
+    );
+    *registry
+        .jitter
+        .state
+        .lock()
+        .expect("ZSM jitter state lock poisoned") = state_before_sample(positive_sample);
+    registry.record_success_at_with_timestamp(&metadata, now, unix_secs);
+    {
+        let statuses = registry
+            .statuses
+            .lock()
+            .expect("zone refresh registry lock poisoned");
+        let status = &statuses[metadata.origin_key.as_ref()];
+        assert_eq!(status.next_refresh, Some(expected_deadline));
+        assert_eq!(
+            status.next_refresh_unix_secs,
+            Some(unix_secs + effective.as_secs())
+        );
+    }
+
+    *registry
+        .jitter
+        .state
+        .lock()
+        .expect("ZSM jitter state lock poisoned") = state_before_sample(positive_sample);
+    registry.record_failure_at_with_timestamp(
+        &metadata.origin,
+        Some(metadata.clone()),
+        now,
+        unix_secs,
+    );
+    let statuses = registry
+        .statuses
+        .lock()
+        .expect("zone refresh registry lock poisoned");
+    let status = &statuses[metadata.origin_key.as_ref()];
+    assert_eq!(status.next_refresh, Some(expected_deadline));
+    assert_eq!(
+        status.next_refresh_unix_secs,
+        Some(unix_secs + effective.as_secs())
+    );
+}
+
+#[test]
 fn refresh_registry_schedules_refresh_and_retry() {
     let registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::from_secs(10),
@@ -425,22 +611,375 @@ fn refresh_registry_expires_zone_once() {
             vec![soa_rdata()],
         )],
     );
+    let zones = ZoneStore::new();
 
     registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    zones.insert_snapshot(snapshot);
     assert!(
         registry
-            .expire_due_zones(now + std::time::Duration::from_secs(604799))
+            .expire_due_zones(&zones, now + std::time::Duration::from_secs(604799))
             .is_empty()
     );
     assert_eq!(
-        registry.expire_due_zones(now + std::time::Duration::from_secs(604800)),
+        registry.expire_due_zones(&zones, now + std::time::Duration::from_secs(604800)),
         vec![origin]
     );
     assert!(
         registry
-            .expire_due_zones(now + std::time::Duration::from_secs(604801))
+            .expire_due_zones(&zones, now + std::time::Duration::from_secs(604801))
             .is_empty()
     );
+}
+
+#[test]
+fn expiration_candidate_removed_before_attempt_does_not_recreate_refresh_status() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let now = std::time::Instant::now();
+    let origin = DomainName::from_absolute_str("removed.example.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata()],
+        )],
+    );
+    let zones = ZoneStore::new();
+    registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    zones.insert_snapshot(snapshot);
+
+    let mut removed = false;
+    let expired = registry.expire_due_zones_with_hooks(
+        &zones,
+        now + std::time::Duration::from_secs(604_800),
+        |_| {
+            if !removed {
+                removed = true;
+                registry.remove_zone(&origin);
+                assert!(zones.remove_zone(&origin));
+            }
+        },
+        |_| panic!("a removed expiration candidate must not reach publication"),
+    );
+
+    assert!(expired.is_empty());
+    assert!(!zones.contains_exact_zone_for_control(&origin));
+    assert!(
+        !registry
+            .statuses
+            .lock()
+            .unwrap()
+            .contains_key(&origin.canonical_key()),
+        "expiration must not recreate deprovisioned refresh state"
+    );
+}
+
+#[test]
+fn stale_expiration_cannot_expire_remove_readd_replacement() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let now = std::time::Instant::now();
+    let origin = DomainName::from_absolute_str("replacement.example.test.").unwrap();
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata()],
+        )],
+    );
+    let zones = ZoneStore::new();
+    registry.record_success_at(&zone_metadata_for(&snapshot), now);
+    zones.insert_snapshot(snapshot);
+
+    let mut replaced = false;
+    let expired = registry.expire_due_zones_with_hooks(
+        &zones,
+        now + std::time::Duration::from_secs(604_800),
+        |_| {},
+        |_| {
+            if !replaced {
+                replaced = true;
+                registry.remove_zone(&origin);
+                assert!(zones.remove_zone(&origin));
+                registry.record_loading_start_at(&origin, now);
+                zones.insert_loading(origin.clone());
+            }
+        },
+    );
+
+    assert!(expired.is_empty());
+    assert_eq!(
+        zones
+            .exact_zone_control_metadata(&origin)
+            .expect("replacement remains installed")
+            .state,
+        ZoneState::Loading
+    );
+    let statuses = registry.statuses.lock().unwrap();
+    let replacement = statuses
+        .get(&origin.canonical_key())
+        .expect("replacement refresh status remains installed");
+    assert!(!replacement.expired);
+    assert!(!replacement.in_progress);
+}
+
+#[tokio::test]
+async fn paused_same_zone_attempt_cannot_publish_after_a_newer_refresh() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let zones = ZoneStore::new();
+    zones.insert_loading(origin.clone());
+    registry.record_loading_start(&origin);
+
+    let mut older = registry.begin_attempt(&origin).await;
+    assert!(
+        registry.try_begin_attempt(&origin).is_none(),
+        "same-zone ownership must reject a concurrent publication attempt"
+    );
+    let (newer_acquired_tx, mut newer_acquired_rx) = oneshot::channel();
+    let newer_registry = registry.clone();
+    let newer_origin = origin.clone();
+    let newer_zones = zones.clone();
+    let newer = tokio::spawn(async move {
+        let mut attempt = newer_registry.begin_attempt(&newer_origin).await;
+        let _ = newer_acquired_tx.send(());
+        let snapshot = ZoneSnapshot::active(
+            newer_origin.clone(),
+            Some(3),
+            vec![Rrset::new(
+                newer_origin.clone(),
+                RecordType::Soa as u16,
+                1,
+                3600,
+                vec![soa_rdata_with_serial(3)],
+            )],
+        );
+        let metadata = zone_metadata_for(&snapshot);
+        newer_zones.insert_snapshot(snapshot);
+        attempt.record_success(&metadata);
+        attempt.finish();
+    });
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            &mut newer_acquired_rx
+        )
+        .await
+        .is_err(),
+        "newer refresh must remain paused behind the older zone owner"
+    );
+
+    let older_snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(2),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    );
+    let older_metadata = zone_metadata_for(&older_snapshot);
+    zones.insert_snapshot(older_snapshot);
+    older.record_success(&older_metadata);
+    older.finish();
+
+    newer_acquired_rx
+        .await
+        .expect("newer refresh acquires ownership after older completion");
+    newer.await.unwrap();
+    assert_eq!(
+        zones
+            .exact_zone_control_metadata(&origin)
+            .expect("newest publication remains active")
+            .serial,
+        Some(3)
+    );
+}
+
+#[tokio::test]
+async fn paused_success_ownership_prevents_expiry_from_racing_publication() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    let zones = ZoneStore::new();
+    let base = std::time::Instant::now();
+    let old_snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(1)],
+        )],
+    );
+    registry.record_success_at(&zone_metadata_for(&old_snapshot), base);
+    zones.insert_snapshot(old_snapshot);
+
+    let old_expiry = base + std::time::Duration::from_secs(604_800);
+    let mut refresh = registry.begin_attempt(&origin).await;
+    assert!(registry.expire_due_zones(&zones, old_expiry).is_empty());
+
+    let new_snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(2),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    );
+    let new_metadata = zone_metadata_for(&new_snapshot);
+    zones.insert_snapshot(new_snapshot);
+    refresh.record_success_at(
+        &new_metadata,
+        base + std::time::Duration::from_secs(604_799),
+        604_799,
+    );
+    refresh.finish();
+
+    assert!(registry.expire_due_zones(&zones, old_expiry).is_empty());
+    let metadata = zones
+        .exact_zone_control_metadata(&origin)
+        .expect("successful refresh remains published");
+    assert_eq!(metadata.state, ZoneState::Active);
+    assert_eq!(metadata.serial, Some(2));
+}
+
+#[tokio::test]
+async fn panicked_zone_owner_is_immediately_rescheduled() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("example.test.").unwrap();
+    registry.record_loading_start(&origin);
+    let panic_registry = registry.clone();
+    let panic_origin = origin.clone();
+
+    let task = tokio::spawn(async move {
+        let _attempt = panic_registry.begin_attempt(&panic_origin).await;
+        panic!("deterministic transfer task panic");
+    });
+    assert!(task.await.expect_err("task must panic").is_panic());
+
+    assert_eq!(
+        registry.start_due_refreshes(std::time::Instant::now()),
+        vec![origin]
+    );
+}
+
+#[tokio::test]
+async fn removed_zone_rejects_paused_attempt_success_without_requeue() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("removed-success.test.").unwrap();
+    registry.record_loading_start(&origin);
+    let mut attempt = registry.begin_attempt(&origin).await;
+    let snapshot = ZoneSnapshot::active(
+        origin.clone(),
+        Some(2),
+        vec![Rrset::new(
+            origin.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(2)],
+        )],
+    );
+    let metadata = zone_metadata_for(&snapshot);
+
+    registry.remove_zone(&origin);
+    assert!(!attempt.record_success(&metadata));
+    attempt.finish();
+    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
+    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+}
+
+#[tokio::test]
+async fn removed_zone_rejects_paused_attempt_failure_without_requeue() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("removed-failure.test.").unwrap();
+    registry.record_loading_start(&origin);
+    let attempt = registry.begin_attempt(&origin).await;
+
+    registry.remove_zone(&origin);
+    attempt.record_failure(None, Some("paused failure".to_owned()));
+    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
+    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+}
+
+#[tokio::test]
+async fn stale_queued_refresh_cannot_reregister_removed_zone() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("stale-queued.test.").unwrap();
+    registry.record_loading_start(&origin);
+    registry.remove_zone(&origin);
+
+    assert!(registry.begin_registered_attempt(&origin).await.is_none());
+    assert!(!registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
+    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
+}
+
+#[tokio::test]
+async fn old_attempt_cannot_mutate_readded_zone_generation() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let origin = DomainName::from_absolute_str("reassigned.test.").unwrap();
+    registry.record_loading_start(&origin);
+    let mut old_attempt = registry.begin_attempt(&origin).await;
+    let snapshot = ZoneSnapshot::active(origin.clone(), Some(9), Vec::new());
+    let metadata = zone_metadata_for(&snapshot);
+
+    registry.remove_zone(&origin);
+    registry.record_loading_start(&origin);
+    assert!(!old_attempt.record_success(&metadata));
+    old_attempt.finish();
+
+    assert!(registry.snapshots_by_zone().contains_key(&origin.canonical_key()));
+    assert!(registry.start_due_refreshes(std::time::Instant::now()).is_empty());
 }
 
 #[test]
@@ -454,6 +993,187 @@ fn ixfr_cooldown_registry_disables_until_cooldown_expires() {
     registry.record_unsupported_at(&zone, primary, now);
     assert!(registry.is_disabled_at(&zone, primary, now + std::time::Duration::from_secs(59)));
     assert!(!registry.is_disabled_at(&zone, primary, now + std::time::Duration::from_secs(60)));
+}
+
+#[test]
+fn ixfr_cooldown_clamps_extreme_deadline_without_panicking() {
+    let registry = IxfrCooldownRegistry::new(std::time::Duration::MAX);
+    let zone = DomainName::from_absolute_str("extreme.test.").unwrap();
+    let primary = "192.0.2.53:53".parse().unwrap();
+    let now = std::time::Instant::now();
+
+    registry.record_unsupported_at(&zone, primary, now);
+    let deadline = registry
+        .disabled_until
+        .lock()
+        .expect("IXFR cooldown registry lock poisoned")[&IxfrCooldownKey::new(&zone, primary, 0)];
+    assert_eq!(
+        deadline.duration_since(now),
+        std::time::Duration::from_secs(MAX_RUNTIME_DURATION_SECS)
+    );
+}
+
+#[test]
+fn ixfr_cooldown_registry_retains_all_live_keys_and_purges_removed_or_expired_zones() {
+    let registry = IxfrCooldownRegistry::new(std::time::Duration::from_secs(60));
+    let now = std::time::Instant::now();
+    let primary: std::net::SocketAddr = "192.0.2.53:53".parse().unwrap();
+    let count = 16 * 1024 + 4096;
+
+    for index in 0..count {
+        let zone = DomainName::from_absolute_str(&format!("member-{index}.catalog.test.")).unwrap();
+        registry.record_unsupported_at(&zone, primary, now);
+    }
+
+    assert_eq!(
+        registry
+            .disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .len(),
+        count
+    );
+
+    let first = DomainName::from_absolute_str("member-0.catalog.test.").unwrap();
+    assert!(registry.is_disabled_at(&first, primary, now));
+    for index in 0..4096 {
+        let removed =
+            DomainName::from_absolute_str(&format!("member-{index}.catalog.test.")).unwrap();
+        registry.remove_zone(&removed);
+    }
+    assert!(!registry.is_disabled_at(&first, primary, now));
+    assert_eq!(
+        registry
+            .disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .len(),
+        count - 4096
+    );
+
+    registry.prune_expired_at(now + std::time::Duration::from_secs(60));
+
+    assert_eq!(
+        registry
+            .disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .len(),
+        0
+    );
+    let last = DomainName::from_absolute_str(&format!("member-{}.catalog.test.", count - 1)).unwrap();
+    assert!(!registry.is_disabled_at(&last, primary, now));
+    assert!(
+        !registry
+            .disabled_until
+            .lock()
+            .expect("IXFR cooldown registry lock poisoned")
+            .contains_key(&IxfrCooldownKey::new(&last, primary, 0))
+    );
+}
+
+#[test]
+fn ixfr_bulk_catalog_cleanup_visits_each_live_key_once_at_20k_scale() {
+    let registry = IxfrCooldownRegistry::new(std::time::Duration::from_secs(60));
+    let now = std::time::Instant::now();
+    let primary: std::net::SocketAddr = "192.0.2.53:53".parse().unwrap();
+    let count = 20_000usize;
+    let zones = (0..count)
+        .map(|index| {
+            DomainName::from_absolute_str(&format!("bulk-{index}.catalog.test.")).unwrap()
+        })
+        .collect::<Vec<_>>();
+    for zone in &zones {
+        registry.record_unsupported_at(zone, primary, now);
+    }
+    let removed_zones = zones.iter().step_by(2).cloned().collect::<Vec<_>>();
+    let changed_plans = zones
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .cloned()
+        .map(|zone| (zone, 1))
+        .collect::<Vec<_>>();
+
+    let started = std::time::Instant::now();
+    let (visited, removed) =
+        registry.reconcile_catalog_generations(&removed_zones, &changed_plans);
+    let elapsed = started.elapsed();
+
+    assert_eq!(visited, count, "bulk cleanup performs one registry scan");
+    assert_eq!(removed, count);
+    assert!(registry.disabled_until.lock().unwrap().is_empty());
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "20k-key bulk cleanup unexpectedly took {elapsed:?}"
+    );
+}
+
+#[test]
+fn ixfr_retained_plan_generation_churn_keeps_one_live_generation() {
+    let registry = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+    let now = std::time::Instant::now();
+    let zone = DomainName::from_absolute_str("churn.catalog.test.").unwrap();
+    let primary: std::net::SocketAddr = "192.0.2.53:53".parse().unwrap();
+
+    for generation in 1..=20_000u64 {
+        registry.record_unsupported_for_generation_at(&zone, primary, generation, now);
+        let (visited, removed) = registry.retain_zone_generation(&zone, generation);
+        assert!(visited <= 2);
+        assert!(removed <= 1);
+        assert_eq!(registry.disabled_until.lock().unwrap().len(), 1);
+        assert!(registry.is_disabled_for_generation_at(
+            &zone,
+            primary,
+            generation,
+            now,
+        ));
+    }
+}
+
+#[test]
+fn refresh_ownership_registry_prunes_only_dead_catalog_churn_keys() {
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    let live = DomainName::from_absolute_str("live.catalog.test.").unwrap();
+    let live_attempt = registry
+        .try_begin_attempt(&live)
+        .expect("first live attempt acquires ownership");
+    registry.remove_zone(&live);
+
+    for index in 0..4096 {
+        let zone = DomainName::from_absolute_str(&format!("member-{index}.catalog.test.")).unwrap();
+        let attempt = registry
+            .try_begin_attempt(&zone)
+            .expect("unique churn zone acquires ownership");
+        registry.remove_zone(&zone);
+        attempt.finish();
+    }
+
+    let ownerships = registry
+        .ownerships
+        .lock()
+        .expect("zone refresh ownership map lock poisoned");
+    assert!(
+        ownerships.len() <= RUNTIME_REGISTRY_PRUNE_INTERVAL as usize,
+        "dead weak ownerships are pruned on a bounded cadence"
+    );
+    assert!(
+        ownerships
+            .get(&live.canonical_key())
+            .and_then(|ownership| ownership.upgrade())
+            .is_some(),
+        "pruning must retain a mutex held by a live attempt"
+    );
+    drop(ownerships);
+    assert!(
+        registry.try_begin_attempt(&live).is_none(),
+        "retained live ownership continues to serialize the zone"
+    );
+    live_attempt.finish();
 }
 
 #[tokio::test]
@@ -486,11 +1206,11 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
         )],
     ));
     let (tx, rx) = mpsc::channel(1);
-    tx.send(RefreshRequest {
-        zone: apex,
-        requested_serial: Some(2),
-        reason: super::RefreshReason::Notify,
-    })
+    tx.send(RefreshRequest::new(
+        apex,
+        Some(2),
+        super::RefreshReason::Notify,
+    ))
     .await
     .unwrap();
     drop(tx);
@@ -520,7 +1240,8 @@ async fn notify_refresh_worker_publishes_requested_refresh() {
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(4)),
             max_resident_transfer_tasks: 16,
-            telemetry: ControlPlaneTelemetryReporter::disabled(),
+            telemetry: ControlPlaneTelemetryClient::disabled(),
+            admission: RefreshAdmission::new(),
         },
     )
     .await
@@ -591,11 +1312,11 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
     }
     let (tx, rx) = mpsc::channel(2);
     for zone in ["alpha.test.", "beta.test."] {
-        tx.send(RefreshRequest {
-            zone: DomainName::from_absolute_str(zone).unwrap(),
-            requested_serial: Some(2),
-            reason: super::RefreshReason::Notify,
-        })
+        tx.send(RefreshRequest::new(
+            DomainName::from_absolute_str(zone).unwrap(),
+            Some(2),
+            super::RefreshReason::Notify,
+        ))
         .await
         .unwrap();
     }
@@ -625,7 +1346,8 @@ async fn notify_refresh_worker_honors_transfer_concurrency_limit() {
             tcp_connect_timeout: std::time::Duration::from_secs(5),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(2)),
             max_resident_transfer_tasks: 8,
-            telemetry: ControlPlaneTelemetryReporter::disabled(),
+            telemetry: ControlPlaneTelemetryClient::disabled(),
+            admission: RefreshAdmission::new(),
         },
     ));
 
@@ -689,11 +1411,11 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
     zones.insert_loading_hidden(catalog_origin.clone());
     zones.insert_loading(filler_origin.clone());
     let (tx, rx) = mpsc::channel(1);
-    tx.send(RefreshRequest {
-        zone: catalog_origin,
-        requested_serial: Some(2),
-        reason: super::RefreshReason::Notify,
-    })
+    tx.send(RefreshRequest::new(
+        catalog_origin,
+        Some(2),
+        super::RefreshReason::Notify,
+    ))
     .await
     .unwrap();
 
@@ -721,23 +1443,30 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
             tcp_connect_timeout: std::time::Duration::from_millis(50),
             transfer_limit: Arc::new(tokio::sync::Semaphore::new(1)),
             max_resident_transfer_tasks: 1,
-            telemetry: ControlPlaneTelemetryReporter::disabled(),
+            telemetry: ControlPlaneTelemetryClient::disabled(),
+            admission: RefreshAdmission::new(),
         },
     ));
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(RefreshRequest {
-        zone: filler_origin.clone(),
-        requested_serial: Some(2),
-        reason: super::RefreshReason::Notify,
-    }))
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(RefreshRequest::new(
+            filler_origin.clone(),
+            Some(2),
+            super::RefreshReason::Notify,
+        )),
+    )
     .await
     .expect("refresh worker should drain the bounded queue before transfer permits free")
     .expect("first filler refresh request queued");
-    tokio::time::timeout(std::time::Duration::from_secs(1), tx.send(RefreshRequest {
-        zone: filler_origin,
-        requested_serial: Some(3),
-        reason: super::RefreshReason::Notify,
-    }))
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tx.send(RefreshRequest::new(
+            filler_origin,
+            Some(3),
+            super::RefreshReason::Notify,
+        )),
+    )
     .await
     .expect("refresh worker should drain a full queue while a catalog apply may enqueue")
     .expect("second filler refresh request queued");
@@ -760,6 +1489,93 @@ async fn notify_refresh_worker_drains_queue_while_transfer_permits_are_saturated
         .expect("refresh worker should not deadlock on catalog member enqueue")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn closed_refresh_admission_discards_buffered_work_without_starting_a_transfer() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "shutdown-pending.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let origin = DomainName::from_absolute_str("shutdown-pending.test.").unwrap();
+    let plan = transfer_plan.get(&origin).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_loading(origin.clone());
+    let registry = ZoneRefreshRegistry::without_jitter(
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+        std::time::Duration::ZERO,
+    );
+    registry.record_loading_start(&origin);
+    registry
+        .statuses
+        .lock()
+        .expect("refresh status lock")
+        .get_mut(&origin.canonical_key())
+        .expect("loading refresh status")
+        .in_progress = true;
+
+    let (tx, rx) = mpsc::channel(1);
+    let mut request = RefreshRequest::new(
+        origin.clone(),
+        Some(2),
+        super::RefreshReason::Notify,
+    )
+    .with_plan_generation(&plan);
+    request.retry_after_queue_drop = Some(super::RefreshReason::Notify);
+    tx.send(request).await.expect("buffer refresh before shutdown");
+    let admission = RefreshAdmission::new();
+    admission.close();
+    let metrics = RuntimeMetrics::new();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        serve_refresh_requests(
+            rx,
+            zones,
+            CatalogRuntime {
+                manager: CatalogManager::from_config(&config),
+                transfer_plan,
+                refresh_registry: registry.clone(),
+                notify_authority: NotifyAuthority::from_config_for_test(&config),
+                refresh_tx: mpsc::channel(1).0.downgrade(),
+                secrets: SecretManager::from_config(&config)
+                    .expect("test configuration loads secret snapshot"),
+            },
+            IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600)),
+            metrics.clone(),
+            RefreshWorkerSettings {
+                axfr_timeout: std::time::Duration::from_secs(1),
+                ixfr_timeout: std::time::Duration::from_secs(1),
+                tcp_connect_timeout: std::time::Duration::from_secs(1),
+                transfer_limit: Arc::new(tokio::sync::Semaphore::new(1)),
+                max_resident_transfer_tasks: 1,
+                telemetry: ControlPlaneTelemetryClient::disabled(),
+                admission,
+            },
+        ),
+    )
+    .await
+    .expect("closed admission wakes and drains refresh worker")
+    .expect("refresh worker exits cleanly");
+
+    assert_eq!(metrics.snapshot().axfr_started, 0);
+    assert_eq!(metrics.snapshot().ixfr_started, 0);
+    let statuses = registry.statuses.lock().expect("refresh status lock");
+    let status = statuses
+        .get(&origin.canonical_key())
+        .expect("refresh status retained for a future process start");
+    assert!(!status.in_progress);
+    assert!(status.next_refresh.is_some());
 }
 
 #[tokio::test]
@@ -839,6 +1655,182 @@ async fn refresh_skips_axfr_when_soa_poll_confirms_current_serial() {
             .answers
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn expired_zone_reactivates_when_serial_hint_confirms_retained_snapshot_current() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "expired-current.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect("valid config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let apex = DomainName::from_absolute_str("expired-current.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        apex.clone(),
+        Some(7),
+        vec![Rrset::new(
+            apex.clone(),
+            RecordType::Soa as u16,
+            1,
+            3600,
+            vec![soa_rdata_with_serial(7)],
+        )],
+    ));
+    let retained = zones
+        .exact_snapshot_for_transfer(&apex)
+        .expect("active retained snapshot")
+        .snapshot_arc_for_transfer()
+        .clone();
+    assert!(zones.expire_zone(&apex));
+    assert_eq!(
+        zones.exact_zone_control_metadata(&apex).unwrap().state,
+        ZoneState::Expired
+    );
+    assert!(!notify_serial_is_current(
+        &zones,
+        &RefreshRequest::new(
+            apex.clone(),
+            Some(7),
+            super::RefreshReason::Notify,
+        ),
+    ));
+    assert!(zones.find_published_zone(&apex).is_some());
+
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+    let metadata = refresh_zone_metadata_from_primaries(
+        &zones,
+        &plan,
+        Some(7),
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+            ixfr_timeout: std::time::Duration::from_secs(1),
+            axfr_timeout: std::time::Duration::from_secs(1),
+            tcp_connect_timeout: std::time::Duration::from_secs(1),
+            reason: "notify",
+        },
+    )
+    .await
+    .expect("same-serial confirmation is a successful refresh");
+
+    assert_eq!(metadata.state, ZoneState::Active);
+    assert_eq!(metadata.serial, Some(7));
+    let reactivated = zones
+        .exact_snapshot_for_transfer(&apex)
+        .expect("reactivated retained snapshot");
+    assert_eq!(reactivated.metadata().state, ZoneState::Active);
+    assert!(Arc::ptr_eq(
+        &retained,
+        reactivated.snapshot_arc_for_transfer()
+    ));
+    assert_eq!(zones.active_count(), 1);
+}
+
+#[tokio::test]
+async fn malformed_catalog_axfr_is_rejected_before_publication_and_success() {
+    let primary = spawn_signed_invalid_catalog_axfr_primary("catalog-invalid.test.", 2).await;
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:5300"]
+            listen_tcp = []
+
+            [[tsig_keys]]
+            name = "catalog-key."
+            algorithm = "hmac-sha256"
+            secret = "dG9wc2VjcmV0"
+
+            [[catalog_zones]]
+            name = "catalog-invalid.test."
+            catalog_primaries = ["{primary}"]
+            member_primaries = ["127.0.0.1:9"]
+            catalog_tsig_key = "catalog-key."
+            member_tsig_key = "catalog-key."
+        "#
+    ))
+    .expect("valid catalog config");
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let origin = DomainName::from_absolute_str("catalog-invalid.test.").unwrap();
+    let plan = transfer_plan.get(&origin).expect("catalog transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_snapshot(ZoneSnapshot::active(
+        origin.clone(),
+        Some(1),
+        vec![Rrset::new(
+            DomainName::from_absolute_str("version.catalog-invalid.test.").unwrap(),
+            RecordType::Txt as u16,
+            1,
+            0,
+            vec![vec![1, b'2']],
+        )],
+    ));
+    let retained = zones
+        .exact_snapshot_for_transfer(&origin)
+        .expect("last known-good catalog snapshot")
+        .snapshot_arc_for_transfer()
+        .clone();
+    let catalog_manager = CatalogManager::from_config(&config);
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+    ixfr_cooldowns.record_unsupported_for_generation_at(
+        &origin,
+        primary,
+        plan.generation(),
+        std::time::Instant::now(),
+    );
+
+    let outcome = refresh_zone_from_primaries_with_outcome(
+        &zones,
+        &plan,
+        Some(2),
+        &catalog_manager,
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan,
+            secrets: SecretManager::from_config(&config)
+                .expect("test configuration loads secret snapshot"),
+            ixfr_timeout: std::time::Duration::from_secs(1),
+            axfr_timeout: std::time::Duration::from_secs(1),
+            tcp_connect_timeout: std::time::Duration::from_secs(1),
+            reason: "notify",
+        },
+    )
+    .await;
+
+    assert!(outcome.success.is_none());
+    assert!(!outcome.obsolete);
+    assert!(
+        outcome
+            .failure_cause
+            .as_deref()
+            .is_some_and(|cause| cause.contains("invalid catalog snapshot"))
+    );
+    let current = zones
+        .exact_snapshot_for_transfer(&origin)
+        .expect("last known-good catalog remains installed");
+    assert_eq!(current.metadata().serial, Some(1));
+    assert!(Arc::ptr_eq(
+        &retained,
+        current.snapshot_arc_for_transfer()
+    ));
+    assert_eq!(metrics.snapshot().axfr_started, 1);
+    assert_eq!(metrics.snapshot().axfr_succeeded, 0);
+    assert_eq!(metrics.snapshot().axfr_failed, 1);
 }
 
 #[tokio::test]
@@ -1653,17 +2645,130 @@ fn file_descriptor_limit_check_uses_srs_resource_formula() {
     )
     .expect("valid config");
 
-    assert_eq!(required_file_descriptor_limit(&config), 246);
-    validate_file_descriptor_limit_value(&config, 246).expect("exact required limit is enough");
+    assert_eq!(required_file_descriptor_limit(&config), 248);
+    validate_file_descriptor_limit_value(&config, 248).expect("exact required limit is enough");
 
-    let error = validate_file_descriptor_limit_value(&config, 245)
+    let error = validate_file_descriptor_limit_value(&config, 247)
         .expect_err("below required limit should fail");
     assert!(matches!(
         error,
         RuntimeError::InsufficientFileDescriptorLimit {
-            current: 245,
-            required: 246
+            current: 247,
+            required: 248
         }
+    ));
+}
+
+#[test]
+fn file_descriptor_limit_counts_udp_tcp_and_health_listener_shape() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300", "127.0.0.1:5301"]
+                listen_tcp = ["127.0.0.1:5300"]
+                health = "127.0.0.1:8080"
+
+                [limits]
+                udp_reuseport_workers = 4
+                max_tcp_connections = 1
+                max_concurrent_transfers = 1
+
+                [health]
+                max_connections = 7
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid multi-listener config");
+
+    // (1 TCP connection + 1 transfer + 8 UDP worker sockets + 1 TCP
+    // listener + 1 health listener + 7 accepted health connections + 1
+    // transient post-accept health descriptor + 100
+    // reserve) * 2.
+    assert_eq!(required_file_descriptor_limit(&config), 240);
+    validate_file_descriptor_limit_value(&config, 240).expect("exact requirement is accepted");
+    assert!(matches!(
+        validate_file_descriptor_limit_value(&config, 239),
+        Err(RuntimeError::InsufficientFileDescriptorLimit {
+            current: 239,
+            required: 240
+        })
+    ));
+}
+
+#[test]
+fn file_descriptor_limit_counts_af_xdp_queues_and_kernel_fallback_socket() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [limits]
+                udp_backend = "af_xdp"
+                udp_reuseport_workers = 4
+                max_tcp_connections = 1
+                max_concurrent_transfers = 1
+
+                [xdp]
+                interface = "lo"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid AF_XDP descriptor-shape config");
+
+    // Four XSK queue descriptors plus one kernel UDP fallback socket.
+    assert_eq!(required_file_descriptor_limit(&config), 214);
+    assert!(matches!(
+        validate_file_descriptor_limit_value(&config, 213),
+        Err(RuntimeError::InsufficientFileDescriptorLimit {
+            current: 213,
+            required: 214
+        })
+    ));
+}
+
+#[test]
+fn file_descriptor_limit_uses_explicit_af_xdp_queue_count() {
+    let config = ServerConfig::from_toml_str(
+        r#"
+                [server]
+                listen_udp = ["192.0.2.1:5300"]
+                listen_tcp = []
+
+                [limits]
+                udp_backend = "af_xdp"
+                udp_reuseport_workers = 1
+                max_tcp_connections = 1
+                max_concurrent_transfers = 1
+
+                [xdp]
+                interface = "eth0"
+                redirect_object = "target/oxidedns-xdp-redirect.bpf.o"
+                queue_ids = [3, 17, 41]
+
+                [[zones]]
+                name = "example.test."
+                primaries = ["192.0.2.53:53"]
+            "#,
+    )
+    .expect("valid sparse AF_XDP queue configuration");
+
+    // One TCP connection + one transfer + three XSK/UMEM workers + one
+    // shared kernel fallback UDP socket + 100 reserve, all doubled.
+    assert_eq!(required_file_descriptor_limit(&config), 212);
+    assert!(matches!(
+        validate_file_descriptor_limit_value(&config, 211),
+        Err(RuntimeError::InsufficientFileDescriptorLimit {
+            current: 211,
+            required: 212
+        })
     ));
 }
 
@@ -1727,6 +2832,143 @@ fn runtime_config_warnings_report_expiring_xot_trust_anchors() {
 }
 
 #[test]
+fn runtime_config_warnings_report_expiring_profile_backed_xot_trust_anchors() {
+    let root = unique_test_path("oxidedns-xot-profile-expiry-warning", "dir");
+    let (trust_anchor, key_path) =
+        write_expiring_self_signed_xot_cert_files_for_name("primary.example.test");
+    copy_secret_store_file(&root, &trust_anchor, "trust-anchor.pem");
+    write_secret_store_manifest(
+        &root,
+        r#"
+            [[xot_profiles]]
+            name = "customer-xot"
+            trust_anchors = ["trust-anchor.pem"]
+        "#,
+    );
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [secret_store]
+                path = "{}"
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                xot_profile = "customer-xot"
+            "#,
+        root.display()
+    ))
+    .expect("valid profile-backed XoT config");
+
+    let warnings = runtime_config_warnings_at(&config, 1_779_667_200)
+        .expect("profile-backed XoT warning collection succeeds");
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].code, "xot_trust_anchor_expiring_soon");
+    assert!(warnings[0].message.contains("within 30 days"));
+    assert!(
+        warnings[0]
+            .parameter
+            .contains("zones[example.test.].transfer_primaries[192.0.2.53:853]")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_file(trust_anchor);
+    let _ = std::fs::remove_file(key_path);
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_backed_expiry_warnings_use_captured_certificates_after_source_mutation() {
+    for mutation in ["replacement", "removal", "malformed"] {
+        let root = unique_test_path(
+            &format!("oxidedns-xot-profile-warning-{mutation}"),
+            "dir",
+        );
+        let (trust_anchor, key_path) =
+            write_expiring_self_signed_xot_cert_files_for_name("primary.example.test");
+        let snapshot_anchor = copy_secret_store_file(&root, &trust_anchor, "trust-anchor.pem");
+        write_secret_store_manifest(
+            &root,
+            r#"
+                [[xot_profiles]]
+                name = "customer-xot"
+                trust_anchors = ["trust-anchor.pem"]
+            "#,
+        );
+        let config = ServerConfig::from_toml_str(&format!(
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [secret_store]
+                path = "{}"
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "192.0.2.53:853"
+                transport = "xot"
+                server_name = "primary.example.test"
+                xot_profile = "customer-xot"
+            "#,
+            root.display()
+        ))
+        .expect("valid profile-backed XoT config");
+        let secrets = SecretManager::from_config(&config).expect("capture trust anchor snapshot");
+        let mut replacement_material = None;
+
+        match mutation {
+            "replacement" => {
+                let (replacement, replacement_key) =
+                    write_self_signed_xot_cert_files_for_name("primary.example.test");
+                let staged = root.join("trust-anchor.next");
+                std::fs::copy(&replacement, &staged).expect("stage replacement trust anchor");
+                std::fs::rename(staged, &snapshot_anchor)
+                    .expect("atomically replace captured trust-anchor source");
+                replacement_material = Some((replacement, replacement_key));
+            }
+            "removal" => {
+                std::fs::remove_file(&snapshot_anchor).expect("remove captured trust-anchor source");
+            }
+            "malformed" => {
+                std::fs::write(&snapshot_anchor, b"not a certificate\n")
+                    .expect("malform captured trust-anchor source");
+            }
+            _ => unreachable!(),
+        }
+
+        let warnings = runtime_config_warnings_with_secrets_at(
+            &config,
+            &secrets,
+            1_779_667_200,
+        )
+        .unwrap_or_else(|error| {
+            panic!("{mutation} source must not affect captured warning material: {error}")
+        });
+        assert_eq!(warnings.len(), 1, "mutation {mutation}");
+        assert_eq!(warnings[0].code, "xot_trust_anchor_expiring_soon");
+
+        if let Some((replacement, replacement_key)) = replacement_material {
+            let _ = std::fs::remove_file(replacement);
+            let _ = std::fs::remove_file(replacement_key);
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(trust_anchor);
+        let _ = std::fs::remove_file(key_path);
+    }
+}
+
+#[test]
 fn runtime_config_validation_rejects_missing_xot_trust_anchor_file() {
     let missing_trust_anchor = unique_test_path("missing-xot-ca", "pem");
     let config = ServerConfig::from_toml_str(&format!(
@@ -1781,8 +3023,8 @@ fn runtime_config_validation_rejects_malformed_xot_trust_anchor_file() {
     assert!(error.to_string().contains("did not contain certificates"));
 }
 
-#[tokio::test]
-async fn runtime_rejects_invalid_xot_config_before_startup() {
+#[test]
+fn runtime_rejects_invalid_xot_config_before_startup() {
     let missing_trust_anchor = unique_test_path("missing-runtime-xot-ca", "pem");
     let config = ServerConfig::from_toml_str(&format!(
         r#"
@@ -1804,11 +3046,34 @@ async fn runtime_rejects_invalid_xot_config_before_startup() {
     .expect("schema-valid config");
 
     let error = Runtime::new(config)
-        .run_with_shutdown_signal(async { Ok("test") })
-        .await
         .expect_err("runtime must reject invalid XoT TLS files before startup");
 
     assert!(matches!(error, RuntimeError::InvalidRuntimeConfig(_)));
+}
+
+#[test]
+fn runtime_revalidates_tcp_inflight_capacity_before_binding_or_spawning_tasks() {
+    let mut config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = []
+            listen_tcp = ["127.0.0.1:0"]
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.53:53"]
+        "#,
+    )
+    .expect("baseline config validates");
+    config.limits.max_tcp_inflight_queries_per_connection = usize::MAX;
+
+    let error = Runtime::new(config)
+        .expect_err("runtime must reject unsafe TCP capacity before binding");
+
+    let RuntimeError::InvalidRuntimeConfig(message) = error else {
+        panic!("expected startup configuration error, got {error}");
+    };
+    assert!(message.contains("max_tcp_inflight_queries_per_connection"));
 }
 
 #[tokio::test]
@@ -1874,6 +3139,80 @@ async fn refresh_axfr_uses_xot_tls_transport() {
             .any(|answer| answer.rdata == vec![192, 0, 2, 10])
     );
     assert_eq!(metrics.snapshot().axfr_succeeded, 1);
+}
+
+#[tokio::test]
+async fn profile_backed_xot_transfer_uses_snapshot_after_trust_path_replacement() {
+    let (primary, trust_anchor) = spawn_xot_axfr_primary_with_serial(1).await;
+    let secret_root = unique_test_path("oxidedns-xot-snapshot-transfer", "dir");
+    std::fs::create_dir_all(&secret_root).expect("create secret-store root");
+    std::fs::copy(&trust_anchor, secret_root.join("trust-anchor.pem"))
+        .expect("copy trust anchor into immutable secret generation");
+    write_secret_store_manifest(
+        &secret_root,
+        r#"
+                [[xot_profiles]]
+                name = "customer-xot"
+                trust_anchors = ["trust-anchor.pem"]
+            "#,
+    );
+    let config = ServerConfig::from_toml_str(&format!(
+        r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = []
+
+                [secret_store]
+                path = "{}"
+
+                [[zones]]
+                name = "example.test."
+
+                [[zones.transfer_primaries]]
+                addr = "{primary}"
+                transport = "xot"
+                server_name = "primary.example.test"
+                xot_profile = "customer-xot"
+            "#,
+        secret_root.display()
+    ))
+    .expect("valid profile-backed XoT config");
+    let secrets = SecretManager::from_config(&config).expect("load XoT material snapshot");
+
+    let staged = unique_test_path("oxidedns-invalid-replacement-anchor", "pem");
+    std::fs::write(&staged, b"not a certificate\n").expect("stage invalid anchor");
+    std::fs::rename(&staged, secret_root.join("trust-anchor.pem"))
+        .expect("atomically replace trust anchor path");
+
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let plan = transfer_plan.get(&apex).expect("zone transfer plan");
+    let zones = ZoneStore::new();
+    zones.insert_loading(apex);
+    let metrics = RuntimeMetrics::new();
+    let ixfr_cooldowns = IxfrCooldownRegistry::new(std::time::Duration::from_secs(3600));
+
+    let metadata = refresh_zone_metadata_from_primaries(
+        &zones,
+        &plan,
+        None,
+        RefreshAttemptContext {
+            ixfr_cooldowns: &ixfr_cooldowns,
+            metrics: &metrics,
+            transfer_plan: transfer_plan.clone(),
+            secrets,
+            ixfr_timeout: std::time::Duration::from_secs(5),
+            axfr_timeout: std::time::Duration::from_secs(5),
+            tcp_connect_timeout: std::time::Duration::from_secs(5),
+            reason: "test",
+        },
+    )
+    .await
+    .expect("snapshot-owned trust anchor must survive source path replacement");
+
+    assert_eq!(metadata.serial, Some(1));
+    let _ = std::fs::remove_file(trust_anchor);
+    let _ = std::fs::remove_dir_all(secret_root);
 }
 
 #[tokio::test]
@@ -2002,10 +3341,24 @@ async fn scheduled_refresh_worker_expires_zone_and_enqueues_refresh() {
             .checked_sub(std::time::Duration::from_secs(604800))
             .unwrap(),
     );
+    let config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "example.test."
+            primaries = ["192.0.2.1:53"]
+        "#,
+    )
+    .unwrap();
+    let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
     let (tx, mut rx) = mpsc::channel(1);
     let worker = tokio::spawn(serve_scheduled_refreshes(
         zones.clone(),
         registry,
+        transfer_plan,
         tx,
         std::time::Duration::from_millis(1),
     ));
@@ -2045,7 +3398,7 @@ async fn runtime_initial_load_publishes_zone_snapshot() {
     .expect("valid config");
 
     let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
-    let runtime = Runtime::new(config);
+    let runtime = Runtime::new(config).expect("valid runtime configuration");
     let refresh_registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::ZERO,
         std::time::Duration::ZERO,
@@ -2112,7 +3465,7 @@ async fn runtime_initial_load_honors_transfer_concurrency_limit() {
     .expect("valid config");
 
     let transfer_plan = TransferPlan::from_config(&config).expect("transfer plan");
-    let runtime = Runtime::new(config);
+    let runtime = Runtime::new(config).expect("valid runtime configuration");
     let zones = runtime.zones.clone();
     let refresh_registry = ZoneRefreshRegistry::without_jitter(
         std::time::Duration::ZERO,

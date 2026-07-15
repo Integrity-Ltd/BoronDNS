@@ -91,6 +91,77 @@ fn validate_config_counts_dns_interface_listeners() {
 }
 
 #[test]
+fn readiness_endpoints_support_legacy_multiline_and_structured_configs() {
+    let fixtures = [
+        (
+            "readiness-legacy",
+            r#"
+                [server]
+                listen_udp = ["127.0.0.1:5300"]
+                listen_tcp = ["127.0.0.1:5301"]
+                health = "127.0.0.1:8081"
+                [[zones]]
+                name = "example.test."
+                primaries = ["127.0.0.1:9"]
+            "#,
+            "health\t127.0.0.1\t8081\n",
+        ),
+        (
+            "readiness-multiline",
+            r#"
+                [server]
+
+                [interfaces]
+                dns = ["127.0.0.1:5300"]
+                mgmt = [
+                    "127.0.0.2:9443",
+                    "[::1]:9443",
+                ]
+                [health]
+                default_port = 8084
+                [[zones]]
+                name = "example.test."
+                primaries = ["127.0.0.1:9"]
+            "#,
+            "health\t127.0.0.2\t8084\nhealth\t::1\t8084\n",
+        ),
+        (
+            "readiness-structured",
+            r#"
+                [server]
+
+                [interfaces]
+                dns = [
+                    { address = "127.0.0.3:5303", name = "dns-primary" },
+                    "[::1]:5303",
+                ]
+                [[zones]]
+                name = "example.test."
+                primaries = ["127.0.0.1:9"]
+            "#,
+            "tcp\t127.0.0.3\t5303\ntcp\t::1\t5303\n",
+        ),
+    ];
+
+    for (name, contents, expected) in fixtures {
+        let config = write_config(name, contents);
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+            .arg("readiness-endpoints")
+            .arg("--config")
+            .arg(&config)
+            .output()
+            .expect("run oxidedns readiness-endpoints");
+        assert!(
+            output.status.success(),
+            "{name}: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{name}");
+        let _ = fs::remove_file(config);
+    }
+}
+
+#[test]
 fn oxidedns_config_env_supplies_default_config_path_for_validation_modes() {
     let config = write_config(
         "oxidedns-config-env",
@@ -773,6 +844,50 @@ fn unreadable_or_unparseable_config_exits_with_config() {
 }
 
 #[test]
+fn malformed_secret_fields_are_absent_from_cli_logs_and_errors() {
+    for (label, contents, sentinel) in [
+        (
+            "malformed-bearer-token",
+            "[control_plane.telemetry]\nbearer_token = \"CLI_BEARER_TOKEN_SENTINEL",
+            "CLI_BEARER_TOKEN_SENTINEL",
+        ),
+        (
+            "malformed-tsig-secret",
+            "[[tsig_keys]]\nsecret = \"CLI_TSIG_SECRET_SENTINEL",
+            "CLI_TSIG_SECRET_SENTINEL",
+        ),
+        (
+            "malformed-inline-client-key",
+            "[[zones]]\n[[zones.transfer_primaries]]\nclient_key_pem = \"CLI_CLIENT_KEY_SENTINEL",
+            "CLI_CLIENT_KEY_SENTINEL",
+        ),
+    ] {
+        let config = write_config(label, contents);
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidedns"))
+            .arg("--validate-config")
+            .arg(&config)
+            .output()
+            .expect("run oxidedns with malformed secret field");
+
+        assert_eq!(output.status.code(), Some(EX_CONFIG));
+        let rendered = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !rendered.contains(sentinel),
+            "{label} leaked secret source into CLI output: {rendered}"
+        );
+        assert!(
+            rendered.contains("failed to parse TOML configuration"),
+            "{label} lost the sanitized parse diagnostic: {rendered}"
+        );
+        let _ = fs::remove_file(config);
+    }
+}
+
+#[test]
 fn unreadable_xot_tls_file_exits_with_ioerr() {
     let config = write_config(
         "missing-xot-file",
@@ -998,6 +1113,9 @@ fn serve_health_bind_failure_exits_with_cantcreat() {
             listen_tcp = []
             health = "{occupied_addr}"
 
+            [limits]
+            max_tcp_connections = 128
+
             [[zones]]
             name = "example.test."
             primaries = ["127.0.0.1:9"]
@@ -1034,6 +1152,9 @@ fn serve_udp_bind_failure_exits_with_cantcreat() {
             listen_udp = ["{occupied_addr}"]
             listen_tcp = []
 
+            [limits]
+            max_tcp_connections = 128
+
             [[zones]]
             name = "example.test."
             primaries = ["127.0.0.1:9"]
@@ -1069,6 +1190,9 @@ fn serve_tcp_bind_failure_exits_with_cantcreat() {
             [server]
             listen_udp = ["127.0.0.1:0"]
             listen_tcp = ["{occupied_addr}"]
+
+            [limits]
+            max_tcp_connections = 128
 
             [[zones]]
             name = "example.test."

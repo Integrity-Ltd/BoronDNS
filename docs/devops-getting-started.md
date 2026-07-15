@@ -11,7 +11,9 @@ git clone git@github.com:Integrity-Ltd/oxidedns.git
 cd oxidedns
 ```
 
-The repository pins the expected Rust toolchain in `rust-toolchain.toml`.
+The repository pins Rust `1.96.1` exactly in `rust-toolchain.toml`; release
+verification and packaging exchange and compare the resolved compiler and Cargo
+binary digests before artifacts are built.
 `rustup` will select it automatically when it is installed.
 
 ## 2. Install Local Prerequisites
@@ -19,7 +21,7 @@ The repository pins the expected Rust toolchain in `rust-toolchain.toml`.
 Required for normal build and test work:
 
 ```bash
-rustup toolchain install stable
+rustup toolchain install 1.96.1
 rustup component add rustfmt clippy
 rustup component add llvm-tools-preview
 cargo install cargo-deny cargo-machete
@@ -48,15 +50,16 @@ BIND tools on most distributions.
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace -- --test-threads=1
+cargo test --workspace --all-targets --all-features -- --test-threads=1
 cargo deny check
 ./scripts/check.sh
 ```
 
 `./scripts/check.sh` is the repository gate used for local Engineering MVP
-evidence. It includes Rust formatting, shell formatting through `shfmt -w`,
-`shellcheck`, clippy, tests, dependency policy, unused-code audit,
+evidence. It includes non-mutating shell formatting checks through `shfmt -d`,
+`shellcheck`, root and fuzz-crate formatting/Clippy, actionlint, tests, dependency policy, unused-code audit,
 unsafe-boundary checks, and short evidence captures.
 
 For a human-operated primary-server smoke test, run the BIND interop check after
@@ -109,13 +112,36 @@ README. On a target host:
 The default `x86_64-unknown-linux-musl` packaging path verifies both binaries
 with `ldd`/`file` output and fails if static linking cannot be confirmed. Use
 `OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1` only for non-release developer or distribution
-experiments; those artifacts are not the published portability baseline.
+experiments. Setting it always forces `release_eligible=0`, records
+`dynamic_link_override=1`, and uses the `-nonrelease-dynamic` artifact/tag
+namespace for an otherwise clean tree; GitHub Actions rejects the override.
+Those artifacts are not the published portability baseline.
+Packaging also requires a clean Git worktree, including no untracked files, and
+rechecks its commit and source status before publishing artifacts. For a local
+diagnostic build only, `OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` permits an
+unchanged dirty tree while marking the manifests `source_clean=0`,
+`release_eligible=0`, and `dirty_source_override=1`. GitHub Actions rejects this
+override, so these outputs cannot be release artifacts.
 
 ```bash
-tar -xf oxidedns-*.tar.xz
-cd oxidedns-*
-sudo ./install.sh
+tag=v0.2.0
+target_triple=x86_64-unknown-linux-musl
+asset="oxidedns-${tag#v}-$target_triple.tar.xz"
+install_root="$(sudo mktemp -d "/var/tmp/oxidedns-install-${tag#v}.XXXXXX")"
+sudo chmod 0700 "$install_root"
+sudo install -m 0600 "$asset" "$asset.sigstore.json" "$install_root/"
+sudo cosign verify-blob \
+  --bundle "$install_root/$asset.sigstore.json" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  "$install_root/$asset"
+sudo tar --no-same-owner -xf "$install_root/$asset" -C "$install_root"
+sudo "$install_root/oxidedns-${tag#v}-$target_triple/install.sh"
 ```
+
+Set `tag` to the exact downloaded release tag. Signature verification is a
+precondition: do not extract or execute an archive whose bundle does not bind
+to that tag's `release-installer.yml` workflow identity.
 
 For unattended static-zone setup:
 
@@ -123,7 +149,7 @@ For unattended static-zone setup:
 sudo OXIDEDNS_ZONE=example.com. \
   OXIDEDNS_PRIMARY=10.0.0.10:53 \
   OXIDEDNS_NOTIFY_SOURCE=10.0.0.10 \
-  ./install.sh --yes
+  "$install_root/oxidedns-${tag#v}-$target_triple/install.sh" --yes
 ```
 
 ## 6. Build the Docker Image Archive
@@ -142,7 +168,9 @@ The output is written under `target/dist/` as
 `oxidedns-<version>-x86_64-unknown-linux-musl-docker-image.tar.xz` with a
 matching `.sha256` file. The SBOM command also writes CycloneDX JSON SBOMs,
 SHA-256 sidecars, and an SBOM manifest for the release binaries and Docker
-image. Load the image into a local Docker daemon with:
+image. Docker packaging applies the same clean-source requirement and records
+the source-clean and release-eligibility state in both its manifest and image
+labels. Load the image into a local Docker daemon with:
 
 ```bash
 xz -dc target/dist/oxidedns-*-x86_64-unknown-linux-musl-docker-image.tar.xz | docker load
@@ -259,6 +287,12 @@ restart. If `[secret_store]` is configured, TSIG keys and named XoT profiles
 inside that already configured filesystem root can be reloaded by the
 control-plane `rotate_tsig` or `republish_feed` operations. `SIGTERM` and
 `SIGINT` trigger graceful shutdown.
+
+Provision secret-store rotations as immutable generation directories. Keep all
+manifest paths relative, stage the complete directory, then atomically switch
+the configured `current` symlink. OxideDNS captures that root once per reload,
+rejects writable or symlinked material, and commits either one complete new
+snapshot or retains the prior snapshot.
 
 ## 11. Next Documents
 

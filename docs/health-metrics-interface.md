@@ -71,6 +71,12 @@ Unhealthy:
 
 All probe responses use `Content-Type: application/json`.
 
+Every accepted management connection is subject to fixed five-second absolute
+request-read and response-write deadlines. Read progress does not extend the
+absolute request deadline, and write progress does not extend the response
+deadline. A stalled client is disconnected and releases its globally bounded
+connection slot; these defensive deadlines are not operator-configurable.
+
 ## Metrics
 
 `/metrics` emits Prometheus text exposition with
@@ -112,7 +118,8 @@ The metrics endpoint exposes these implemented metric families:
   `oxidedns_udp_received_datagrams_total`, `oxidedns_udp_send_batches_total`,
   and `oxidedns_udp_sent_datagrams_total`;
 - `oxidedns_secondary_query_duration_seconds` query latency histogram, with
-  buckets configured by `[metrics].latency_histogram_buckets`;
+  up to 64 strictly increasing buckets configured by
+  `[metrics].latency_histogram_buckets`;
 - opt-in active-zone shape gauges and fixed-bucket layout histograms under
   `oxidedns_zone_shape_*`, including child-name fan-out, RRsets per owner name,
   RDATA records per RRset, and RDATA payload bytes per RRset;

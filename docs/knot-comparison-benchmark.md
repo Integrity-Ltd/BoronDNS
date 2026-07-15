@@ -3,6 +3,13 @@
 This document defines how to compare OxideDNS against Knot DNS without mixing
 different benchmark units or query mixes.
 
+Historical rows below retain the `xdp.tx_wakeup_interval` values used to collect
+their evidence. They are not current-safe configuration guidance: the server
+now requires interval `1` and kicks every non-empty TX enqueue because its AF_XDP
+dependency enables `XDP_USE_NEED_WAKEUP` without exposing the kernel ring flag.
+The retained low-rate evidence at the interval-1 transition demonstrated why a
+periodic counter cannot safely replace that flag.
+
 ## Source-Derived Baseline
 
 Knot's published response-rate benchmark uses two physical servers directly
@@ -1074,13 +1081,16 @@ AF_XDP per-worker transport counters are now retained even when
 evidence without enabling the higher-cost UDP hot-path counters. The physical
 summary adds active-worker and min/max packet columns for
 `oxidedns_af_xdp_worker_received_packets_total` and
-`oxidedns_af_xdp_worker_sent_packets_total`. The reverse-role diagnostic row
+`oxidedns_af_xdp_worker_sent_packets_total`. Despite the stable historical
+metric name, that counter means packets admitted to AF_XDP TX rings, not
+confirmed wire delivery; kick delivery failures are reported separately by
+`oxidedns_af_xdp_tx_delivery_failures_total`. The reverse-role diagnostic row
 `physical-udp-knot-comparison-20260606T045650Z` measured OxideDNS AF_XDP at
 2455876 replies/s and 99.960788%; the server received and queued 12328220
 AF_XDP packets, but only 27 of 63 server workers were active. Active workers
-ranged from 256000 to 772096 received packets, with matching sent-packet
+ranged from 256000 to 772096 received packets, with matching TX-ring admission
 counts. That keeps MTU lower on the suspect list for this row because the run
-used temporary native-XDP MTU 1500 and the server worker received/sent totals
+used temporary native-XDP MTU 1500 and the server worker receive/admission totals
 matched; the next useful receive-path work should instead target queue service,
 fill lifecycle, or source-port lists that avoid overloading the hot AF_XDP
 workers without repeating the distinct-worker regression.

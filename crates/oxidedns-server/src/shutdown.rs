@@ -1,9 +1,10 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
+#[cfg(test)]
+use std::time::Duration;
+
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use tokio::task::JoinSet;
@@ -36,44 +37,69 @@ pub(crate) fn handle_runtime_task_result(
     match result {
         Some(Ok(Ok(()))) | None => Ok(()),
         Some(Ok(Err(error))) => Err(error),
-        Some(Err(error)) => {
-            warn!(%error, task_set, "runtime task failed");
-            Ok(())
-        }
+        Some(Err(error)) => Err(RuntimeError::RuntimeTask {
+            task_set,
+            message: error.to_string(),
+        }),
     }
 }
 
-pub(crate) async fn abort_task_set(
+pub(crate) async fn abort_task_set_until(
     tasks: &mut JoinSet<Result<(), RuntimeError>>,
+    deadline: tokio::time::Instant,
     task_set: &'static str,
-) {
+) -> bool {
     tasks.abort_all();
-    while let Some(result) = tasks.join_next().await {
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                warn!(%error, task_set, "runtime task returned error during shutdown");
-            }
-            Err(error) if error.is_cancelled() => {
-                debug!(task_set, "runtime task cancelled during shutdown");
-            }
-            Err(error) => {
-                warn!(%error, task_set, "runtime task failed during shutdown");
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let reaped = tokio::time::timeout(remaining, async {
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(%error, task_set, "runtime task returned error during shutdown");
+                }
+                Err(error) if error.is_cancelled() => {
+                    debug!(task_set, "runtime task cancelled during shutdown");
+                }
+                Err(error) => {
+                    warn!(%error, task_set, "runtime task failed during shutdown");
+                }
             }
         }
+    })
+    .await;
+    if reaped.is_err() {
+        warn!(
+            task_set,
+            "shutdown deadline elapsed while reaping aborted tasks"
+        );
+        return false;
     }
+    true
 }
 
+#[cfg(test)]
 pub(crate) async fn drain_task_set(
     tasks: &mut JoinSet<Result<(), RuntimeError>>,
     grace: Duration,
+    task_set: &'static str,
+) -> bool {
+    let now = tokio::time::Instant::now();
+    let deadline = now.checked_add(grace).unwrap_or(now);
+    drain_task_set_until(tasks, deadline, task_set).await
+}
+
+pub(crate) async fn drain_task_set_until(
+    tasks: &mut JoinSet<Result<(), RuntimeError>>,
+    deadline: tokio::time::Instant,
     task_set: &'static str,
 ) -> bool {
     if tasks.is_empty() {
         return true;
     }
 
-    let drained = tokio::time::timeout(grace, async {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let drained = tokio::time::timeout(remaining, async {
         let mut clean = true;
         while let Some(result) = tasks.join_next().await {
             match result {
@@ -96,31 +122,19 @@ pub(crate) async fn drain_task_set(
         Ok(clean) => clean,
         Err(_) => {
             tasks.abort_all();
-            while let Some(result) = tasks.join_next().await {
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        warn!(%error, task_set, "runtime task returned error after drain timeout");
-                    }
-                    Err(error) if error.is_cancelled() => {
-                        debug!(task_set, "runtime task cancelled after drain timeout");
-                    }
-                    Err(error) => {
-                        warn!(%error, task_set, "runtime task failed after drain timeout");
-                    }
-                }
-            }
             false
         }
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn drain_tcp_connections(
     active_connections: Arc<AtomicUsize>,
     grace: Duration,
     poll_interval: Duration,
 ) -> bool {
-    let deadline = tokio::time::Instant::now() + grace;
+    let now = tokio::time::Instant::now();
+    let deadline = now.checked_add(grace).unwrap_or(now);
     loop {
         if active_connections.load(Ordering::Acquire) == 0 {
             return true;
@@ -130,5 +144,27 @@ pub(crate) async fn drain_tcp_connections(
             return false;
         }
         tokio::time::sleep(poll_interval.min(remaining)).await;
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn abort_reap_does_not_wait_past_deadline_for_noncooperative_task() {
+        let mut tasks = JoinSet::new();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        tasks.spawn(async move {
+            let _ = started_tx.send(());
+            tokio::task::block_in_place(|| std::thread::sleep(Duration::from_secs(1)));
+            Ok(())
+        });
+        started_rx.await.expect("blocking task started");
+
+        let started = tokio::time::Instant::now();
+        let deadline = started + Duration::from_millis(20);
+        assert!(!abort_task_set_until(&mut tasks, deadline, "test").await);
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }

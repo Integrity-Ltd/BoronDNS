@@ -33,6 +33,40 @@ Current targets:
 - `notify_edns_datagram`
 - `zone_image_datagram`
 - `catalog_zone`
+- `zone_store_state`
+- `zone_store_concurrent`
+- `server_lifecycle`
+
+For a direct local `scripts/fuzz-campaign.sh` run, an unset
+`CARGO_TARGET_DIR` selects a fresh private tree below
+`${TMPDIR:-/var/tmp}/oxidedns-fuzz-builds-<uid>/`. The runner removes only the
+descriptor-created and prepublication-journaled device/inode identity on every
+exit after writing retained artifact hashes; pathname replacement is retained
+and reported. Its journal is staged from an open `O_TMPFILE`, durably publishes
+an allocating intent before `mkdir`, then records preparing/ready identity and
+an exact removing quarantine before either rename. Generic same-UID cleanup
+retains the exact quarantined inode instead of unlinking a pathname that can be
+replaced after validation. Once live descriptor/socket authority is gone, a
+later creator treats the journal as evidence and performs no destructive
+recovery; privileged/manual reconciliation is required. Live owners,
+replacements, renamed-away targets, and ambiguous identities are also retained. Explicit
+caller build roots are preserved. The two-host services instead use their
+planned explicit per-attempt roots described below. Because those roots and
+their parent are owned by the campaign UID, authenticated cleanup performs an
+exact whole-tree quarantine even when invoked through sudo; it never treats
+privilege as authority to recursively delete a same-UID-writable namespace.
+Before that rename, cleanup publishes an exact
+`.oxidedns-retained-cleanup-<root>.<pid>.<nonce>.env` mapping with the original path,
+preallocated quarantine path, and parent/object device, inode, and owner. It
+advances from `prepared` to `retained` only after revalidating the quarantined
+inode and emits `cleanup_retained` in the remote log. The retained tree remains
+available for privileged reconciliation; the same-UID journal is evidence and
+must not be treated as post-exit deletion authority. Retries allocate new
+journal/quarantine names and retain all previous mappings. If a crash leaves
+the journal at `prepared` after the rename, verification reports
+`cleanup_prepared_verified` only when the original is absent and the exact
+recorded quarantine identity and type still match; this is evidence, never
+destructive authority.
 
 Use the two-host helper to prepare a manifest:
 
@@ -43,15 +77,21 @@ scripts/fuzz-soak-two-host-campaign.sh plan --duration 86400 --sanitizer address
 The manifest is written under
 `target/evidence/fuzz-soak-two-host-<timestamp>/` and records the target split,
 remote commands, systemd unit names, status command, collect command, duration,
-toolchain, and remote evidence root. It does not start work unless `launch` is
-used:
+toolchain, remote evidence root, and an executable copy of the strict collection
+validator. That validator is part of the immutable plan manifest; management
+rejects a copied validator that differs from the current semantic reference
+even if an operator recomputes the plan manifest. Collection executes the exact
+saved copy, so validation cannot switch implementations between planning and
+evidence classification. The plan does not start work unless `launch` is used:
 
 ```sh
 scripts/fuzz-soak-two-host-campaign.sh launch --duration 86400 --sanitizer address
 ```
 
-`launch` installs one systemd service per fuzz target on the assigned host, with
-unit names recorded in `assignments.tsv`. This makes later inspection explicit:
+`launch` first installs each physical host's sampler and waits until its first
+authenticated sample has been published. Only then does it install one systemd
+service per fuzz target on the assigned host, with unit names recorded in
+`assignments.tsv`. This makes later inspection explicit:
 
 ```sh
 ssh oxidedns-1 'systemctl status oxidedns-fuzz-<campaign>-<n>-<target>.service'
@@ -65,9 +105,74 @@ scripts/fuzz-soak-two-host-campaign.sh status --evidence-dir target/evidence/fuz
 scripts/fuzz-soak-two-host-campaign.sh collect --evidence-dir target/evidence/fuzz-soak-two-host-<timestamp>
 ```
 
+After collection, remove only the campaign's verified inactive systemd units and
+owned `/var/tmp` build roots while retaining remote evidence:
+
+```sh
+scripts/fuzz-soak-two-host-campaign.sh cleanup --evidence-dir target/evidence/fuzz-soak-two-host-<timestamp>
+```
+
+Cleanup fails closed when systemd cannot report state, a unit is active, its
+loaded fragment or `ExecStart` does not identify the exact campaign attempt, or
+the build tree is symlinked, has the wrong owner, or falls outside the exact
+campaign root. Cleanup acquires the same private target or sampler lock used by
+launch/resume and completes every unit, runner, and build-root preflight before
+the first removal. It removes the atomically published fragment and confirms a
+`not-found` reload before deleting the immutable root-owned runner and build
+tree. If `daemon-reload` fails, those dependencies remain available for an
+identity-checked retry. Abandoned same-filesystem fragment staging files are
+removed only under the exact campaign unit identity. Cleanup never removes the
+retained remote evidence tree.
+
+Plans are staged and published with a no-replace rename plus a `plan-complete`
+marker, so a destination that reappears during publication fails closed. Their
+canonical base64 scalar metadata is parsed without shell execution. Planning
+requires a clean source checkout, rejects distinct host names that canonicalize
+to the same evidence identifier, and remote target and sampler runners recheck
+the exact recorded commit plus a clean worktree before evidence writes. Plan
+paths and ancestors must be real and owned, the immutable plan tree must not be
+group/world writable, and management commands execute a regenerated private
+command copy derived from the validated semantic plan. Local plan and runner
+locks live under a dedicated `.oxidedns-campaign-locks` mode-0700 directory;
+their parent must be owned by the campaign user and must not be group/world
+writable. Each lock is opened without following symlinks and its live descriptor
+is checked for regular-file type, owner, link count, and mode before locking.
+Remote locks use the same descriptor-validated broker and live in a
+runner-owned mode-0700 directory; no shell redirection opens a checked path a
+second time. Every protected mutation sends an acknowledged broker heartbeat;
+broker death therefore aborts rather than silently releasing exclusivity.
+The broker also binds an abstract Unix-socket authority derived from the
+canonical lock root and namespace. That kernel-held authority survives visible
+lock-path unlink or replacement and prevents a second cooperating broker from
+entering the same critical section until the first process exits.
+Collection status changes perform the same live heartbeat immediately before
+publication. Evidence, journal, and classification files use a per-host
+transaction directory: an interrupted uncommitted generation is rolled back on
+the next collect, while an atomically committed generation is retained.
+Systemd fragments are staged as root in the unit directory and atomically
+renamed. `ExecStart` points to a root-owned mode-0555 runner beneath a
+root-owned parent, with a root-owned identity sidecar binding its SHA-256,
+device, and inode. The `scp` collection fallback copies into a
+fresh staging destination so stale evidence cannot survive a refresh. Initial
+launch refuses an already-active target or sampler unit name; a reused campaign
+id therefore cannot silently leave an older process running under the new unit
+definition. If a multi-host launch stops partway through, run
+`resume --evidence-dir <plan>`; active jobs and jobs with fully finalized
+terminal evidence are left untouched. A partial setup or incomplete attempt is
+retained under its immutable attempt directory and resume creates a new attempt
+rather than overwriting it.
+
+Fuzz services inherit already-open descriptors for the plan-authenticated
+Cargo, rustc, and cargo-fuzz executables. The runner hashes those descriptors
+again immediately before use and keeps a root-system-only command search path,
+so adjacent replacement in the campaign user's Cargo directory cannot change
+the executed tool. Host sampling reads each unit's cgroup and retains a process
+row only when `/proc/<pid>/stat` has the same start time before and after the
+sample; ordinary unit exit is an empty sample, not a sampler failure.
+
 For CPU-saturating campaigns, repeat the target set and weight the host list.
-With the current six-target set, the 2:3 host weighting below launches 90 fuzz
-services, which is about 36 instances on the 48-core `oxidedns-1` host and 54
+With the current nine-target set, the 2:3 host weighting below launches 135 fuzz
+services, which is about 54 instances on the 48-core `oxidedns-1` host and 81
 instances on the 72-core `oxidegun-1` host. That is the preferred 70%-80% CPU
 campaign shape when the servers are otherwise idle:
 
@@ -85,10 +190,226 @@ scripts/fuzz-soak-two-host-campaign.sh launch \
   --host oxidegun-1
 ```
 
-The helper gives each repeated target instance a unique evidence directory and
-installs one sampler service per physical host. Sampler output is retained under
-`host/<host>/host-samples.tsv` and records active fuzz units, matching process
-count, aggregate CPU, aggregate RSS, load averages, and available memory.
+The repeated `--host` values are an ordered assignment-slot schedule, not five
+distinct machines: two slots select `oxidedns-1` and three select
+`oxidegun-1`. Target services preserve that exact 2:3 round-robin weighting.
+Sampler installation, status, and collection derive the stable first-occurrence
+physical host list, so each actual host receives exactly one sampler and one
+collection pass.
+
+The helper gives each repeated target instance a unique root containing owned
+`attempt.*` directories and installs one sampler service per physical host.
+Sampler output is retained under `host/<host>/attempts/attempt.*/` and records
+active fuzz units, matching process count, aggregate CPU, aggregate RSS, load
+averages, and available memory. Each process row carries the exact sample UTC
+and epoch key; validation rejects orphan keys, duplicate PIDs within one sample,
+and count, two-decimal CPU, or integer RSS totals that differ from the host row.
+The same PID may legitimately recur at a later sample epoch. Target and sampler setup can be retried after a
+transient systemd installation or start failure: the failed attempt remains
+immutable and a fresh attempt receives the new runner and evidence. Resume
+accepts target completion only when `campaign-summary.tsv` has the exact header
+and one matching passed terminal row. That row records the actual target start
+and end epochs; collection requires the authenticated sampler rows to begin no
+later than target start and end no earlier than target end.
+`campaign-completed.env` records matching summary and artifact-manifest hashes,
+every referenced path is contained and non-symlinked, and the strict
+artifact-manifest verification succeeds. The completion marker is atomically
+published only after final artifact manifests and successful cleanup of an
+automatic build root; cleanup failure leaves the evidence incomplete. Automatic
+root cleanup also fails closed when the captured root's original pathname is absent:
+absence cannot distinguish deletion from a rename-away, so it is never accepted
+as proof that the build inode was removed. Sampler completion likewise requires
+an exact `sampler-completed.env` plus a terminal
+zero-active-unit sample at or after the authenticated deadline. Sampler metadata
+binds the interval, absolute deadline, start timestamp, and start epoch; every
+sample carries a matching epoch. Collection rejects late starts, non-monotonic
+epochs, gaps beyond the interval plus the bounded per-unit probe budget, early
+completion, and terminal samples that do not cover the deadline. A valid
+`sampler-hard-stop.env` is retained as terminal failure evidence. Header-only,
+unfinalized, or otherwise partial evidence is never classified as complete. The
+hard-stop UTC must fall between the authenticated sampler start and its derived
+terminal reserve. If host or process sample TSVs are present, collection
+validates both files' exact schemas, chronology, sample-key membership, and
+aggregates; a header-only host file therefore requires an empty process-detail
+file. A future/pre-start marker
+or malformed published sample is rejected even though hard-stop evidence is
+not a successful campaign classification. The
+plan authenticates one absolute sampler
+deadline, derived from `created_utc + duration + one hour + the 600-second
+target-setup reserve`, in both
+`campaign.env` and each physical-host sampler assignment. Every initial or
+resumed sampler attempt receives that same deadline; resume refuses metadata
+that would extend it. The sampler writes the hard-stop marker before exiting
+nonzero if fuzz units remain active. A systemd probe error is distinct from an
+inactive unit: it writes the exact terminal three-line marker ending in
+`probe_failed=1` and can never publish sampler completion merely because the
+number of units successfully classified as active was zero.
+Remote waits and child watchdogs use one absolute `CLOCK_BOOTTIME` deadline and
+timerfd-based expiry, so host suspend consumes rather than replenishes the
+budget. After expiry they send process-group `SIGKILL` and poll pidfd/`WNOHANG`
+only through a separate bounded termination tail (five seconds by default,
+configurable with `OXIDEDNS_CAMPAIGN_DEADLINE_TERMINATION_TAIL_SECONDS`, hard
+maximum 30). If an uninterruptible process cannot be reaped in that tail, the
+supervisor returns 125 promptly, reports that `SIGKILL` remains pending, and
+leaves kernel reparenting to recover the orphan rather than entering an
+unbounded `waitpid`. Process-group membership enumeration runs in a separate
+pidfd-owned scan worker under the same tail's absolute timerfd. A blocked procfs
+walk, an inventory beyond Linux `pid_max`, or an incomplete result therefore
+fails with 125 without extending the tail or releasing the unreaped leader's
+numeric process-group authority. Once an EXIT finalizer begins, repeated INT, TERM, and HUP are ignored
+to prevent re-entry during cleanup or terminal marker publication.
+The collector supplies the exact ordered sampler unit identities from the
+authenticated assignment plan. `fuzz-units.txt` must equal that canonical,
+unique list byte-for-line; evidence cannot add invented or duplicate units to
+increase its own cadence or terminal allowance.
+
+Sampler sleep is capped to the remaining authenticated schedule. At the
+deadline it performs one bounded terminal probe pass, using ten seconds per
+allowlisted unit plus five seconds of finalization reserve, so an inactive host
+deterministically records its final sample at or after the deadline. Evidence
+outside that derived terminal window is rejected. Each cargo-fuzz invocation also has an outer wall-clock deadline in
+addition to libFuzzer's `-max_total_time`; the default build/start grace is 1800
+seconds and can be narrowed with `OXIDEDNS_FUZZ_WALL_CLOCK_GRACE_SECONDS`.
+`OXIDEDNS_FUZZ_WALL_CLOCK_KILL_AFTER_SECONDS` controls the final kill grace.
+Every rustup, Git, and tool-version preflight is independently hard bounded;
+`OXIDEDNS_FUZZ_PREFLIGHT_TIMEOUT_SECONDS` and
+`OXIDEDNS_FUZZ_PREFLIGHT_KILL_AFTER_SECONDS` control that bound. Target and
+sampler units also carry a plan-derived `RuntimeMaxSec`: target units receive
+campaign duration plus one hour, while sampler units additionally receive the
+600-second setup reserve and their derived terminal-probe reserve. Both use a
+fixed `TimeoutStopSec=30`, providing an authenticated systemd backstop if a
+runner-level timeout path fails.
+
+All controller SSH, rsync, and scp paths set connection and keepalive bounds and
+also run under command-specific wall-clock limits. The defaults can be tuned
+with the `OXIDEDNS_CAMPAIGN_SSH_*`, `OXIDEDNS_CAMPAIGN_REMOTE_*_TIMEOUT_SECONDS`,
+and `OXIDEDNS_CAMPAIGN_RSYNC_IDLE_TIMEOUT_SECONDS` environment variables.
+Read-only status and collection still validate saved commands against their
+manifest-bound tool digests, but do not require the controller's current Rust
+or cargo-fuzz binaries to retain the same digest for the lifetime of a remote
+campaign.
+
+Process samples are derived only from each planned fuzz unit's `MainPID` and
+descendants. They retain PID, resource counters, elapsed time, and command name,
+but never full argv, so unrelated same-UID processes and command-line secrets
+cannot enter campaign evidence.
+
+Each target attempt also gets a freshly created, runner-owned
+`CARGO_TARGET_DIR` under `/var/tmp/oxidedns-fuzz-<campaign>/`, outside both the
+checkout's ignored `target/` and `fuzz/target/` trees. The runner refuses a
+symlink, wrong owner, or non-empty build directory before invoking Cargo.
+`config.txt` and `tool-versions.txt` record the selected paths and the hashes of
+the exact Cargo, rustc, and cargo-fuzz bytes executed, rather than only the
+rustup proxy. All three executables are opened, copied through those pinned
+descriptors into one private execution directory, and then invoked only from
+that snapshot. The staged inodes and digests are rechecked immediately before
+and after every invocation. For a concrete rustup compiler, the adjacent
+dynamic-library, sysroot, sanitizer, and build-std tree is likewise copied
+(using a filesystem reflink when available), checked against source hashes on
+both sides of the copy, and bound to a retained tree digest. Thus concurrent
+selected-path or compiler-runtime replacement, or a different `cargo-fuzz`
+adjacent to the selected Cargo, cannot change the tools used while leaving
+apparently valid evidence.
+`build-artifacts.sha256` and `artifact-manifest.sha256` retain the resulting
+build and evidence hashes. Evidence-manifest and summary paths are relative to
+the attempt root, so a collected attempt remains independently verifiable after
+the remote host or its original absolute path is gone.
+
+The per-host sampler setup lock remains held through unit publication,
+daemon-reload, start, and an exact post-start identity check. Concurrent resume
+commands therefore cannot create competing sampler attempts or race to replace
+the same unit definition. The sampler itself flocks its attempt-directory file
+descriptor, leaving no stale lock pathname that could obstruct crash recovery.
+
+Collection snapshots every regular remote file and directory before and after
+transfer. Symlinks and special nodes are rejected; rsync is instructed not to
+preserve them, and the scp fallback is protected by the same remote and local
+tree scans. The copied staging tree must have the exact same content snapshot as
+both remote snapshots, which turns concurrent mutation into a failed collection
+instead of mixed evidence. A strict local validator then checks node types,
+source commit and clean-source provenance, completion markers, all manifest
+hashes and coverage, relative-path containment, target summaries, and every
+sampler row. Fuzz validation also requires the authenticated SHA-256 identities
+of Cargo, rustc, and cargo-fuzz, in addition to the toolchain selector and
+sanitizer. A completed target must cover at least duration minus one second in
+the integer wall-clock epochs, must have a nonzero wall interval, and its
+monotonic nanoseconds must remain within the explicit two-second
+timestamp-capture tolerance of that wall interval. Zero-wall and implausibly
+large monotonic claims are rejected even when completion hashes are recomputed;
+long setup and terminal manifest work remain outside the measured target
+window. Every host must match the plan and therefore each other. Remote jobs
+run from a detached clone of the authenticated commit whose source tree and
+containing build entry are root-owned and non-writable by the campaign UID;
+only the separate Cargo target directory remains runner-owned. Edits,
+chmod-and-revert, or entry replacement by the service account therefore cannot
+contaminate evidence after preflight. Soak validation requires the exact authenticated
+timeout, kill-after, cycle-sleep, sample interval, and allow-skip policy; a
+fail-on-skip plan rejects any skipped terminal row. It also bounds the last
+scenario activity before the authenticated deadline by one scenario timeout,
+kill grace, cycle sleep, and timestamp resolution, preventing a live sampler
+from masking a stopped scenario runner. Only that validated staging tree
+replaces an older collection. Its whole-tree snapshot digest remains in the
+status record. A separate
+`remotes/<host>.collection-status.tsv.commit` record binds both that digest and
+the SHA-256 of the exact status bytes with the explicit
+`unprivileged-sha256` scheme, and is promoted atomically last. Publication
+checks evidence before and after promotion and uses content- and
+identity-bound promotion for both status objects; readers verify the commit,
+exact status bytes, and a fresh evidence-tree digest before acceptance.
+Status reads use non-following, nonblocking descriptor opens and require one
+current-UID, single-link regular inode whose device, inode, size, mode, owner,
+mtime, and ctime remain stable through the read. Status is capped at 8 MiB and
+the one-line commit at 1 KiB; both reads and hashes share the collection's
+absolute deadline. Sparse growth, FIFOs, and post-open pathname swaps fail
+closed instead of consuming unbounded memory or time.
+
+This unkeyed record detects independent corruption, classification-only edits,
+and evidence/status drift. It is deliberately not authenticity against a
+hostile process with the campaign UID: that process can coordinate a rewrite
+of evidence, status, and commit. Formal hostile-same-UID authenticity requires
+a signature key or root-owned commit state outside the campaign UID's writable
+namespace. Paths containing whitespace or shell
+metacharacters require rsync; the legacy scp fallback fails closed for them.
+`remotes/<host>.collection-status.tsv` records complete, incomplete, or invalid
+classification explicitly. Collected unit journals live in the sibling
+`remotes/<host>.journal/` directory so they do not alter the validated remote
+evidence tree. Status walks immutable `attempt.*` directories and reports
+summaries and samples at their actual paths.
+One validated `CLOCK_BOOTTIME` deadline covers each host's snapshot, copy,
+validation, journal capture, and publication while the collection lock is held.
+The local snapshot and validator share explicit entry, depth, per-file, and
+total-byte limits and stream file hashes through non-following descriptors.
+Aggregate bytes are charged from the bytes actually streamed, and inventory
+identity, size, modification time, and change time must remain stable through
+each hash.
+Defaults are 10,800 seconds, 100,000 entries, depth 64, 2 GiB per file, and
+64 GiB total. Operators may lower them with
+`OXIDEDNS_CAMPAIGN_COLLECTION_TIMEOUT_SECONDS`,
+`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_ENTRIES`,
+`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_DEPTH`,
+`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_FILE_BYTES`, and
+`OXIDEDNS_CAMPAIGN_COLLECTION_MAX_TOTAL_BYTES`; hard maxima are 86,400 seconds,
+1,000,000 entries, depth 128, 16 GiB per file, and 1 TiB total. Invalid,
+overflowing, exhausted, or exceeded budgets fail closed without publishing.
+The authenticated plan supplies the exact target-instance set, per-target
+duration, and sampler identity expected on each physical host. Missing entities
+remain incomplete and extra entities are invalid; a complete subset can never
+make a host complete. Evidence, journal, status, and status-commit replacements are staged and
+published as one rollback-safe bundle, so repeated collection is supported.
+Same-process recovery receives the same absolute collection deadline. Its live
+transaction inventory is descriptor/identity-bound, capped at 64 direct
+entries, and fail-retained on deadline or cap exhaustion; recovery never uses
+an unbounded pathname `find` over transaction state.
+Each physical host has a collection lock spanning both remote snapshots,
+validation, and publication. Final promotion uses no-replace renames, so a
+destination that reappears despite the lock fails closed instead of nesting or
+overwriting another collector's bundle.
+Status destinations must be owned regular files and are never followed through
+symlinks. Active-unit resume checks likewise fail closed on systemctl errors and
+verify the exact loaded fragment plus executable path from `ExecStart` before
+trusting a same-name service; wrapper and suffix matches are rejected. Cleanup
+performs the same loaded identity check. Status continues across all physical
+hosts after a probe error but returns nonzero once any SSH or remote probe failed.
 
 For formal SRS fuzz evidence, retain at least one 24-hour run per parser target.
 The two-host split reduces wall-clock time but does not reduce per-target
@@ -120,6 +441,10 @@ cargo +nightly fuzz check transfer_stream
 cargo +nightly fuzz check tsig_message
 cargo +nightly fuzz check notify_edns_datagram
 cargo +nightly fuzz check zone_image_datagram
+cargo +nightly fuzz check catalog_zone
+cargo +nightly fuzz check zone_store_state
+cargo +nightly fuzz check zone_store_concurrent
+cargo +nightly fuzz check server_lifecycle
 cargo +nightly fuzz run --sanitizer address dns_datagram -- -max_total_time=60
 cargo +nightly miri test -p oxidedns-core
 ```
@@ -130,11 +455,11 @@ that as product evidence.
 
 ### Soak Lane
 
-Existing evidence schema owner: `scripts/capture-soak-handoff.sh`.
-
-The current soak tooling creates schemas and report templates; it is not yet a
-long-running executor. Before starting a production-representative soak, create
-the handoff artifacts:
+The current long-running executor is `scripts/large-surface-soak.sh`, with
+two-host systemd orchestration in `scripts/large-surface-soak-campaign.sh`.
+See `docs/large-surface-soak.md` for launch, resume, status, collection, bounded
+scenario cleanup, and retained-evidence behavior. The handoff helper remains
+useful when preparing the separate single-resident-process soak lane:
 
 ```sh
 scripts/capture-soak-handoff.sh
@@ -150,10 +475,12 @@ Prepared execution shape:
 - append anomalies to `operational-events.tsv`;
 - retain weekly summaries and a final report.
 
-The first executor should be narrow: start one server, one local synthetic
-primary/corpus, one local client workload, and one sampler. Expand to catalog
-zone churn, transfer failures, restart/recovery, and multi-primary cases only
-after the simple loop is stable.
+For the single-resident-process lane, start narrowly with one server, one local
+synthetic primary/corpus, one local client workload, and one sampler. Expand to
+catalog-zone churn, transfer failures, restart/recovery, and multi-primary cases
+only after the simple loop is stable. The large-surface executor is the broad
+repeated scenario-cycle lane and does not replace this narrower RSS/FD-growth
+measurement.
 
 ### XDP Lane
 

@@ -105,6 +105,10 @@ WantedBy=multi-user.target
 ```
 
 This beta profile intentionally keeps the Alpine-based image inspectable with
-`docker exec` for troubleshooting. The image base can be pinned by release
-engineering with `OXIDEDNS_DOCKER_ALPINE_VERSION=<version>` during packaging;
-do not treat that as part of the OxideDNS runtime compatibility contract.
+`docker exec` for troubleshooting. Release packaging pins the image base to the
+reviewed platform manifest
+`alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6`.
+`OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE` is accepted only when it equals that exact
+reference, and the retained image manifest records both `base_image` and
+`base_image_digest`; do not treat the Alpine choice as part of the OxideDNS
+runtime compatibility contract.

@@ -8,6 +8,7 @@ import csv
 from pathlib import Path
 import re
 import sys
+import tomllib
 
 repo_root = Path(sys.argv[1])
 unsafe_registry = repo_root / "docs" / "unsafe-boundaries.tsv"
@@ -37,7 +38,9 @@ with unsafe_registry.open(newline="", encoding="utf-8") as handle:
     current_unsafe_adapter_paths = {
         Path(row["path"])
         for row in csv.DictReader(handle, delimiter="\t")
-        if row["status"] == "current" and not row["path"].startswith("future:")
+        if row["status"] == "current"
+        and row["boundary_kind"] != "posix-safe-syscall-wrapper"
+        and not row["path"].startswith("future:")
     }
 audited_unsafe_adapter_paths = {
     path for path in current_unsafe_adapter_paths if path in runtime_sources
@@ -95,8 +98,9 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
         [
             re.compile(r"\bstd::fs::write\b"),
             re.compile(r"\btokio::fs::write\b"),
+            re.compile(r"\b(?:std::fs::|tokio::fs::)(?:copy|hard_link)\s*\("),
             re.compile(r"\bFile::create\b"),
-            re.compile(r"\bOpenOptions\b"),
+            re.compile(r"\.set_len\s*\("),
             re.compile(r"\bcreate_dir(?:_all)?\b"),
             re.compile(r"\bremove_(?:file|dir|dir_all)\b"),
             re.compile(r"\b(?:std::fs::|tokio::fs::)?rename\s*\("),
@@ -168,6 +172,1239 @@ checks: list[tuple[str, str, list[re.Pattern[str]], list[Path]]] = [
 
 failures: list[str] = []
 
+OPEN_OPTIONS_MUTATORS = ("write", "append", "create", "create_new", "truncate")
+FILESYSTEM_MUTATION_FUNCTIONS = (
+    "write",
+    "copy",
+    "hard_link",
+    "create_dir",
+    "create_dir_all",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "rename",
+    "set_permissions",
+    "set_permissions_nofollow",
+    "set_times",
+    "set_times_nofollow",
+    "soft_link",
+)
+RUSTIX_MUTATION_FUNCTIONS = (
+    "chmod",
+    "chmodat",
+    "chown",
+    "chownat",
+    "copy_file_range",
+    "ext4_ioc_resize_fs",
+    "fallocate",
+    "fchmod",
+    "fchown",
+    "fclonefileat",
+    "fcopyfile",
+    "fremovexattr",
+    "fsetxattr",
+    "ftruncate",
+    "futimens",
+    "ioctl_ficlone",
+    "ioctl_setflags",
+    "link",
+    "linkat",
+    "lremovexattr",
+    "lsetxattr",
+    "mkdir",
+    "mkdirat",
+    "mkfifoat",
+    "mknodat",
+    "removexattr",
+    "rename",
+    "renameat",
+    "renameat_with",
+    "rmdir",
+    "sendfile",
+    "setxattr",
+    "symlink",
+    "symlinkat",
+    "unlink",
+    "unlinkat",
+    "utimensat",
+)
+STD_SYMLINK_FUNCTIONS = (
+    ("std::os::unix::fs", "symlink"),
+    ("std::os::unix::fs", "chown"),
+    ("std::os::unix::fs", "fchown"),
+    ("std::os::unix::fs", "lchown"),
+    ("std::os::unix::fs", "mkfifo"),
+    ("std::os::windows::fs", "symlink_file"),
+    ("std::os::windows::fs", "symlink_dir"),
+)
+RUSTIX_WRITE_FLAGS = ("WRONLY", "RDWR", "APPEND", "CREATE", "TRUNC", "TMPFILE")
+FILE_MUTATION_METHODS = ("set_len", "set_permissions", "set_times", "set_modified")
+FILE_WRITE_METHODS = ("write", "write_vectored", "write_all", "write_fmt")
+FILE_EXT_WRITE_METHODS = ("write_at", "write_all_at", "seek_write")
+READ_ONLY_UNIX_OPEN_FLAGS = {
+    "O_CLOEXEC", "O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK", "O_SYNC",
+    "O_DSYNC", "O_DIRECT", "O_NOCTTY", "O_NOATIME", "O_PATH", "O_LARGEFILE",
+}
+READ_ONLY_RUSTIX_OPEN_FLAGS = {
+    "RDONLY", "CLOEXEC", "NOFOLLOW", "DIRECTORY", "NONBLOCK", "SYNC", "DSYNC",
+    "DIRECT", "NOCTTY", "NOATIME", "PATH", "LARGEFILE",
+}
+EXTERNAL_CRATE_ALIASES: dict[str, set[str]] = {}
+
+def cargo_dependency_aliases(path: Path) -> dict[str, set[str]]:
+    """Resolve dependency keys to package names for the source file's crate.
+
+    Cargo dependency renaming changes the Rust crate identifier, so source-only
+    `use` parsing is insufficient for a fail-closed architectural audit.
+    """
+    crate_dir = repo_root / "crates" / path.parts[1]
+    manifest = crate_dir / "Cargo.toml"
+    aliases: dict[str, set[str]] = {"rustix": set(), "tokio": set()}
+    if not manifest.is_file():
+        return aliases
+    with manifest.open("rb") as handle:
+        data = tomllib.load(handle)
+    with (repo_root / "Cargo.toml").open("rb") as handle:
+        workspace = tomllib.load(handle).get("workspace", {}).get("dependencies", {})
+
+    tables: list[dict[str, object]] = [data.get("dependencies", {})]
+    tables.extend(
+        target.get("dependencies", {})
+        for target in data.get("target", {}).values()
+        if isinstance(target, dict)
+    )
+    for table in tables:
+        for alias, specification in table.items():
+            package = alias
+            if isinstance(specification, dict):
+                if specification.get("workspace") is True:
+                    workspace_specification = workspace.get(alias, {})
+                    if isinstance(workspace_specification, dict):
+                        package = workspace_specification.get("package", alias)
+                else:
+                    package = specification.get("package", alias)
+            if package in aliases:
+                aliases[package].add(alias.replace("-", "_"))
+    return aliases
+
+def balanced_call_arguments(text: str, opening_parenthesis: int) -> tuple[list[str], int] | None:
+    """Return top-level call arguments without pretending to parse Rust types."""
+    depth = 0
+    start = opening_parenthesis + 1
+    arguments: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for offset in range(opening_parenthesis, len(text)):
+        char = text[offset]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                arguments.append(text[start:offset].strip())
+                return arguments, offset + 1
+        elif char == "," and depth == 1:
+            arguments.append(text[start:offset].strip())
+            start = offset + 1
+    return None
+
+def provably_read_only_flag_expression(expression: str, allowed_flags: set[str], flag_type: str) -> bool:
+    """Accept only a literal OR of audited read-only flags and zero.
+
+    Variables, calls, casts, arithmetic, unknown constants, and raw bit values
+    fail closed. This deliberately trades syntax breadth for a reviewable proof.
+    """
+    compact = re.sub(r"\s+", "", expression)
+    if compact in {"0", f"{flag_type}::empty()"}:
+        return True
+    if not compact:
+        return False
+    parts = compact.split("|")
+    if any(not part for part in parts):
+        return False
+    for part in parts:
+        part = part.strip("()")
+        match = re.fullmatch(r"(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Z][A-Z0-9_]*)", part)
+        if match is None or match.group(1) not in allowed_flags:
+            return False
+    return True
+
+def source_match(text: str, offset: int) -> tuple[int, str]:
+    line_start = text.rfind("\n", 0, offset) + 1
+    line_end = text.find("\n", offset)
+    if line_end == -1:
+        line_end = len(text)
+    return text.count("\n", 0, offset) + 1, text[line_start:line_end].strip()
+
+def rust_use_imports(text: str) -> list[tuple[tuple[str, ...], str | None]]:
+    """Return flattened Rust use-tree leaves, including arbitrarily nested groups."""
+    imports: list[tuple[tuple[str, ...], str | None]] = []
+    token_pattern = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|::|[{},;*]")
+
+    for use_match in re.finditer(r"\buse\b", text):
+        statement_start = use_match.end()
+        depth = 0
+        statement_end = None
+        for offset, char in enumerate(text[statement_start:], start=statement_start):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif char == ";" and depth == 0:
+                statement_end = offset + 1
+                break
+        if statement_end is None:
+            continue
+        tokens = token_pattern.findall(text[statement_start:statement_end])
+        position = 0
+
+        def parse_item(prefix: tuple[str, ...]) -> None:
+            nonlocal position
+            segments: list[str] = []
+            while position < len(tokens):
+                token = tokens[position]
+                if token in ("{", "}", ",", ";") or token == "as":
+                    break
+                if token != "::":
+                    segments.append(token)
+                position += 1
+            path = prefix + tuple(segments)
+            if position < len(tokens) and tokens[position] == "{":
+                position += 1
+                while position < len(tokens) and tokens[position] != "}":
+                    parse_item(path)
+                    if position < len(tokens) and tokens[position] == ",":
+                        position += 1
+                if position < len(tokens) and tokens[position] == "}":
+                    position += 1
+                return
+            alias = None
+            if position < len(tokens) and tokens[position] == "as":
+                position += 1
+                if position < len(tokens):
+                    alias = tokens[position]
+                    position += 1
+            if path and path[-1] == "self":
+                path = path[:-1]
+            if path:
+                imports.append((path, alias))
+
+        while position < len(tokens) and tokens[position] != ";":
+            parse_item(())
+            if position < len(tokens) and tokens[position] == ",":
+                position += 1
+            elif position < len(tokens) and tokens[position] not in (";", "}"):
+                position += 1
+    return imports
+
+def crate_aliases(text: str, crate: str) -> set[str]:
+    aliases = {crate} | EXTERNAL_CRATE_ALIASES.get(crate, set())
+    aliases.update(
+        match.group(1)
+        for match in re.finditer(
+            rf"\bextern\s+crate\s+{re.escape(crate)}\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            text,
+        )
+    )
+    imports = rust_use_imports(text)
+    while True:
+        discovered = {
+            alias
+            for path, alias in imports
+            if len(path) == 1 and path[0] in aliases and alias is not None
+        }
+        if discovered <= aliases:
+            break
+        aliases.update(discovered)
+    return aliases
+
+def prefix_variants(text: str, prefix: str) -> set[tuple[str, ...]]:
+    segments = tuple(prefix.split("::"))
+    if not segments:
+        return set()
+    return {
+        (alias,) + segments[1:]
+        for alias in crate_aliases(text, segments[0])
+    }
+
+def imported_path_aliases(text: str, paths: set[tuple[str, ...]]) -> set[str]:
+    """Resolve `use` aliases of known paths to a fixed point."""
+    aliases = {"::".join(path) for path in paths}
+    imports = rust_use_imports(text)
+    while True:
+        discovered = {
+            alias or path[-1]
+            for path, alias in imports
+            if "::".join(path) in aliases
+        }
+        if discovered <= aliases:
+            break
+        aliases.update(discovered)
+    return aliases
+
+def imported_name_aliases(text: str, prefix: str, name: str) -> set[str]:
+    wanted = {variant + (name,) for variant in prefix_variants(text, prefix)}
+    aliases = imported_path_aliases(text, wanted)
+    type_aliases = list(
+        re.finditer(
+            r"\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+            r"([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*;",
+            text,
+        )
+    )
+    while True:
+        discovered = {
+            match.group(1)
+            for match in type_aliases
+            if match.group(2) in aliases
+        }
+        if discovered <= aliases:
+            break
+        aliases.update(discovered)
+    return aliases
+
+def imported_module_aliases(text: str, crate: str, module: str) -> set[str]:
+    crate_names = crate_aliases(text, crate)
+    wanted = {(name, module) for name in crate_names}
+    return imported_path_aliases(text, wanted)
+
+def filesystem_module_aliases(text: str) -> set[str]:
+    return imported_module_aliases(text, "std", "fs") | imported_module_aliases(text, "tokio", "fs")
+
+def module_aliases_for_prefix(text: str, prefix: str) -> set[str]:
+    segments = prefix.split("::")
+    if len(segments) < 2:
+        return set()
+    wanted = prefix_variants(text, prefix)
+    return imported_path_aliases(text, wanted)
+
+def rust_bindings(text: str) -> list[tuple[str, str | None, str]]:
+    """Return simple let/const/static bindings and later assignments.
+
+    Keeping the declared type lets the scanner resolve type-directed
+    `Default::default()` constructors without treating arbitrary defaults as
+    filesystem capabilities.
+    """
+    declarations = re.compile(
+        r"\b(?:let\s+(?:mut\s+)?|const\s+|static\s+(?:mut\s+)?)"
+        r"([A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:\s*:\s*([^\n=;]+))?\s*=(?!=)\s*([^;]+)\s*;"
+    )
+    assignments = re.compile(
+        r"(?:(?m:^[ \t]*)|(?<=[;{}])[ \t]*)"
+        r"([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*([^;]+)\s*;"
+    )
+    bindings = [
+        (match.start(), match.group(1), match.group(2), match.group(3).strip())
+        for match in declarations.finditer(text)
+    ]
+    bindings.extend(
+        (match.start(), match.group(1), None, match.group(2).strip())
+        for match in assignments.finditer(text)
+    )
+    return [
+        (target, declared_type.strip() if declared_type is not None else None, expression)
+        for _offset, target, declared_type, expression in sorted(bindings)
+    ]
+
+def rust_assignments(text: str) -> list[tuple[str, str]]:
+    """Return binding/assignment targets and expressions for value flow."""
+    return [(target, expression) for target, _declared_type, expression in rust_bindings(text)]
+
+def strip_outer_parentheses(expression: str) -> str:
+    """Remove balanced parentheses enclosing a complete expression."""
+    expression = expression.strip()
+    while expression.startswith("(") and expression.endswith(")"):
+        depth = 0
+        closes_at_end = False
+        for offset, char in enumerate(expression):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    closes_at_end = offset == len(expression) - 1
+                    break
+        if not closes_at_end:
+            break
+        expression = expression[1:-1].strip()
+    return expression
+
+def normalize_value_expression(expression: str) -> str:
+    """Normalize parenthesized/cast function items and capability moves."""
+    expression = strip_outer_parentheses(expression)
+    depth = 0
+    cast_offset = None
+    offset = 0
+    while offset < len(expression):
+        char = expression[offset]
+        if char in "([{<":
+            depth += 1
+        elif char in ")]}>":
+            depth = max(0, depth - 1)
+        elif depth == 0 and expression.startswith(" as ", offset):
+            cast_offset = offset
+        offset += 1
+    if cast_offset is not None:
+        expression = strip_outer_parentheses(expression[:cast_offset])
+    return expression.strip()
+
+def normalized_type_name(declared_type: str) -> str:
+    """Normalize harmless whitespace in a simple Rust path type."""
+    declared_type = strip_outer_parentheses(declared_type)
+    return re.sub(r"\s*::\s*", "::", declared_type.strip())
+
+def default_constructor(expression: str) -> bool:
+    """Recognize zero-argument Default/default associated constructors."""
+    expression = strip_outer_parentheses(expression)
+    return re.fullmatch(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*|<[^;]+>)"
+        r"\s*::\s*default\s*\(\s*\)",
+        expression,
+    ) is not None
+
+def preceding_call_callee(
+    text: str,
+    opening_parenthesis: int,
+    matching_parentheses: dict[int, int],
+) -> tuple[int, str] | None:
+    """Return the path expression immediately preceding a call's arguments."""
+    cursor = opening_parenthesis - 1
+    while cursor >= 0 and text[cursor].isspace():
+        cursor -= 1
+    if cursor < 0:
+        return None
+    if text[cursor] == ")":
+        start = matching_parentheses.get(cursor)
+        if start is None:
+            return None
+        return start, normalize_value_expression(text[start:cursor + 1])
+    start = cursor
+    while start >= 0 and (text[start].isalnum() or text[start] in "_:"):
+        start -= 1
+    start += 1
+    candidate = text[start:cursor + 1]
+    if re.fullmatch(
+        r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*",
+        candidate,
+    ) is None:
+        return None
+    return start, candidate
+
+def function_value_call_matches(text: str, values: set[str]) -> list[tuple[int, str]]:
+    """Find ordinary or parenthesized calls through known function values."""
+    matches: list[tuple[int, str]] = []
+    stack: list[int] = []
+    matching_parentheses: dict[int, int] = {}
+    for offset, char in enumerate(text):
+        if char == "(":
+            stack.append(offset)
+        elif char == ")" and stack:
+            matching_parentheses[offset] = stack.pop()
+    for opening_parenthesis, char in enumerate(text):
+        if char != "(":
+            continue
+        callee = preceding_call_callee(text, opening_parenthesis, matching_parentheses)
+        if callee is None or callee[1] not in values:
+            continue
+        if re.search(r"\bfn\s+$", text[max(0, callee[0] - 24):callee[0]]):
+            continue
+        matches.append(source_match(text, callee[0]))
+    return matches
+
+def fixed_point_value_aliases(text: str, values: set[str]) -> set[str]:
+    """Propagate normalized Rust moves/assignments of known capabilities."""
+    aliases = set(values)
+    assignments = rust_assignments(text)
+    path = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
+    while True:
+        discovered = {
+            target
+            for target, expression in assignments
+            if path.fullmatch(normalize_value_expression(expression))
+            and normalize_value_expression(expression) in aliases
+        }
+        if discovered <= aliases:
+            break
+        aliases.update(discovered)
+    return aliases
+
+def filesystem_glob_import_matches(text: str) -> list[tuple[int, str]]:
+    """Reject filesystem glob imports whose imported mutation names are unknowable."""
+    matches: list[tuple[int, str]] = []
+    for use_match in re.finditer(r"\buse\b", text):
+        statement_start = use_match.end()
+        depth = 0
+        statement_end = None
+        for offset, char in enumerate(text[statement_start:], start=statement_start):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif char == ";" and depth == 0:
+                statement_end = offset + 1
+                break
+        if statement_end is None:
+            continue
+        statement = text[use_match.start():statement_end]
+        glob_paths = {
+            tuple(module.split("::")) + ("*",)
+            for module in (
+                filesystem_module_aliases(text)
+                | imported_module_aliases(text, "rustix", "fs")
+            )
+        }
+        if any(path in glob_paths for path, _alias in rust_use_imports(statement)):
+            matches.append(source_match(text, use_match.start()))
+    return matches
+
+def persistent_mutation_matches(text: str) -> list[tuple[int, str]]:
+    """Find filesystem mutation surfaces, including imported aliases.
+
+    Explicitly read-only OpenOptions and rustix OFlags remain valid. Rustix
+    write-capable open flags are rejected even when OFlags has been renamed.
+    """
+    matches: list[tuple[int, str]] = []
+    mutator = "|".join(OPEN_OPTIONS_MUTATORS)
+
+    matches.extend(filesystem_glob_import_matches(text))
+
+    filesystem_modules = filesystem_module_aliases(text)
+    for module in filesystem_modules:
+        for match in re.finditer(
+            rf"\b{re.escape(module)}\s*::\s*(?:{'|'.join(FILESYSTEM_MUTATION_FUNCTIONS)})\s*\(",
+            text,
+        ):
+            matches.append(source_match(text, match.start()))
+
+    function_aliases: set[str] = set()
+    for prefix in ("std::fs", "tokio::fs"):
+        for function in FILESYSTEM_MUTATION_FUNCTIONS:
+            function_aliases.update(imported_name_aliases(text, prefix, function))
+    for function in RUSTIX_MUTATION_FUNCTIONS:
+        function_aliases.update(imported_name_aliases(text, "rustix::fs", function))
+    for prefix, function in STD_SYMLINK_FUNCTIONS:
+        function_aliases.update(imported_name_aliases(text, prefix, function))
+    for function in function_aliases:
+        for match in re.finditer(rf"(?<![:.])\b{re.escape(function)}\s*\(", text):
+            matches.append(source_match(text, match.start()))
+
+    # A mutation function can also be copied into a local function-value and
+    # invoked under an otherwise unrelated name. Resolve the known std/tokio
+    # filesystem mutation references (including imported module/name aliases)
+    # before scanning those local calls.
+    mutation_references: set[str] = set(function_aliases)
+    for prefix in ("std::fs", "tokio::fs"):
+        for function in FILESYSTEM_MUTATION_FUNCTIONS:
+            mutation_references.add(f"{prefix}::{function}")
+    for module in filesystem_modules:
+        for function in FILESYSTEM_MUTATION_FUNCTIONS:
+            mutation_references.add(f"{module}::{function}")
+    rustix_modules = imported_module_aliases(text, "rustix", "fs")
+    rustix_modules.add("rustix::fs")
+    for module in rustix_modules:
+        for function in RUSTIX_MUTATION_FUNCTIONS:
+            mutation_references.add(f"{module}::{function}")
+    for prefix, function in STD_SYMLINK_FUNCTIONS:
+        mutation_references.add(f"{prefix}::{function}")
+        for module in module_aliases_for_prefix(text, prefix):
+            mutation_references.add(f"{module}::{function}")
+
+    file_types_for_references: set[str] = set()
+    directory_builder_types: set[str] = set()
+    for prefix in ("std::fs", "tokio::fs"):
+        file_types_for_references.update(imported_name_aliases(text, prefix, "File"))
+        file_types_for_references.update(
+            "::".join(path + ("File",)) for path in prefix_variants(text, prefix)
+        )
+    directory_builder_types.update(imported_name_aliases(text, "std::fs", "DirBuilder"))
+    directory_builder_types.update(
+        "::".join(path + ("DirBuilder",)) for path in prefix_variants(text, "std::fs")
+    )
+    for file_type_name in file_types_for_references:
+        mutation_references.add(f"{file_type_name}::create")
+        mutation_references.add(f"{file_type_name}::create_new")
+        for method in FILE_MUTATION_METHODS:
+            mutation_references.add(f"{file_type_name}::{method}")
+    for builder_type in directory_builder_types:
+        mutation_references.add(f"{builder_type}::create")
+
+    # Resolve chains to a fixed point: `let first = std::fs::write; let second
+    # = first; second(...)`. Rust permits function items to be copied through
+    # arbitrarily many local/const/static bindings, parentheses, and explicit
+    # function-pointer casts.
+    function_value_aliases = fixed_point_value_aliases(text, mutation_references)
+    matches.extend(function_value_call_matches(text, function_value_aliases))
+
+    open_option_types: set[str] = set()
+    file_types: set[str] = set()
+    for prefix in ("std::fs", "tokio::fs"):
+        open_option_types.update(imported_name_aliases(text, prefix, "OpenOptions"))
+        file_types.update(imported_name_aliases(text, prefix, "File"))
+        open_option_types.update("::".join(path + ("OpenOptions",)) for path in prefix_variants(text, prefix))
+        file_types.update("::".join(path + ("File",)) for path in prefix_variants(text, prefix))
+    option_type = "|".join(re.escape(name) for name in sorted(open_option_types, key=len, reverse=True))
+    file_type = "|".join(re.escape(name) for name in sorted(file_types, key=len, reverse=True))
+    builder = rf"(?:(?:{option_type})\s*::\s*(?:new|default)|(?:{file_type})\s*::\s*options)\s*\(\s*\)"
+
+    for builder_match in re.finditer(builder, text):
+        statement_end = text.find(";", builder_match.end())
+        if statement_end == -1:
+            statement_end = len(text)
+        setter = re.search(rf"\.\s*(?:{mutator})\s*\(", text[builder_match.start():statement_end])
+        if setter:
+            matches.append(source_match(text, builder_match.start() + setter.start()))
+
+    variables: set[str] = set()
+    bindings = rust_bindings(text)
+    assignments = rust_assignments(text)
+    variables.update(
+        target
+        for target, initializer in assignments
+        if re.search(builder, initializer)
+    )
+    variables.update(
+        target
+        for target, declared_type, initializer in bindings
+        if declared_type is not None
+        and normalized_type_name(declared_type) in open_option_types
+        and default_constructor(initializer)
+    )
+    # Mutating OpenOptions calls are also possible in configuration helpers
+    # that receive an already-created builder by reference.
+    option_binding = "|".join(
+        re.escape(name) for name in sorted(open_option_types, key=len, reverse=True)
+    )
+    parameter = re.compile(
+        rf"(?:^|[,\(])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&?\s*(?:mut\s+)?(?:{option_binding})\b",
+        re.MULTILINE,
+    )
+    variables.update(match.group(1) for match in parameter.finditer(text))
+    variables = fixed_point_value_aliases(text, variables)
+    for variable in variables:
+        for setter in re.finditer(rf"\b{re.escape(variable)}\s*\.\s*(?:{mutator})\s*\(", text):
+            matches.append(source_match(text, setter.start()))
+
+    for file_type_name in file_types:
+        for match in re.finditer(rf"\b{re.escape(file_type_name)}\s*::\s*(?:create|create_new)\s*\(", text):
+            matches.append(source_match(text, match.start()))
+
+    # Track only receivers that are syntactically proven to be std/tokio File.
+    # Generic `Write` calls remain allowed because DNS sockets and TLS streams
+    # legitimately implement that trait.
+    file_variables: set[str] = set()
+    file_type_pattern = "|".join(
+        re.escape(name) for name in sorted(file_types, key=len, reverse=True)
+    )
+    file_variables.update(
+        match.group(1)
+        for match in re.finditer(
+            rf"(?:^|[,\(])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&?\s*(?:mut\s+)?(?:{file_type_pattern})\b",
+            text,
+            re.MULTILINE,
+        )
+    )
+    for candidate, initializer in assignments:
+        if re.search(builder + r"[^;]*\.\s*open\s*\(", initializer) or any(
+            re.search(rf"\b{re.escape(options_variable)}\s*\.\s*open\s*\(", initializer)
+            for options_variable in variables
+        ):
+            file_variables.add(candidate)
+    file_variables.update(
+        match.group(1)
+        for match in re.finditer(
+            rf"\blet\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:{file_type_pattern})\b",
+            text,
+        )
+    )
+    constructor_pattern = "|".join(
+        rf"{re.escape(name)}\s*::\s*(?:open|create|create_new)" for name in file_types
+    )
+    file_variables.update(
+        target
+        for target, initializer in assignments
+        if re.match(rf"(?:{constructor_pattern})\s*\(", initializer)
+    )
+    file_variables = fixed_point_value_aliases(text, file_variables)
+    for variable in file_variables:
+        for method in FILE_MUTATION_METHODS + FILE_WRITE_METHODS + FILE_EXT_WRITE_METHODS:
+            for match in re.finditer(
+                rf"\b{re.escape(variable)}\s*\.\s*{re.escape(method)}\s*\(", text
+            ):
+                matches.append(source_match(text, match.start()))
+    qualified_file_traits = (
+        ("std::io", "Write", FILE_WRITE_METHODS),
+        ("std::os::unix::fs", "FileExt", ("write_at", "write_all_at")),
+        ("std::os::windows::fs", "FileExt", ("seek_write",)),
+    )
+    for prefix, trait_name, methods in qualified_file_traits:
+        trait_names = imported_name_aliases(text, prefix, trait_name)
+        trait_names.update(f"{module}::{trait_name}" for module in module_aliases_for_prefix(text, prefix))
+        for trait in trait_names:
+            for method in methods:
+                for call in re.finditer(
+                    rf"\b{re.escape(trait)}\s*::\s*{method}\s*\(", text
+                ):
+                    opening = text.find("(", call.start())
+                    parsed = balanced_call_arguments(text, opening)
+                    if parsed is None or not parsed[0]:
+                        continue
+                    receiver = re.sub(r"^&\s*(?:mut\s+)?", "", parsed[0][0]).strip()
+                    if receiver in file_variables:
+                        matches.append(source_match(text, call.start()))
+    for file_type_name in file_types:
+        for method in FILE_MUTATION_METHODS:
+            for match in re.finditer(
+                rf"\b{re.escape(file_type_name)}\s*::\s*{method}\s*\(", text
+            ):
+                matches.append(source_match(text, match.start()))
+
+    for builder_type in directory_builder_types:
+        for match in re.finditer(
+            rf"\b{re.escape(builder_type)}\s*::\s*create\s*\(", text
+        ):
+            matches.append(source_match(text, match.start()))
+    directory_builder_variables: set[str] = set()
+    builder_type_pattern = "|".join(
+        re.escape(name) for name in sorted(directory_builder_types, key=len, reverse=True)
+    )
+    directory_builder_variables.update(
+        target
+        for target, initializer in assignments
+        if re.match(rf"(?:{builder_type_pattern})\s*::\s*new\s*\(", initializer)
+    )
+    directory_builder_variables.update(
+        match.group(1)
+        for match in re.finditer(
+            rf"(?:^|[,\(])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*&?\s*(?:mut\s+)?(?:{builder_type_pattern})\b",
+            text,
+            re.MULTILINE,
+        )
+    )
+    directory_builder_variables.update(
+        match.group(1)
+        for match in re.finditer(
+            rf"\blet\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:{builder_type_pattern})\b",
+            text,
+        )
+    )
+    directory_builder_variables = fixed_point_value_aliases(text, directory_builder_variables)
+    for variable in directory_builder_variables:
+        for match in re.finditer(rf"\b{re.escape(variable)}\s*\.\s*create\s*\(", text):
+            matches.append(source_match(text, match.start()))
+
+    # OpenOptionsExt::custom_flags may carry O_CREAT/O_TRUNC without calling a
+    # named OpenOptions mutator. Unknown or computed expressions fail closed.
+    custom_flag_receivers = variables
+    for match in re.finditer(r"\.\s*custom_flags\s*\(", text):
+        prefix = text[max(0, match.start() - 160):match.start()]
+        statement = text[text.rfind(";", 0, match.start()) + 1:match.start()]
+        receiver = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", prefix)
+        is_open_options = receiver is not None and receiver.group(1) in custom_flag_receivers
+        is_open_options = is_open_options or re.search(builder + r"[^;]*$", prefix) is not None
+        is_open_options = is_open_options or any(
+            re.search(rf"\b{re.escape(variable)}\b", statement)
+            for variable in custom_flag_receivers
+        )
+        if not is_open_options:
+            continue
+        parsed = balanced_call_arguments(text, text.find("(", match.start()))
+        if parsed is None or len(parsed[0]) != 1 or not provably_read_only_flag_expression(
+            parsed[0][0], READ_ONLY_UNIX_OPEN_FLAGS, "OpenOptionsFlags"
+        ):
+            matches.append(source_match(text, match.start()))
+
+    rustix_flag_types = imported_name_aliases(text, "rustix::fs", "OFlags")
+    rustix_flag_types.update(
+        f"{module}::OFlags" for module in imported_module_aliases(text, "rustix", "fs")
+    )
+    rustix_flag_types.add("rustix::fs::OFlags")
+    flag_type = "|".join(re.escape(name) for name in sorted(rustix_flag_types, key=len, reverse=True))
+    write_flag = "|".join(RUSTIX_WRITE_FLAGS)
+    for match in re.finditer(rf"\b(?:{flag_type})\s*::\s*(?:{write_flag})\b", text):
+        matches.append(source_match(text, match.start()))
+
+    for module in rustix_modules:
+        for match in re.finditer(
+            rf"\b{re.escape(module)}\s*::\s*(?:{'|'.join(RUSTIX_MUTATION_FUNCTIONS)})\s*\(",
+            text,
+        ):
+            matches.append(source_match(text, match.start()))
+    for prefix, function in STD_SYMLINK_FUNCTIONS:
+        modules = module_aliases_for_prefix(text, prefix) | {prefix}
+        for module in modules:
+            for match in re.finditer(
+                rf"\b{re.escape(module)}\s*::\s*{re.escape(function)}\s*\(", text
+            ):
+                matches.append(source_match(text, match.start()))
+
+    # A rustix open is allowed only when its OFlags argument is a literal OR of
+    # audited read-only flags. Parameters, helper calls, casts, and unknown bits
+    # cannot prove the no-persistent-write invariant and are rejected.
+    rustix_open_references: dict[str, int] = {}
+    for function, flag_index in (("open", 1), ("openat", 2), ("openat2", 2)):
+        for alias in imported_name_aliases(text, "rustix::fs", function):
+            rustix_open_references[alias] = flag_index
+        for module in rustix_modules:
+            rustix_open_references[f"{module}::{function}"] = flag_index
+    for reference, flag_index in sorted(rustix_open_references.items(), key=lambda item: -len(item[0])):
+        for call in re.finditer(rf"(?<![A-Za-z0-9_:.]){re.escape(reference)}\s*\(", text):
+            if re.search(r"\bfn\s+$", text[max(0, call.start() - 24):call.start()]):
+                continue
+            opening = text.find("(", call.start())
+            parsed = balanced_call_arguments(text, opening)
+            safe = False
+            if parsed is not None and len(parsed[0]) > flag_index:
+                expression = parsed[0][flag_index]
+                if reference.endswith("openat2"):
+                    flag_call = re.search(r"\.\s*flags\s*\(", expression)
+                    if flag_call is not None:
+                        nested_open = expression.find("(", flag_call.start())
+                        nested = balanced_call_arguments(expression, nested_open)
+                        safe = nested is not None and len(nested[0]) == 1 and provably_read_only_flag_expression(
+                            nested[0][0], READ_ONLY_RUSTIX_OPEN_FLAGS, "OFlags"
+                        )
+                else:
+                    safe = provably_read_only_flag_expression(
+                        expression, READ_ONLY_RUSTIX_OPEN_FLAGS, "OFlags"
+                    )
+            if not safe:
+                matches.append(source_match(text, call.start()))
+
+    return sorted(set(matches))
+
+read_only_filesystem_fixture = """
+use std::fs::{File, OpenOptions};
+use std::{fs::{OpenOptions as NestedReadOptions}};
+use tokio::fs::OpenOptions as AsyncOptions;
+use rustix::fs::{open, openat, Mode, OFlags};
+let mut options = OpenOptions::new();
+options.read(true);
+options.custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK);
+let _file = options.open(path)?;
+let _other = File::options().read(true).open(other)?;
+let _async = AsyncOptions::default().read(true).open(async_path).await?;
+let _nested = NestedReadOptions::new().read(true).open(nested_path)?;
+let _root = open(root, OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())?;
+let _child = openat(&_root, child, OFlags::RDONLY | OFlags::NOFOLLOW, Mode::empty())?;
+"""
+if persistent_mutation_matches(read_only_filesystem_fixture):
+    raise SystemExit("ODS-INV-004 scanner rejected its read-only filesystem fixture")
+
+mutating_filesystem_fixture = """
+use std::{fs as filesystem};
+use tokio::{fs as async_filesystem};
+use tokio::fs::{write as async_save, OpenOptions as AsyncOptions};
+use std::fs::rename as move_path;
+use std::fs::OpenOptions as FsOptions;
+use rustix::fs as direct_rfs;
+use rustix::{fs as grouped_rfs};
+use rustix::fs::{open, Mode, OFlags as Flags};
+let enabled = policy.allows_writes();
+filesystem::copy(source, destination)?;
+async_filesystem::hard_link(source, linked).await?;
+async_save(output, bytes).await?;
+move_path(old, new)?;
+let mut options: FsOptions = FsOptions::new();
+options.write(enabled);
+let _async = AsyncOptions::default().create(enabled).open(path).await?;
+let _write_only = open(path, direct_rfs::OFlags::WRONLY, Mode::RUSR)?;
+let _read_write = open(path, grouped_rfs::OFlags::RDWR, Mode::RUSR)?;
+let _append = open(path, Flags::APPEND, Mode::RUSR)?;
+let _create = open(path, Flags::CREATE, Mode::RUSR)?;
+let _truncate = open(path, Flags::TRUNC, Mode::RUSR)?;
+let _temporary = open(path, Flags::TMPFILE, Mode::RUSR)?;
+"""
+fixture_mutators = persistent_mutation_matches(mutating_filesystem_fixture)
+if len(fixture_mutators) != 12:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its aliased filesystem mutation fixtures: "
+        f"{fixture_mutators}"
+    )
+
+nested_mutating_filesystem_fixture = """
+use std::{fs::{write as nested_write, OpenOptions as NestedOptions}};
+use rustix::{fs::{OFlags as NestedFlags}};
+nested_write(output, bytes)?;
+let _created = NestedOptions::new().create(true).open(path)?;
+let _direct = rustix::fs::open(path, NestedFlags::WRONLY, rustix::fs::Mode::RUSR)?;
+"""
+nested_fixture_mutators = persistent_mutation_matches(nested_mutating_filesystem_fixture)
+if len(nested_fixture_mutators) != 3:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact nested std::fs write/OpenOptions/rustix OFlags fixtures: "
+        f"{nested_fixture_mutators}"
+    )
+
+glob_mutating_filesystem_fixture = """
+use std::fs::*;
+use tokio::{fs::*};
+use rustix::{fs::{*}};
+"""
+glob_fixture_mutators = persistent_mutation_matches(glob_mutating_filesystem_fixture)
+if len(glob_fixture_mutators) != 3:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact filesystem glob import fixtures: "
+        f"{glob_fixture_mutators}"
+    )
+
+function_value_alias_fixture = """
+use std::fs as filesystem;
+use tokio::fs::remove_file as async_remove;
+let persist = std::fs::write;
+let duplicate = filesystem::copy;
+let erase = async_remove;
+persist(path, bytes)?;
+duplicate(source, destination)?;
+erase(path).await?;
+"""
+function_value_alias_mutators = persistent_mutation_matches(function_value_alias_fixture)
+if len(function_value_alias_mutators) != 3:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact filesystem function-value alias fixtures: "
+        f"{function_value_alias_mutators}"
+    )
+
+typed_default_open_options_fixture = """
+type O1 = std::fs::OpenOptions;
+type O2 = O1;
+let mut direct: std::fs::OpenOptions = Default::default();
+direct.create(true).open(path)?;
+let first: O2 = (std::default::Default::default());
+let second = (first);
+second.truncate(true).open(other)?;
+let mut qualified: O2 = (<O2 as Default>::default());
+qualified.append(true).open(third)?;
+"""
+typed_default_open_options_mutators = persistent_mutation_matches(
+    typed_default_open_options_fixture
+)
+if len(typed_default_open_options_mutators) != 3:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact typed Default::default OpenOptions fixtures: "
+        f"{typed_default_open_options_mutators}"
+    )
+
+parenthesized_function_value_fixture = """
+let direct = (std::fs::write);
+(direct)(path, bytes)?;
+((std::fs::remove_file))(victim)?;
+let first = (std::fs::rename);
+let second = (first);
+(second)(old, new)?;
+let casted = (std::fs::write as fn(&str, &[u8]) -> std::io::Result<()>);
+let cast_hop = (casted);
+(cast_hop)(other, bytes)?;
+"""
+parenthesized_function_value_mutators = persistent_mutation_matches(
+    parenthesized_function_value_fixture
+)
+if len(parenthesized_function_value_mutators) != 4:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact parenthesized/cast function-value fixtures: "
+        f"{parenthesized_function_value_mutators}"
+    )
+
+const_static_function_value_fixture = """
+const REMOVE: fn(&str) -> std::io::Result<()> = std::fs::remove_file;
+static WRITE: fn(&str, &[u8]) -> std::io::Result<()> = std::fs::write;
+const FIRST_RENAME: fn(&str, &str) -> std::io::Result<()> = std::fs::rename;
+static SECOND_RENAME: fn(&str, &str) -> std::io::Result<()> = (FIRST_RENAME);
+REMOVE(victim)?;
+(WRITE)(path, bytes)?;
+let rename_hop = (SECOND_RENAME);
+rename_hop(old, new)?;
+"""
+const_static_function_value_mutators = persistent_mutation_matches(
+    const_static_function_value_fixture
+)
+if len(const_static_function_value_mutators) != 3:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact const/static function-value fixtures: "
+        f"{const_static_function_value_mutators}"
+    )
+
+extended_mutation_fixture = """
+use rustix::fs::{mkdirat as create_beneath, renameat, unlinkat};
+use std::os::unix::fs::symlink as create_symlink;
+use std::fs::OpenOptions as FsOptions;
+let first = std::fs::write;
+let second = first;
+let persist = second;
+persist(path, bytes)?;
+create_beneath(dirfd, path, Mode::RUSR)?;
+renameat(old_dir, old, new_dir, new)?;
+unlinkat(dirfd, victim, AtFlags::empty())?;
+create_symlink(source, destination)?;
+fn enable_write(options: &mut FsOptions) { options.write(true); }
+"""
+extended_fixture_mutators = persistent_mutation_matches(extended_mutation_fixture)
+if len(extended_fixture_mutators) != 6:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact rustix/std-symlink/multi-hop/helper mutation fixtures: "
+        f"{extended_fixture_mutators}"
+    )
+
+rustix_public_mutation_fixture = """
+use rustix::fs as rfs;
+use rustix::fs::{mkfifoat as create_fifo, mknodat};
+rustix::fs::chmod(path, Mode::RUSR)?;
+create_fifo(dirfd, fifo, Mode::RUSR)?;
+mknodat(dirfd, node, FileType::RegularFile, Mode::RUSR, dev)?;
+rfs::renameat_with(old_dir, old, new_dir, new, RenameFlags::EXCHANGE)?;
+rfs::fallocate(file, FallocateFlags::empty(), 0, 4096)?;
+let first = rfs::setxattr;
+let second = first;
+second(path, name, value, XattrFlags::CREATE)?;
+"""
+rustix_public_mutators = persistent_mutation_matches(rustix_public_mutation_fixture)
+if len(rustix_public_mutators) != 6:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact rustix direct/import/module/multi-hop mutation fixtures: "
+        f"{rustix_public_mutators}"
+    )
+
+rust_196_and_crate_alias_fixture = """
+use std as standard;
+use tokio as async_runtime;
+use rustix as rx;
+use standard::fs::soft_link as create_soft_link;
+use standard::os::unix::fs::chown as change_owner;
+standard::fs::set_permissions_nofollow(path, permissions)?;
+standard::fs::set_times(path, times)?;
+standard::fs::set_times_nofollow(path, times)?;
+create_soft_link(source, destination)?;
+change_owner(path, uid, gid)?;
+standard::os::unix::fs::fchown(file, uid, gid)?;
+standard::os::unix::fs::lchown(path, uid, gid)?;
+standard::os::unix::fs::mkfifo(path, mode)?;
+async_runtime::fs::write(path, bytes).await?;
+rx::fs::chmod(path, rx::fs::Mode::RUSR)?;
+let first = rx::fs::rename;
+let second = first;
+second(old, new)?;
+"""
+rust_196_and_crate_alias_mutators = persistent_mutation_matches(
+    rust_196_and_crate_alias_fixture
+)
+if len(rust_196_and_crate_alias_mutators) != 11:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact Rust 1.96/crate-alias mutation fixtures: "
+        f"{rust_196_and_crate_alias_mutators}"
+    )
+
+fail_closed_file_mutation_fixture = """
+use std::fs::{DirBuilder, File as FsFile, OpenOptions};
+use std::io::Write as IoWrite;
+use std::os::unix::fs::FileExt as UnixFileExt;
+let direct = std::fs::File::create_new(path)?;
+let aliased = FsFile::create_new(other)?;
+let allocate = FsFile::create_new;
+let via_value = allocate(third)?;
+let mut builder = DirBuilder::new();
+builder.create(directory)?;
+fn mutate(file: &mut FsFile, permissions: std::fs::Permissions, times: std::fs::FileTimes) {
+    file.set_len(0)?;
+    file.set_permissions(permissions)?;
+    file.set_times(times)?;
+    file.set_modified(SystemTime::now())?;
+    file.write_all(bytes)?;
+    IoWrite::write_fmt(file, arguments)?;
+    UnixFileExt::write_at(file, bytes, 0)?;
+}
+let mut unknown = OpenOptions::new();
+unknown.read(true).custom_flags(runtime_flags).open(path)?;
+"""
+fail_closed_file_mutators = persistent_mutation_matches(fail_closed_file_mutation_fixture)
+if len(fail_closed_file_mutators) != 12:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact File/DirBuilder/custom-flags fixtures: "
+        f"{fail_closed_file_mutators}"
+    )
+
+read_only_writer_fixture = """
+use std::io::Write;
+fn emit(socket: &mut TcpStream, buffer: &mut Vec<u8>) {
+    socket.write_all(bytes)?;
+    buffer.write_fmt(arguments)?;
+}
+let mut options = std::fs::OpenOptions::new();
+options.read(true).custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW).open(path)?;
+rustix::fs::open(path, rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC, rustix::fs::Mode::empty())?;
+"""
+if persistent_mutation_matches(read_only_writer_fixture):
+    raise SystemExit("ODS-INV-004 scanner rejected its generic-writer/read-only-flags fixture")
+
+dynamic_rustix_open_fixture = """
+use rustix::fs as filesystem;
+use rustix::fs::{openat as relative_open, OFlags};
+fn dynamic(flags: OFlags) {
+    filesystem::open(path, flags, Mode::empty())?;
+    relative_open(dir, path, OFlags::from_bits_retain(raw), Mode::empty())?;
+}
+"""
+dynamic_rustix_open_mutators = persistent_mutation_matches(dynamic_rustix_open_fixture)
+if len(dynamic_rustix_open_mutators) != 2:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its dynamic rustix-open fixtures: "
+        f"{dynamic_rustix_open_mutators}"
+    )
+
+EXTERNAL_CRATE_ALIASES = {"rustix": {"rx"}, "tokio": {"async_io"}}
+cargo_renamed_dependency_fixture = """
+use rx::fs as renamed_fs;
+use rx::fs::chmod as change_mode;
+use async_io::fs::write as async_write;
+rx::fs::rename(old, new)?;
+renamed_fs::unlink(path)?;
+change_mode(path, Mode::RUSR)?;
+let first = rx::fs::rmdir;
+let second = first;
+second(path)?;
+async_write(path, bytes).await?;
+"""
+cargo_renamed_dependency_mutators = persistent_mutation_matches(cargo_renamed_dependency_fixture)
+if len(cargo_renamed_dependency_mutators) != 5:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its Cargo dependency-rename fixtures: "
+        f"{cargo_renamed_dependency_mutators}"
+    )
+
+cargo_and_source_renamed_dependency_fixture = """
+use rx as r2;
+r2::fs::chmod(path, r2::fs::Mode::RUSR)?;
+"""
+cargo_and_source_renamed_dependency_mutators = persistent_mutation_matches(
+    cargo_and_source_renamed_dependency_fixture
+)
+if len(cargo_and_source_renamed_dependency_mutators) != 1:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact Cargo-plus-source crate rename fixture: "
+        f"{cargo_and_source_renamed_dependency_mutators}"
+    )
+EXTERNAL_CRATE_ALIASES = {}
+
+moved_open_options_fixture = """
+let first = std::fs::OpenOptions::new();
+let second = first;
+second.create(true).open(path)?;
+"""
+moved_open_options_mutators = persistent_mutation_matches(moved_open_options_fixture)
+if len(moved_open_options_mutators) != 1:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact moved OpenOptions fixture: "
+        f"{moved_open_options_mutators}"
+    )
+
+chained_file_type_alias_fixture = """
+use std::fs::File as F;
+type G = F;
+fn mutate(file: &mut G) { file.write_all(bytes)?; }
+"""
+chained_file_type_alias_mutators = persistent_mutation_matches(chained_file_type_alias_fixture)
+if len(chained_file_type_alias_mutators) != 1:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its exact chained File type-alias fixture: "
+        f"{chained_file_type_alias_mutators}"
+    )
+
+fixed_point_capability_fixture = """
+use rustix as rx;
+use rx as r2;
+use r2::fs as rfs;
+use rfs as rfs2;
+use std::fs::File as F1;
+type F2 = F1;
+type F3 = F2;
+type O1 = std::fs::OpenOptions;
+type O2 = O1;
+type D1 = std::fs::DirBuilder;
+type D2 = D1;
+rfs2::rename(old, new)?;
+let first_function = rfs2::unlink;
+let second_function;
+second_function = first_function;
+second_function(path)?;
+let first_options = O2::new();
+let second_options = first_options;
+let third_options;
+third_options = second_options;
+third_options.truncate(true).open(path)?;
+let first_builder = D2::new();
+let second_builder = first_builder;
+let third_builder;
+third_builder = second_builder;
+third_builder.create(directory)?;
+fn move_file(first_file: F3) {
+    let second_file = first_file;
+    let third_file;
+    third_file = second_file;
+    third_file.set_len(0)?;
+}
+"""
+fixed_point_capability_mutators = persistent_mutation_matches(fixed_point_capability_fixture)
+if len(fixed_point_capability_mutators) != 5:
+    raise SystemExit(
+        "ODS-INV-004 scanner failed its multi-hop module/type/function/capability fixtures: "
+        f"{fixed_point_capability_mutators}"
+    )
+
+fixed_point_negative_fixture = """
+use std::io::Write;
+use rustix as rx;
+use rx as r2;
+use r2::fs as rfs;
+use rfs as rfs2;
+fn emit(socket: TcpStream) {
+    let first = socket;
+    let second = first;
+    second.write_all(bytes)?;
+}
+let first_options = std::fs::OpenOptions::new();
+let second_options = first_options;
+second_options.read(true).custom_flags(libc::O_CLOEXEC).open(path)?;
+rfs2::open(path, rfs2::OFlags::RDONLY | rfs2::OFlags::CLOEXEC, rfs2::Mode::empty())?;
+"""
+if persistent_mutation_matches(fixed_point_negative_fixture):
+    raise SystemExit(
+        "ODS-INV-004 scanner rejected its moved generic-writer/read-only alias fixture"
+    )
+
+typed_default_and_function_value_negative_fixture = """
+use std::io::Write;
+fn send(socket: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
+    socket.write_all(bytes)
+}
+const SEND: fn(&mut TcpStream, &[u8]) -> std::io::Result<()> = send;
+static SEND_AGAIN: fn(&mut TcpStream, &[u8]) -> std::io::Result<()> = (SEND);
+let callback = (SEND_AGAIN);
+(callback)(socket, bytes)?;
+let mut read_only: std::fs::OpenOptions = (Default::default());
+let moved_read_only = (read_only);
+moved_read_only.read(true).open(path)?;
+let mut unrelated: NetworkOptions = Default::default();
+unrelated.write(true);
+"""
+if persistent_mutation_matches(typed_default_and_function_value_negative_fixture):
+    raise SystemExit(
+        "ODS-INV-004 scanner rejected its typed-default/function-value negative fixture"
+    )
+
 print("architectural_invariant_audit=started")
 print("runtime_source_files:")
 for path in runtime_sources:
@@ -192,6 +1429,11 @@ for title, success, patterns, paths in checks:
                     ):
                         continue
                     matches.append(f"{path}:{line_number}: {line.strip()}")
+        if title.startswith("ODS-INV-004"):
+            EXTERNAL_CRATE_ALIASES = cargo_dependency_aliases(path)
+            for line_number, line in persistent_mutation_matches(text):
+                matches.append(f"{path}:{line_number}: {line}")
+            EXTERNAL_CRATE_ALIASES = {}
     print()
     print(f"check={title}")
     if matches:
@@ -3306,6 +4548,20 @@ if observe_query_start >= 0 and observe_query_end >= 0:
     observe_query_text = server_text[observe_query_start:observe_query_end]
 else:
     observe_query_text = ""
+metric_admission_start = server_text.find("pub(crate) fn record_published_zone_query(")
+metric_admission_end = server_text.find(
+    "fn record_zone_query_incarnation_locked(", metric_admission_start
+)
+if metric_admission_start >= 0 and metric_admission_end >= 0:
+    metric_admission_text = server_text[metric_admission_start:metric_admission_end]
+else:
+    metric_admission_text = ""
+current_zone_start = zone_text.find("pub fn is_current_published_zone(")
+current_zone_end = zone_text.find("pub fn is_current_zone_incarnation(", current_zone_start)
+if current_zone_start >= 0 and current_zone_end >= 0:
+    current_zone_text = zone_text[current_zone_start:current_zone_end]
+else:
+    current_zone_text = ""
 observation_failures = []
 if "published_zone.snapshot()" in observe_query_text:
     observation_failures.append("observe_query_metrics clones PublishedZone snapshot")
@@ -3316,8 +4572,18 @@ for marker in [".offline_oracle()", "oracle_lookup_with_options", "oracle_lookup
         observation_failures.append(f"observe_query_metrics runs snapshot oracle lookup: {marker}")
 if "published_zone.origin().canonical_key()" in observe_query_text:
     observation_failures.append("observe_query_metrics rebuilds the zone canonical key from snapshot origin")
-if "published_zone.origin_key()" not in observe_query_text:
-    observation_failures.append("observe_query_metrics does not use PublishedZone cached canonical key")
+if "record_published_zone_query(zones, &published_zone)" not in observe_query_text:
+    observation_failures.append("observe_query_metrics does not pass the PublishedZone handle into metric admission")
+if "published_zone.origin_key()" not in metric_admission_text:
+    observation_failures.append("metric admission does not use the PublishedZone cached canonical key")
+if "published_zone.incarnation()" not in metric_admission_text:
+    observation_failures.append("metric admission does not bind counters to the PublishedZone incarnation")
+if "zones.is_current_published_zone(published_zone)" not in metric_admission_text:
+    observation_failures.append("metric admission does not validate the exact PublishedZone incarnation")
+if "published.origin_key()" not in current_zone_text or ".canonical_key()" in current_zone_text:
+    observation_failures.append("ZoneStore current-incarnation validation does not use the cached PublishedZone key")
+if ".canonical_key()" in metric_admission_text:
+    observation_failures.append("metric admission rebuilds a canonical zone key")
 if "find_published_zone_with_ascii_lowercase_hint(\n        &question.qname,\n        question.qname_ascii_lowercase()," not in observe_query_text:
     observation_failures.append("observe_query_metrics does not pass parser-carried lowercase QNAME fact into zone suffix lookup")
 if "zone_image_shadow" in observe_query_text:
@@ -3332,7 +4598,7 @@ if observation_failures:
     )
 else:
     print("status=passed")
-    print("evidence=Runtime query observation records zone metrics through PublishedZone cached canonical keys, carries the parser lowercase-QNAME hint into suffix lookup, and contains no snapshot clone, old snapshot/offline-oracle lookup, per-query origin canonical-key rebuild, or live shadow-validation oracle.")
+    print("evidence=Runtime query observation passes the exact PublishedZone handle into incarnation-validating metric admission, consumes its cached canonical key and lifecycle incarnation, carries the parser lowercase-QNAME hint into suffix lookup, and contains no snapshot clone, old snapshot/offline-oracle lookup, per-query origin canonical-key rebuild, or live shadow-validation oracle.")
 
 print()
 print("check=ZoneStore query lookup exposes PublishedZone handle")
@@ -3702,12 +4968,27 @@ if "Current(ZoneMetadata)" not in server_text:
     refresh_clone_failures.append("refresh current outcome does not carry narrow ZoneMetadata")
 if "Current(Arc<ZoneSnapshot>)" in server_text:
     refresh_clone_failures.append("refresh current outcome still carries Arc<ZoneSnapshot>")
-if "Updated {\n        snapshot: Arc<ZoneSnapshot>,\n        metadata: ZoneMetadata,\n    }" not in server_text:
-    refresh_clone_failures.append("refresh updated outcome does not carry shared transfer snapshot plus narrow metadata")
-if "fn into_metadata_and_updated_snapshot(self) -> (ZoneMetadata, Option<Arc<ZoneSnapshot>>)" not in server_text:
-    refresh_clone_failures.append("refresh success outcome does not consume into narrow metadata plus updated-only snapshot access")
-if "Self::Updated { snapshot, metadata } => (metadata, Some(snapshot))" not in server_text:
-    refresh_clone_failures.append("refresh updated success handling rebuilds metadata instead of consuming carried metadata")
+success_enum_start = server_text.find("enum RefreshZoneSuccess")
+success_enum_end = server_text.find("impl RefreshZoneOutcome", success_enum_start)
+success_enum_text = (
+    server_text[success_enum_start:success_enum_end]
+    if success_enum_start >= 0 and success_enum_end >= 0
+    else ""
+)
+if "Current(ZoneMetadata)" not in success_enum_text:
+    refresh_clone_failures.append("refresh current outcome does not carry narrow ZoneMetadata")
+if "Updated {" not in success_enum_text or "metadata: ZoneMetadata" not in success_enum_text:
+    refresh_clone_failures.append("refresh updated outcome does not carry narrow metadata")
+if "catalog_members: Option<ParsedCatalogMembers>" not in success_enum_text:
+    refresh_clone_failures.append("refresh updated outcome does not carry the bounded parsed catalog result")
+if "snapshot:" in success_enum_text or "ZoneSnapshot" in success_enum_text:
+    refresh_clone_failures.append("refresh success outcome carries the full transferred snapshot past publication")
+if "Self::Current(metadata) => (metadata, false, None)" not in server_text:
+    refresh_clone_failures.append("refresh current success handling does not consume carried metadata")
+if "} => (metadata, true, catalog_members)," not in server_text:
+    refresh_clone_failures.append("refresh updated success handling does not consume carried metadata and parsed catalog members")
+if "let (metadata, updated, catalog_members) = success.into_parts();" not in server_text:
+    refresh_clone_failures.append("refresh success outcome does not consume into narrow metadata plus an updated flag and parsed catalog result")
 if "fn into_owned(self, zones: &ZoneStore) -> Option<ZoneSnapshot>" in server_text:
     refresh_clone_failures.append("test refresh success helper still clones outcomes back into owned ZoneSnapshot")
 if "async fn refresh_zone_metadata_from_primaries(\n    zones: &ZoneStore,\n    plan: &ZoneTransferPlan,\n    primary_serial_hint: Option<u32>,\n    context: RefreshAttemptContext<'_>,\n) -> Option<ZoneSnapshot>" in server_text:
@@ -3764,29 +5045,38 @@ if "let serial = metadata.serial;" not in refresh_text:
     refresh_clone_failures.append("refresh updated path does not read completion serial from carried metadata")
 if ".filter(|snapshot| catalog_runtime.manager.is_catalog(&snapshot.origin))" in server_text or "catalog_runtime.manager.is_catalog(&snapshot.origin)" in server_text:
     refresh_clone_failures.append("catalog follow-up detection still reads updated snapshot origin instead of carried metadata")
-if ".is_catalog_key(metadata.origin_key.as_ref())" not in server_text:
-    refresh_clone_failures.append("catalog follow-up detection does not use carried metadata origin key")
 if "fn is_catalog(&self, origin: &DomainName)" in server_text:
     refresh_clone_failures.append("catalog manager still exposes origin-based catalog lookup for updated transfer follow-up")
-if "fn is_catalog_key(&self, origin_key: &str) -> bool" not in server_text:
-    refresh_clone_failures.append("catalog manager does not expose cached-key catalog lookup")
-apply_snapshot_start = server_text.find("    async fn apply_snapshot(")
-apply_snapshot_end = server_text.find("        if catalog.config.serve_catalog_zone", apply_snapshot_start)
+if "if let Some(catalog_members) = catalog_members" not in server_text:
+    refresh_clone_failures.append("catalog follow-up detection does not use the carried parsed catalog result")
+parse_candidate_start = server_text.find("    fn parse_candidate_view(")
+parse_candidate_end = server_text.find("    fn member_metrics(", parse_candidate_start)
+parse_candidate_text = (
+    server_text[parse_candidate_start:parse_candidate_end]
+    if parse_candidate_start >= 0 and parse_candidate_end >= 0
+    else ""
+)
+if "catalog_view: CatalogZoneView<'_>" not in parse_candidate_text:
+    refresh_clone_failures.append("catalog candidate validation does not accept a narrow CatalogZoneView")
+if "parse_catalog_members_bounded_with_filter(" not in parse_candidate_text or "catalog_view," not in parse_candidate_text:
+    refresh_clone_failures.append("catalog candidate validation does not parse the passed view into a bounded result")
+apply_snapshot_start = server_text.find("    async fn apply_parsed_snapshot(")
+apply_snapshot_end = server_text.find("    #[cfg(test)]", apply_snapshot_start)
 apply_snapshot_text = (
     server_text[apply_snapshot_start:apply_snapshot_end]
     if apply_snapshot_start >= 0 and apply_snapshot_end >= 0
     else ""
 )
+if "parsed: ParsedCatalogMembers" not in apply_snapshot_text:
+    refresh_clone_failures.append("catalog application does not accept the carried bounded parsed result")
 if "metadata: &ZoneMetadata" not in apply_snapshot_text:
-    refresh_clone_failures.append("catalog snapshot application does not accept carried metadata")
-if "catalog_view: CatalogZoneView<'_>" not in apply_snapshot_text:
-    refresh_clone_failures.append("catalog snapshot application accepts a full ZoneSnapshot instead of a narrow CatalogZoneView")
-if "snapshot: &ZoneSnapshot" in apply_snapshot_text:
-    refresh_clone_failures.append("catalog snapshot application still names a full ZoneSnapshot parameter")
+    refresh_clone_failures.append("catalog application does not accept carried metadata")
+if "snapshot: &ZoneSnapshot" in apply_snapshot_text or "catalog_view: CatalogZoneView<'_>" in apply_snapshot_text:
+    refresh_clone_failures.append("catalog application reopens the full snapshot or catalog view after validation")
 if "self.catalogs_by_key.get(metadata.origin_key.as_ref())" not in apply_snapshot_text:
-    refresh_clone_failures.append("catalog snapshot application rebuilds catalog key from updated snapshot")
-if "parse_catalog_members(catalog_view)" not in server_text:
-    refresh_clone_failures.append("catalog snapshot application does not parse through the passed CatalogZoneView")
+    refresh_clone_failures.append("catalog application rebuilds catalog key instead of using carried metadata")
+if "let ParsedCatalogMembers { members, dropped } = parsed;" not in apply_snapshot_text:
+    refresh_clone_failures.append("catalog application does not consume the carried bounded parsed result")
 if refresh_clone_failures:
     print("status=failed")
     for failure in refresh_clone_failures:
@@ -3797,7 +5087,7 @@ if refresh_clone_failures:
     )
 else:
     print("status=passed")
-    print("evidence=Refresh transfer control uses exact-zone control metadata without status-only shape clones for serial hint/SOA-poll/NOTIFY/loading decisions, consumes current successes into narrow ZoneMetadata without cloning, checks cached serial metadata before exposing the IXFR transfer snapshot view, reads IXFR current serials through transfer-view cached metadata while borrowing snapshots only for delta comparison, and publishes newly transferred builder snapshots through a shared Arc with carried metadata instead of cloning or rebuilding the full old layout in success handling.")
+    print("evidence=Refresh transfer control uses exact-zone control metadata without status-only shape clones for serial hint/SOA-poll/NOTIFY/loading decisions, consumes current and updated successes into narrow ZoneMetadata plus an updated flag without carrying the full transferred snapshot past publication, checks cached serial metadata before exposing the IXFR transfer snapshot view, reads IXFR current serials through transfer-view cached metadata while borrowing snapshots only for delta comparison, validates catalog data once through a narrow CatalogZoneView into bounded ParsedCatalogMembers, and carries that parsed result with publication metadata into reconciliation without reopening or cloning the transferred snapshot.")
 
 zone_snapshot_start = zone_text.find("impl ZoneSnapshot")
 zone_snapshot_end = zone_text.find("impl ZoneSnapshotIndexes", zone_snapshot_start)

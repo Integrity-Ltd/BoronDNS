@@ -6,4 +6,4 @@ pub mod tsig;
 pub mod zone;
 pub mod zone_image;
 
-pub use config::{ConfigError, ConfigWarning, LogFormatConfig, ServerConfig};
+pub use config::{ConfigError, ConfigParseError, ConfigWarning, LogFormatConfig, ServerConfig};

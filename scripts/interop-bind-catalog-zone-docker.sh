@@ -23,6 +23,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_root/scripts/interop-version-evidence.sh"
 # shellcheck source=scripts/interop-docker-images.sh
 source "$repo_root/scripts/interop-docker-images.sh"
+# shellcheck source=scripts/interop-dns-assertions.sh
+source "$repo_root/scripts/interop-dns-assertions.sh"
 
 workdir="$repo_root/target/interop/bind-catalog-zone-docker-$$"
 container="oxidedns-bind-catalog-$$"
@@ -77,8 +79,11 @@ traceability_tsv="$workdir/bind-catalog-zone-traceability.tsv"
 catalog_hidden_out="$workdir/catalog-hidden.out"
 member_added_out="$workdir/member-added.out"
 member_removed_out="$workdir/member-removed.out"
+metrics_initial_out="$workdir/metrics-initial.txt"
 metrics_after_add_out="$workdir/metrics-after-add.txt"
 metrics_after_remove_out="$workdir/metrics-after-remove.txt"
+readyz_initial_out="$workdir/readyz-initial.json"
+readyz_after_add_out="$workdir/readyz-after-add.json"
 bind_image="$(ensure_alpine_bind_image)"
 
 write_catalog_zone() {
@@ -261,29 +266,44 @@ cargo build -p oxidedns-cli >/dev/null
 "$repo_root/target/debug/oxidedns" serve --config "$oxidedns_conf" >"$workdir/oxidedns.log" 2>&1 &
 oxidedns_pid=$!
 
-ready=""
+catalog_acquired=false
 for _ in {1..120}; do
-    if ready="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/readyz" 2>/dev/null)"; then
-        [[ "$ready" == "ready" || "$ready" == *'"status":"ready"'* ]] && break
+    if grep -F '"message":"AXFR completed","zone":"catalog.example."' "$workdir/oxidedns.log" >/dev/null 2>&1; then
+        catalog_acquired=true
+        break
     fi
     sleep 0.1
 done
-
-if [[ "$ready" != "ready" && "$ready" != *'"status":"ready"'* ]]; then
-    echo "OxideDNS did not become ready after initial catalog transfer" >&2
+if [[ "$catalog_acquired" != "true" ]]; then
+    echo "OxideDNS did not acquire the initial hidden catalog zone" >&2
     exit 1
 fi
 
-catalog_hidden="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1)"
-printf '%s\n' "$catalog_hidden" >"$catalog_hidden_out"
-if [[ "$catalog_hidden" == *'"2"'* ]]; then
-    echo "OxideDNS served the catalog zone even though serve_catalog_zone=false" >&2
+metrics_initial="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
+printf '%s\n' "$metrics_initial" >"$metrics_initial_out"
+if [[ "$metrics_initial" != *'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052501'* ]] ||
+    [[ "$metrics_initial" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS initial metrics did not retain the hidden catalog without counting it active" >&2
     exit 1
 fi
 
-initial_member="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-if [[ -n "$initial_member" ]]; then
-    echo "OxideDNS served member.example before the catalog listed it" >&2
+ready_status="$(curl -sS -o "$readyz_initial_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$readyz_initial_out")"
+if [[ "$ready_status" != "503" || "$ready" != *'"status":"not-ready"'* ]]; then
+    echo "OxideDNS became ready before the catalog produced an active member zone" >&2
+    exit 1
+fi
+
+if ! dig_until_rcode "$catalog_hidden_out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" version.catalog.example. TXT +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the hidden catalog zone query" >&2
+    exit 1
+fi
+
+member_before_out="$workdir/member-before.out"
+if ! dig_until_rcode "$member_before_out" REFUSED 20 0.1 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE member.example before the catalog listed it" >&2
     exit 1
 fi
 
@@ -294,9 +314,10 @@ docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/n
 
 member_added=""
 for _ in {1..80}; do
-    member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ "$member_added" == "192.0.2.77" ]]; then
-        break
+    if member_added="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"; then
+        if [[ "$member_added" == "192.0.2.77" ]]; then
+            break
+        fi
     fi
     sleep 0.25
 done
@@ -306,10 +327,17 @@ if [[ "$member_added" != "192.0.2.77" ]]; then
     exit 1
 fi
 
+ready_status="$(curl -sS -o "$readyz_after_add_out" -w '%{http_code}' "http://127.0.0.1:$oxidedns_health_port/readyz")"
+ready="$(<"$readyz_after_add_out")"
+if [[ "$ready_status" != "200" || "$ready" != *'"status":"ready"'* ]]; then
+    echo "OxideDNS did not become ready after the first catalog member became active" >&2
+    exit 1
+fi
+
 metrics_after_add="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_add" >"$metrics_after_add_out"
 for expected in \
-    'oxidedns_zones_active 2' \
+    'oxidedns_zones_active 1' \
     'oxidedns_zone_soa_serial{zone="catalog.example."} 2026052502' \
     'oxidedns_zone_soa_serial{zone="member.example."} 2026052501'; do
     if [[ "$metrics_after_add" != *"$expected"* ]]; then
@@ -323,24 +351,17 @@ cp "$catalog_zone" "$workdir/catalog-removed.zone"
 docker exec "$container" named-checkzone catalog.example. /work/catalog.example.zone >/dev/null
 docker exec "$container" rndc -c /work/rndc.conf reload catalog.example. >/dev/null
 
-member_removed="192.0.2.77"
-for _ in {1..80}; do
-    member_removed="$(dig "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1 +short)"
-    if [[ -z "$member_removed" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-printf '%s\n' "$member_removed" >"$member_removed_out"
-if [[ -n "$member_removed" ]]; then
-    echo "OxideDNS still served the member zone after catalog removal" >&2
+if ! dig_until_rcode "$member_removed_out" REFUSED 80 0.25 \
+    "@127.0.0.1" -p "$oxidedns_dns_port" www.member.example. A +norecurse +time=1 +tries=1; then
+    echo "OxideDNS did not REFUSE the member zone after catalog removal" >&2
     exit 1
 fi
+member_removed="REFUSED"
 
 metrics_after_remove="$(curl -fsS "http://127.0.0.1:$oxidedns_health_port/metrics")"
 printf '%s\n' "$metrics_after_remove" >"$metrics_after_remove_out"
-if [[ "$metrics_after_remove" != *'oxidedns_zones_active 1'* ]]; then
-    echo "OxideDNS metrics after catalog removal did not return to one active hidden catalog zone" >&2
+if [[ "$metrics_after_remove" != *'oxidedns_zones_active 0'* ]]; then
+    echo "OxideDNS metrics after catalog removal did not return to zero published active zones" >&2
     exit 1
 fi
 if [[ "$metrics_after_remove" == *'oxidedns_zone_soa_serial{zone="member.example."}'* ]]; then
@@ -357,7 +378,7 @@ docker logs "$container" >"$workdir/named.log" 2>&1 || true
 
 cat >"$traceability_tsv" <<'EOF'
 requirement_id	evidence_method	scenario	artifacts	rationale
-RFC9432-CATALOG-MVP-001	retained-real-primary	bind_catalog_transfer	catalog-initial.zone; primary-version.txt; metrics-after-add.txt	OxideDNS transfers a real BIND-served RFC 9432 catalog zone and records the catalog SOA serial.
+RFC9432-CATALOG-MVP-001	retained-real-primary	bind_catalog_transfer	catalog-initial.zone; primary-version.txt; metrics-initial.txt; readyz-initial.json	OxideDNS transfers a real BIND-served RFC 9432 catalog zone and records the catalog SOA serial while remaining not-ready until a published member is active.
 RFC9432-CATALOG-MVP-002	retained-real-primary	bind_catalog_member_add	catalog-added.zone; member-added.out; bind-catalog-zone-summary.tsv	A live BIND catalog mutation adds member.example. while OxideDNS is running, and OxideDNS transfers and serves the member zone.
 RFC9432-CATALOG-MVP-003	retained-real-primary	bind_catalog_member_remove	catalog-removed.zone; member-removed.out; metrics-after-remove.txt	A live BIND catalog mutation removes member.example. while OxideDNS is running, and OxideDNS stops serving the catalog-managed member zone.
 RFC9432-CATALOG-MVP-004	retained-real-primary	catalog_query_hidden	catalog-hidden.out; oxidedns.toml	The catalog zone is transferred for management use but not served on the DNS query interface when serve_catalog_zone=false.
@@ -368,8 +389,9 @@ if [[ -n "$artifact_dir" ]]; then
     for artifact in \
         named.conf rndc.conf oxidedns.toml named.log oxidedns.log primary-version.txt \
         catalog-initial.zone catalog-added.zone catalog-removed.zone member-initial.zone \
-        catalog-hidden.out member-added.out member-removed.out \
-        metrics-after-add.txt metrics-after-remove.txt \
+        catalog-hidden.out member-before.out member-added.out member-removed.out \
+        metrics-initial.txt metrics-after-add.txt metrics-after-remove.txt \
+        readyz-initial.json readyz-after-add.json \
         bind-catalog-zone-summary.tsv bind-catalog-zone-traceability.tsv; do
         cp "$workdir/$artifact" "$artifact_dir/$artifact"
     done

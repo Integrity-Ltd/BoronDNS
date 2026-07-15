@@ -12,6 +12,7 @@ except ModuleNotFoundError as exc:
 
 
 HEADER = ["package", "boundary_ids", "status", "allowed_paths", "rationale"]
+REQUIRED_TRACKED_PACKAGES = {"rustix"}
 
 
 def fail(message: str) -> None:
@@ -122,6 +123,12 @@ def main() -> None:
     lock_path = repo_root / "Cargo.lock"
 
     triggers = read_tsv(trigger_path)
+    missing_tracked = REQUIRED_TRACKED_PACKAGES - set(triggers)
+    if missing_tracked:
+        fail(
+            f"{trigger_path} is missing required low-level dependency rows: "
+            f"{sorted(missing_tracked)}"
+        )
     boundary_statuses = read_boundary_statuses(boundary_path)
     present = locked_packages(lock_path)
 

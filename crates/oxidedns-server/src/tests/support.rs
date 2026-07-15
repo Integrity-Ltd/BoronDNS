@@ -1,3 +1,18 @@
+fn runtime_with_portable_resource_limits(mut config: ServerConfig) -> Runtime {
+    // Runtime lifecycle tests exercise listeners and shutdown semantics, not
+    // production-scale admission limits. Keep their descriptor preflight below
+    // the commonly used test-runner RLIMIT_NOFILE=1024 while the dedicated
+    // descriptor-formula tests retain explicit production-scale coverage.
+    config.limits.max_tcp_connections = 16;
+    config.limits.max_concurrent_transfers = 4;
+    config.health.max_connections = 16;
+    assert!(
+        required_file_descriptor_limit(&config) <= 1_024,
+        "runtime lifecycle fixture must remain portable under RLIMIT_NOFILE=1024"
+    );
+    Runtime::new(config).expect("valid runtime configuration")
+}
+
 async fn spawn_axfr_primary() -> std::net::SocketAddr {
     spawn_axfr_primary_with_serial(1).await
 }
@@ -369,6 +384,77 @@ async fn spawn_axfr_primary_with_serial(serial: u32) -> std::net::SocketAddr {
     addr
 }
 
+async fn spawn_axfr_primary_with_unsigned_terminator_and_tsig_only_terminal()
+-> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        assert_eq!(query_qtype(&query), RecordType::Axfr as u16);
+
+        let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let request_mac = extract_query_tsig_mac(&query);
+        let soa = record(
+            "example.test.",
+            RecordType::Soa as u16,
+            soa_rdata_with_serial(1),
+        );
+        let first = transfer_response_message(
+            header.id,
+            Some(("example.test.", RecordType::Axfr as u16)),
+            vec![
+                soa.clone(),
+                record(
+                    "example.test.",
+                    RecordType::Ns as u16,
+                    ns_rdata_for_zone("example.test."),
+                ),
+                record(
+                    "www.example.test.",
+                    RecordType::A as u16,
+                    vec![192, 0, 2, 10],
+                ),
+            ],
+        );
+        let time_signed = current_unix_time();
+        let first = key
+            .sign_response(
+                &first,
+                &request_mac,
+                time_signed,
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        let terminating = transfer_response_message(header.id, None, vec![soa]);
+        let terminal = transfer_response_message(header.id, None, Vec::new());
+        let terminal = sign_tcp_continuation_after_unsigned_message(
+            &key,
+            &first.mac,
+            &terminating,
+            &terminal,
+            time_signed,
+            DEFAULT_TSIG_FUDGE_SECS,
+        );
+
+        stream
+            .write_all(&frame_tcp_message(&first.message))
+            .await
+            .unwrap();
+        stream
+            .write_all(&frame_tcp_message(&terminating))
+            .await
+            .unwrap();
+        stream
+            .write_all(&frame_tcp_message(&terminal))
+            .await
+            .unwrap();
+        std::future::pending::<()>().await;
+    });
+    addr
+}
+
 async fn spawn_barrier_axfr_primary(
     zone: &'static str,
     barrier: Arc<tokio::sync::Barrier>,
@@ -483,6 +569,42 @@ async fn spawn_signed_catalog_axfr_primary_with_member(
 
         let request_mac = extract_query_tsig_mac(&query);
         let response = catalog_axfr_response(catalog_zone, member_zone, header.id, serial);
+        let key = TsigKey::from_base64("catalog-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+        let signed = key
+            .sign_response(
+                &response,
+                &request_mac,
+                current_unix_time(),
+                DEFAULT_TSIG_FUDGE_SECS,
+            )
+            .unwrap();
+        stream
+            .write_all(&frame_tcp_message(&signed.message))
+            .await
+            .unwrap();
+    });
+    addr
+}
+
+async fn spawn_signed_invalid_catalog_axfr_primary(
+    catalog_zone: &'static str,
+    serial: u32,
+) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let query = read_primary_query(&mut stream).await;
+        let header = Header::parse(&query).unwrap();
+        let (_, qname_len) = DomainName::parse(&query, 12).unwrap();
+        let qtype_offset = 12 + qname_len;
+        assert_eq!(
+            u16::from_be_bytes([query[qtype_offset], query[qtype_offset + 1]]),
+            RecordType::Axfr as u16
+        );
+
+        let request_mac = extract_query_tsig_mac(&query);
+        let response = catalog_axfr_response_with_version(catalog_zone, header.id, serial, b'3');
         let key = TsigKey::from_base64("catalog-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
         let signed = key
             .sign_response(
@@ -864,6 +986,25 @@ fn axfr_response_for_zone(qid: u16, zone: &str, serial: u32) -> Vec<u8> {
 }
 
 fn catalog_axfr_response(catalog_zone: &str, member_zone: &str, qid: u16, serial: u32) -> Vec<u8> {
+    catalog_axfr_response_with_records(catalog_zone, qid, serial, b'2', Some(member_zone))
+}
+
+fn catalog_axfr_response_with_version(
+    catalog_zone: &str,
+    qid: u16,
+    serial: u32,
+    version_value: u8,
+) -> Vec<u8> {
+    catalog_axfr_response_with_records(catalog_zone, qid, serial, version_value, None)
+}
+
+fn catalog_axfr_response_with_records(
+    catalog_zone: &str,
+    qid: u16,
+    serial: u32,
+    version_value: u8,
+    member_zone: Option<&str>,
+) -> Vec<u8> {
     let soa = record(
         catalog_zone,
         RecordType::Soa as u16,
@@ -877,14 +1018,17 @@ fn catalog_axfr_response(catalog_zone: &str, member_zone: &str, qid: u16, serial
     let version = record(
         &format!("version.{catalog_zone}"),
         RecordType::Txt as u16,
-        vec![1, b'2'],
+        vec![1, version_value],
     );
-    let member = record(
-        &format!("m0.zones.{catalog_zone}"),
-        RecordType::Ptr as u16,
-        DomainName::from_absolute_str(member_zone).unwrap().to_wire(),
-    );
-    let answers = vec![soa.clone(), ns, version, member, soa];
+    let mut answers = vec![soa.clone(), ns, version];
+    if let Some(member_zone) = member_zone {
+        answers.push(record(
+            &format!("m0.zones.{catalog_zone}"),
+            RecordType::Ptr as u16,
+            DomainName::from_absolute_str(member_zone).unwrap().to_wire(),
+        ));
+    }
+    answers.push(soa);
     let mut out = Vec::new();
     out.extend_from_slice(&qid.to_be_bytes());
     out.extend_from_slice(&0x8000u16.to_be_bytes());
@@ -943,6 +1087,78 @@ fn transfer_response_for_zone(qid: u16, zone: &str, qtype: u16, serial: u32) -> 
         out.extend_from_slice(&answer.rdata);
     }
     out
+}
+
+fn transfer_response_message(
+    qid: u16,
+    question: Option<(&str, u16)>,
+    answers: Vec<ResourceRecord>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&qid.to_be_bytes());
+    out.extend_from_slice(&0x8000u16.to_be_bytes());
+    out.extend_from_slice(&u16::from(question.is_some()).to_be_bytes());
+    out.extend_from_slice(&(answers.len() as u16).to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    if let Some((zone, qtype)) = question {
+        out.extend_from_slice(&DomainName::from_absolute_str(zone).unwrap().to_wire());
+        out.extend_from_slice(&qtype.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+    }
+    for answer in answers {
+        out.extend_from_slice(&answer.owner.to_wire());
+        out.extend_from_slice(&answer.rr_type.to_be_bytes());
+        out.extend_from_slice(&answer.class.to_be_bytes());
+        out.extend_from_slice(&answer.ttl.to_be_bytes());
+        out.extend_from_slice(&(answer.rdata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&answer.rdata);
+    }
+    out
+}
+
+fn sign_tcp_continuation_after_unsigned_message(
+    key: &TsigKey,
+    prior_mac: &[u8],
+    pending_unsigned: &[u8],
+    terminal: &[u8],
+    time_signed: u64,
+    fudge: u16,
+) -> Vec<u8> {
+    let mut mac_input = Vec::new();
+    mac_input.extend_from_slice(&(prior_mac.len() as u16).to_be_bytes());
+    mac_input.extend_from_slice(prior_mac);
+    mac_input.extend_from_slice(pending_unsigned);
+    mac_input.extend_from_slice(terminal);
+    mac_input.extend_from_slice(&time_signed.to_be_bytes()[2..]);
+    mac_input.extend_from_slice(&fudge.to_be_bytes());
+    let mac = key.sign(&mac_input).unwrap();
+
+    let signed = key
+        .sign_tcp_response_continuation(terminal, prior_mac, time_signed, fudge)
+        .unwrap();
+    replace_tsig_only_message_mac(signed.message, &mac)
+}
+
+fn replace_tsig_only_message_mac(mut message: Vec<u8>, replacement_mac: &[u8]) -> Vec<u8> {
+    let header = Header::parse(&message).unwrap();
+    assert_eq!(header.qdcount, 0);
+    assert_eq!(header.ancount, 0);
+    assert_eq!(header.nscount, 0);
+    assert_eq!(header.arcount, 1);
+
+    let (_, owner_len) = DomainName::parse(&message, 12).unwrap();
+    let rdata_offset = 12 + owner_len + 10;
+    let (_, algorithm_len) = DomainName::parse(&message, rdata_offset).unwrap();
+    let mac_len_offset = rdata_offset + algorithm_len + 6 + 2;
+    let mac_len = u16::from_be_bytes([
+        message[mac_len_offset],
+        message[mac_len_offset + 1],
+    ]) as usize;
+    assert_eq!(mac_len, replacement_mac.len());
+    let mac_offset = mac_len_offset + 2;
+    message[mac_offset..mac_offset + mac_len].copy_from_slice(replacement_mac);
+    message
 }
 
 async fn read_primary_query(stream: &mut TcpStream) -> Vec<u8> {
@@ -1497,6 +1713,27 @@ async fn spawn_telemetry_endpoint(
     (addr, request_rx)
 }
 
+async fn spawn_telemetry_endpoints(
+    status: &'static str,
+    count: usize,
+) -> (std::net::SocketAddr, oneshot::Receiver<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut requests = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut stream).await);
+            let response =
+                format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        let _ = request_tx.send(requests);
+    });
+    (addr, request_rx)
+}
+
 async fn spawn_operation_endpoint() -> (std::net::SocketAddr, oneshot::Receiver<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1524,6 +1761,40 @@ async fn spawn_operation_endpoint() -> (std::net::SocketAddr, oneshot::Receiver<
         let _ = request_tx.send(requests);
     });
     (addr, request_rx)
+}
+
+async fn spawn_operation_poll_endpoint(
+    body: Vec<u8>,
+    declared_content_length: Option<usize>,
+) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = read_http_request(&mut stream).await;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            declared_content_length.unwrap_or(body.len())
+        );
+        if stream.write_all(response.as_bytes()).await.is_ok() {
+            let _ = stream.write_all(&body).await;
+        }
+    });
+    addr
+}
+
+async fn spawn_http_redirect_endpoint(location: String) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = read_http_request(&mut stream).await;
+        let response = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nConnection: close\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n"
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+    });
+    addr
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> String {
@@ -1570,6 +1841,7 @@ fn control_plane_reporter_for_endpoint(
 
                 [control_plane.telemetry]
                 endpoint_url = "http://{endpoint}"
+                allow_insecure_loopback_http = true
                 node_id = "node-a"
                 bearer_token = "token-a"
                 timeout_secs = 5
@@ -1595,6 +1867,7 @@ fn control_plane_operation_client_for_endpoint(
                 [control_plane.operations]
                 enabled = true
                 endpoint_url = "http://{endpoint}"
+                allow_insecure_loopback_http = true
                 node_id = "node-a"
                 bearer_token = "token-a"
                 poll_interval_secs = 1
@@ -1715,6 +1988,24 @@ async fn read_framed_tcp_response(stream: &mut TcpStream) -> Vec<u8> {
     response
 }
 
+async fn eventually_tcp_connect_fails(
+    addr: std::net::SocketAddr,
+    timeout: std::time::Duration,
+) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => drop(stream),
+            Err(_) => return,
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "TCP listener {addr} continued accepting connections after shutdown"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 async fn spawn_runtime_with_bound_health(
     runtime: Runtime,
 ) -> (
@@ -1736,13 +2027,24 @@ async fn spawn_runtime_with_bound_health_and_shutdown(
     std::net::SocketAddr,
 ) {
     let (health_bound_tx, health_bound_rx) = oneshot::channel();
-    let server = tokio::spawn(
+    let mut server = tokio::spawn(
         runtime.run_with_shutdown_signal_inner(shutdown_signal, Some(health_bound_tx)),
     );
-    let health_addr = tokio::time::timeout(std::time::Duration::from_secs(1), health_bound_rx)
+    let health_addr = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::select! {
+            address = health_bound_rx => match address {
+                Ok(address) => address,
+                Err(_) => panic!(
+                    "runtime exited before binding health listener: {:?}",
+                    (&mut server).await,
+                ),
+            },
+            result = &mut server => panic!("runtime exited before binding health listener: {result:?}"),
+        }
+    })
         .await
         .expect("runtime did not bind health listener before timeout")
-        .expect("runtime exited before binding health listener");
+        ;
     (server, health_addr)
 }
 
@@ -1887,6 +2189,22 @@ async fn unused_udp_tcp_addr() -> std::net::SocketAddr {
     panic!("could not find an address free for both UDP and TCP");
 }
 
+async fn unused_tcp_port_on_loopback_pair() -> u16 {
+    for _ in 0..32 {
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = first.local_addr().unwrap().port();
+        match TcpListener::bind(("127.0.0.2", port)).await {
+            Ok(second) => {
+                drop(second);
+                drop(first);
+                return port;
+            }
+            Err(_) => drop(first),
+        }
+    }
+    panic!("could not find a TCP port free on both loopback addresses");
+}
+
 fn health_state(zones: ZoneStore) -> HealthEndpointState {
     health_state_with_observability(zones, ObservabilityConfig::default())
 }
@@ -1913,9 +2231,11 @@ fn health_state_with_observability(
         observability_auth,
         observability_rate_limiter,
         transfer_materials: Vec::<TransferMaterial>::new(),
+        secrets: SecretManager::empty_for_test(),
         started_at: std::time::Instant::now(),
         graceful_shutdown_secs: 30,
         zone_shape_metrics_enabled: false,
+        connection_slots: Arc::new(Semaphore::new(DEFAULT_HEALTH_MAX_CONNECTIONS)),
     }
 }
 

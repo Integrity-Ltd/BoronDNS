@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use tokio::sync::watch;
 
 use oxidedns_core::{
     ServerConfig,
@@ -17,7 +18,7 @@ use oxidedns_core::{
     dns::DomainName,
 };
 
-use crate::RuntimeError;
+use crate::{RuntimeError, transfer::TransferIngestBudget};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ZoneTransferPlan {
@@ -29,9 +30,35 @@ pub(crate) struct ZoneTransferPlan {
     pub(crate) max_transfer_ingest_bytes: u64,
     pub(crate) transfer_sources: Vec<SocketAddr>,
     generation: u64,
+    cancellation: watch::Sender<bool>,
 }
 
 impl ZoneTransferPlan {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        let mut cancellation = self.cancellation.subscribe();
+        loop {
+            if *cancellation.borrow_and_update() {
+                return;
+            }
+            if cancellation.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub(crate) fn is_cancelled(&self) -> bool {
+        *self.cancellation.borrow()
+    }
+
+    fn cancel(&self) {
+        self.cancellation.send_replace(true);
+    }
+
     pub(crate) fn transfer_source_for(&self, primary: SocketAddr) -> Option<SocketAddr> {
         self.transfer_sources
             .iter()
@@ -49,6 +76,7 @@ impl ZoneTransferPlan {
             max_transfer_ingest_bytes: self.max_transfer_ingest_bytes,
             transfer_sources: self.transfer_sources.clone(),
             generation: 0,
+            cancellation: fresh_cancellation(),
         }
     }
 
@@ -68,6 +96,7 @@ pub(crate) struct TransferPlan {
     zones_by_key: Arc<Mutex<HashMap<String, ZoneTransferPlan>>>,
     catalog_member_templates_by_key: Arc<HashMap<String, ZoneTransferPlan>>,
     next_generation: Arc<AtomicU64>,
+    transfer_ingest_budget: TransferIngestBudget,
 }
 
 impl TransferPlan {
@@ -118,7 +147,19 @@ impl TransferPlan {
             zones_by_key: Arc::new(Mutex::new(zones_by_key)),
             catalog_member_templates_by_key: Arc::new(catalog_member_templates_by_key),
             next_generation,
+            // `max_transfer_ingest_bytes` is a per-session protocol limit. The
+            // shared guard therefore reserves enough for every session admitted
+            // by the transfer semaphore instead of making concurrent valid
+            // sessions compete for one session's allowance.
+            transfer_ingest_budget: TransferIngestBudget::for_concurrent_sessions(
+                config.limits.max_transfer_ingest_bytes,
+                config.limits.max_concurrent_transfers,
+            ),
         })
+    }
+
+    pub(crate) fn ingest_budget(&self) -> TransferIngestBudget {
+        self.transfer_ingest_budget.clone()
     }
 
     pub(crate) fn get(&self, origin: &DomainName) -> Option<ZoneTransferPlan> {
@@ -156,15 +197,27 @@ impl TransferPlan {
             .is_some_and(|current| current.generation == plan.generation)
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
     pub(crate) fn insert(&self, mut plan: ZoneTransferPlan) {
         assign_generation(&mut plan, &self.next_generation);
-        self.zones_by_key
+        if let Some(previous) = self
+            .zones_by_key
             .lock()
             .expect("transfer plan lock poisoned")
-            .insert(plan.origin.canonical_key(), plan);
+            .insert(plan.origin.canonical_key(), plan)
+        {
+            previous.cancel();
+        }
     }
 
-    pub(crate) fn insert_preserving_generation_if_unchanged(&self, mut plan: ZoneTransferPlan) {
+    /// Inserts `plan`, preserving the generation when its transfer shape is unchanged.
+    ///
+    /// Returns `true` when the effective transfer shape changed. Callers use this
+    /// to schedule a prompt refresh after catalog ownership or override changes.
+    pub(crate) fn insert_preserving_generation_if_unchanged(
+        &self,
+        mut plan: ZoneTransferPlan,
+    ) -> bool {
         let mut zones_by_key = self
             .zones_by_key
             .lock()
@@ -174,11 +227,16 @@ impl TransferPlan {
             && current.same_transfer_shape(&plan)
         {
             plan.generation = current.generation;
+            plan.cancellation = current.cancellation.clone();
             zones_by_key.insert(key, plan);
-            return;
+            return false;
+        }
+        if let Some(current) = zones_by_key.get(&key) {
+            current.cancel();
         }
         assign_generation(&mut plan, &self.next_generation);
         zones_by_key.insert(key, plan);
+        true
     }
 
     pub(crate) fn catalog_member_plan(
@@ -274,10 +332,14 @@ impl TransferPlan {
     }
 
     pub(crate) fn remove(&self, origin: &DomainName) {
-        self.zones_by_key
+        if let Some(plan) = self
+            .zones_by_key
             .lock()
             .expect("transfer plan lock poisoned")
-            .remove(&origin.canonical_key());
+            .remove(&origin.canonical_key())
+        {
+            plan.cancel();
+        }
     }
 
     pub(crate) fn initial_origins(&self) -> Vec<DomainName> {
@@ -295,6 +357,11 @@ impl TransferPlan {
 
 fn assign_generation(plan: &mut ZoneTransferPlan, next_generation: &AtomicU64) {
     plan.generation = next_generation.fetch_add(1, Ordering::Relaxed);
+    plan.cancellation = fresh_cancellation();
+}
+
+fn fresh_cancellation() -> watch::Sender<bool> {
+    watch::channel(false).0
 }
 
 fn transfer_plan_from_zone_config(
@@ -323,6 +390,7 @@ fn transfer_plan_from_zone_config(
         max_transfer_ingest_bytes,
         transfer_sources: transfer_sources.to_vec(),
         generation: 0,
+        cancellation: fresh_cancellation(),
     })
 }
 

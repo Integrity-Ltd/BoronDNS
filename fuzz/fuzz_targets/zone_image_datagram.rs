@@ -1,36 +1,40 @@
 #![no_main]
 
-use std::{hint::black_box, sync::OnceLock};
+use std::{
+    hint::black_box,
+    sync::{Once, OnceLock},
+};
 
 use libfuzzer_sys::fuzz_target;
 use oxidedns_core::{
     dns::{
-        AnswerOptions, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName, Header, RecordType,
-        Transport, ZoneImageProvider,
+        AnswerOptions, AnyResponseMode, DEFAULT_MAX_UDP_PAYLOAD, DatagramAction, DomainName,
+        Header, LookupResult, Question, RecordType, Transport,
         answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image,
         default_zone_image_provider,
     },
-    zone::{Rrset, ZoneSnapshot, ZoneStore},
+    zone::{ResourceRecord, Rrset, ZoneSnapshot, ZoneStore},
+    zone_image::{ZoneImagePlanSectionSummary, ZoneImagePlanSummary},
 };
 
 const QID: u16 = 0x5a11;
 const QCLASS_IN: u16 = 1;
+const QCLASS_ANY: u16 = 255;
 
 fuzz_target!(|data: &[u8]| {
-    exercise_packet(data, data, &default_zone_image_provider);
+    // Preserve arbitrary wire/parser coverage independently of the valid
+    // semantic-query generator below.
+    exercise_packet(data, answer_options(data));
 
-    let packet = shaped_query_packet(data);
-    if let Ok(header) = Header::parse(&packet) {
-        black_box(header.qdcount);
-    }
-    exercise_packet(&packet, data, &default_zone_image_provider);
+    exercise_regression_seeds_once();
+    let _ = exercise_shaped_query(data);
 });
 
-fn exercise_packet(packet: &[u8], data: &[u8], provider: ZoneImageProvider<'_>) {
-    let action = answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
+fn exercise_packet(packet: &[u8], options: AnswerOptions<'_>) -> DatagramAction {
+    answer_message_with_notify_hooks_lookup_metrics_observer_and_zone_image(
         packet,
         zones(),
-        answer_options(data),
+        options,
         |qname, qclass| {
             black_box((qname, qclass));
             true
@@ -41,22 +45,218 @@ fn exercise_packet(packet: &[u8], data: &[u8], provider: ZoneImageProvider<'_>) 
         |metrics| {
             black_box(metrics);
         },
-        provider,
-    );
+        &default_zone_image_provider,
+    )
+}
 
-    if let DatagramAction::Respond(response) = action {
-        black_box(response.len());
+fn exercise_shaped_query(data: &[u8]) -> Header {
+    let packet = shaped_query_packet(data);
+    let request_header = Header::parse(&packet).expect("shaped header is valid");
+    let question = Question::parse(&packet).expect("shaped question is valid");
+    let options = answer_options(data);
+    let edns_well_formed = shaped_edns_well_formed(data);
+    // The production query path consults authoritative zone data only for IN
+    // and ANY. CHAOS is answered separately and every other QCLASS is refused
+    // before ZoneStore/ZoneImage lookup, so direct image/oracle equivalence is
+    // neither required nor observable for those classes.
+    let plan_summary = (edns_well_formed && matches!(question.qclass, QCLASS_IN | QCLASS_ANY))
+        .then(|| assert_zone_image_matches_offline_oracle(&question, options));
+
+    let DatagramAction::Respond(response) = exercise_packet(&packet, options) else {
+        panic!("valid authoritative query was discarded");
+    };
+    let response_header = Header::parse(&response).expect("response header is valid");
+    assert_eq!(response_header.id, request_header.id);
+    assert!(response_header.is_response());
+    if !edns_well_formed {
+        assert_eq!(
+            response_header.flags & 0x000f,
+            oxidedns_core::dns::Rcode::FormErr as u16,
+            "malformed EDNS must be rejected before QCLASS and zone lookup"
+        );
+        assert_eq!(response_header.flags & 0x0400, 0);
+    } else if let Some(plan_summary) = plan_summary {
+        assert_eq!(
+            response_header.flags & 0x000f,
+            (plan_summary.rcode as u16) & 0x000f
+        );
+        assert_eq!(
+            response_header.flags & 0x0400 != 0,
+            plan_summary.authoritative
+        );
+    } else {
+        assert_eq!(
+            response_header.flags & 0x000f,
+            oxidedns_core::dns::Rcode::Refused as u16,
+            "fixture names are not CHAOS diagnostics and unsupported QCLASS must be refused"
+        );
+        assert_eq!(response_header.flags & 0x0400, 0);
     }
+
+    if options.transport == Transport::Udp {
+        let advertised_payload = if byte(data, 13) & 1 == 0 {
+            512
+        } else {
+            512 + (get_u16(data, 14) % 1232)
+        };
+        let ceiling = usize::from(advertised_payload.min(options.max_udp_payload));
+        assert!(response.len() <= ceiling);
+    } else {
+        assert_eq!(response_header.flags & 0x0200, 0);
+    }
+    response_header
+}
+
+fn assert_zone_image_matches_offline_oracle(
+    question: &Question,
+    options: AnswerOptions<'_>,
+) -> ZoneImagePlanSummary {
+    let published = zones()
+        .find_published_zone(&question.qname)
+        .expect("shaped query is inside fixture zone");
+    let image = published.active_zone_image_ref();
+    let plan = image.lookup_response_plan(
+        &question.qname,
+        question.qtype,
+        question.qclass,
+        options.max_cname_chain,
+        options.any_response,
+    );
+    let image_summary = image.plan_summary(&plan).expect("image plan summarizes");
+    let oracle_lookup = fixture().snapshot.offline_oracle().lookup_with_options(
+        &question.qname,
+        question.qtype,
+        question.qclass,
+        options.max_cname_chain,
+        options.any_response,
+    );
+    assert_eq!(image_summary, lookup_summary(&oracle_lookup));
+    image_summary
+}
+
+struct Fixture {
+    store: ZoneStore,
+    snapshot: ZoneSnapshot,
+}
+
+fn fixture() -> &'static Fixture {
+    static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let apex = DomainName::from_absolute_str("zoneimage.test.").expect("static apex is valid");
+        let snapshot = zone_snapshot(apex);
+        let store = ZoneStore::new();
+        store.insert_snapshot(snapshot.clone());
+        Fixture { store, snapshot }
+    })
 }
 
 fn zones() -> &'static ZoneStore {
-    static ZONES: OnceLock<ZoneStore> = OnceLock::new();
-    ZONES.get_or_init(|| {
-        let apex = DomainName::from_absolute_str("zoneimage.test.").expect("static apex is valid");
-        let store = ZoneStore::new();
-        store.insert_snapshot(zone_snapshot(apex));
-        store
-    })
+    &fixture().store
+}
+
+fn exercise_regression_seeds_once() {
+    static REGRESSION_SEEDS: Once = Once::new();
+    REGRESSION_SEEDS.call_once(|| {
+        for (index, seed) in regression_seeds().iter().enumerate() {
+            let response_header = exercise_shaped_query(seed);
+            if index == 6 {
+                assert_ne!(
+                    response_header.flags & 0x0200,
+                    0,
+                    "bulk ANY regression query must exercise UDP truncation"
+                );
+            }
+        }
+    });
+}
+
+fn regression_seeds() -> [[u8; 32]; 10] {
+    let mut seeds = [[0u8; 32]; 10];
+
+    // CNAME, wildcard synthesis, DNAME synthesis, referral, ANY/full,
+    // DNSSEC/EDNS denial, UDP truncation, and QCLASS=ANY.
+    seeds[0][4] = 2;
+    seeds[1][4] = 9;
+    seeds[2][4] = 10;
+    seeds[3][4] = 12;
+    seeds[4][5] = 11;
+    seeds[4][27] = 1;
+    seeds[5][4] = 14;
+    seeds[5][13] = 1;
+    seeds[5][16] = 1;
+    seeds[6][4] = 15;
+    seeds[6][5] = 11;
+    seeds[6][27] = 1;
+    seeds[7][4] = 1;
+    seeds[7][8] = 0x80;
+    seeds[7][10] = 0xff;
+    // Retained-corpus regression: apex/CNAME/QCLASS=0 must follow the
+    // production REFUSED path rather than comparing unreachable lookup plans.
+    seeds[8][..9].copy_from_slice(&[0x6e, 0x73, 0xff, 0xff, 0xff, 0xff, 0x0a, 0x31, 0xeb]);
+    // Retained-corpus regression: malformed three-byte COOKIE EDNS data must
+    // produce FORMERR before this unsupported QCLASS can produce REFUSED.
+    seeds[9][..23].copy_from_slice(&[
+        0x74, 0x50, 0x06, 0x10, 0x74, 0x50, 0x06, 0x10, 0xff, 0xff, 0xff, 0x64, 0xa2, 0x03, 0x00,
+        0xff, 0xff, 0xff, 0x64, 0xa2, 0x03, 0x00, 0x0a,
+    ]);
+    seeds
+}
+
+fn shaped_edns_well_formed(data: &[u8]) -> bool {
+    if byte(data, 13) & 1 == 0 {
+        return true;
+    }
+    let option_len = usize::from(byte(data, 20).min(32));
+    if option_len == 0 {
+        return true;
+    }
+    let option_code = get_u16(data, 21);
+    // The shaped generator emits one exactly framed option. Of the option
+    // codes interpreted by the server, only COOKIE imposes a payload length:
+    // 8 bytes for a client cookie, or 8 plus a 8..=32 byte server cookie.
+    option_code != 10 || option_len == 8 || (16..=40).contains(&option_len)
+}
+
+fn lookup_summary(lookup: &LookupResult) -> ZoneImagePlanSummary {
+    ZoneImagePlanSummary {
+        rcode: lookup.rcode,
+        authoritative: lookup.authoritative,
+        answers: records_summary(&lookup.answers),
+        authorities: records_summary(&lookup.authorities),
+        additionals: records_summary(&lookup.additionals),
+        termination: lookup.termination,
+        nsec3_iterations_exceeded: lookup.nsec3_iterations_exceeded,
+    }
+}
+
+fn records_summary(records: &[ResourceRecord]) -> ZoneImagePlanSectionSummary {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+
+    let mut digest = FNV_OFFSET_BASIS;
+    for record in records {
+        let mut record_digest = FNV_OFFSET_BASIS;
+        record_digest = fnv1a_bytes(record_digest, record.owner.canonical_key().as_bytes());
+        record_digest = fnv1a_bytes(record_digest, &record.rr_type.to_be_bytes());
+        record_digest = fnv1a_bytes(record_digest, &record.class.to_be_bytes());
+        record_digest = fnv1a_bytes(record_digest, &record.ttl.to_be_bytes());
+        record_digest = fnv1a_bytes(record_digest, &(record.rdata.len() as u64).to_be_bytes());
+        record_digest = fnv1a_bytes(record_digest, &record.rdata);
+        digest = fnv1a_bytes(digest, &record_digest.to_be_bytes());
+    }
+    ZoneImagePlanSectionSummary {
+        count: records.len(),
+        digest,
+    }
+}
+
+fn fnv1a_bytes(mut digest: u64, bytes: &[u8]) -> u64 {
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    for byte in bytes {
+        digest ^= u64::from(*byte);
+        digest = digest.wrapping_mul(FNV_PRIME);
+    }
+    digest
 }
 
 fn zone_snapshot(apex: DomainName) -> ZoneSnapshot {
@@ -143,6 +343,13 @@ fn zone_snapshot(apex: DomainName) -> ZoneSnapshot {
                 vec![vec![192, 0, 2, 93]],
             ),
             rrset(
+                &name("bulk.zoneimage.test."),
+                RecordType::Txt,
+                (0..32)
+                    .map(|index| txt_rdata(format!("bulk record {index:02} payload").as_bytes()))
+                    .collect(),
+            ),
+            rrset(
                 &name("www.zoneimage.test."),
                 RecordType::Rrsig,
                 vec![rrsig_rdata(RecordType::A)],
@@ -204,6 +411,14 @@ fn answer_options(data: &[u8]) -> AnswerOptions<'_> {
         AnswerOptions::udp(512 + (get_u16(data, 2) % (DEFAULT_MAX_UDP_PAYLOAD - 511)));
     options.transport = transport;
     options.edns_padding_block_size = padding_block;
+    // Production configuration rejects zero; keep the semantic oracle inside
+    // the supported 1..=8 chain-limit domain.
+    options.max_cname_chain = usize::from(byte(data, 26) % 8) + 1;
+    options.any_response = if byte(data, 27) & 1 == 0 {
+        AnyResponseMode::Minimal
+    } else {
+        AnyResponseMode::Full
+    };
     options
 }
 
@@ -224,6 +439,7 @@ fn shaped_query_packet(data: &[u8]) -> Vec<u8> {
         "www.child.zoneimage.test.",
         "_sip._udp.zoneimage.test.",
         "absent.zoneimage.test.",
+        "bulk.zoneimage.test.",
         "*.zoneimage.test.",
     ];
     let qtypes = [
@@ -240,7 +456,7 @@ fn shaped_query_packet(data: &[u8]) -> Vec<u8> {
         RecordType::Nsec as u16,
         255,
         65_280,
-        get_u16(data, 6),
+        65_280 + (get_u16(data, 6) % 255),
     ];
 
     let qname = names[(byte(data, 4) as usize) % names.len()];
@@ -275,10 +491,10 @@ fn append_opt(packet: &mut Vec<u8>, data: &[u8]) {
     packet.extend_from_slice(&(RecordType::Opt as u16).to_be_bytes());
     let payload = 512 + (get_u16(data, 14) % 1232);
     packet.extend_from_slice(&payload.to_be_bytes());
-    let ttl = if byte(data, 16) & 0x80 == 0 {
-        0x8000u32
+    let ttl = if byte(data, 16) & 1 == 0 {
+        0
     } else {
-        ((byte(data, 17) as u32) << 16) | get_u16(data, 18) as u32
+        0x8000u32
     };
     packet.extend_from_slice(&ttl.to_be_bytes());
 

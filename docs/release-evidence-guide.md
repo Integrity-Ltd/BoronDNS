@@ -141,6 +141,23 @@ target directories for `x86_64-unknown-linux-musl`, fixes the embedded
 `OXIDEDNS_BUILD_*` metadata plus `SOURCE_DATE_EPOCH`, and writes
 `artifact-manifest.tsv`, `comparison.tsv`, and `reproducible-build-summary.env`
 under `target/evidence/reproducible-build-...`.
+The comparison refuses modified or untracked source by default. The explicit
+`OXIDEDNS_REPRODUCIBLE_BUILD_ALLOW_DIRTY_NON_RELEASE=1` escape hatch exists only
+for diagnostics: such a run exits nonzero and records
+`reproducible_build_status=false` plus `release_eligible=false`, even when its two
+artifact digests match. Dirty-source output is never release evidence.
+The source commit and the complete non-ignored worktree status are captured at
+preflight and must remain identical before and after locked metadata capture,
+each build, artifact capture, and terminal evidence publication. Any boundary
+drift fails the comparison before it can publish passing release evidence.
+The tagged release workflow runs this comparison again for its exact checked-out
+commit before preparing the signing handoff. It validates the two matching
+binary pairs with `scripts/verify-release-reproducibility.py`; a missing,
+ineligible, commit-mismatched, size-mismatched, or digest-mismatched record is a
+hard failure before the privileged signing job can start. The independently
+packaged raw `oxidedns` and `oxide-gun` binaries must then compare byte-for-byte
+with both retained builds, so the result authenticates the bytes sent for
+signing rather than an unrelated successful comparison.
 
 The comparison intentionally uses the concrete rustup Cargo and rustc binaries
 instead of the local `cargo` shim so build-script environment values reach the
@@ -156,11 +173,84 @@ reports, and SHA-256 files. Use `scripts/test-installer-docker.sh` to smoke the
 installer in Ubuntu, including install, update, config validation,
 `oxide-gun --self-test`, and startup.
 
+Both installer and Docker packaging fail closed when Git reports any modified
+or untracked, non-ignored source. They revalidate the exact commit and complete
+worktree status across build and publication boundaries. The
+`OXIDEDNS_PACKAGE_ALLOW_DIRTY_NON_RELEASE=1` override exists only for local
+development diagnostics: affected manifests record `source_clean=0`,
+`release_eligible=0`, and `dirty_source_override=1`, and Docker images carry
+matching source-clean and release-eligibility labels. The override is rejected
+under GitHub Actions and must never appear in the tagged release workflow.
+Likewise, `OXIDEDNS_PACKAGE_ALLOW_DYNAMIC=1` is a local diagnostic override:
+even on a clean tree it forces `release_eligible=0`, records
+`dynamic_link_override=1`, and publishes only in the `-nonrelease-dynamic`
+artifact and image-tag namespace. It is also rejected under GitHub Actions.
+
+Installer, SBOM, and Docker package builders capture the device, inode, owner,
+and directory type of every private run/staging root that may later be removed
+recursively. Normal completion and failure rollback both revalidate that exact
+identity immediately before cleanup. In a packaging-UID-writable namespace,
+logical cleanup ends with an exact no-replace rename to a unique
+`*.oxidedns-remove.*` quarantine. The builder reports that retained path and
+its captured `device:inode:owner:type`, plus the immediate parent path and parent
+identity. Recovery journals persist those four values in the indexed
+`retained_removal_quarantine_N*` fields. The journal parent directory is bound
+to `publication_recovery_root_identity`; retained objects beneath it also carry
+root-relative object and parent paths. If a same-process retry later quarantines
+that whole root, the diagnostic path is identity-revalidated and rebased while
+the immutable journal remains resolvable through its current parent directory.
+The original absolute fields remain historical evidence. The builder never
+performs a later pathname `unlink` or `rmdir`; remove it only during
+privileged or dedicated-UID reconciliation where the packaging UID cannot swap
+the victim. If a same-UID process replaces either the private path or its
+quarantine, packaging exits nonzero and preserves the replacement and displaced
+recovery state for inspection; a failed post-move revalidation reports only the
+unverified parent namespace and does not claim an exact retained identity.
+Unique quarantine names and removal of the
+obsolete source binding from live package state let later staging runs proceed
+without adopting or overwriting retained objects.
+An interrupted recovery-diagnostic write likewise retains its uniquely named
+`.publication-recovery-incomplete-*` inode instead of attempting a raceable
+cleanup unlink; stderr identifies the exact path, object identity, parent path,
+and parent identity when post-write revalidation succeeds, or only the
+unverified parent namespace when it does not.
+Cargo-cyclonedx's fixed worktree outputs are identity-bound renamed into unique
+`*.oxidedns-remove.*` paths under the already locked Git metadata root. This
+keeps retained evidence outside Git source-status accounting without using a
+copy-and-unlink fallback; an unsupported cross-filesystem layout fails closed
+and retains the source pathname with the same object/parent identity evidence
+when it can still be revalidated. A later invocation never imports a prior
+stderr or journal record as mutation authority.
+Transactional artifact publication applies the same object-identity binding to
+regular-file backups and promoted files immediately before rollback removal,
+restore, or committed backup cleanup. Docker packaging creates private run
+roots only after preflight and gives one EXIT cleanup path sole ownership of
+both its run root and installer-publication staging root on success, failure,
+and signals.
+
 Use `scripts/package-docker-image.sh` to build and export the Docker image
 archive, image manifest, inspect JSON, and SHA-256 file. Use
 `scripts/test-docker-image.sh` to smoke the image with a read-only root
 filesystem, dropped capabilities, `no-new-privileges`, health endpoints, and
 metrics.
+Docker packaging rebuilds its image input in the isolated
+`target/docker-installer-input/` directory. It must not reuse or overwrite the
+installer archive and raw binaries in `target/dist/`, because those exact
+publishable files have already passed the installer smoke test.
+The image manifest records both the reviewed digest-pinned Alpine base reference
+and its resolved `sha256` digest; retain those fields with the other release
+evidence so the published image can be traced to the exact platform manifest.
+The build also captures Docker's immutable image ID through `--iidfile`; inspect,
+archive export, archive reload verification, and the required Syft scan all use
+that ID. A mutable tag is checked against it before and after packaging, and tag
+drift aborts publication rather than mixing evidence from two images.
+Before an exported archive reaches the Docker daemon,
+`scripts/verify-docker-archive.py` streams it under a single absolute
+`CLOCK_BOOTTIME` deadline and hard upper bounds for member count, individual and
+total expanded bytes, and retained JSON. Callers may lower those bounds through
+the `OXIDEDNS_DOCKER_ARCHIVE_*` environment variables, but cannot raise the
+compiled maxima. Links, special files, duplicate or non-canonical members,
+digest mismatches, and archives exceeding any bound fail closed.
 
 Use `scripts/package-sbom.sh` to generate CycloneDX JSON SBOMs and SHA-256
 files for the two shipped release binaries. The Cargo SBOM pass uses
@@ -173,6 +263,66 @@ Set `OXIDEDNS_SBOM_DOCKER=1` after `scripts/package-docker-image.sh` to require
 Syft and add a CycloneDX JSON SBOM for the release Docker image. Tagged GitHub
 release builds run this required Docker SBOM mode and attach the binary SBOMs,
 Docker image SBOM, their SHA-256 files, and the SBOM manifest to the release.
+The tagged workflow uses three exact GitHub-hosted jobs. A `contents: read`
+verification runner executes Continuous and emits only its verified commit. A
+new `contents: read` packaging runner checks out that exact commit and therefore
+inherits no environment, background process, or mutable tool state from
+Continuous. It passes the publishable files plus a public SHA-256 handoff
+manifest and a separate internal manifest covering the reproducibility records
+and their two validators. Both manifest SHA-256 values are carried as
+authenticated job outputs and checked before any signing. The internal records
+are signing inputs only; they do not expand the published release-asset surface
+or the public handoff manifest.
+The workflow relies on the pinned download action's transport integrity plus
+that independent manifest, rather than exposing an artifact-digest output that
+the download action cannot compare against an expected value.
+The release binaries are built on that fresh packaging runner in a freshly
+recreated, release-only Cargo target directory, so ignored fingerprints or
+executables from verification cannot be reused for packaging. The signing job installs the
+commit-pinned Cosign action before downloading and fully verifying the handoff;
+no executable or action step is allowed between verification and signing.
+Only that short signing/publishing job receives `contents: write` and
+`id-token: write`, and it neither checks out nor executes repository or built
+code. The workflow keylessly signs every published asset, including the handoff
+manifest, with Cosign and attaches `<asset>.sigstore.json`. Generated release
+notes include a `cosign verify-blob` command constrained to the GitHub Actions
+OIDC issuer and this repository's tagged `release-installer.yml` workflow
+identity. Release acceptance must execute that command against every downloaded
+asset/bundle pair and retain the verification output; the existence of workflow
+YAML alone does not close the signing evidence gap.
+GitHub release API mutations run through `scripts/release-api-supervisor.py`.
+Each call receives one absolute operation deadline, blocks cancellation signals
+before spawning a new process group, and waits for an explicit parent-authority
+token before it may start `gh`. Cancellation or timeout terminates and reaps the
+whole group; an API leader that exits while descendants remain is a failed
+operation. This closes the shell's spawn-to-PID window for release mutations.
+Release tags are an immutable provenance boundary: repository rules must protect
+`v*` tags from force-update and deletion after creation. The publishing job peels
+the remote tag to its commit immediately before release creation and again
+immediately afterward. If the second lookup fails or differs from the event
+commit, it deletes the just-created release and fails. That rollback is a final
+race detector, not a substitute for protected immutable tags; an environment
+that permits tag rewrites is not release-eligible.
+The verification and packaging jobs resolve Cargo and rustc through the pinned
+rustup toolchain, record their SHA-256 identities, and invoke the resolved
+absolute paths. The package manifest records stable executable names plus those
+digests; a competing PATH `cargo` cannot proxy a release build, and absolute
+host paths do not make otherwise identical archives differ.
+For installer acceptance, run verification before extraction or privilege:
+
+```sh
+tag=v0.2.0
+asset="oxidedns-${tag#v}-x86_64-unknown-linux-musl.tar.xz"
+cosign verify-blob \
+  --bundle "$asset.sigstore.json" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/Integrity-Ltd/oxidedns/.github/workflows/release-installer.yml@refs/tags/$tag" \
+  "$asset"
+```
+
+The recorded tag, identity, bundle, asset digest, Cosign output, and time of
+verification belong in the release evidence. A failed or cross-tag identity
+must stop acceptance before `tar` or `sudo` is run.
 Local release snapshots use `OXIDEDNS_SBOM_DOCKER=0` by default so they retain
 binary SBOM evidence without requiring a local Docker daemon.
 

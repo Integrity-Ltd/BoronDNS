@@ -69,6 +69,35 @@ async fn transfer_axfr_from_primary_reads_tcp_messages() {
 }
 
 #[tokio::test]
+async fn signed_axfr_completes_on_tsig_only_message_after_unsigned_terminating_soa() {
+    let primary = spawn_axfr_primary_with_unsigned_terminator_and_tsig_only_terminal().await;
+    let target = TransferPrimaryConfig::tcp(primary);
+    let apex = DomainName::from_absolute_str("example.test.").unwrap();
+    let key = TsigKey::from_base64("transfer-key.", "hmac-sha256", "dG9wc2VjcmV0").unwrap();
+
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        super::transfer_axfr_from_target_with_tsig(
+            &target,
+            &apex,
+            1,
+            0x1234,
+            TransferSession::new(
+                TransferTsig::new(Some(&key), DEFAULT_TSIG_FUDGE_SECS),
+                DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT,
+            ),
+            std::time::Duration::from_secs(5),
+        ),
+    )
+    .await
+    .expect("AXFR should finish while the primary keeps the TCP stream open")
+    .expect("signed AXFR transfer");
+
+    assert_eq!(snapshot.state, ZoneState::Active);
+    assert_eq!(snapshot.serial, Some(1));
+}
+
+#[tokio::test]
 async fn tcp_connect_timeout_abandons_pending_connect_attempt() {
     let primary = "192.0.2.53:53".parse().unwrap();
     let error = super::tcp_connect_with_timeout(
@@ -209,6 +238,125 @@ fn transfer_ingest_tracker_enforces_message_count_cap() {
             ..
         } if received_messages == DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT + 1
             && limit_messages == DEFAULT_TRANSFER_INGEST_MESSAGE_LIMIT
+    ));
+}
+
+#[test]
+fn transfer_ingest_global_budget_releases_after_success() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let budget = TransferIngestBudget::new(16);
+    {
+        let mut ingest =
+            TransferIngestTracker::new("AXFR", primary, 16).with_ingest_budget(Some(&budget));
+        ingest.record_message(16).expect("budget reservation");
+        assert_eq!(budget.in_flight_bytes(), 16);
+    }
+    assert_eq!(budget.in_flight_bytes(), 0);
+
+    let mut reuse =
+        TransferIngestTracker::new("IXFR", primary, 16).with_ingest_budget(Some(&budget));
+    reuse
+        .record_message(16)
+        .expect("released budget is reusable");
+}
+
+#[test]
+fn concurrent_transfer_sessions_each_retain_the_full_per_session_allowance() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let per_session_limit = 16;
+    let budget = TransferIngestBudget::for_concurrent_sessions(per_session_limit, 2);
+    let mut first = TransferIngestTracker::new("AXFR", primary, per_session_limit)
+        .with_ingest_budget(Some(&budget));
+    let mut second = TransferIngestTracker::new("IXFR", primary, per_session_limit)
+        .with_ingest_budget(Some(&budget));
+
+    first
+        .record_message(per_session_limit as usize)
+        .expect("first concurrent session may consume its full allowance");
+    second
+        .record_message(per_session_limit as usize)
+        .expect("second concurrent session may consume its full allowance");
+
+    assert_eq!(budget.in_flight_bytes(), per_session_limit * 2);
+}
+
+#[test]
+fn derived_transfer_ingest_budget_saturates_instead_of_wrapping() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let budget = TransferIngestBudget::for_concurrent_sessions(u64::MAX, 2);
+    let mut ingest = TransferIngestTracker::new("AXFR", primary, u64::MAX)
+        .with_ingest_budget(Some(&budget));
+
+    ingest
+        .record_message(1)
+        .expect("overflow-safe derived aggregate budget remains usable");
+    assert_eq!(budget.in_flight_bytes(), 1);
+}
+
+#[test]
+fn transfer_ingest_global_budget_releases_after_error() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let budget = TransferIngestBudget::new(10);
+    let result = (|| {
+        let mut first =
+            TransferIngestTracker::new("AXFR", primary, 20).with_ingest_budget(Some(&budget));
+        first.record_message(8)?;
+        assert_eq!(budget.in_flight_bytes(), 8);
+
+        let mut second =
+            TransferIngestTracker::new("IXFR", primary, 20).with_ingest_budget(Some(&budget));
+        second.record_message(3)
+    })();
+
+    assert!(matches!(
+        result,
+        Err(TransferError::IngestGlobalSizeLimit {
+            requested_bytes: 3,
+            in_flight_bytes: 8,
+            limit_bytes: 10,
+            ..
+        })
+    ));
+    assert_eq!(budget.in_flight_bytes(), 0);
+}
+
+#[tokio::test]
+async fn transfer_ingest_global_budget_releases_after_cancellation() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let budget = TransferIngestBudget::new(10);
+    let task_budget = budget.clone();
+    let (reserved_tx, reserved_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut ingest =
+            TransferIngestTracker::new("AXFR", primary, 10).with_ingest_budget(Some(&task_budget));
+        ingest.record_message(10).expect("budget reservation");
+        reserved_tx.send(()).expect("reservation observation");
+        std::future::pending::<()>().await;
+        drop(ingest);
+    });
+
+    reserved_rx.await.expect("reservation was acquired");
+    assert_eq!(budget.in_flight_bytes(), 10);
+    task.abort();
+    assert!(task.await.expect_err("task was cancelled").is_cancelled());
+    assert_eq!(budget.in_flight_bytes(), 0);
+}
+
+#[test]
+fn transfer_ingest_message_allocation_is_capped_by_session_bytes() {
+    let primary = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 53), 53));
+    let mut ingest = TransferIngestTracker::new("AXFR", primary, 8);
+    let error = ingest
+        .record_message(9)
+        .expect_err("one message cannot exceed the configured ingest cap");
+
+    assert!(matches!(
+        error,
+        TransferError::IngestSizeLimit {
+            received_bytes: 9,
+            limit_bytes: 8,
+            ..
+        }
     ));
 }
 
@@ -631,4 +779,261 @@ fn dns_cookie_secret_store_uses_configured_shared_secrets() {
             0x11, 0x00,
         ])
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn xot_private_key_loader_checks_world_mode_symlinks_and_regular_file() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let (cert_path, key_path) = write_self_signed_xot_cert_files();
+    let addr = "192.0.2.53:853".parse().expect("valid test address");
+    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o640))
+        .expect("group-readable private key mode");
+    load_pem_private_key(addr, key_path.to_str().expect("UTF-8 key path"))
+        .expect("group-readable private key remains compatible with ODS-IF-CONF-004");
+
+    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o604))
+        .expect("world-readable private key mode");
+    let error = load_pem_private_key(addr, key_path.to_str().expect("UTF-8 key path"))
+        .expect_err("world-readable private key rejected");
+    assert!(error.to_string().contains("must not be world-readable"));
+
+    for mode in [0o602, 0o620] {
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(mode))
+            .expect("writable-by-others private key mode");
+        let error = load_pem_private_key(addr, key_path.to_str().expect("UTF-8 key path"))
+            .expect_err("group- or world-writable private key rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not be group- or world-writable"),
+            "mode {mode:o}: {error}"
+        );
+    }
+
+    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+        .expect("restore secure private key mode");
+    let link = unique_test_path("oxidedns-xot-key-link", "pem");
+    symlink(&key_path, &link).expect("create private key symlink");
+    load_pem_private_key(addr, link.to_str().expect("UTF-8 link path"))
+        .expect_err("private key symlink rejected");
+
+    let directory = unique_test_path("oxidedns-xot-key-directory", "dir");
+    std::fs::create_dir(&directory).expect("create private key directory");
+    let error = load_pem_private_key(
+        addr,
+        directory.to_str().expect("UTF-8 directory path"),
+    )
+    .expect_err("private key directory rejected");
+    assert!(error.to_string().contains("must be a regular file"));
+
+    let _ = std::fs::remove_file(link);
+    let _ = std::fs::remove_dir(directory);
+    let _ = std::fs::remove_file(key_path);
+    let _ = std::fs::remove_file(cert_path);
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_xot_material_loader_enforces_exact_limit_and_growth_fence() {
+    use std::{
+        io::Write,
+        os::unix::fs::PermissionsExt,
+    };
+
+    let limit = crate::transfer::MAX_DIRECT_XOT_TLS_MATERIAL_BYTES;
+    let certificate_path = unique_test_path("oxidedns-direct-xot-material-limit", "pem");
+    let certificate = std::fs::File::create(&certificate_path).expect("create TLS material file");
+    certificate
+        .set_len(limit as u64)
+        .expect("size exact-limit TLS material file");
+    drop(certificate);
+    assert_eq!(
+        crate::transfer::direct_xot_tls_material_len_after_open_for_test(
+            certificate_path.to_str().expect("UTF-8 certificate path"),
+            || {},
+        )
+        .expect("exact-limit direct XoT TLS material is accepted"),
+        limit
+    );
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&certificate_path)
+        .expect("open TLS material for resize")
+        .set_len((limit + 1) as u64)
+        .expect("size over-limit TLS material file");
+    let error = crate::transfer::direct_xot_tls_material_len_after_open_for_test(
+        certificate_path.to_str().expect("UTF-8 certificate path"),
+        || {},
+    )
+    .expect_err("one-byte-over direct XoT TLS material is rejected");
+    assert!(error.to_string().contains(&limit.to_string()));
+    assert!(error.to_string().contains("direct XoT material limit"));
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&certificate_path)
+        .expect("open TLS material for exact-limit reset")
+        .set_len(limit as u64)
+        .expect("reset exact-limit TLS material file");
+    let growth_path = certificate_path.clone();
+    let error = crate::transfer::direct_xot_tls_material_len_after_open_for_test(
+        certificate_path.to_str().expect("UTF-8 certificate path"),
+        move || {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&growth_path)
+                .expect("open captured TLS material for hostile append")
+                .write_all(&[0])
+                .expect("grow captured TLS material after metadata validation");
+        },
+    )
+    .expect_err("bounded same-handle read rejects post-validation growth");
+    assert!(error.to_string().contains("direct XoT material limit"));
+
+    let private_key_path = unique_test_path("oxidedns-direct-xot-private-key-limit", "pem");
+    let private_key = std::fs::File::create(&private_key_path).expect("create private-key file");
+    private_key
+        .set_len(limit as u64)
+        .expect("size exact-limit private-key file");
+    drop(private_key);
+    std::fs::set_permissions(&private_key_path, std::fs::Permissions::from_mode(0o600))
+        .expect("private key mode");
+    let addr = "192.0.2.53:853".parse().expect("valid primary address");
+    assert_eq!(
+        crate::transfer::direct_xot_private_key_len_after_open_for_test(
+            addr,
+            private_key_path.to_str().expect("UTF-8 key path"),
+            || {},
+        )
+        .expect("exact-limit direct XoT private key is accepted"),
+        limit
+    );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&private_key_path)
+        .expect("open private key for resize")
+        .set_len((limit + 1) as u64)
+        .expect("size over-limit private key file");
+    let error = crate::transfer::direct_xot_private_key_len_after_open_for_test(
+        addr,
+        private_key_path.to_str().expect("UTF-8 key path"),
+        || {},
+    )
+    .expect_err("one-byte-over direct XoT private key is rejected");
+    assert!(error.to_string().contains("direct XoT material limit"));
+
+    let _ = std::fs::remove_file(certificate_path);
+    let _ = std::fs::remove_file(private_key_path);
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_xot_material_loader_counts_repeated_files_against_profile_budget() {
+    let file_limit = crate::transfer::MAX_DIRECT_XOT_TLS_MATERIAL_BYTES;
+    let profile_limit =
+        oxidedns_core::config::MAX_XOT_TLS_MATERIAL_BYTES_PER_PROFILE;
+    assert_eq!(profile_limit % file_limit, 0);
+
+    let material_path = unique_test_path("oxidedns-direct-xot-aggregate", "pem");
+    let material = std::fs::File::create(&material_path).expect("create aggregate material");
+    material
+        .set_len(file_limit as u64)
+        .expect("size aggregate material");
+    drop(material);
+    let material_path = material_path.to_str().expect("UTF-8 material path");
+    let repeated = vec![material_path; profile_limit / file_limit];
+    let addr = "192.0.2.53:853".parse().expect("valid primary address");
+
+    assert_eq!(
+        crate::transfer::direct_xot_aggregate_material_len_for_test(addr, &repeated)
+            .expect("exact aggregate profile limit is accepted"),
+        profile_limit
+    );
+
+    let one_byte_path = unique_test_path("oxidedns-direct-xot-aggregate-plus-one", "pem");
+    std::fs::write(&one_byte_path, [b'x']).expect("write one-byte aggregate material");
+    let one_byte_path = one_byte_path.to_str().expect("UTF-8 one-byte path");
+    let mut over_limit = repeated;
+    over_limit.push(one_byte_path);
+    let error = crate::transfer::direct_xot_aggregate_material_len_for_test(addr, &over_limit)
+        .expect_err("one byte over aggregate profile limit is rejected");
+    assert!(error.to_string().contains(&profile_limit.to_string()));
+    assert!(error.to_string().contains("per-profile limit"));
+
+    let _ = std::fs::remove_file(material_path);
+    let _ = std::fs::remove_file(one_byte_path);
+}
+
+#[test]
+fn direct_xot_inline_private_key_enforces_exact_limit_before_clone_or_file_io() {
+    let limit = crate::transfer::MAX_DIRECT_XOT_TLS_MATERIAL_BYTES;
+    let addr = "192.0.2.53:853".parse().expect("valid primary address");
+    crate::transfer::validate_direct_xot_inline_private_key_size(addr, &vec![b'x'; limit])
+        .expect("exact-limit inline private key is accepted by the size fence");
+    let error =
+        crate::transfer::validate_direct_xot_inline_private_key_size(addr, &vec![b'x'; limit + 1])
+            .expect_err("one-byte-over inline private key is rejected");
+    assert!(error.to_string().contains(&limit.to_string()));
+
+    let mut config = ServerConfig::from_toml_str(
+        r#"
+            [server]
+            listen_udp = ["127.0.0.1:0"]
+            listen_tcp = []
+
+            [[zones]]
+            name = "example.test."
+
+            [[zones.transfer_primaries]]
+            addr = "192.0.2.53:853"
+            transport = "xot"
+            server_name = "primary.example.test"
+            trust_anchors = ["definitely-missing-anchor.pem"]
+            client_cert = "definitely-missing-client.pem"
+            client_key_pem = "placeholder"
+        "#,
+    )
+    .expect("baseline inline XoT schema validates without reading material");
+    config.zones[0].transfer_primaries[0].client_key_pem = Some(
+        ConfigSecretString::from_plaintext("x".repeat(limit + 1)),
+    );
+    let error = Runtime::new(config)
+        .expect_err("runtime rejects hostile inline key before reading missing files");
+    let RuntimeError::InvalidRuntimeConfig(message) = error else {
+        panic!("expected invalid runtime configuration, got {error}");
+    };
+    assert!(message.contains("inline client private key"));
+    assert!(message.contains(&limit.to_string()));
+    assert!(!message.contains("failed to read"));
+}
+
+#[cfg(unix)]
+#[test]
+fn xot_certificate_and_trust_anchor_loader_rejects_group_or_world_write_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (cert_path, key_path) = write_self_signed_xot_cert_files();
+    std::fs::set_permissions(&cert_path, std::fs::Permissions::from_mode(0o644))
+        .expect("world-readable certificate mode");
+    load_pem_certs(cert_path.to_str().expect("UTF-8 certificate path"))
+        .expect("public certificate may remain world-readable");
+
+    for mode in [0o602, 0o620, 0o666] {
+        std::fs::set_permissions(&cert_path, std::fs::Permissions::from_mode(mode))
+            .expect("writable-by-others certificate mode");
+        let error = load_pem_certs(cert_path.to_str().expect("UTF-8 certificate path"))
+            .expect_err("group- or world-writable certificate rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not be group- or world-writable"),
+            "mode {mode:o}: {error}"
+        );
+    }
+
+    let _ = std::fs::remove_file(key_path);
+    let _ = std::fs::remove_file(cert_path);
 }

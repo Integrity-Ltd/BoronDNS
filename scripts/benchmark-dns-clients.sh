@@ -56,8 +56,9 @@ remote_client_remote_host_id="none"
 remote_client_same_host="none"
 remote_client_bin_sha256="none"
 git_revision="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
-if git -C "$repo_root" status --porcelain=v1 --untracked-files=normal >/dev/null 2>&1; then
-    if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=normal)" ]]; then
+git_status_output=""
+if git_status_output="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=normal 2>/dev/null)"; then
+    if [[ -n "$git_status_output" ]]; then
         git_dirty="true"
     else
         git_dirty="false"

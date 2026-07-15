@@ -1,13 +1,17 @@
 use std::{
     collections::HashMap,
+    future::Future,
     io::ErrorKind,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use oxidedns_core::{
-    config::{UdpBackend, UdpIdleStrategy, UdpRuntime, XdpConfig},
+    config::{MAX_UDP_BATCH_SIZE, UdpBackend, UdpIdleStrategy, UdpRuntime, XdpConfig},
     dns::{
         AnswerOptions, AnyResponseMode, ChaosOptions, DEFAULT_TCP_KEEPALIVE_TIMEOUT_SECS,
         DatagramAction, DnsCookieContext, DnsCookieRequestStatus, DomainName,
@@ -46,7 +50,12 @@ const ERRNO_ENOBUFS: i32 = 105;
 const ERRNO_ECONNREFUSED: i32 = 111;
 const ERRNO_EHOSTUNREACH: i32 = 113;
 const ERRNO_ENOMEM: i32 = 12;
+const ERRNO_EBUSY: i32 = 16;
 const UDP_RESOURCE_BACKOFF: Duration = Duration::from_millis(50);
+
+pub(super) fn bounded_udp_batch_size(batch_size: usize) -> usize {
+    batch_size.clamp(1, MAX_UDP_BATCH_SIZE)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UdpIoErrorAction {
@@ -66,6 +75,12 @@ pub(crate) enum BoundUdpListener {
     #[cfg(feature = "af-xdp")]
     AfXdp {
         packet_io: af_xdp::AfXdpPacketIo,
+        worker_id: usize,
+        worker_count: usize,
+    },
+    #[cfg(feature = "af-xdp")]
+    AfXdpKernelFallback {
+        socket: Arc<UdpSocket>,
         worker_id: usize,
         worker_count: usize,
     },
@@ -141,7 +156,7 @@ pub(crate) fn classify_udp_send_error(error: &std::io::Error) -> UdpIoErrorActio
             Some(ERRNO_ENOBUFS | ERRNO_ENOMEM) => UdpIoErrorAction::Backoff(UDP_RESOURCE_BACKOFF),
             Some(
                 ERRNO_ECONNREFUSED | ERRNO_EHOSTUNREACH | ERRNO_ENETUNREACH | ERRNO_EMSGSIZE
-                | ERRNO_EPERM,
+                | ERRNO_EPERM | ERRNO_EBUSY,
             ) => UdpIoErrorAction::Continue,
             Some(ERRNO_EBADF | ERRNO_EINVAL) => UdpIoErrorAction::Fatal,
             _ => UdpIoErrorAction::Fatal,
@@ -181,8 +196,13 @@ fn bind_af_xdp_udp_listeners(
     let worker_count = worker_count.max(1);
     af_xdp::AfXdpPacketIo::bind_queues(socket, xdp, worker_count)
         .map(|packet_ios| {
-            let worker_count = packet_ios.len();
-            packet_ios
+            let xsk_worker_count = packet_ios.len();
+            let worker_count = xsk_worker_count.saturating_add(1);
+            let fallback_socket = packet_ios
+                .first()
+                .expect("AF_XDP bind always produces at least one queue")
+                .kernel_fallback_socket();
+            let mut listeners = packet_ios
                 .into_iter()
                 .enumerate()
                 .map(|(worker_id, packet_io)| BoundUdpListener::AfXdp {
@@ -190,16 +210,27 @@ fn bind_af_xdp_udp_listeners(
                     worker_id,
                     worker_count,
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            listeners.push(BoundUdpListener::AfXdpKernelFallback {
+                socket: fallback_socket,
+                worker_id: xsk_worker_count,
+                worker_count,
+            });
+            listeners
         })
         .map_err(RuntimeError::Udp)
 }
 
-pub(crate) async fn serve_bound_udp(
+pub(crate) async fn serve_bound_udp_until<S>(
     listener: BoundUdpListener,
     zones: ZoneStore,
     settings: UdpServerSettings,
-) -> Result<(), RuntimeError> {
+    admission_open: Arc<AtomicBool>,
+    shutdown: S,
+) -> Result<(), RuntimeError>
+where
+    S: Future<Output = tokio::time::Instant>,
+{
     match listener {
         BoundUdpListener::Std {
             socket,
@@ -212,21 +243,63 @@ pub(crate) async fn serve_bound_udp(
                     socket,
                     zones,
                     settings,
-                    worker_id,
-                    worker_count,
-                    cpu_affinity,
+                    DedicatedUdpWorkerIdentity {
+                        worker_id,
+                        worker_count,
+                        cpu_affinity,
+                    },
+                    admission_open,
+                    shutdown,
                 )
                 .await;
             }
             let packet_io = StdUdpBatchIo::new(socket, settings.udp_batch_size);
-            serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await
+            serve_udp_packet_io_until(
+                packet_io,
+                zones,
+                settings,
+                worker_id,
+                worker_count,
+                admission_open,
+                shutdown,
+            )
+            .await
         }
         #[cfg(feature = "af-xdp")]
         BoundUdpListener::AfXdp {
             packet_io,
             worker_id,
             worker_count,
-        } => serve_udp_packet_io(packet_io, zones, settings, worker_id, worker_count).await,
+        } => {
+            serve_udp_packet_io_until(
+                packet_io,
+                zones,
+                settings,
+                worker_id,
+                worker_count,
+                admission_open,
+                shutdown,
+            )
+            .await
+        }
+        #[cfg(feature = "af-xdp")]
+        BoundUdpListener::AfXdpKernelFallback {
+            socket,
+            worker_id,
+            worker_count,
+        } => {
+            let packet_io = StdUdpBatchIo::from_shared(socket, settings.udp_batch_size);
+            serve_udp_packet_io_until(
+                packet_io,
+                zones,
+                settings,
+                worker_id,
+                worker_count,
+                admission_open,
+                shutdown,
+            )
+            .await
+        }
     }
 }
 
@@ -272,7 +345,7 @@ async fn serve_af_xdp_udp(
 }
 
 async fn serve_udp_packet_io<I>(
-    mut packet_io: I,
+    packet_io: I,
     zones: ZoneStore,
     settings: UdpServerSettings,
     udp_worker_id: usize,
@@ -281,9 +354,35 @@ async fn serve_udp_packet_io<I>(
 where
     I: PacketIo,
 {
+    serve_udp_packet_io_until(
+        packet_io,
+        zones,
+        settings,
+        udp_worker_id,
+        udp_worker_count,
+        Arc::new(AtomicBool::new(true)),
+        std::future::pending(),
+    )
+    .await
+}
+
+pub(crate) async fn serve_udp_packet_io_until<I, S>(
+    mut packet_io: I,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+    udp_worker_id: usize,
+    udp_worker_count: usize,
+    admission_open: Arc<AtomicBool>,
+    shutdown: S,
+) -> Result<(), RuntimeError>
+where
+    I: PacketIo,
+    S: Future<Output = tokio::time::Instant>,
+{
+    tokio::pin!(shutdown);
     let local_addr = packet_io.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, udp_worker_id, udp_worker_count, "UDP listener bound");
-    let mut outbound = Vec::with_capacity(settings.udp_batch_size.max(1));
+    let mut outbound = Vec::with_capacity(bounded_udp_batch_size(settings.udp_batch_size));
     let is_af_xdp = packet_io.is_af_xdp();
     let benchmark_fixed_response = is_af_xdp && benchmark_af_xdp_fixed_response_enabled();
     if benchmark_fixed_response {
@@ -294,9 +393,55 @@ where
     }
 
     loop {
+        if !admission_open.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let pending_send_result = tokio::select! {
+            biased;
+            _deadline = &mut shutdown => return Ok(()),
+            result = packet_io.service_pending_send(&admission_open, &settings.metrics) => result,
+        };
+        if let Err(error) = pending_send_result {
+            if !admission_open.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            match classify_udp_send_error(&error) {
+                UdpIoErrorAction::Continue => {
+                    settings.metrics.record_udp_send_error();
+                    debug!(
+                        %error,
+                        udp_worker_id,
+                        "pending UDP send work remains retryable"
+                    );
+                    continue;
+                }
+                UdpIoErrorAction::Backoff(duration) => {
+                    settings.metrics.record_udp_send_error();
+                    warn!(
+                        %error,
+                        udp_worker_id,
+                        backoff_ms = duration.as_millis(),
+                        "pending UDP send work is under resource pressure; backing off"
+                    );
+                    tokio::select! {
+                        biased;
+                        _deadline = &mut shutdown => return Ok(()),
+                        () = tokio::time::sleep(duration) => {}
+                    }
+                    continue;
+                }
+                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+            }
+        }
         {
-            let inbound = match packet_io.recv_batch().await {
+            let received = tokio::select! {
+                biased;
+                _deadline = &mut shutdown => return Ok(()),
+                received = packet_io.recv_batch(&admission_open) => received,
+            };
+            let inbound = match received {
                 Ok(inbound) => inbound,
+                Err(_) if !admission_open.load(Ordering::Acquire) => return Ok(()),
                 Err(error) => match classify_udp_recv_error(&error) {
                     UdpIoErrorAction::Continue => {
                         settings.metrics.record_udp_receive_error();
@@ -327,6 +472,9 @@ where
             outbound.clear();
 
             for packet in inbound {
+                if !udp_inbound_has_reply_port(packet) {
+                    continue;
+                }
                 if benchmark_fixed_response {
                     outbound.push(UdpOutbound::benchmark_fixed_response(packet.target()));
                 } else if let Some(response) =
@@ -336,8 +484,38 @@ where
                 }
             }
         };
-        let outbound_len = outbound.len();
-        if let Err(error) = packet_io.send_batch(&outbound, &settings.metrics).await {
+        let send = packet_io.send_batch(&outbound, &settings.metrics, udp_worker_id);
+        tokio::pin!(send);
+        let send_result = tokio::select! {
+            biased;
+            deadline = &mut shutdown => {
+                match tokio::time::timeout_at(deadline, &mut send).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        warn!(
+                            udp_worker_id,
+                            "UDP shutdown deadline elapsed with an in-flight batch"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            result = &mut send => result,
+        };
+        let (queued, send_error) = match send_result {
+            Ok(queued) => (queued, None),
+            Err(error) => {
+                let (queued, error) = error.into_parts();
+                (queued, Some(error))
+            }
+        };
+        // AF_XDP records admission synchronously in its cancellation-safe
+        // guard. Standard packet I/O records here after either a complete
+        // success or an error that followed partial successful sends.
+        if !is_af_xdp {
+            settings.metrics.record_udp_send_batch(queued);
+        }
+        if let Some(error) = send_error {
             match classify_udp_send_error(&error) {
                 UdpIoErrorAction::Continue => {
                     settings.metrics.record_udp_send_error();
@@ -355,11 +533,6 @@ where
                 }
                 UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
             }
-        }
-        if is_af_xdp && outbound_len > 0 {
-            settings
-                .metrics
-                .record_af_xdp_worker_send_batch(udp_worker_id, outbound_len);
         }
     }
 }
@@ -380,20 +553,37 @@ fn record_udp_worker_source_ports(
     metrics.record_udp_worker_source_ports(worker_id, source_ports);
 }
 
-async fn serve_dedicated_std_udp_worker(
+fn udp_inbound_has_reply_port(packet: &UdpInbound) -> bool {
+    if packet.peer.port() != 0 {
+        return true;
+    }
+    debug!(
+        peer_ip = %packet.peer.ip(),
+        transport = "udp",
+        bytes = packet.len,
+        "discarded UDP datagram without a reply port"
+    );
+    false
+}
+
+async fn serve_dedicated_std_udp_worker<S>(
     socket: UdpSocket,
     zones: ZoneStore,
     settings: UdpServerSettings,
-    worker_id: usize,
-    worker_count: usize,
-    cpu_affinity: Option<usize>,
-) -> Result<(), RuntimeError> {
+    identity: DedicatedUdpWorkerIdentity,
+    admission_open: Arc<AtomicBool>,
+    shutdown: S,
+) -> Result<(), RuntimeError>
+where
+    S: Future<Output = tokio::time::Instant>,
+{
     let socket = socket.into_std().map_err(RuntimeError::Udp)?;
     socket.set_nonblocking(true).map_err(RuntimeError::Udp)?;
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let control = Arc::new(DedicatedUdpWorkerControl::new());
     let (result_tx, result_rx) = oneshot::channel();
-    let thread_stop = stop.clone();
-    let thread_name = format!("oxidedns-udp-{worker_id}");
+    let thread_control = control.clone();
+    let thread_admission_open = admission_open.clone();
+    let thread_name = format!("oxidedns-udp-{}", identity.worker_id);
     let handle = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -401,47 +591,213 @@ async fn serve_dedicated_std_udp_worker(
                 socket,
                 zones,
                 settings,
-                thread_stop,
-                worker_id,
-                worker_count,
-                cpu_affinity,
+                thread_control,
+                thread_admission_open,
+                identity,
             );
             let _ = result_tx.send(result);
         })
         .map_err(RuntimeError::Udp)?;
     let thread = handle.thread().clone();
     let mut guard = DedicatedUdpWorkerGuard {
-        stop,
+        control,
         thread,
         handle: Some(handle),
     };
 
-    let result = match result_rx.await {
+    tokio::pin!(shutdown);
+    let mut result_rx = result_rx;
+    let worker_result = tokio::select! {
+        result = &mut result_rx => result,
+        deadline = &mut shutdown => {
+            guard.request_shutdown(deadline);
+            match tokio::time::timeout_at(deadline, &mut result_rx).await {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!(worker_id = identity.worker_id, "dedicated UDP shutdown deadline elapsed; detaching stopped worker");
+                    guard.detach();
+                    return Ok(());
+                }
+            }
+        }
+    };
+    let result = match worker_result {
         Ok(result) => result,
         Err(_) => Err(RuntimeError::Udp(std::io::Error::other(
             "dedicated UDP worker exited without reporting status",
         ))),
     };
-    if let Some(handle) = guard.handle.take()
-        && handle.join().is_err()
-    {
-        return Err(RuntimeError::Udp(std::io::Error::other(
-            "dedicated UDP worker panicked",
-        )));
-    }
+    guard.join()?;
     result
 }
 
+#[derive(Clone, Copy)]
+struct DedicatedUdpWorkerIdentity {
+    worker_id: usize,
+    worker_count: usize,
+    cpu_affinity: Option<usize>,
+}
+
+struct DedicatedUdpWorkerControl {
+    stop: AtomicBool,
+    deadline: Mutex<Option<Instant>>,
+    #[cfg(test)]
+    after_receive_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+impl DedicatedUdpWorkerControl {
+    fn new() -> Self {
+        Self {
+            stop: AtomicBool::new(false),
+            deadline: Mutex::new(None),
+            #[cfg(test)]
+            after_receive_hook: Mutex::new(None),
+        }
+    }
+
+    fn request_shutdown(&self, deadline: tokio::time::Instant) {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        *self.deadline.lock().expect("dedicated UDP deadline mutex") =
+            Some(Instant::now() + remaining);
+        self.stop.store(true, Ordering::Release);
+    }
+
+    fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
+    fn deadline_elapsed(&self) -> bool {
+        self.deadline
+            .lock()
+            .expect("dedicated UDP deadline mutex")
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    #[cfg(test)]
+    fn set_after_receive_hook(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .after_receive_hook
+            .lock()
+            .expect("dedicated UDP after-receive hook mutex") = Some(Box::new(hook));
+    }
+
+    #[cfg(test)]
+    fn run_after_receive_hook(&self) {
+        if let Some(hook) = self
+            .after_receive_hook
+            .lock()
+            .expect("dedicated UDP after-receive hook mutex")
+            .take()
+        {
+            hook();
+        }
+    }
+}
+
 struct DedicatedUdpWorkerGuard {
-    stop: Arc<std::sync::atomic::AtomicBool>,
+    control: Arc<DedicatedUdpWorkerControl>,
     thread: std::thread::Thread,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
+impl DedicatedUdpWorkerGuard {
+    fn request_shutdown(&self, deadline: tokio::time::Instant) {
+        self.control.request_shutdown(deadline);
+        self.thread.unpark();
+    }
+
+    fn join(&mut self) -> Result<(), RuntimeError> {
+        if let Some(handle) = self.handle.take()
+            && handle.join().is_err()
+        {
+            return Err(RuntimeError::Udp(std::io::Error::other(
+                "dedicated UDP worker panicked",
+            )));
+        }
+        Ok(())
+    }
+
+    fn detach(&mut self) {
+        let _ = self.handle.take();
+    }
+}
+
 impl Drop for DedicatedUdpWorkerGuard {
     fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::Release);
-        self.thread.unpark();
+        if self.handle.is_some() {
+            self.request_shutdown(tokio::time::Instant::now());
+            if self
+                .handle
+                .as_ref()
+                .is_some_and(|handle| handle.is_finished())
+            {
+                if self.join().is_err() {
+                    warn!("dedicated UDP worker panicked while shutting down");
+                }
+            } else {
+                self.detach();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dedicated_worker_ownership_tests {
+    use std::{
+        sync::{Arc, atomic::Ordering, mpsc},
+        time::Duration,
+    };
+
+    use super::{DedicatedUdpWorkerControl, DedicatedUdpWorkerGuard};
+
+    #[test]
+    fn dropping_dedicated_worker_guard_requests_stop_without_blocking() {
+        let control = Arc::new(DedicatedUdpWorkerControl::new());
+        let (exited_tx, exited_rx) = mpsc::channel();
+        let thread_control = control.clone();
+        let handle = std::thread::spawn(move || {
+            while !thread_control.stop.load(Ordering::Acquire) {
+                std::thread::park();
+            }
+            let _ = exited_tx.send(());
+        });
+        let thread = handle.thread().clone();
+        let guard = DedicatedUdpWorkerGuard {
+            control,
+            thread,
+            handle: Some(handle),
+        };
+
+        drop(guard);
+        exited_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached worker observes stop request");
+    }
+
+    #[test]
+    fn dropping_dedicated_worker_guard_never_waits_for_unresponsive_thread() {
+        let control = Arc::new(DedicatedUdpWorkerControl::new());
+        let (exited_tx, exited_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = exited_tx.send(());
+        });
+        let thread = handle.thread().clone();
+        let guard = DedicatedUdpWorkerGuard {
+            control,
+            thread,
+            handle: Some(handle),
+        };
+
+        let started = std::time::Instant::now();
+        drop(guard);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "guard drop must detach instead of joining an unresponsive worker"
+        );
+        exited_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached test worker eventually exits");
     }
 }
 
@@ -449,11 +805,15 @@ fn run_dedicated_std_udp_worker(
     socket: std::net::UdpSocket,
     zones: ZoneStore,
     settings: UdpServerSettings,
-    stop: Arc<std::sync::atomic::AtomicBool>,
-    worker_id: usize,
-    worker_count: usize,
-    cpu_affinity: Option<usize>,
+    control: Arc<DedicatedUdpWorkerControl>,
+    admission_open: Arc<AtomicBool>,
+    identity: DedicatedUdpWorkerIdentity,
 ) -> Result<(), RuntimeError> {
+    let DedicatedUdpWorkerIdentity {
+        worker_id,
+        worker_count,
+        cpu_affinity,
+    } = identity;
     if let Some(cpu) = cpu_affinity {
         std_udp_socket::pin_current_thread_to_cpu(cpu).map_err(RuntimeError::Udp)?;
         info!(
@@ -464,7 +824,7 @@ fn run_dedicated_std_udp_worker(
     let local_addr = socket.local_addr().map_err(RuntimeError::Udp)?;
     info!(%local_addr, worker_id, worker_count, "dedicated UDP worker bound");
 
-    let batch_size = settings.udp_batch_size.max(1);
+    let batch_size = bounded_udp_batch_size(settings.udp_batch_size);
     let mut inbound = (0..batch_size)
         .map(|_| UdpInbound::new())
         .collect::<Vec<_>>();
@@ -472,116 +832,216 @@ fn run_dedicated_std_udp_worker(
     let mut packet_io = std_udp_mmsg::StdUdpMmsg::new(batch_size);
     let mut idle_spins = 0usize;
 
-    while !stop.load(std::sync::atomic::Ordering::Acquire) {
-        let active = match packet_io.recv_batch(&socket, &mut inbound) {
-            Ok(0) => {
-                idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
-                continue;
-            }
-            Ok(active) => active,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
-                continue;
-            }
-            Err(error) => match classify_udp_recv_error(&error) {
-                UdpIoErrorAction::Continue => {
-                    settings.metrics.record_udp_receive_error();
-                    debug!(%error, worker_id, "transient UDP receive error ignored");
+    let result = (|| {
+        while !control.stop_requested() && admission_open.load(Ordering::Acquire) {
+            let received = packet_io.recv_batch(&socket, &mut inbound);
+            #[cfg(test)]
+            control.run_after_receive_hook();
+            let active = match received {
+                Ok(0) => {
+                    idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
                     continue;
                 }
-                UdpIoErrorAction::Backoff(duration) => {
-                    settings.metrics.record_udp_receive_error();
-                    warn!(
-                        %error,
-                        worker_id,
-                        backoff_ms = duration.as_millis(),
-                        "UDP receive resource pressure; backing off"
-                    );
-                    std::thread::sleep(duration);
+                Ok(active) => active,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    idle_dedicated_udp_worker(&mut idle_spins, settings.udp_idle_strategy);
                     continue;
                 }
-                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
-            },
-        };
-        idle_spins = 0;
-        settings.metrics.record_udp_receive_batch(active);
-        settings
-            .metrics
-            .record_udp_worker_receive_batch(worker_id, active);
+                Err(error) => match classify_udp_recv_error(&error) {
+                    UdpIoErrorAction::Continue => {
+                        settings.metrics.record_udp_receive_error();
+                        debug!(%error, worker_id, "transient UDP receive error ignored");
+                        continue;
+                    }
+                    UdpIoErrorAction::Backoff(duration) => {
+                        settings.metrics.record_udp_receive_error();
+                        warn!(
+                            %error,
+                            worker_id,
+                            backoff_ms = duration.as_millis(),
+                            "UDP receive resource pressure; backing off"
+                        );
+                        std::thread::sleep(duration);
+                        continue;
+                    }
+                    UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
+                },
+            };
+            // A nonblocking receive can race the admission boundary. As with the
+            // Tokio and AF_XDP adapters, do not publish or process the batch until
+            // a post-receive acquire has linearized it before that boundary.
+            if ensure_udp_admission_open(&admission_open).is_err() {
+                return Ok(());
+            }
+            idle_spins = 0;
+            settings.metrics.record_udp_receive_batch(active);
+            settings
+                .metrics
+                .record_udp_worker_receive_batch(worker_id, active);
 
-        outbound.clear();
-        for packet in &inbound[..active] {
-            if let Some(response) =
-                handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
-            {
-                outbound.push(response.with_target(packet.target()));
+            outbound.clear();
+            for packet in &inbound[..active] {
+                if !udp_inbound_has_reply_port(packet) {
+                    continue;
+                }
+                if let Some(response) =
+                    handle_udp_datagram(packet.payload(), packet.peer, &zones, &settings)
+                {
+                    outbound.push(response.with_target(packet.target()));
+                }
             }
+            if control.stop_requested() && control.deadline_elapsed() {
+                return Ok(());
+            }
+            let send_result = send_std_udp_batch(
+                &mut packet_io,
+                &socket,
+                &outbound,
+                worker_id,
+                &settings.metrics,
+            );
+            settings
+                .metrics
+                .record_udp_mmsg_stats(packet_io.take_stats());
+            send_result?;
         }
-        send_std_udp_batch(
-            &mut packet_io,
-            &socket,
-            &outbound,
-            worker_id,
-            &settings.metrics,
-        )?;
-        settings
-            .metrics
-            .record_udp_mmsg_stats(packet_io.take_stats());
-    }
 
-    Ok(())
+        Ok(())
+    })();
+    // Receive-side observations can remain pending when shutdown closes an
+    // idle worker, the post-receive admission fence rejects a batch, or an
+    // error/deadline exits before the normal post-send drain. The post-send
+    // `take_stats` above leaves this final drain empty on the ordinary path.
+    settings
+        .metrics
+        .record_udp_mmsg_stats(packet_io.take_stats());
+    result
 }
 
-fn send_std_udp_batch(
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum DedicatedUdpAfterReceiveTestAction {
+    CloseAdmission,
+    ExpireDeadline,
+}
+
+#[cfg(test)]
+pub(crate) fn run_dedicated_std_udp_worker_after_one_receive_for_test(
+    socket: std::net::UdpSocket,
+    zones: ZoneStore,
+    settings: UdpServerSettings,
+    admission_open: Arc<AtomicBool>,
+    action: DedicatedUdpAfterReceiveTestAction,
+) -> Result<(), RuntimeError> {
+    socket.set_nonblocking(true).map_err(RuntimeError::Udp)?;
+    let control = Arc::new(DedicatedUdpWorkerControl::new());
+    match action {
+        DedicatedUdpAfterReceiveTestAction::CloseAdmission => {
+            let admission_open = admission_open.clone();
+            control.set_after_receive_hook(move || {
+                admission_open.store(false, Ordering::Release);
+            });
+        }
+        DedicatedUdpAfterReceiveTestAction::ExpireDeadline => {
+            let weak_control = Arc::downgrade(&control);
+            control.set_after_receive_hook(move || {
+                weak_control
+                    .upgrade()
+                    .expect("dedicated UDP test control remains live")
+                    .request_shutdown(tokio::time::Instant::now());
+            });
+        }
+    }
+    run_dedicated_std_udp_worker(
+        socket,
+        zones,
+        settings,
+        control,
+        admission_open,
+        DedicatedUdpWorkerIdentity {
+            worker_id: 0,
+            worker_count: 1,
+            cpu_affinity: None,
+        },
+    )
+}
+
+pub(crate) fn send_std_udp_batch(
     packet_io: &mut std_udp_mmsg::StdUdpMmsg,
     socket: &std::net::UdpSocket,
     outbound: &[UdpOutbound],
     worker_id: usize,
     metrics: &RuntimeMetrics,
 ) -> Result<(), RuntimeError> {
+    send_std_udp_batch_with_backoff(
+        packet_io,
+        socket,
+        outbound,
+        worker_id,
+        metrics,
+        std::thread::sleep,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn send_std_udp_batch_with_backoff_for_test(
+    packet_io: &mut std_udp_mmsg::StdUdpMmsg,
+    socket: &std::net::UdpSocket,
+    outbound: &[UdpOutbound],
+    worker_id: usize,
+    metrics: &RuntimeMetrics,
+    backoff: impl FnMut(Duration),
+) -> Result<(), RuntimeError> {
+    send_std_udp_batch_with_backoff(packet_io, socket, outbound, worker_id, metrics, backoff)
+}
+
+fn send_std_udp_batch_with_backoff(
+    packet_io: &mut std_udp_mmsg::StdUdpMmsg,
+    socket: &std::net::UdpSocket,
+    outbound: &[UdpOutbound],
+    worker_id: usize,
+    metrics: &RuntimeMetrics,
+    mut backoff: impl FnMut(Duration),
+) -> Result<(), RuntimeError> {
     if outbound.is_empty() {
         return Ok(());
     }
 
-    if !metrics.pipeline_timing_enabled() {
-        let sent = match packet_io.send_batch(socket, outbound) {
-            Ok(sent) => sent,
-            Err(error) => match classify_udp_send_error(&error) {
-                UdpIoErrorAction::Continue => {
-                    metrics.record_udp_send_error();
-                    debug!(%error, worker_id, "UDP send error ignored");
-                    0
-                }
-                UdpIoErrorAction::Backoff(duration) => {
-                    metrics.record_udp_send_error();
-                    warn!(
-                        %error,
-                        worker_id,
-                        backoff_ms = duration.as_millis(),
-                        "UDP send resource pressure; backing off"
-                    );
-                    std::thread::sleep(duration);
-                    0
-                }
-                UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
-            },
-        };
-        metrics.record_udp_send_batch(sent);
-        metrics.record_udp_worker_send_batch(worker_id, sent);
-        return Ok(());
-    }
+    let send_started = metrics.pipeline_timing_enabled().then(|| {
+        outbound
+            .iter()
+            .map(|packet| packet.query_metrics.as_ref().map(|_| Instant::now()))
+            .collect::<Vec<_>>()
+    });
+    let (sent_indices, send_error) = match packet_io.send_batch_with_successes(socket, outbound) {
+        Ok(sent_indices) => (sent_indices, None),
+        Err(error) => {
+            let (sent_indices, error) = error.into_parts();
+            (sent_indices, Some(error))
+        }
+    };
 
-    let send_started = outbound
-        .iter()
-        .map(|packet| packet.query_metrics.as_ref().map(|_| Instant::now()))
-        .collect::<Vec<_>>();
-    let sent_indices = match packet_io.send_batch_with_successes(socket, outbound) {
-        Ok(sent_indices) => sent_indices,
-        Err(error) => match classify_udp_send_error(&error) {
+    if let Some(send_started) = send_started {
+        for index in sent_indices.iter().copied() {
+            let packet = &outbound[index];
+            let started = send_started[index];
+            if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
+                record_query_send_metric(
+                    query_metrics,
+                    &packet.response,
+                    metrics,
+                    started.elapsed(),
+                );
+            }
+        }
+    }
+    metrics.record_udp_send_batch(sent_indices.len());
+    metrics.record_udp_worker_send_batch(worker_id, sent_indices.len());
+    if let Some(error) = send_error {
+        match classify_udp_send_error(&error) {
             UdpIoErrorAction::Continue => {
                 metrics.record_udp_send_error();
                 debug!(%error, worker_id, "UDP send error ignored");
-                Vec::new()
             }
             UdpIoErrorAction::Backoff(duration) => {
                 metrics.record_udp_send_error();
@@ -591,22 +1051,11 @@ fn send_std_udp_batch(
                     backoff_ms = duration.as_millis(),
                     "UDP send resource pressure; backing off"
                 );
-                std::thread::sleep(duration);
-                Vec::new()
+                backoff(duration);
             }
             UdpIoErrorAction::Fatal => return Err(RuntimeError::Udp(error)),
-        },
-    };
-
-    for index in sent_indices.iter().copied() {
-        let packet = &outbound[index];
-        let started = send_started[index];
-        if let (Some(query_metrics), Some(started)) = (&packet.query_metrics, started) {
-            record_query_send_metric(query_metrics, &packet.response, metrics, started.elapsed());
         }
     }
-    metrics.record_udp_send_batch(sent_indices.len());
-    metrics.record_udp_worker_send_batch(worker_id, sent_indices.len());
     Ok(())
 }
 
@@ -614,16 +1063,19 @@ fn send_std_udp_batch(
 pub(crate) fn send_std_udp_batch_fallback_with_successes(
     socket: &std::net::UdpSocket,
     outbound: &[UdpOutbound],
-) -> std::io::Result<Vec<usize>> {
+) -> Result<Vec<usize>, std_udp_mmsg::StdUdpMmsgSendError> {
     let mut sent_indices = Vec::new();
     for (index, packet) in outbound.iter().enumerate() {
         let peer = match packet.target {
             UdpPacketTarget::Socket(peer) => peer,
             #[cfg(feature = "af-xdp")]
             UdpPacketTarget::AfXdp { .. } => {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "standard UDP backend cannot send AF_XDP packet target",
+                return Err(std_udp_mmsg::StdUdpMmsgSendError::new(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "standard UDP backend cannot send AF_XDP packet target",
+                    ),
+                    sent_indices,
                 ));
             }
         };
@@ -648,7 +1100,9 @@ pub(crate) fn send_std_udp_batch_fallback_with_successes(
                         std::thread::sleep(duration);
                         break;
                     }
-                    UdpIoErrorAction::Fatal => return Err(error),
+                    UdpIoErrorAction::Fatal => {
+                        return Err(std_udp_mmsg::StdUdpMmsgSendError::new(error, sent_indices));
+                    }
                 },
             }
         }
@@ -658,14 +1112,6 @@ pub(crate) fn send_std_udp_batch_fallback_with_successes(
         sent_indices.push(index);
     }
     Ok(sent_indices)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn send_std_udp_batch_fallback(
-    socket: &std::net::UdpSocket,
-    outbound: &[UdpOutbound],
-) -> std::io::Result<usize> {
-    Ok(send_std_udp_batch_fallback_with_successes(socket, outbound)?.len())
 }
 
 fn idle_dedicated_udp_worker(idle_spins: &mut usize, strategy: UdpIdleStrategy) {
@@ -690,19 +1136,52 @@ pub(crate) trait PacketIo {
         false
     }
 
-    async fn recv_batch(&mut self) -> std::io::Result<&[UdpInbound]>;
+    /// Services send-side work that must complete before the backend can
+    /// safely block for another receive batch.
+    ///
+    /// Backends without deferred send work keep the default no-op. Keeping
+    /// this operation separate from `recv_batch` preserves the provenance of
+    /// any error and lets the worker publish send telemetry before retrying.
+    async fn service_pending_send(
+        &mut self,
+        _admission_open: &AtomicBool,
+        _metrics: &RuntimeMetrics,
+    ) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    async fn recv_batch(&mut self, admission_open: &AtomicBool) -> std::io::Result<&[UdpInbound]>;
 
     async fn send_batch(
         &mut self,
         outbound: &[UdpOutbound],
         metrics: &RuntimeMetrics,
-    ) -> std::io::Result<()>;
+        worker_id: usize,
+    ) -> Result<usize, PacketIoSendError>;
+}
+
+#[derive(Debug)]
+pub(crate) struct PacketIoSendError {
+    error: std::io::Error,
+    queued: usize,
+}
+
+impl PacketIoSendError {
+    pub(crate) fn new(error: std::io::Error, queued: usize) -> Self {
+        Self { error, queued }
+    }
+
+    fn into_parts(self) -> (usize, std::io::Error) {
+        (self.queued, self.error)
+    }
 }
 
 pub(crate) struct StdUdpBatchIo {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     batch_size: usize,
     inbound: Vec<UdpInbound>,
+    #[cfg(test)]
+    recv_waiting_signal: Option<Arc<tokio::sync::Notify>>,
 }
 
 pub(crate) struct UdpInbound {
@@ -731,13 +1210,25 @@ pub(crate) enum UdpPacketTarget {
 
 impl StdUdpBatchIo {
     pub(crate) fn new(socket: UdpSocket, batch_size: usize) -> Self {
-        let batch_size = batch_size.max(1);
+        Self::from_shared(Arc::new(socket), batch_size)
+    }
+
+    pub(crate) fn from_shared(socket: Arc<UdpSocket>, batch_size: usize) -> Self {
+        let batch_size = bounded_udp_batch_size(batch_size);
         let inbound = (0..batch_size).map(|_| UdpInbound::new()).collect();
         Self {
             socket,
             batch_size,
             inbound,
+            #[cfg(test)]
+            recv_waiting_signal: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_recv_waiting_signal(mut self, signal: Arc<tokio::sync::Notify>) -> Self {
+        self.recv_waiting_signal = Some(signal);
+        self
     }
 }
 
@@ -746,16 +1237,33 @@ impl PacketIo for StdUdpBatchIo {
         self.socket.local_addr()
     }
 
-    async fn recv_batch(&mut self) -> std::io::Result<&[UdpInbound]> {
+    async fn recv_batch(&mut self, admission_open: &AtomicBool) -> std::io::Result<&[UdpInbound]> {
+        if !admission_open.load(Ordering::Acquire) {
+            return Err(std::io::Error::from(ErrorKind::Interrupted));
+        }
+        #[cfg(test)]
+        if let Some(signal) = &self.recv_waiting_signal {
+            signal.notify_one();
+        }
         let (len, peer) = self.socket.recv_from(&mut self.inbound[0].buffer).await?;
+        // The readiness wake and the admission boundary can race. Linearize
+        // admission after the receive completes, before publishing this first
+        // datagram as an admitted userspace batch.
+        ensure_udp_admission_open(admission_open)?;
         self.inbound[0].len = len;
         self.inbound[0].peer = peer;
         self.inbound[0].target = UdpPacketTarget::Socket(peer);
         let mut active = 1;
 
-        while active < self.batch_size {
+        while active < self.batch_size && admission_open.load(Ordering::Acquire) {
             match self.socket.try_recv_from(&mut self.inbound[active].buffer) {
                 Ok((len, peer)) => {
+                    // A close may race the optimistic loop condition. Consume
+                    // and discard that datagram, but return the userspace batch
+                    // that was already admitted before the boundary.
+                    if ensure_udp_admission_open(admission_open).is_err() {
+                        break;
+                    }
                     self.inbound[active].len = len;
                     self.inbound[active].peer = peer;
                     self.inbound[active].target = UdpPacketTarget::Socket(peer);
@@ -786,9 +1294,10 @@ impl PacketIo for StdUdpBatchIo {
         &mut self,
         outbound: &[UdpOutbound],
         metrics: &RuntimeMetrics,
-    ) -> std::io::Result<()> {
+        _worker_id: usize,
+    ) -> Result<usize, PacketIoSendError> {
         if outbound.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         let mut sent = 0usize;
@@ -801,17 +1310,23 @@ impl PacketIo for StdUdpBatchIo {
                 UdpPacketTarget::Socket(peer) => peer,
                 #[cfg(feature = "af-xdp")]
                 UdpPacketTarget::AfXdp { .. } => {
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "standard UDP backend cannot send AF_XDP packet target",
+                    return Err(PacketIoSendError::new(
+                        std::io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "standard UDP backend cannot send AF_XDP packet target",
+                        ),
+                        sent,
                     ));
                 }
             };
             #[cfg(feature = "af-xdp")]
             if packet.benchmark_fixed_response {
-                return Err(std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "standard UDP backend cannot send AF_XDP benchmark fixed response",
+                return Err(PacketIoSendError::new(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "standard UDP backend cannot send AF_XDP benchmark fixed response",
+                    ),
+                    sent,
                 ));
             }
             match self.socket.send_to(&packet.response, peer).await {
@@ -842,12 +1357,21 @@ impl PacketIo for StdUdpBatchIo {
                         );
                         tokio::time::sleep(duration).await;
                     }
-                    UdpIoErrorAction::Fatal => return Err(error),
+                    UdpIoErrorAction::Fatal => {
+                        return Err(PacketIoSendError::new(error, sent));
+                    }
                 },
             }
         }
-        metrics.record_udp_send_batch(sent);
+        Ok(sent)
+    }
+}
+
+pub(crate) fn ensure_udp_admission_open(admission_open: &AtomicBool) -> std::io::Result<()> {
+    if admission_open.load(Ordering::Acquire) {
         Ok(())
+    } else {
+        Err(std::io::Error::from(ErrorKind::Interrupted))
     }
 }
 
@@ -912,6 +1436,33 @@ fn handle_udp_datagram(
     zones: &ZoneStore,
     settings: &UdpServerSettings,
 ) -> Option<UdpOutbound> {
+    handle_udp_datagram_with_optional_prepared_hook(packet, peer, zones, settings, None)
+}
+
+#[cfg(test)]
+pub(crate) fn handle_udp_datagram_with_prepared_hook(
+    packet: &[u8],
+    peer: SocketAddr,
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+    prepared_hook: &dyn Fn(),
+) -> Option<UdpOutbound> {
+    handle_udp_datagram_with_optional_prepared_hook(
+        packet,
+        peer,
+        zones,
+        settings,
+        Some(prepared_hook),
+    )
+}
+
+fn handle_udp_datagram_with_optional_prepared_hook(
+    packet: &[u8],
+    peer: SocketAddr,
+    zones: &ZoneStore,
+    settings: &UdpServerSettings,
+    prepared_hook: Option<&dyn Fn()>,
+) -> Option<UdpOutbound> {
     let peer_ip = peer.ip();
     let parse_started = settings.metrics.start_pipeline_timer();
     let Some(prepared) = prepare_notify_packet_with_metrics(
@@ -940,6 +1491,9 @@ fn handle_udp_datagram(
             #[cfg(feature = "af-xdp")]
             benchmark_fixed_response: false,
         });
+    }
+    if let Some(prepared_hook) = prepared_hook {
+        prepared_hook();
     }
     let dns_cookie_secrets = settings
         .dns_cookie
@@ -995,9 +1549,12 @@ fn handle_udp_datagram(
         dns_cookie,
     };
     let notify_authorized = |qname: &DomainName, qclass| {
-        let authorized = settings
-            .notify_authority
-            .is_authorized(qname, qclass, peer_ip);
+        let authorized = settings.notify_authority.is_authorized_for_token(
+            qname,
+            qclass,
+            peer_ip,
+            prepared.notify_policy_token.as_ref(),
+        );
         if !authorized {
             settings.metrics.record_notify_unauthorized();
             settings.notify_log_limiter.log_unauthorized(peer_ip, qname);
@@ -1101,7 +1658,7 @@ pub(crate) struct QueryMetricObservation {
     pub(crate) transport: Transport,
     pub(crate) started_at: Option<Instant>,
     pub(crate) cookie_validated: bool,
-    pub(crate) zone_key: Option<Arc<str>>,
+    pub(crate) zone_metric: Option<crate::health_metrics::ZoneMetricToken>,
     pub(crate) parse_duration: Option<Duration>,
     pub(crate) lookup_duration: Option<Duration>,
     pub(crate) compose_duration: Option<Duration>,
@@ -1126,7 +1683,7 @@ pub(crate) fn observe_query_metrics(
         transport: options.transport,
         started_at: None,
         cookie_validated: false,
-        zone_key: None,
+        zone_metric: None,
         parse_duration: options.parse_duration,
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
@@ -1135,12 +1692,12 @@ pub(crate) fn observe_query_metrics(
         return not_query();
     }
     let started_at = Instant::now();
-    let observed_query = |zone_key| QueryMetricObservation {
+    let observed_query = |zone_metric| QueryMetricObservation {
         is_query: true,
         transport: options.transport,
         started_at: Some(started_at),
         cookie_validated: options.cookie_validated,
-        zone_key,
+        zone_metric,
         parse_duration: options.parse_duration,
         lookup_duration: lookup_started.map(|started| started.elapsed()),
         compose_duration: None,
@@ -1166,8 +1723,7 @@ pub(crate) fn observe_query_metrics(
         &question.qname,
         question.qname_ascii_lowercase(),
     ) {
-        metrics.record_zone_query_key(published_zone.origin_key());
-        return observed_query(Some(published_zone.origin_key_arc()));
+        return observed_query(metrics.record_published_zone_query(zones, &published_zone));
     }
     observed_query(None)
 }
@@ -1258,8 +1814,8 @@ pub(crate) fn record_query_response_metric(
     }
     let rcode = response_rcode(response, &header);
     metrics.record_query_response_rcode(rcode);
-    if let Some(zone_key) = &observation.zone_key {
-        metrics.record_zone_query_response_rcode(zone_key, rcode);
+    if let Some(zone_metric) = &observation.zone_metric {
+        metrics.record_zone_query_response_rcode(zone_metric, rcode);
     }
     if let Some(started_at) = observation.started_at {
         metrics.record_query_latency(

@@ -3,28 +3,39 @@ use std::{
     future::Future,
     io::Write,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    task::{Context, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Router,
-    extract::{ConnectInfo, Path, State},
+    body::{Body, Bytes, HttpBody},
+    extract::{ConnectInfo, Path, Request, State},
     http::{HeaderMap, StatusCode, Uri, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
 use flate2::{Compression, write::GzEncoder};
 use oxidedns_core::{
-    config::{HealthConfig, MetricsHotPathDetail, ObservabilityConfig},
-    dns::{ChaosQueryOutcome, DnsCookieRequestStatus, ZoneImageServeFailureReason},
-    zone::{ZoneShapeHistogramBucket, ZoneState, ZoneStore},
+    config::{
+        HealthConfig, MAX_LATENCY_HISTOGRAM_BUCKETS, MetricsHotPathDetail, ObservabilityConfig,
+    },
+    dns::{ChaosQueryOutcome, DnsCookieRequestStatus, DomainName, ZoneImageServeFailureReason},
+    zone::{PublishedZone, ZoneShapeHistogramBucket, ZoneState, ZoneStore},
 };
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, task};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{TcpListener, TcpStream},
+    sync::{OwnedSemaphorePermit, Semaphore},
+    task,
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -35,27 +46,326 @@ use crate::{
     observability::{
         ObservabilityAuth, ObservabilityAuthError, TransferMaterial,
         certificate_observability_value, filesystem_observability_value, fraction_value,
-        process_resources_observability_value, time_sync_observability_value,
-        transfer_material_observability_counts,
+        process_resources_observability_value, resolve_transfer_materials_from_snapshot,
+        time_sync_observability_value, transfer_material_observability_counts,
     },
+    secret_store::SecretManager,
     std_udp_mmsg,
 };
+
+const MANAGEMENT_REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const MANAGEMENT_RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const MANAGEMENT_SATURATED_ACCEPT_BACKOFF: Duration = Duration::from_millis(1);
 
 pub(crate) async fn serve_health(
     listener: TcpListener,
     state: HealthEndpointState,
     shutdown_signal: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RuntimeError> {
+    serve_health_with_connection_timeouts(
+        listener,
+        state,
+        shutdown_signal,
+        MANAGEMENT_REQUEST_READ_TIMEOUT,
+        MANAGEMENT_RESPONSE_WRITE_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn serve_health_with_request_read_timeout(
+    listener: TcpListener,
+    state: HealthEndpointState,
+    shutdown_signal: impl Future<Output = ()> + Send + 'static,
+    request_read_timeout: Duration,
+) -> Result<(), RuntimeError> {
+    serve_health_with_connection_timeouts(
+        listener,
+        state,
+        shutdown_signal,
+        request_read_timeout,
+        MANAGEMENT_RESPONSE_WRITE_TIMEOUT,
+    )
+    .await
+}
+
+pub(crate) async fn serve_health_with_connection_timeouts(
+    listener: TcpListener,
+    state: HealthEndpointState,
+    shutdown_signal: impl Future<Output = ()> + Send + 'static,
+    request_read_timeout: Duration,
+    response_write_timeout: Duration,
+) -> Result<(), RuntimeError> {
     let local_addr = listener.local_addr().map_err(RuntimeError::Health)?;
     info!(%local_addr, "health listener bound");
 
+    let listener = BoundedHealthListener {
+        listener,
+        slots: state.connection_slots.clone(),
+        request_read_timeout,
+        response_write_timeout,
+    };
     axum::serve(
         listener,
-        health_router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        health_router(state).into_make_service_with_connect_info::<HealthPeer>(),
     )
     .with_graceful_shutdown(shutdown_signal)
     .await
     .map_err(RuntimeError::Health)
+}
+
+struct BoundedHealthListener {
+    listener: TcpListener,
+    slots: Arc<Semaphore>,
+    request_read_timeout: Duration,
+    response_write_timeout: Duration,
+}
+
+impl axum::serve::Listener for BoundedHealthListener {
+    type Io = HealthConnection;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (stream, peer) = axum::serve::Listener::accept(&mut self.listener).await;
+            if let Ok(permit) = self.slots.clone().try_acquire_owned() {
+                return (
+                    HealthConnection::new(
+                        stream,
+                        permit,
+                        self.request_read_timeout,
+                        self.response_write_timeout,
+                    ),
+                    peer,
+                );
+            }
+            // Admission is global across all bound health addresses. Closing a
+            // just-accepted excess connection avoids reserving capacity on an
+            // idle listener while retaining a hard concurrent connection cap.
+            drop(stream);
+            // A continuously ready accept queue must not turn this one
+            // Listener::accept future into an unbounded synchronous loop. In
+            // particular, axum cancels the accept future when graceful
+            // shutdown wins its select. This short cancellation-safe sleep
+            // guarantees that shutdown and other current-thread tasks can be
+            // polled even while clients continuously refill the queue.
+            tokio::time::sleep(MANAGEMENT_SATURATED_ACCEPT_BACKOFF).await;
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.listener.local_addr()
+    }
+}
+
+#[derive(Clone)]
+struct HealthPeer {
+    addr: SocketAddr,
+    request_interval_generation: Arc<AtomicU64>,
+    response_body_complete_generation: Arc<AtomicU64>,
+}
+
+impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, BoundedHealthListener>>
+    for HealthPeer
+{
+    fn connect_info(stream: axum::serve::IncomingStream<'_, BoundedHealthListener>) -> Self {
+        Self {
+            addr: *stream.remote_addr(),
+            request_interval_generation: stream.io().request_interval_generation.clone(),
+            response_body_complete_generation: stream
+                .io()
+                .response_body_complete_generation
+                .clone(),
+        }
+    }
+}
+
+impl std::ops::Deref for HealthPeer {
+    type Target = SocketAddr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.addr
+    }
+}
+
+struct HealthConnection {
+    stream: TcpStream,
+    _permit: OwnedSemaphorePermit,
+    read_timeout: Duration,
+    idle_read_deadline: Pin<Box<tokio::time::Sleep>>,
+    absolute_request_deadline: Pin<Box<tokio::time::Sleep>>,
+    response_write_timeout: Duration,
+    response_write_deadline: Pin<Box<tokio::time::Sleep>>,
+    response_write_started: bool,
+    request_interval_generation: Arc<AtomicU64>,
+    response_body_complete_generation: Arc<AtomicU64>,
+    observed_request_interval_generation: u64,
+    observed_response_interval_generation: u64,
+}
+
+impl HealthConnection {
+    fn new(
+        stream: TcpStream,
+        permit: OwnedSemaphorePermit,
+        read_timeout: Duration,
+        response_write_timeout: Duration,
+    ) -> Self {
+        Self {
+            stream,
+            _permit: permit,
+            read_timeout,
+            idle_read_deadline: Box::pin(tokio::time::sleep(read_timeout)),
+            absolute_request_deadline: Box::pin(tokio::time::sleep(read_timeout)),
+            response_write_timeout,
+            response_write_deadline: Box::pin(tokio::time::sleep(response_write_timeout)),
+            response_write_started: false,
+            request_interval_generation: Arc::new(AtomicU64::new(0)),
+            response_body_complete_generation: Arc::new(AtomicU64::new(0)),
+            observed_request_interval_generation: 0,
+            observed_response_interval_generation: 0,
+        }
+    }
+
+    fn reset_request_interval_deadlines(&mut self) {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(self.read_timeout)
+            .unwrap_or_else(tokio::time::Instant::now);
+        self.idle_read_deadline.as_mut().reset(deadline);
+        self.absolute_request_deadline.as_mut().reset(deadline);
+    }
+
+    fn prepare_response_write_deadline(&mut self) {
+        let response_interval_generation = self.request_interval_generation.load(Ordering::Acquire);
+        if !self.response_write_started
+            || response_interval_generation != self.observed_response_interval_generation
+        {
+            self.response_write_started = true;
+            self.observed_response_interval_generation = response_interval_generation;
+            self.response_write_deadline.as_mut().reset(
+                tokio::time::Instant::now()
+                    .checked_add(self.response_write_timeout)
+                    .unwrap_or_else(tokio::time::Instant::now),
+            );
+        }
+    }
+
+    fn poll_response_write_deadline(
+        &mut self,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        if self
+            .response_write_deadline
+            .as_mut()
+            .poll(context)
+            .is_ready()
+        {
+            Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "management HTTP response write deadline elapsed",
+            )))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl AsyncRead for HealthConnection {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let connection = self.get_mut();
+        let request_interval_generation = connection
+            .request_interval_generation
+            .load(Ordering::Acquire);
+        if request_interval_generation != connection.observed_request_interval_generation {
+            connection.observed_request_interval_generation = request_interval_generation;
+            connection.reset_request_interval_deadlines();
+        }
+
+        if connection
+            .absolute_request_deadline
+            .as_mut()
+            .poll(context)
+            .is_ready()
+        {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "management HTTP absolute request deadline elapsed",
+            )));
+        }
+        if connection
+            .idle_read_deadline
+            .as_mut()
+            .poll(context)
+            .is_ready()
+        {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "management HTTP idle read deadline elapsed",
+            )));
+        }
+
+        let filled_before = buffer.filled().len();
+        let result = Pin::new(&mut connection.stream).poll_read(context, buffer);
+        if matches!(result, Poll::Ready(Ok(()))) && buffer.filled().len() > filled_before {
+            connection.idle_read_deadline.as_mut().reset(
+                tokio::time::Instant::now()
+                    .checked_add(connection.read_timeout)
+                    .unwrap_or_else(tokio::time::Instant::now),
+            );
+        }
+        result
+    }
+}
+
+impl AsyncWrite for HealthConnection {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let connection = self.get_mut();
+        connection.prepare_response_write_deadline();
+        if let Poll::Ready(Err(error)) = connection.poll_response_write_deadline(context) {
+            return Poll::Ready(Err(error));
+        }
+        Pin::new(&mut connection.stream).poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        let connection = self.get_mut();
+        if connection.response_write_started
+            && let Poll::Ready(Err(error)) = connection.poll_response_write_deadline(context)
+        {
+            return Poll::Ready(Err(error));
+        }
+        let result = Pin::new(&mut connection.stream).poll_flush(context);
+        let response_body_complete_generation = connection
+            .response_body_complete_generation
+            .load(Ordering::Acquire);
+        if matches!(result, Poll::Ready(Ok(())))
+            && response_body_complete_generation == connection.observed_response_interval_generation
+        {
+            // Hyper flushes after a response has been handed to the socket. Do
+            // not let that response's absolute deadline become an unintended
+            // keep-alive idle timeout. The response-body wrapper prevents an
+            // intermediate flush from disarming the absolute write deadline.
+            connection.response_write_started = false;
+        }
+        result
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(context)
+    }
 }
 
 fn health_router(state: HealthEndpointState) -> Router {
@@ -162,7 +472,90 @@ fn health_router(state: HealthEndpointState) -> Router {
             );
     }
 
-    router.fallback(health_not_found).with_state(state)
+    router
+        .fallback(health_not_found)
+        .layer(middleware::from_fn(track_management_request_and_response))
+        .with_state(state)
+}
+
+async fn track_management_request_and_response(request: Request, next: Next) -> Response {
+    let response_marker =
+        request
+            .extensions()
+            .get::<ConnectInfo<HealthPeer>>()
+            .map(|connect_info| {
+                let generation = connect_info
+                    .0
+                    .request_interval_generation
+                    .fetch_add(1, Ordering::AcqRel)
+                    .wrapping_add(1);
+                (
+                    connect_info.0.response_body_complete_generation.clone(),
+                    generation,
+                )
+            });
+    let response = next.run(request).await;
+    let Some((response_body_complete_generation, generation)) = response_marker else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    Response::from_parts(
+        parts,
+        Body::new(ManagementResponseBody::new(
+            body,
+            response_body_complete_generation,
+            generation,
+        )),
+    )
+}
+
+struct ManagementResponseBody {
+    inner: Body,
+    response_body_complete_generation: Arc<AtomicU64>,
+    generation: u64,
+}
+
+impl ManagementResponseBody {
+    fn new(
+        inner: Body,
+        response_body_complete_generation: Arc<AtomicU64>,
+        generation: u64,
+    ) -> Self {
+        if inner.is_end_stream() {
+            response_body_complete_generation.store(generation, Ordering::Release);
+        }
+        Self {
+            inner,
+            response_body_complete_generation,
+            generation,
+        }
+    }
+}
+
+impl HttpBody for ManagementResponseBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let body = self.get_mut();
+        let result = Pin::new(&mut body.inner).poll_frame(context);
+        if matches!(result, Poll::Ready(None)) || body.inner.is_end_stream() {
+            body.response_body_complete_generation
+                .store(body.generation, Ordering::Release);
+        }
+        result
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
 }
 
 async fn health_method_not_allowed(uri: Uri) -> Response {
@@ -205,7 +598,7 @@ async fn readyz(State(state): State<HealthEndpointState>) -> Response {
 }
 
 async fn metrics(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -256,7 +649,7 @@ async fn metrics(
 }
 
 async fn observability_index(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -267,7 +660,7 @@ async fn observability_index(
 }
 
 async fn observability_summary(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -278,7 +671,7 @@ async fn observability_summary(
 }
 
 async fn observability_runtime(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -289,7 +682,7 @@ async fn observability_runtime(
 }
 
 async fn observability_resources(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -328,7 +721,7 @@ async fn observability_resources(
 }
 
 async fn observability_time(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -349,7 +742,7 @@ async fn observability_time(
 }
 
 async fn observability_certificates(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -358,9 +751,15 @@ async fn observability_certificates(
     }
     let include_certificate_status = state.observability.include_certificate_status;
     let transfer_materials = state.transfer_materials.clone();
+    let secret_snapshot = state.secrets.current_snapshot();
     let status = task::spawn_blocking(move || {
         if include_certificate_status {
-            certificate_observability_value(&transfer_materials)
+            match secret_snapshot {
+                Ok(snapshot) => certificate_observability_value(
+                    &resolve_transfer_materials_from_snapshot(&transfer_materials, &snapshot),
+                ),
+                Err(error) => json!({"status": "error", "error": error.to_string()}),
+            }
         } else {
             json!({"status": "disabled"})
         }
@@ -371,7 +770,7 @@ async fn observability_certificates(
 }
 
 async fn observability_zones(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -412,7 +811,7 @@ async fn observability_zones(
 }
 
 async fn observability_zone(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     Path(zone): Path<String>,
     State(state): State<HealthEndpointState>,
@@ -449,7 +848,7 @@ async fn observability_zone(
 }
 
 async fn observability_catalogs(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -466,7 +865,7 @@ async fn observability_catalogs(
 }
 
 async fn observability_transfers(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -483,6 +882,13 @@ async fn observability_transfers(
         .iter()
         .filter(|zone| zone["next_refresh_unix_seconds"].is_number())
         .count();
+    let resolved_transfer_materials = state
+        .secrets
+        .current_snapshot()
+        .map(|snapshot| {
+            resolve_transfer_materials_from_snapshot(&state.transfer_materials, &snapshot)
+        })
+        .unwrap_or_else(|_| state.transfer_materials.clone());
     observability_response(observability_base_value(
         &state,
         json!({
@@ -506,14 +912,14 @@ async fn observability_transfers(
                 "zones_waiting_for_refresh": zones_waiting,
                 "failures_since_success_total": failures_since_success,
             },
-            "transfer_materials": transfer_material_observability_counts(&state.transfer_materials),
+            "transfer_materials": transfer_material_observability_counts(&resolved_transfer_materials),
             "per_zone_scheduler": scheduler,
         }),
     ))
 }
 
 async fn observability_security(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -586,7 +992,7 @@ async fn observability_security(
 }
 
 async fn observability_config(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<HealthPeer>,
     headers: HeaderMap,
     State(state): State<HealthEndpointState>,
 ) -> Response {
@@ -1047,13 +1453,13 @@ fn append_build_info_metric(body: &mut String) {
 
 fn append_udp_packet_io_metrics(body: &mut String, snapshot: RuntimeMetricsSnapshot) {
     body.push_str(
-        "# HELP oxidedns_udp_receive_batches_total UDP receive batches processed by the standard socket listener.\n\
+        "# HELP oxidedns_udp_receive_batches_total UDP receive batches returned by the configured packet-I/O backend.\n\
          # TYPE oxidedns_udp_receive_batches_total counter\n\
-         # HELP oxidedns_udp_received_datagrams_total UDP datagrams received by the standard socket listener.\n\
+         # HELP oxidedns_udp_received_datagrams_total UDP datagrams returned by the configured packet-I/O backend.\n\
          # TYPE oxidedns_udp_received_datagrams_total counter\n\
-         # HELP oxidedns_udp_send_batches_total UDP send batches emitted by the standard socket listener.\n\
+         # HELP oxidedns_udp_send_batches_total UDP send batches with one or more datagrams accepted by the configured packet-I/O backend.\n\
          # TYPE oxidedns_udp_send_batches_total counter\n\
-         # HELP oxidedns_udp_sent_datagrams_total UDP datagrams sent by the standard socket listener.\n\
+         # HELP oxidedns_udp_sent_datagrams_total UDP datagrams accepted by the configured packet-I/O backend; AF_XDP counts TX-ring admission, not confirmed delivery.\n\
          # TYPE oxidedns_udp_sent_datagrams_total counter\n\
          # HELP oxidedns_udp_receive_errors_total Non-fatal UDP receive errors ignored by the listener.\n\
          # TYPE oxidedns_udp_receive_errors_total counter\n\
@@ -1093,7 +1499,11 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
          # HELP oxidedns_udp_mmsg_send_partial_syscalls_total Linux sendmmsg calls that accepted fewer datagrams than requested.\n\
          # TYPE oxidedns_udp_mmsg_send_partial_syscalls_total counter\n\
          # HELP oxidedns_udp_mmsg_send_wouldblock_retries_total Dedicated UDP worker sendmmsg WouldBlock retry attempts.\n\
-         # TYPE oxidedns_udp_mmsg_send_wouldblock_retries_total counter\n",
+         # TYPE oxidedns_udp_mmsg_send_wouldblock_retries_total counter\n\
+         # HELP oxidedns_udp_mmsg_send_interrupted_retries_total Dedicated UDP worker sendmmsg retry attempts after EINTR.\n\
+         # TYPE oxidedns_udp_mmsg_send_interrupted_retries_total counter\n\
+         # HELP oxidedns_udp_mmsg_send_resource_backoff_retries_total Dedicated UDP worker sendmmsg retry attempts after ENOBUFS or ENOMEM resource pressure.\n\
+         # TYPE oxidedns_udp_mmsg_send_resource_backoff_retries_total counter\n",
     );
     body.push_str(&format!(
         "oxidedns_udp_mmsg_receive_syscalls_total {}\n\
@@ -1103,7 +1513,9 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
          oxidedns_udp_mmsg_send_syscalls_total {}\n\
          oxidedns_udp_mmsg_sent_datagrams_total {}\n\
          oxidedns_udp_mmsg_send_partial_syscalls_total {}\n\
-         oxidedns_udp_mmsg_send_wouldblock_retries_total {}\n",
+         oxidedns_udp_mmsg_send_wouldblock_retries_total {}\n\
+         oxidedns_udp_mmsg_send_interrupted_retries_total {}\n\
+         oxidedns_udp_mmsg_send_resource_backoff_retries_total {}\n",
         metrics
             .inner
             .udp_mmsg_receive_syscalls
@@ -1133,6 +1545,14 @@ fn append_udp_mmsg_metrics(body: &mut String, metrics: &RuntimeMetrics) {
             .inner
             .udp_mmsg_send_wouldblock_retries
             .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_send_interrupted_retries
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .udp_mmsg_send_resource_backoff_retries
+            .load(Ordering::Relaxed),
     ));
 }
 
@@ -1152,8 +1572,14 @@ fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) 
          # TYPE oxidedns_af_xdp_tx_queued_packets_total counter\n\
          # HELP oxidedns_af_xdp_tx_empty_send_calls_total AF_XDP TX ring send calls that queued no packets.\n\
          # TYPE oxidedns_af_xdp_tx_empty_send_calls_total counter\n\
-         # HELP oxidedns_af_xdp_tx_wakeups_total AF_XDP TX send calls made with wakeup requested.\n\
+         # HELP oxidedns_af_xdp_tx_wakeups_total Explicit AF_XDP TX kick syscall attempts.\n\
          # TYPE oxidedns_af_xdp_tx_wakeups_total counter\n\
+         # HELP oxidedns_af_xdp_tx_kick_successes_total Explicit AF_XDP TX kick syscalls that succeeded.\n\
+         # TYPE oxidedns_af_xdp_tx_kick_successes_total counter\n\
+         # HELP oxidedns_af_xdp_tx_kick_transient_failures_total Explicit AF_XDP TX kick syscalls retried after a no-progress transient error.\n\
+         # TYPE oxidedns_af_xdp_tx_kick_transient_failures_total counter\n\
+         # HELP oxidedns_af_xdp_tx_delivery_failures_total Kernel-reported AF_XDP TX delivery failures while draining admitted descriptors.\n\
+         # TYPE oxidedns_af_xdp_tx_delivery_failures_total counter\n\
          # HELP oxidedns_af_xdp_tx_poll_write_calls_total AF_XDP socket poll_write calls after zero-descriptor TX sends.\n\
          # TYPE oxidedns_af_xdp_tx_poll_write_calls_total counter\n\
          # HELP oxidedns_af_xdp_tx_poll_write_ready_total AF_XDP socket poll_write calls that reported write readiness.\n\
@@ -1172,6 +1598,9 @@ fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) 
          oxidedns_af_xdp_tx_queued_packets_total {}\n\
          oxidedns_af_xdp_tx_empty_send_calls_total {}\n\
          oxidedns_af_xdp_tx_wakeups_total {}\n\
+         oxidedns_af_xdp_tx_kick_successes_total {}\n\
+         oxidedns_af_xdp_tx_kick_transient_failures_total {}\n\
+         oxidedns_af_xdp_tx_delivery_failures_total {}\n\
          oxidedns_af_xdp_tx_poll_write_calls_total {}\n\
          oxidedns_af_xdp_tx_poll_write_ready_total {}\n\
          oxidedns_af_xdp_completion_dequeues_total {}\n\
@@ -1198,6 +1627,18 @@ fn append_af_xdp_packet_io_metrics(body: &mut String, metrics: &RuntimeMetrics) 
         metrics.inner.af_xdp_tx_wakeups.load(Ordering::Relaxed),
         metrics
             .inner
+            .af_xdp_tx_kick_successes
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_kick_transient_failures
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
+            .af_xdp_tx_delivery_failures
+            .load(Ordering::Relaxed),
+        metrics
+            .inner
             .af_xdp_tx_poll_write_calls
             .load(Ordering::Relaxed),
         metrics
@@ -1221,9 +1662,9 @@ fn append_af_xdp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMe
          # TYPE oxidedns_af_xdp_worker_receive_batches_total counter\n\
          # HELP oxidedns_af_xdp_worker_received_packets_total AF_XDP packets received per worker slot.\n\
          # TYPE oxidedns_af_xdp_worker_received_packets_total counter\n\
-         # HELP oxidedns_af_xdp_worker_send_batches_total AF_XDP send batches emitted per worker slot.\n\
+         # HELP oxidedns_af_xdp_worker_send_batches_total AF_XDP batches with one or more packets admitted to TX rings per worker slot.\n\
          # TYPE oxidedns_af_xdp_worker_send_batches_total counter\n\
-         # HELP oxidedns_af_xdp_worker_sent_packets_total AF_XDP packets sent per worker slot.\n\
+         # HELP oxidedns_af_xdp_worker_sent_packets_total AF_XDP packets admitted to TX rings per worker slot.\n\
          # TYPE oxidedns_af_xdp_worker_sent_packets_total counter\n",
     );
     for worker_id in 0..metrics.inner.af_xdp_worker_receive_batches.len() {
@@ -1233,16 +1674,20 @@ fn append_af_xdp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMe
             metrics.inner.af_xdp_worker_received_packets[worker_id].load(Ordering::Relaxed);
         let send_batches =
             metrics.inner.af_xdp_worker_send_batches[worker_id].load(Ordering::Relaxed);
-        let sent_packets =
+        let admitted_packets =
             metrics.inner.af_xdp_worker_sent_packets[worker_id].load(Ordering::Relaxed);
-        if receive_batches == 0 && received_packets == 0 && send_batches == 0 && sent_packets == 0 {
+        if receive_batches == 0
+            && received_packets == 0
+            && send_batches == 0
+            && admitted_packets == 0
+        {
             continue;
         }
         body.push_str(&format!(
             "oxidedns_af_xdp_worker_receive_batches_total{{worker=\"{worker_id}\"}} {receive_batches}\n\
              oxidedns_af_xdp_worker_received_packets_total{{worker=\"{worker_id}\"}} {received_packets}\n\
              oxidedns_af_xdp_worker_send_batches_total{{worker=\"{worker_id}\"}} {send_batches}\n\
-             oxidedns_af_xdp_worker_sent_packets_total{{worker=\"{worker_id}\"}} {sent_packets}\n",
+             oxidedns_af_xdp_worker_sent_packets_total{{worker=\"{worker_id}\"}} {admitted_packets}\n",
         ));
     }
 }
@@ -1253,9 +1698,9 @@ fn append_udp_worker_packet_io_metrics(body: &mut String, metrics: &RuntimeMetri
          # TYPE oxidedns_udp_worker_receive_batches_total counter\n\
          # HELP oxidedns_udp_worker_received_datagrams_total UDP datagrams received per worker slot.\n\
          # TYPE oxidedns_udp_worker_received_datagrams_total counter\n\
-         # HELP oxidedns_udp_worker_send_batches_total UDP send batches emitted per worker slot.\n\
+         # HELP oxidedns_udp_worker_send_batches_total UDP send batches with one or more datagrams accepted per worker slot.\n\
          # TYPE oxidedns_udp_worker_send_batches_total counter\n\
-         # HELP oxidedns_udp_worker_sent_datagrams_total UDP datagrams sent per worker slot.\n\
+         # HELP oxidedns_udp_worker_sent_datagrams_total UDP datagrams accepted by the socket transport per worker slot.\n\
          # TYPE oxidedns_udp_worker_sent_datagrams_total counter\n",
     );
     for worker_id in 0..metrics.inner.udp_worker_receive_batches.len() {
@@ -2206,7 +2651,7 @@ struct ZoneCounts {
 impl ZoneCounts {
     fn from_store(zones: &ZoneStore) -> Self {
         let mut counts = Self::default();
-        for metadata in zones.zone_metadata() {
+        for metadata in zones.published_zone_metadata() {
             match metadata.state {
                 ZoneState::Loading => counts.loading += 1,
                 ZoneState::Active => counts.active += 1,
@@ -2239,9 +2684,11 @@ pub(crate) struct HealthEndpointState {
     pub(crate) observability_auth: ObservabilityAuth,
     pub(crate) observability_rate_limiter: MetricsRateLimiter,
     pub(crate) transfer_materials: Vec<TransferMaterial>,
+    pub(crate) secrets: SecretManager,
     pub(crate) started_at: Instant,
     pub(crate) graceful_shutdown_secs: u64,
     pub(crate) zone_shape_metrics_enabled: bool,
+    pub(crate) connection_slots: Arc<Semaphore>,
 }
 
 impl HealthEndpointState {
@@ -2326,24 +2773,30 @@ impl MetricsRateLimiter {
                 Err((seconds_until_token as u64).max(1))
             }
         };
-        state.lru.push_back((source, now));
+        state.touch_lru(source);
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_sizes_for_test(&self) -> (usize, usize) {
+        let state = self.inner.lock().expect("metrics limiter mutex poisoned");
+        (state.entries.len(), state.lru.len())
     }
 }
 
 #[derive(Debug, Default)]
 struct MetricsRateLimitState {
     entries: HashMap<IpAddr, MetricsRateLimitEntry>,
-    lru: VecDeque<(IpAddr, Instant)>,
+    // Exactly one recency node is retained per tracked source. In particular,
+    // rejected requests must not append an unbounded history while an older,
+    // still-active source remains at the front of the queue.
+    lru: VecDeque<IpAddr>,
 }
 
 impl MetricsRateLimitState {
     fn evict_idle(&mut self, cutoff: Instant) {
-        while let Some((source, seen_at)) = self.lru.front().copied() {
+        while let Some(source) = self.lru.front().copied() {
             match self.entries.get(&source) {
-                Some(entry) if entry.last_seen != seen_at => {
-                    self.lru.pop_front();
-                }
                 Some(entry) if entry.last_seen <= cutoff => {
                     self.lru.pop_front();
                     self.entries.remove(&source);
@@ -2358,18 +2811,19 @@ impl MetricsRateLimitState {
 
     fn evict_lru_until_below(&mut self, cap: usize) {
         while self.entries.len() >= cap {
-            let Some((source, seen_at)) = self.lru.pop_front() else {
+            let Some(source) = self.lru.pop_front() else {
                 self.entries.clear();
                 break;
             };
-            if self
-                .entries
-                .get(&source)
-                .is_some_and(|entry| entry.last_seen == seen_at)
-            {
-                self.entries.remove(&source);
-            }
+            self.entries.remove(&source);
         }
+    }
+
+    fn touch_lru(&mut self, source: IpAddr) {
+        self.lru.retain(|candidate| *candidate != source);
+        self.lru.push_back(source);
+        debug_assert_eq!(self.entries.len(), self.lru.len());
+        debug_assert!(self.lru.len() <= MAX_METRICS_RATE_LIMIT_SOURCES);
     }
 }
 
@@ -2413,6 +2867,8 @@ struct RuntimeMetricsInner {
     udp_mmsg_sent_datagrams: AtomicU64,
     udp_mmsg_send_partial_syscalls: AtomicU64,
     udp_mmsg_send_wouldblock_retries: AtomicU64,
+    udp_mmsg_send_interrupted_retries: AtomicU64,
+    udp_mmsg_send_resource_backoff_retries: AtomicU64,
     af_xdp_rx_recv_calls: AtomicU64,
     af_xdp_rx_empty_recv_calls: AtomicU64,
     af_xdp_rx_received_packets: AtomicU64,
@@ -2421,6 +2877,9 @@ struct RuntimeMetricsInner {
     af_xdp_tx_queued_packets: AtomicU64,
     af_xdp_tx_empty_send_calls: AtomicU64,
     af_xdp_tx_wakeups: AtomicU64,
+    af_xdp_tx_kick_successes: AtomicU64,
+    af_xdp_tx_kick_transient_failures: AtomicU64,
+    af_xdp_tx_delivery_failures: AtomicU64,
     af_xdp_tx_poll_write_calls: AtomicU64,
     af_xdp_tx_poll_write_ready: AtomicU64,
     af_xdp_completion_dequeues: AtomicU64,
@@ -2473,8 +2932,7 @@ struct RuntimeMetricsInner {
     pub(crate) chaos_non_txt: AtomicU64,
     dns_cookie_prefixes: Mutex<CookiePrefixMetrics>,
     query_rcodes: Mutex<HashMap<u16, u64>>,
-    zone_queries: Mutex<HashMap<String, u64>>,
-    zone_query_rcodes: Mutex<HashMap<(String, u16), u64>>,
+    zone_metrics: Mutex<ZoneMetricState>,
     latency_buckets: Vec<f64>,
     query_latency: Mutex<HashMap<QueryLatencyCategory, QueryLatencyHistogram>>,
     pipeline_timing_enabled: bool,
@@ -2485,6 +2943,26 @@ struct RuntimeMetricsInner {
 }
 
 #[derive(Debug, Default)]
+struct ZoneMetricState {
+    next_generation: u64,
+    zones: HashMap<Arc<str>, ZoneMetricCounters>,
+}
+
+#[derive(Debug, Default)]
+struct ZoneMetricCounters {
+    generation: u64,
+    zone_incarnation: Option<u64>,
+    queries: u64,
+    rcodes: HashMap<u16, u64>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ZoneMetricToken {
+    zone_key: Arc<str>,
+    generation: u64,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
 #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
 pub(crate) struct AfXdpPacketIoStats {
     pub(crate) rx_recv_calls: u64,
@@ -2495,6 +2973,9 @@ pub(crate) struct AfXdpPacketIoStats {
     pub(crate) tx_queued_packets: u64,
     pub(crate) tx_empty_send_calls: u64,
     pub(crate) tx_wakeups: u64,
+    pub(crate) tx_kick_successes: u64,
+    pub(crate) tx_kick_transient_failures: u64,
+    pub(crate) tx_delivery_failures: u64,
     pub(crate) tx_poll_write_calls: u64,
     pub(crate) tx_poll_write_ready: u64,
     pub(crate) completion_dequeues: u64,
@@ -2800,13 +3281,39 @@ impl RuntimeMetrics {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_settings(
         cookie_prefix_limit: usize,
         latency_buckets: Vec<f64>,
         pipeline_timing_enabled: bool,
         hot_path_detail: MetricsHotPathDetail,
     ) -> Self {
-        Self {
+        Self::try_new_with_settings(
+            cookie_prefix_limit,
+            latency_buckets,
+            pipeline_timing_enabled,
+            hot_path_detail,
+        )
+        .expect("internal runtime metrics settings respect validated histogram cardinality")
+    }
+
+    pub(crate) fn try_new_with_settings(
+        cookie_prefix_limit: usize,
+        latency_buckets: Vec<f64>,
+        pipeline_timing_enabled: bool,
+        hot_path_detail: MetricsHotPathDetail,
+    ) -> Result<Self, String> {
+        if latency_buckets.is_empty() {
+            return Err(
+                "metrics.latency_histogram_buckets must contain at least one bucket".to_owned(),
+            );
+        }
+        if latency_buckets.len() > MAX_LATENCY_HISTOGRAM_BUCKETS {
+            return Err(format!(
+                "metrics.latency_histogram_buckets must not contain more than {MAX_LATENCY_HISTOGRAM_BUCKETS} buckets"
+            ));
+        }
+        Ok(Self {
             inner: Arc::new(RuntimeMetricsInner {
                 dns_cookie_prefixes: Mutex::new(CookiePrefixMetrics::new(cookie_prefix_limit)),
                 latency_buckets,
@@ -2822,7 +3329,7 @@ impl RuntimeMetrics {
                 af_xdp_worker_sent_packets: atomic_counter_slots(UDP_WORKER_METRIC_SLOTS),
                 ..RuntimeMetricsInner::default()
             }),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -2904,7 +3411,7 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_send_batch(&self, datagrams: usize) {
-        if !self.hot_path_counters_enabled() {
+        if datagrams == 0 || !self.hot_path_counters_enabled() {
             return;
         }
         self.inner.udp_send_batches.fetch_add(1, Ordering::Relaxed);
@@ -2967,10 +3474,23 @@ impl RuntimeMetrics {
                 .udp_mmsg_send_wouldblock_retries
                 .fetch_add(stats.send_wouldblock_retries, Ordering::Relaxed);
         }
+        if stats.send_interrupted_retries != 0 {
+            self.inner
+                .udp_mmsg_send_interrupted_retries
+                .fetch_add(stats.send_interrupted_retries, Ordering::Relaxed);
+        }
+        if stats.send_resource_backoff_retries != 0 {
+            self.inner
+                .udp_mmsg_send_resource_backoff_retries
+                .fetch_add(stats.send_resource_backoff_retries, Ordering::Relaxed);
+        }
     }
 
     #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
     pub(crate) fn record_af_xdp_packet_io_stats(&self, stats: AfXdpPacketIoStats) {
+        if stats == AfXdpPacketIoStats::default() {
+            return;
+        }
         self.inner
             .af_xdp_rx_recv_calls
             .fetch_add(stats.rx_recv_calls, Ordering::Relaxed);
@@ -2996,6 +3516,15 @@ impl RuntimeMetrics {
             .af_xdp_tx_wakeups
             .fetch_add(stats.tx_wakeups, Ordering::Relaxed);
         self.inner
+            .af_xdp_tx_kick_successes
+            .fetch_add(stats.tx_kick_successes, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_kick_transient_failures
+            .fetch_add(stats.tx_kick_transient_failures, Ordering::Relaxed);
+        self.inner
+            .af_xdp_tx_delivery_failures
+            .fetch_add(stats.tx_delivery_failures, Ordering::Relaxed);
+        self.inner
             .af_xdp_tx_poll_write_calls
             .fetch_add(stats.tx_poll_write_calls, Ordering::Relaxed);
         self.inner
@@ -3009,6 +3538,36 @@ impl RuntimeMetrics {
             .fetch_add(stats.completed_packets, Ordering::Relaxed);
     }
 
+    /// Records one explicit AF_XDP TX kick immediately after its syscall.
+    ///
+    /// This deliberately bypasses the adapter's batched stats flush: a UDP
+    /// shutdown deadline can cancel the retry future after the syscall but
+    /// before the adapter gets another opportunity to flush local counters.
+    #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
+    pub(crate) fn record_af_xdp_tx_kick_observation(
+        &self,
+        success: bool,
+        transient_failure: bool,
+        delivery_failure: bool,
+    ) {
+        self.inner.af_xdp_tx_wakeups.fetch_add(1, Ordering::Relaxed);
+        if success {
+            self.inner
+                .af_xdp_tx_kick_successes
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if transient_failure {
+            self.inner
+                .af_xdp_tx_kick_transient_failures
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if delivery_failure {
+            self.inner
+                .af_xdp_tx_delivery_failures
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn record_af_xdp_worker_receive_batch(&self, worker_id: usize, packets: usize) {
         if let Some(counter) = self.inner.af_xdp_worker_receive_batches.get(worker_id) {
             counter.fetch_add(1, Ordering::Relaxed);
@@ -3018,13 +3577,41 @@ impl RuntimeMetrics {
         }
     }
 
+    #[cfg_attr(not(any(feature = "af-xdp", test)), allow(dead_code))]
     pub(crate) fn record_af_xdp_worker_send_batch(&self, worker_id: usize, packets: usize) {
+        if packets == 0 {
+            return;
+        }
         if let Some(counter) = self.inner.af_xdp_worker_send_batches.get(worker_id) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
         if let Some(counter) = self.inner.af_xdp_worker_sent_packets.get(worker_id) {
             counter.fetch_add(packets as u64, Ordering::Relaxed);
         }
+    }
+
+    #[cfg(test)]
+    #[cfg_attr(not(feature = "af-xdp"), allow(dead_code))]
+    pub(crate) fn af_xdp_durable_send_stats_for_test(
+        &self,
+        worker_id: usize,
+    ) -> (u64, u64, u64, u64, u64, u64) {
+        (
+            self.inner.af_xdp_tx_send_calls.load(Ordering::Relaxed),
+            self.inner.af_xdp_tx_queued_packets.load(Ordering::Relaxed),
+            self.inner
+                .af_xdp_completion_dequeues
+                .load(Ordering::Relaxed),
+            self.inner.af_xdp_completed_packets.load(Ordering::Relaxed),
+            self.inner
+                .af_xdp_worker_send_batches
+                .get(worker_id)
+                .map_or(0, |counter| counter.load(Ordering::Relaxed)),
+            self.inner
+                .af_xdp_worker_sent_packets
+                .get(worker_id)
+                .map_or(0, |counter| counter.load(Ordering::Relaxed)),
+        )
     }
 
     pub(crate) fn record_udp_worker_receive_batch(&self, worker_id: usize, datagrams: usize) {
@@ -3040,7 +3627,7 @@ impl RuntimeMetrics {
     }
 
     pub(crate) fn record_udp_worker_send_batch(&self, worker_id: usize, datagrams: usize) {
-        if !self.hot_path_counters_enabled() {
+        if datagrams == 0 || !self.hot_path_counters_enabled() {
             return;
         }
         if let Some(counter) = self.inner.udp_worker_send_batches.get(worker_id) {
@@ -3280,16 +3867,22 @@ impl RuntimeMetrics {
         *counter = counter.saturating_add(1);
     }
 
-    pub(crate) fn record_zone_query_response_rcode(&self, zone_key: &str, rcode: u16) {
+    pub(crate) fn record_zone_query_response_rcode(&self, token: &ZoneMetricToken, rcode: u16) {
         if !self.hot_path_detail_enabled() {
             return;
         }
-        let mut rcodes = self
+        let mut state = self
             .inner
-            .zone_query_rcodes
+            .zone_metrics
             .lock()
             .expect("runtime metrics per-zone RCODE counter lock poisoned");
-        let counter = rcodes.entry((zone_key.to_owned(), rcode)).or_default();
+        let Some(zone) = state.zones.get_mut(token.zone_key.as_ref()) else {
+            return;
+        };
+        if zone.generation != token.generation {
+            return;
+        }
+        let counter = zone.rcodes.entry(rcode).or_default();
         *counter = counter.saturating_add(1);
     }
 
@@ -3390,10 +3983,18 @@ impl RuntimeMetrics {
 
     pub(crate) fn zone_query_rcode_counts(&self) -> HashMap<(String, u16), u64> {
         self.inner
-            .zone_query_rcodes
+            .zone_metrics
             .lock()
             .expect("runtime metrics per-zone RCODE counter lock poisoned")
-            .clone()
+            .zones
+            .iter()
+            .flat_map(|(zone_key, counters)| {
+                counters
+                    .rcodes
+                    .iter()
+                    .map(|(rcode, count)| ((zone_key.to_string(), *rcode), *count))
+            })
+            .collect()
     }
 
     pub(crate) fn query_latency_histograms(
@@ -3440,28 +4041,114 @@ impl RuntimeMetrics {
         self.inner.latency_buckets.clone()
     }
 
-    pub(crate) fn record_zone_query_key(&self, zone_key: &str) {
+    pub(crate) fn record_published_zone_query(
+        &self,
+        zones: &ZoneStore,
+        published_zone: &PublishedZone,
+    ) -> Option<ZoneMetricToken> {
         if !self.hot_path_detail_enabled() {
-            return;
+            return None;
         }
-        let mut query_counts = self
+        let mut state = self
             .inner
-            .zone_queries
+            .zone_metrics
             .lock()
             .expect("runtime metrics query counter lock poisoned");
-        if let Some(counter) = query_counts.get_mut(zone_key) {
-            *counter = counter.saturating_add(1);
+        // Catalog removal publishes the new zone directory before pruning its
+        // metrics. Validate the exact handle while holding this lock: a query
+        // that wins the race is subsequently pruned, while one that loses can
+        // no longer recreate counters for the removed incarnation.
+        if !zones.is_current_published_zone(published_zone) {
+            return None;
+        }
+        Some(Self::record_zone_query_incarnation_locked(
+            &mut state,
+            published_zone.origin_key(),
+            Some(published_zone.incarnation()),
+        ))
+    }
+
+    fn record_zone_query_incarnation_locked(
+        state: &mut ZoneMetricState,
+        zone_key: &str,
+        zone_incarnation: Option<u64>,
+    ) -> ZoneMetricToken {
+        let generation = if let Some(zone) = state
+            .zones
+            .get(zone_key)
+            .filter(|zone| zone.zone_incarnation == zone_incarnation)
+        {
+            zone.generation
         } else {
-            query_counts.insert(zone_key.to_owned(), 1);
+            state.next_generation = state.next_generation.wrapping_add(1).max(1);
+            let generation = state.next_generation;
+            state.zones.insert(
+                Arc::<str>::from(zone_key),
+                ZoneMetricCounters {
+                    generation,
+                    zone_incarnation,
+                    ..ZoneMetricCounters::default()
+                },
+            );
+            generation
+        };
+        let zone = state
+            .zones
+            .get_mut(zone_key)
+            .expect("zone metric entry was inserted above");
+        zone.queries = zone.queries.saturating_add(1);
+        ZoneMetricToken {
+            zone_key: Arc::from(zone_key),
+            generation,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_zone_query_key(&self, zone_key: &str) -> Option<ZoneMetricToken> {
+        if !self.hot_path_detail_enabled() {
+            return None;
+        }
+        let mut state = self
+            .inner
+            .zone_metrics
+            .lock()
+            .expect("runtime metrics query counter lock poisoned");
+        Some(Self::record_zone_query_incarnation_locked(
+            &mut state, zone_key, None,
+        ))
+    }
+
+    pub(crate) fn remove_zone_metrics(&self, zone_store: &ZoneStore, zones: &[DomainName]) {
+        if zones.is_empty() {
+            return;
+        }
+        let mut state = self
+            .inner
+            .zone_metrics
+            .lock()
+            .expect("runtime metrics per-zone counter lock poisoned");
+        for zone in zones {
+            let zone_key = zone.canonical_key();
+            let should_remove = state.zones.get(zone_key.as_str()).is_some_and(|counters| {
+                counters.zone_incarnation.is_none_or(|incarnation| {
+                    !zone_store.is_current_zone_incarnation(zone_key.as_str(), incarnation)
+                })
+            });
+            if should_remove {
+                state.zones.remove(zone_key.as_str());
+            }
         }
     }
 
     pub(crate) fn zone_query_counts(&self) -> HashMap<String, u64> {
         self.inner
-            .zone_queries
+            .zone_metrics
             .lock()
             .expect("runtime metrics query counter lock poisoned")
-            .clone()
+            .zones
+            .iter()
+            .map(|(zone_key, counters)| (zone_key.to_string(), counters.queries))
+            .collect()
     }
 
     pub(crate) fn snapshot(&self) -> RuntimeMetricsSnapshot {

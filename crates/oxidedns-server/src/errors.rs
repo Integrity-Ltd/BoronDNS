@@ -46,6 +46,12 @@ pub enum RuntimeError {
     #[error("shutdown signal failed: {0}")]
     ShutdownSignal(std::io::Error),
 
+    #[error("{task_set} task panicked or was cancelled unexpectedly: {message}")]
+    RuntimeTask {
+        task_set: &'static str,
+        message: String,
+    },
+
     #[error("invalid runtime configuration: {0}")]
     InvalidRuntimeConfig(String),
 
@@ -149,6 +155,17 @@ pub enum TransferError {
         protocol: &'static str,
         addr: SocketAddr,
         received_bytes: u64,
+        limit_bytes: u64,
+    },
+
+    #[error(
+        "{protocol} session from primary {addr} could not reserve {requested_bytes} octets from the global transfer ingestion budget ({in_flight_bytes} octets already in flight, limit {limit_bytes})"
+    )]
+    IngestGlobalSizeLimit {
+        protocol: &'static str,
+        addr: SocketAddr,
+        requested_bytes: u64,
+        in_flight_bytes: u64,
         limit_bytes: u64,
     },
 

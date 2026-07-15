@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     future::Future,
     io::{self, ErrorKind},
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -23,7 +23,7 @@ use oxidedns_core::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
     task::JoinSet,
 };
 use tracing::{debug, info, warn};
@@ -44,16 +44,48 @@ const ERRNO_ENFILE: i32 = 23;
 const ERRNO_ENOBUFS: i32 = 105;
 const ERRNO_ENOMEM: i32 = 12;
 
+#[cfg(test)]
 pub(crate) async fn serve_tcp(
     listener: TcpListener,
     zones: ZoneStore,
     settings: TcpServerSettings,
 ) -> Result<(), RuntimeError> {
+    serve_tcp_until(listener, zones, settings, std::future::pending()).await
+}
+
+pub(crate) async fn serve_tcp_until<F>(
+    listener: TcpListener,
+    zones: ZoneStore,
+    settings: TcpServerSettings,
+    graceful_stop: F,
+) -> Result<(), RuntimeError>
+where
+    F: Future<Output = ()> + Send,
+{
     let local_addr = listener.local_addr().map_err(RuntimeError::Tcp)?;
     info!(%local_addr, "TCP listener bound");
+    let mut connections = JoinSet::new();
+    let (connection_shutdown_tx, connection_shutdown_rx) = watch::channel(false);
+    tokio::pin!(graceful_stop);
 
     loop {
-        let (stream, peer) = match listener.accept().await {
+        // Completed JoinSet entries retain their task allocation until joined.
+        // Drain every completion already ready before polling accept so a
+        // continuously readable listener cannot grow an unbounded completed
+        // task backlog through the biased shutdown-first select below.
+        reap_ready_tcp_connections(&mut connections, local_addr);
+        let accepted = tokio::select! {
+            biased;
+            () = &mut graceful_stop => break,
+            accepted = listener.accept() => accepted,
+            completed = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = completed {
+                    warn!(%local_addr, %error, "TCP connection task failed");
+                }
+                continue;
+            }
+        };
+        let (stream, peer) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => match classify_tcp_accept_error(&error) {
                 TcpAcceptErrorAction::Continue => {
@@ -104,9 +136,10 @@ pub(crate) async fn serve_tcp(
 
         let zones = zones.clone();
         let settings = settings.clone();
-        tokio::spawn(async move {
+        let connection_shutdown = connection_shutdown_rx.clone();
+        connections.spawn(async move {
             let _connection_permit = connection_permit;
-            if let Err(error) = handle_tcp_connection(
+            if let Err(error) = handle_tcp_connection_until(
                 stream,
                 zones,
                 settings.idle_timeout,
@@ -132,6 +165,7 @@ pub(crate) async fn serve_tcp(
                 settings.notify_log_limiter,
                 settings.metrics,
                 peer.ip(),
+                connection_shutdown,
             )
             .await
             {
@@ -145,6 +179,32 @@ pub(crate) async fn serve_tcp(
             }
         });
     }
+
+    let _ = connection_shutdown_tx.send(true);
+    drop(listener);
+    info!(
+        %local_addr,
+        active_connections = connections.len(),
+        "TCP listener stopped; draining established connections"
+    );
+    while let Some(completed) = connections.join_next().await {
+        if let Err(error) = completed {
+            warn!(%local_addr, %error, "TCP connection task failed during drain");
+        }
+    }
+    info!(%local_addr, "TCP established connection drain completed");
+    Ok(())
+}
+
+fn reap_ready_tcp_connections(connections: &mut JoinSet<()>, local_addr: SocketAddr) -> usize {
+    let mut reaped = 0usize;
+    while let Some(completed) = connections.try_join_next() {
+        if let Err(error) = completed {
+            warn!(%local_addr, %error, "TCP connection task failed");
+        }
+        reaped = reaped.saturating_add(1);
+    }
+    reaped
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +337,7 @@ fn try_acquire_tcp_connection_slot(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) async fn handle_tcp_connection(
     stream: TcpStream,
     zones: ZoneStore,
@@ -336,6 +397,68 @@ pub(crate) async fn handle_tcp_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_tcp_connection_until(
+    stream: TcpStream,
+    zones: ZoneStore,
+    idle_timeout: Duration,
+    max_udp_payload: u16,
+    max_cname_chain: usize,
+    nsec3_max_iterations: u16,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    max_inflight_queries_per_connection: usize,
+    inflight_limit_timeout: Duration,
+    edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
+    any_response: AnyResponseMode,
+    nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
+    dns_cookie_secrets: DnsCookieSecretStore,
+    dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
+    notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
+    metrics: RuntimeMetrics,
+    peer_ip: IpAddr,
+    connection_shutdown: watch::Receiver<bool>,
+) -> Result<(), RuntimeError> {
+    handle_tcp_connection_with_query_hook_until(
+        stream,
+        zones,
+        idle_timeout,
+        max_udp_payload,
+        max_cname_chain,
+        nsec3_max_iterations,
+        read_timeout,
+        write_timeout,
+        max_inflight_queries_per_connection,
+        inflight_limit_timeout,
+        edns_padding_block_size,
+        extended_dns_errors,
+        any_response,
+        nsid,
+        chaos_version,
+        chaos_hostname,
+        dns_cookie_secrets,
+        dns_cookie,
+        cookie_prefix_metrics,
+        notify_authority,
+        notify_refresh,
+        notify_refresh_tx,
+        notify_log_limiter,
+        metrics,
+        peer_ip,
+        None,
+        Some(connection_shutdown),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) async fn handle_tcp_connection_with_query_hook(
     stream: TcpStream,
     zones: ZoneStore,
@@ -364,23 +487,86 @@ pub(crate) async fn handle_tcp_connection_with_query_hook(
     peer_ip: IpAddr,
     query_hook: Option<TcpQueryHook>,
 ) -> Result<(), RuntimeError> {
+    handle_tcp_connection_with_query_hook_until(
+        stream,
+        zones,
+        idle_timeout,
+        max_udp_payload,
+        max_cname_chain,
+        nsec3_max_iterations,
+        read_timeout,
+        write_timeout,
+        max_inflight_queries_per_connection,
+        inflight_limit_timeout,
+        edns_padding_block_size,
+        extended_dns_errors,
+        any_response,
+        nsid,
+        chaos_version,
+        chaos_hostname,
+        dns_cookie_secrets,
+        dns_cookie,
+        cookie_prefix_metrics,
+        notify_authority,
+        notify_refresh,
+        notify_refresh_tx,
+        notify_log_limiter,
+        metrics,
+        peer_ip,
+        query_hook,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tcp_connection_with_query_hook_until(
+    stream: TcpStream,
+    zones: ZoneStore,
+    idle_timeout: Duration,
+    max_udp_payload: u16,
+    max_cname_chain: usize,
+    nsec3_max_iterations: u16,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    max_inflight_queries_per_connection: usize,
+    inflight_limit_timeout: Duration,
+    edns_padding_block_size: u16,
+    extended_dns_errors: ExtendedDnsErrorsMode,
+    any_response: AnyResponseMode,
+    nsid: Vec<u8>,
+    chaos_version: String,
+    chaos_hostname: String,
+    dns_cookie_secrets: DnsCookieSecretStore,
+    dns_cookie: DnsCookieRuntimeSettings,
+    cookie_prefix_metrics: CookiePrefixMetricSettings,
+    notify_authority: NotifyAuthority,
+    notify_refresh: NotifyRefreshTracker,
+    notify_refresh_tx: mpsc::Sender<RefreshRequest>,
+    notify_log_limiter: NotifyLogLimiter,
+    metrics: RuntimeMetrics,
+    peer_ip: IpAddr,
+    query_hook: Option<TcpQueryHook>,
+    mut connection_shutdown: Option<watch::Receiver<bool>>,
+) -> Result<(), RuntimeError> {
     let (mut reader, writer) = stream.into_split();
     let inflight = Arc::new(Semaphore::new(max_inflight_queries_per_connection));
     let (response_tx, response_rx) = mpsc::channel(max_inflight_queries_per_connection);
-    let writer_task = tokio::spawn(write_tcp_responses(
-        writer,
-        response_rx,
-        write_timeout,
-        metrics.clone(),
-    ));
-    let mut query_tasks = JoinSet::new();
-    let mut read_error = None;
+    let writer_metrics = metrics.clone();
+    let read_queries = async move {
+        let mut query_tasks = JoinSet::new();
+        let mut read_error = None;
 
-    while !response_tx.is_closed() {
-        let permit =
-            match tokio::time::timeout(inflight_limit_timeout, inflight.clone().acquire_owned())
-                .await
-            {
+        while !response_tx.is_closed() {
+            let permit_result = tokio::select! {
+                biased;
+                result = tokio::time::timeout(
+                    inflight_limit_timeout,
+                    inflight.clone().acquire_owned(),
+                ) => result,
+                () = wait_for_connection_shutdown(&mut connection_shutdown) => break,
+            };
+            let permit = match permit_result {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(_)) => break,
                 Err(_) => {
@@ -395,69 +581,144 @@ pub(crate) async fn handle_tcp_connection_with_query_hook(
                 }
             };
 
-        let packet = match read_tcp_message(&mut reader, idle_timeout, read_timeout).await {
-            Ok(Some(packet)) => packet,
-            Ok(None) => {
+            // The first frame-length octet completing into user space is the
+            // deterministic admission boundary. Once it has been read, finish
+            // that frame even if graceful stop arrives; once graceful stop
+            // wins this select, perform no opportunistic socket read and
+            // accept no frame that only existed in the kernel receive queue.
+            let first_len_byte =
+                read_tcp_frame_admission(&mut reader, idle_timeout, &mut connection_shutdown)
+                    .await?;
+            let Some(first_len_byte) = first_len_byte else {
                 drop(permit);
                 break;
-            }
-            Err(error) => {
-                drop(permit);
-                read_error = Some(error);
+            };
+            let packet = match read_tcp_message_after_first_len_byte(
+                &mut reader,
+                first_len_byte,
+                read_timeout,
+            )
+            .await
+            {
+                Ok(Some(packet)) => packet,
+                Ok(None) => {
+                    drop(permit);
+                    break;
+                }
+                Err(error) => {
+                    drop(permit);
+                    read_error = Some(error);
+                    break;
+                }
+            };
+
+            query_tasks.spawn(handle_tcp_packet(
+                packet,
+                zones.clone(),
+                idle_timeout,
+                max_udp_payload,
+                max_cname_chain,
+                nsec3_max_iterations,
+                edns_padding_block_size,
+                extended_dns_errors,
+                any_response,
+                nsid.clone(),
+                chaos_version.clone(),
+                chaos_hostname.clone(),
+                dns_cookie_secrets.clone(),
+                dns_cookie,
+                cookie_prefix_metrics,
+                notify_authority.clone(),
+                notify_refresh.clone(),
+                notify_refresh_tx.clone(),
+                notify_log_limiter.clone(),
+                metrics.clone(),
+                peer_ip,
+                response_tx.clone(),
+                permit,
+                query_hook.clone(),
+            ));
+
+            if connection_shutdown
+                .as_mut()
+                .is_some_and(|shutdown| *shutdown.borrow_and_update())
+            {
                 break;
             }
-        };
 
-        query_tasks.spawn(handle_tcp_packet(
-            packet,
-            zones.clone(),
-            idle_timeout,
-            max_udp_payload,
-            max_cname_chain,
-            nsec3_max_iterations,
-            edns_padding_block_size,
-            extended_dns_errors,
-            any_response,
-            nsid.clone(),
-            chaos_version.clone(),
-            chaos_hostname.clone(),
-            dns_cookie_secrets.clone(),
-            dns_cookie,
-            cookie_prefix_metrics,
-            notify_authority.clone(),
-            notify_refresh.clone(),
-            notify_refresh_tx.clone(),
-            notify_log_limiter.clone(),
-            metrics.clone(),
-            peer_ip,
-            response_tx.clone(),
-            permit,
-            query_hook.clone(),
-        ));
+            while let Some(join_result) = query_tasks.try_join_next() {
+                if let Err(error) = join_result {
+                    warn!(%peer_ip, %error, "TCP query task failed");
+                }
+            }
+        }
 
-        while let Some(join_result) = query_tasks.try_join_next() {
+        drop(response_tx);
+        while let Some(join_result) = query_tasks.join_next().await {
             if let Err(error) = join_result {
                 warn!(%peer_ip, %error, "TCP query task failed");
             }
         }
-    }
 
-    drop(response_tx);
-    while let Some(join_result) = query_tasks.join_next().await {
-        if let Err(error) = join_result {
-            warn!(%peer_ip, %error, "TCP query task failed");
+        read_error.map_or(Ok(()), Err)
+    };
+    let writer = write_tcp_responses(writer, response_rx, write_timeout, writer_metrics);
+    coordinate_tcp_io(read_queries, writer).await
+}
+
+async fn coordinate_tcp_io<R, W>(read_queries: R, writer: W) -> Result<(), RuntimeError>
+where
+    R: Future<Output = Result<(), RuntimeError>>,
+    W: Future<Output = Result<(), RuntimeError>>,
+{
+    tokio::pin!(read_queries);
+    tokio::pin!(writer);
+    tokio::select! {
+        biased;
+        read_result = &mut read_queries => {
+            // EOF and graceful shutdown stop admission, but already-admitted
+            // query tasks retain their permits and may still enqueue responses.
+            // Drain those responses before completing the connection.
+            writer.await?;
+            read_result
+        }
+        writer_result = &mut writer => {
+            // A failed or timed-out writer can no longer make progress. Returning
+            // drops the read future and its JoinSet, promptly cancelling socket
+            // admission and every query task that still owns an in-flight permit.
+            writer_result
         }
     }
-    match writer_task.await {
-        Ok(result) => result?,
-        Err(error) => warn!(%peer_ip, %error, "TCP writer task failed"),
-    }
+}
 
-    if let Some(error) = read_error {
-        return Err(error);
+async fn wait_for_connection_shutdown(receiver: &mut Option<watch::Receiver<bool>>) {
+    let Some(receiver) = receiver else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        if *receiver.borrow_and_update() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
+}
 
-    Ok(())
+pub(crate) async fn read_tcp_frame_admission<R>(
+    stream: &mut R,
+    idle_timeout: Duration,
+    connection_shutdown: &mut Option<watch::Receiver<bool>>,
+) -> Result<Option<u8>, RuntimeError>
+where
+    R: AsyncRead + Unpin,
+{
+    tokio::select! {
+        biased;
+        () = wait_for_connection_shutdown(connection_shutdown) => Ok(None),
+        result = read_tcp_byte(stream, idle_timeout) => result,
+    }
 }
 
 struct TcpResponse {
@@ -467,7 +728,7 @@ struct TcpResponse {
 }
 
 async fn write_tcp_responses(
-    mut writer: tokio::net::tcp::OwnedWriteHalf,
+    mut writer: impl AsyncWrite + Unpin,
     mut responses: mpsc::Receiver<TcpResponse>,
     write_timeout: Duration,
     metrics: RuntimeMetrics,
@@ -550,6 +811,11 @@ async fn handle_tcp_packet(
             .await;
         return;
     }
+    if let (Some(hook), Some(query_id)) = (&query_hook, query_id) {
+        // This boundary is after cryptographic preparation but before final
+        // policy authorization resolves concurrent snapshot replacement.
+        hook(query_id).await;
+    }
     let secrets = dns_cookie_secrets.current();
     let dns_cookie = dns_cookie_context(peer_ip, &secrets, dns_cookie);
     let cookie_validated = dns_cookie
@@ -598,7 +864,12 @@ async fn handle_tcp_packet(
         dns_cookie,
     };
     let notify_authorized = |qname: &DomainName, qclass| {
-        let authorized = notify_authority.is_authorized(qname, qclass, peer_ip);
+        let authorized = notify_authority.is_authorized_for_token(
+            qname,
+            qclass,
+            peer_ip,
+            prepared.notify_policy_token.as_ref(),
+        );
         if !authorized {
             metrics.record_notify_unauthorized();
             notify_log_limiter.log_unauthorized(peer_ip, qname);
@@ -671,9 +942,6 @@ async fn handle_tcp_packet(
                 &metrics,
                 query_cache_ineligible,
             );
-            if let (Some(hook), Some(query_id)) = (&query_hook, query_id) {
-                hook(query_id).await;
-            }
             let _ = response_tx
                 .send(TcpResponse {
                     response,
@@ -701,17 +969,14 @@ where
     }
 }
 
-async fn read_tcp_message<R>(
+pub(crate) async fn read_tcp_message_after_first_len_byte<R>(
     stream: &mut R,
-    idle_timeout: Duration,
+    first_len_byte: u8,
     read_timeout: Duration,
 ) -> Result<Option<Vec<u8>>, RuntimeError>
 where
     R: AsyncRead + Unpin,
 {
-    let Some(first_len_byte) = read_tcp_byte(stream, idle_timeout).await? else {
-        return Ok(None);
-    };
     let Some(second_len_byte) = read_tcp_byte(stream, read_timeout).await? else {
         return Ok(None);
     };
@@ -762,6 +1027,217 @@ fn frame_dns_tcp_message(message: &[u8]) -> Result<Vec<u8>, RuntimeError> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn completed_connection_churn_is_reaped_to_a_bounded_join_set() {
+        let local_addr: SocketAddr = "127.0.0.1:53".parse().expect("static socket address");
+        let mut connections = JoinSet::new();
+        let mut maximum_resident = 0usize;
+
+        for _ in 0..10_000 {
+            connections.spawn(async {});
+            maximum_resident = maximum_resident.max(connections.len());
+            while reap_ready_tcp_connections(&mut connections, local_addr) == 0 {
+                tokio::task::yield_now().await;
+            }
+            assert!(connections.is_empty());
+        }
+
+        assert_eq!(maximum_resident, 1);
+    }
+
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(signal) = self.0.take() {
+                let _ = signal.send(());
+            }
+        }
+    }
+
+    struct BackpressuredWriter;
+
+    impl AsyncWrite for BackpressuredWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buffer: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::task::Poll::Pending
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    struct FailingWriter;
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buffer: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::task::Poll::Ready(Err(io::Error::new(
+                ErrorKind::BrokenPipe,
+                "deterministic test writer failure",
+            )))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    async fn assert_writer_termination_cancels_reader(
+        writer: impl AsyncWrite + Unpin,
+        expect_error: bool,
+    ) {
+        let inflight = Arc::new(Semaphore::new(2));
+        let response_permit = inflight
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test response permit");
+        let (response_tx, response_rx) = mpsc::channel(1);
+        response_tx
+            .send(TcpResponse {
+                response: vec![0; 12],
+                query_observation: None,
+                permit: response_permit,
+            })
+            .await
+            .expect("queue deterministic test response");
+        drop(response_tx);
+
+        let iterations = Arc::new(AtomicUsize::new(0));
+        let query_iterations = iterations.clone();
+        let query_permit = inflight
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test query-task permit");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+        let mut query_tasks = JoinSet::new();
+        query_tasks.spawn(async move {
+            let _permit = query_permit;
+            let _cancelled = DropSignal(Some(cancelled_tx));
+            let _ = started_tx.send(());
+            loop {
+                query_iterations.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+            }
+        });
+        started_rx.await.expect("continuing query task must start");
+        let reader = async move {
+            let _query_tasks = query_tasks;
+            std::future::pending::<()>().await;
+            #[allow(unreachable_code)]
+            Ok(())
+        };
+        let writer = write_tcp_responses(
+            writer,
+            response_rx,
+            Duration::from_millis(20),
+            RuntimeMetrics::new(),
+        );
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), coordinate_tcp_io(reader, writer))
+                .await
+                .expect("writer termination must stop the connection promptly");
+        assert_eq!(result.is_err(), expect_error);
+        cancelled_rx
+            .await
+            .expect("dropping the reader JoinSet must abort its continuing query task");
+        assert_eq!(
+            inflight.available_permits(),
+            2,
+            "writer termination releases response and query-task ownership"
+        );
+        let stopped_at = iterations.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            iterations.load(Ordering::Relaxed),
+            stopped_at,
+            "the reader task must consume no CPU after writer death"
+        );
+    }
+
+    #[tokio::test]
+    async fn backpressured_writer_timeout_cancels_continuing_reader() {
+        assert_writer_termination_cancels_reader(BackpressuredWriter, false).await;
+    }
+
+    #[tokio::test]
+    async fn failed_writer_cancels_continuing_reader() {
+        assert_writer_termination_cancels_reader(FailingWriter, true).await;
+    }
+
+    fn tcp_server_settings_for_drain_test(
+        active_connections: Arc<AtomicUsize>,
+    ) -> TcpServerSettings {
+        let (notify_refresh_tx, _notify_refresh_rx) = mpsc::channel(1);
+        TcpServerSettings {
+            max_udp_payload: 1232,
+            max_cname_chain: 8,
+            nsec3_max_iterations: 100,
+            idle_timeout: Duration::from_secs(30),
+            read_timeout: Duration::from_secs(30),
+            write_timeout: Duration::from_secs(30),
+            max_connections: 8,
+            max_connections_per_source: None,
+            max_inflight_queries_per_connection: 8,
+            inflight_limit_timeout: Duration::from_secs(30),
+            edns_padding_block_size: 0,
+            extended_dns_errors: ExtendedDnsErrorsMode::Off,
+            any_response: AnyResponseMode::Minimal,
+            nsid: Vec::new(),
+            chaos_version: String::new(),
+            chaos_hostname: String::new(),
+            dns_cookie_secrets: DnsCookieSecretStore::new([7; 16], None),
+            dns_cookie: DnsCookieRuntimeSettings {
+                policy: None,
+                past_window_secs: 3600,
+                future_window_secs: 300,
+                secret_rotation_interval: None,
+            },
+            cookie_prefix_metrics: CookiePrefixMetricSettings {
+                ipv4_prefix_len: 24,
+                ipv6_prefix_len: 56,
+            },
+            notify_authority: NotifyAuthority::default(),
+            notify_refresh: NotifyRefreshTracker::new(Duration::from_secs(1)),
+            notify_refresh_tx,
+            notify_log_limiter: NotifyLogLimiter::new(Duration::from_secs(60), 1_024),
+            metrics: RuntimeMetrics::new(),
+            active_connections,
+            active_connections_by_source: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     #[test]
     fn tcp_frame_rejects_messages_above_dns_tcp_limit() {
         let oversized = vec![0u8; usize::from(u16::MAX) + 1];
@@ -776,5 +1252,99 @@ mod tests {
 
         assert_eq!(&framed[..2], &4u16.to_be_bytes());
         assert_eq!(&framed[2..], &[1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn tcp_connection_join_set_drains_or_cancels_with_its_owner() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let mut drain_owner = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            connections.spawn(async move {
+                let _ = started_tx.send(());
+                let _ = finish_rx.await;
+            });
+            while connections.join_next().await.is_some() {}
+        });
+
+        started_rx.await.expect("connection task should start");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut drain_owner)
+                .await
+                .is_err(),
+            "drain owner must retain and await an established connection"
+        );
+        finish_tx.send(()).expect("connection task should be alive");
+        tokio::time::timeout(Duration::from_secs(1), drain_owner)
+            .await
+            .expect("connection drain should finish")
+            .expect("drain owner should not fail");
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+        let force_cancel_owner = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            connections.spawn(async move {
+                let _drop_signal = DropSignal(Some(cancelled_tx));
+                let _ = started_tx.send(());
+                std::future::pending::<()>().await;
+            });
+            while connections.join_next().await.is_some() {}
+        });
+
+        started_rx.await.expect("connection task should start");
+        force_cancel_owner.abort();
+        let _ = force_cancel_owner.await;
+        tokio::time::timeout(Duration::from_secs(1), cancelled_rx)
+            .await
+            .expect("aborting the owner should cancel its connection tasks")
+            .expect("connection task should emit its drop signal");
+    }
+
+    #[tokio::test]
+    async fn graceful_stop_closes_listener_and_idle_established_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let active_connections = Arc::new(AtomicUsize::new(0));
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_tcp_until(
+            listener,
+            ZoneStore::new(),
+            tcp_server_settings_for_drain_test(active_connections.clone()),
+            async move {
+                let _ = stop_rx.await;
+            },
+        ));
+
+        let mut established = TcpStream::connect(addr).await.unwrap();
+        for _ in 0..100 {
+            if active_connections.load(Ordering::Acquire) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(active_connections.load(Ordering::Acquire), 1);
+
+        stop_tx.send(()).expect("TCP server should await stop");
+        let listener_closed = async {
+            while let Ok(probe) = TcpStream::connect(addr).await {
+                drop(probe);
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(1), listener_closed)
+            .await
+            .expect("graceful stop should close the TCP listener");
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server should stop idle established connection reads")
+            .expect("TCP server task should not fail")
+            .expect("TCP server should stop cleanly");
+        let mut byte = [0u8; 1];
+        let closed = tokio::time::timeout(Duration::from_secs(1), established.read(&mut byte))
+            .await
+            .expect("idle established connection should close promptly");
+        assert!(matches!(closed, Ok(0) | Err(_)));
+        assert_eq!(active_connections.load(Ordering::Acquire), 0);
     }
 }

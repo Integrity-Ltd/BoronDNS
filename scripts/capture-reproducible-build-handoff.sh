@@ -8,8 +8,10 @@ evidence_dir="${OXIDEDNS_REPRODUCIBLE_BUILD_HANDOFF_DIR:-$repo_root/target/evide
 commit="$(git -C "$repo_root" rev-parse HEAD)"
 short_commit="$(git -C "$repo_root" rev-parse --short=8 HEAD)"
 branch="$(git -C "$repo_root" branch --show-current)"
-dirty_status="$(git -C "$repo_root" status --short)"
-if [[ -n "$dirty_status" ]]; then
+dirty_status=""
+if ! dirty_status="$(git -C "$repo_root" status --short)"; then
+    dirty="unknown"
+elif [[ -n "$dirty_status" ]]; then
     dirty="yes"
 else
     dirty="no"

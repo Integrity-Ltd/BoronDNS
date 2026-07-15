@@ -524,6 +524,7 @@ FEATURES = {
         "paths": [
             "crates/oxidedns-core/src/catalog.rs",
             "crates/oxidedns-core/src/config.rs",
+            "crates/oxidedns-core/src/zone.rs",
             "crates/oxidedns-server/src/lib.rs",
             "crates/oxidedns-server/src/health_metrics.rs",
         ],
@@ -544,7 +545,7 @@ FEATURES = {
         "source_needles": [
             "parse_catalog_members",
             "max_member_zones",
-            "insert_loading_hidden",
+            "insert_loading_batch",
             "is_catalog",
             "catalog_member_limit_exceeded",
             "catalog_member_added",
@@ -668,7 +669,9 @@ SUPPORT_TOOLING = {
             "sha256",
             "static_link_confirmed",
             "OXIDEDNS_PACKAGE_ALLOW_DYNAMIC",
-            "OXIDEDNS_DOCKER_ALPINE_VERSION",
+            "OXIDEDNS_DOCKER_ALPINE_BASE_IMAGE",
+            "base_image_digest",
+            "alpine:3.22@sha256:7c8cb692ae09657cbc4a3f3cbd0e8d5a2690ba38386aaaf252dbb060bf5eb2e6",
         ],
         "evidence_needles": [
             "fails if static linking cannot be confirmed",

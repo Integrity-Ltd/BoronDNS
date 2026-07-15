@@ -607,9 +607,9 @@ dedicated worker. Defaults preserve one socket, Tokio runtime ownership, and no
 affinity. The benchmark harness records the runtime, worker count, and affinity
 settings so Tokio and dedicated profiles can be compared without changing the
 release default. Dedicated Linux runs also expose mmsg syscall counters,
-partial-send counters, WouldBlock retry counters, and per-worker labelled
-datagram counters so local tuning can distinguish syscall batch depth from
-reuseport worker imbalance.
+partial-send counters, separate WouldBlock, interrupted, and resource-pressure
+retry counters, and per-worker labelled datagram counters so local tuning can
+distinguish syscall batch depth from reuseport worker imbalance.
 
 On 2026-06-02, the local loopback profile with reduced hot-path metrics,
 `udp_batch_size=32`, four server threads, four client threads, and client

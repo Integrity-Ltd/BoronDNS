@@ -1,7 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
 use smallvec::SmallVec;
@@ -1193,6 +1199,9 @@ struct ZoneDirectory {
 pub struct ZoneStore {
     zones: Arc<ArcSwap<ZoneDirectory>>,
     publish_lock: Arc<Mutex<()>>,
+    next_incarnation: Arc<AtomicU64>,
+    #[cfg(test)]
+    publication_clone_work: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1208,6 +1217,7 @@ pub struct PublishedZoneRef<'a> {
 #[derive(Debug, Clone)]
 pub struct TransferZoneSnapshot {
     snapshot: Arc<ZoneSnapshot>,
+    installed_snapshot: Arc<ZoneSnapshot>,
     metadata: ZoneMetadata,
 }
 
@@ -1303,6 +1313,7 @@ struct ZoneStoreEntry {
     shape: Option<ZoneShapeSummary>,
     shape_histograms: Option<ZoneShapeHistogramSummary>,
     hidden: bool,
+    incarnation: u64,
 }
 
 impl Default for ZoneStore {
@@ -1310,6 +1321,9 @@ impl Default for ZoneStore {
         Self {
             zones: Arc::new(ArcSwap::from_pointee(ZoneDirectory::default())),
             publish_lock: Arc::new(Mutex::new(())),
+            next_incarnation: Arc::new(AtomicU64::new(0)),
+            #[cfg(test)]
+            publication_clone_work: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -1327,6 +1341,82 @@ impl ZoneStore {
     pub fn insert_loading_hidden(&self, origin: DomainName) {
         let snapshot = Arc::new(ZoneSnapshot::loading(origin));
         self.replace_snapshot(snapshot, true);
+    }
+
+    /// Publish many initial LOADING zones with one copy-on-write directory
+    /// update. This keeps startup and catalog-scale provisioning linear in the
+    /// number of zones rather than cloning the growing directory per zone.
+    pub fn insert_loading_batch(&self, visible: &[DomainName], hidden: &[DomainName]) {
+        let mut loading = Vec::with_capacity(visible.len().saturating_add(hidden.len()));
+        loading.extend_from_slice(visible);
+        loading.extend_from_slice(hidden);
+        self.apply_atomic_directory_update(&loading, &[], &[], hidden);
+    }
+
+    /// Atomically publish a set of query-visible directory changes.
+    ///
+    /// Catalog reconciliation stages policy and lifecycle bookkeeping outside
+    /// the query path, then uses this single directory swap so readers observe
+    /// either the complete old membership or the complete new membership.
+    pub fn apply_atomic_directory_update(
+        &self,
+        loading_origins: &[DomainName],
+        removed_origins: &[DomainName],
+        visible_origins: &[DomainName],
+        hidden_origins: &[DomainName],
+    ) {
+        if loading_origins.is_empty()
+            && removed_origins.is_empty()
+            && visible_origins.is_empty()
+            && hidden_origins.is_empty()
+        {
+            return;
+        }
+
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let current = self.zones.load_full();
+        let mut next = self.clone_directory_for_publication(current.as_ref());
+        let hidden_loading = hidden_origins
+            .iter()
+            .map(DomainName::canonical_key)
+            .collect::<HashSet<_>>();
+
+        for origin in removed_origins {
+            next.remove(&origin.canonical_key());
+        }
+        for origin in loading_origins {
+            let snapshot = Arc::new(ZoneSnapshot::loading(origin.clone()));
+            let key = origin.canonical_key();
+            let incarnation = next
+                .get(&key)
+                .map(|entry| entry.incarnation)
+                .unwrap_or_else(|| self.allocate_incarnation());
+            let entry = Arc::new(
+                ZoneStoreEntry::try_new(
+                    key.clone(),
+                    snapshot,
+                    hidden_loading.contains(key.as_str()),
+                    incarnation,
+                )
+                .expect("loading zone image construction cannot fail"),
+            );
+            next.insert(key, entry);
+        }
+        for (origins, hidden) in [(visible_origins, false), (hidden_origins, true)] {
+            for origin in origins {
+                let key = origin.canonical_key();
+                if let Some(entry) = next.get(&key)
+                    && entry.hidden != hidden
+                {
+                    next.insert(key, Arc::new(entry.with_hidden(hidden)));
+                }
+            }
+        }
+
+        self.zones.store(Arc::new(next));
     }
 
     pub fn insert_snapshot(&self, snapshot: ZoneSnapshot) {
@@ -1358,7 +1448,7 @@ impl ZoneStore {
             return false;
         }
 
-        let mut next = current.as_ref().clone();
+        let mut next = self.clone_directory_for_publication(current.as_ref());
         next.remove(&key);
         self.zones.store(Arc::new(next));
         true
@@ -1393,10 +1483,90 @@ impl ZoneStore {
             return false;
         }
 
-        let mut next = current.as_ref().clone();
+        let mut next = self.clone_directory_for_publication(current.as_ref());
         next.insert(key, Arc::new(entry.with_state(ZoneState::Expired)));
         self.zones.store(Arc::new(next));
         true
+    }
+
+    /// Expire `current` only while the exact snapshot captured by the caller is
+    /// still installed for its origin.
+    ///
+    /// Refresh lifecycle code uses this compare-and-publish boundary so a
+    /// catalog remove/re-add cannot let an expiration decision made for the old
+    /// incarnation mutate the replacement zone entry.
+    pub fn expire_zone_if_snapshot(&self, current: &TransferZoneSnapshot) -> bool {
+        let key = current.metadata.origin_key.as_ref();
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let directory = self.zones.load_full();
+        let Some(entry) = directory.get(key) else {
+            return false;
+        };
+        if entry.state == ZoneState::Expired || !Arc::ptr_eq(&entry.snapshot, &current.snapshot) {
+            return false;
+        }
+
+        let mut next = self.clone_directory_for_publication(directory.as_ref());
+        next.insert(
+            key.to_owned(),
+            Arc::new(entry.with_state(ZoneState::Expired)),
+        );
+        self.zones.store(Arc::new(next));
+        true
+    }
+
+    /// Confirm that `current` is still the installed snapshot and make it
+    /// query-active again when it was previously expired.
+    ///
+    /// A successful SOA/IXFR current response is a successful refresh even when
+    /// the held serial did not change. The refresh path uses this atomic
+    /// compare-and-publish operation so an EXPIRED zone can return to ACTIVE
+    /// without allowing a remove/re-add or replacement snapshot to be revived.
+    pub fn activate_zone_if_snapshot(
+        &self,
+        current: &TransferZoneSnapshot,
+    ) -> Result<Option<ZoneMetadata>, ZoneImageBuildError> {
+        let key = current.metadata.origin_key.as_ref();
+        let _publish_guard = self
+            .publish_lock
+            .lock()
+            .expect("zone store publish lock poisoned");
+        let directory = self.zones.load_full();
+        let Some(entry) = directory.get(key) else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&entry.snapshot, &current.installed_snapshot) {
+            return Ok(None);
+        }
+        if entry.state == ZoneState::Active {
+            return Ok(Some(entry.control_metadata()));
+        }
+        if entry.state != ZoneState::Expired {
+            return Ok(None);
+        }
+
+        // Expiration changes only the directory entry's serving state, leaving
+        // the last validated ACTIVE snapshot intact. Rebuild its query image
+        // while holding the same publication lock used for the identity check.
+        let active_snapshot = if current.installed_snapshot.state == ZoneState::Active {
+            current.installed_snapshot.clone()
+        } else {
+            Arc::new(current.installed_snapshot.with_state(ZoneState::Active))
+        };
+        let active_entry = Arc::new(ZoneStoreEntry::try_new(
+            key.to_owned(),
+            active_snapshot,
+            entry.hidden,
+            entry.incarnation,
+        )?);
+        let metadata = active_entry.control_metadata();
+        let mut next = self.clone_directory_for_publication(directory.as_ref());
+        next.insert(key.to_owned(), active_entry);
+        self.zones.store(Arc::new(next));
+        Ok(Some(metadata))
     }
 
     /// Return the exact-origin snapshot plus cached control metadata for IXFR
@@ -1407,6 +1577,7 @@ impl ZoneStore {
             .get(&origin.canonical_key())
             .map(|entry| TransferZoneSnapshot {
                 snapshot: entry.snapshot_for_control(),
+                installed_snapshot: entry.snapshot.clone(),
                 metadata: entry.control_metadata(),
             })
     }
@@ -1423,6 +1594,7 @@ impl ZoneStore {
             .filter(|entry| entry.serial.is_some())
             .map(|entry| TransferZoneSnapshot {
                 snapshot: entry.snapshot_for_control(),
+                installed_snapshot: entry.snapshot.clone(),
                 metadata: entry.control_metadata(),
             })
     }
@@ -1470,6 +1642,27 @@ impl ZoneStore {
             .map(|entry| PublishedZone { entry })
     }
 
+    /// Return whether `published` still belongs to the current lifecycle
+    /// incarnation for its origin.
+    ///
+    /// Snapshot and serving-state publications replace the directory entry's
+    /// `Arc` while preserving its incarnation. Consumers that retain a
+    /// published-zone handle across another subsystem's lock acquisition must
+    /// accept those ordinary refreshes, but reject an incarnation removed and
+    /// re-added in the meantime.
+    pub fn is_current_published_zone(&self, published: &PublishedZone) -> bool {
+        self.is_current_zone_incarnation(published.origin_key(), published.incarnation())
+    }
+
+    /// Check the current exact-origin incarnation, including non-serving
+    /// LOADING and EXPIRED entries.
+    pub fn is_current_zone_incarnation(&self, origin_key: &str, incarnation: u64) -> bool {
+        self.zones
+            .load()
+            .get(origin_key)
+            .is_some_and(|entry| entry.incarnation == incarnation)
+    }
+
     /// Borrow the most-specific published zone for the duration of `visit`.
     ///
     /// This avoids cloning the underlying published-zone handle on hot query
@@ -1491,6 +1684,20 @@ impl ZoneStore {
     pub fn zone_metadata(&self) -> Vec<ZoneMetadata> {
         let zones = self.zones.load();
         let mut entries = zones.values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.origin_key.cmp(&right.origin_key));
+        entries.into_iter().map(|entry| entry.metadata()).collect()
+    }
+
+    /// Return metadata only for zones visible on the authoritative query
+    /// interface. Hidden catalog snapshots remain available to control and
+    /// observability paths through `zone_metadata`, but must not satisfy
+    /// serving-readiness checks or served-zone aggregate gauges.
+    pub fn published_zone_metadata(&self) -> Vec<ZoneMetadata> {
+        let zones = self.zones.load();
+        let mut entries = zones
+            .values()
+            .filter(|entry| !entry.hidden)
+            .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.origin_key.cmp(&right.origin_key));
         entries.into_iter().map(|entry| entry.metadata()).collect()
     }
@@ -1547,8 +1754,17 @@ impl ZoneStore {
             .expect("zone store publish lock poisoned");
         let current = self.zones.load_full();
         let hidden = force_hidden || current.get(&key).is_some_and(|entry| entry.hidden);
-        let mut next = current.as_ref().clone();
-        let entry = Arc::new(ZoneStoreEntry::try_new(key.clone(), snapshot, hidden)?);
+        let incarnation = current
+            .get(&key)
+            .map(|entry| entry.incarnation)
+            .unwrap_or_else(|| self.allocate_incarnation());
+        let mut next = self.clone_directory_for_publication(current.as_ref());
+        let entry = Arc::new(ZoneStoreEntry::try_new(
+            key.clone(),
+            snapshot,
+            hidden,
+            incarnation,
+        )?);
         next.insert(key.clone(), entry.clone());
         self.zones.store(Arc::new(next));
         Ok(entry)
@@ -1568,9 +1784,27 @@ impl ZoneStore {
             return;
         }
 
-        let mut next = current.as_ref().clone();
+        let mut next = self.clone_directory_for_publication(current.as_ref());
         next.insert(key, Arc::new(entry.with_hidden(hidden)));
         self.zones.store(Arc::new(next));
+    }
+
+    fn clone_directory_for_publication(&self, current: &ZoneDirectory) -> ZoneDirectory {
+        #[cfg(test)]
+        self.publication_clone_work
+            .fetch_add(current.len(), Ordering::Relaxed);
+        current.clone()
+    }
+
+    fn allocate_incarnation(&self) -> u64 {
+        self.next_incarnation
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
+    }
+
+    #[cfg(test)]
+    fn publication_clone_work(&self) -> usize {
+        self.publication_clone_work.load(Ordering::Relaxed)
     }
 }
 
@@ -1597,6 +1831,12 @@ impl PublishedZone {
 
     pub fn origin_key(&self) -> &str {
         &self.entry.origin_key
+    }
+
+    /// Stable identity of this installed zone entry. Replacing or removing and
+    /// re-adding the same origin produces a different incarnation.
+    pub fn incarnation(&self) -> u64 {
+        self.entry.incarnation
     }
 
     pub fn origin_label_count(&self) -> usize {
@@ -1692,21 +1932,21 @@ impl ZoneDirectory {
     fn insert(&mut self, key: String, entry: Arc<ZoneStoreEntry>) {
         let suffix_key = canonical_reverse_label_key(&entry.origin);
         if let Some(previous) = self.by_origin.insert(key.clone(), entry.clone()) {
-            self.active_count = self
-                .active_count
-                .saturating_sub(usize::from(previous.state == ZoneState::Active));
+            self.active_count = self.active_count.saturating_sub(usize::from(
+                previous.state == ZoneState::Active && !previous.hidden,
+            ));
         }
-        self.active_count = self
-            .active_count
-            .saturating_add(usize::from(entry.state == ZoneState::Active));
+        self.active_count = self.active_count.saturating_add(usize::from(
+            entry.state == ZoneState::Active && !entry.hidden,
+        ));
         self.suffix_index.insert(suffix_key, entry);
     }
 
     fn remove(&mut self, key: &str) -> Option<Arc<ZoneStoreEntry>> {
         let entry = self.by_origin.remove(key)?;
-        self.active_count = self
-            .active_count
-            .saturating_sub(usize::from(entry.state == ZoneState::Active));
+        self.active_count = self.active_count.saturating_sub(usize::from(
+            entry.state == ZoneState::Active && !entry.hidden,
+        ));
         self.suffix_index
             .remove(canonical_reverse_label_key(&entry.origin).as_slice());
         Some(entry)
@@ -1810,6 +2050,7 @@ impl ZoneStoreEntry {
         origin_key: String,
         snapshot: Arc<ZoneSnapshot>,
         hidden: bool,
+        incarnation: u64,
     ) -> Result<Self, ZoneImageBuildError> {
         let image = if snapshot.state == ZoneState::Active {
             Some(Arc::new(ZoneImage::compile(&snapshot)?))
@@ -1832,6 +2073,7 @@ impl ZoneStoreEntry {
             shape,
             shape_histograms,
             hidden,
+            incarnation,
         })
     }
 
@@ -1883,6 +2125,7 @@ impl ZoneStoreEntry {
             shape: self.shape,
             shape_histograms: self.shape_histograms.clone(),
             hidden,
+            incarnation: self.incarnation,
         }
     }
 
@@ -1904,6 +2147,7 @@ impl ZoneStoreEntry {
                 .then(|| self.shape_histograms.clone())
                 .flatten(),
             hidden: self.hidden,
+            incarnation: self.incarnation,
         }
     }
 }
@@ -2323,6 +2567,28 @@ mod tests {
     }
 
     #[test]
+    fn active_count_and_published_metadata_exclude_hidden_catalog_snapshots() {
+        let store = ZoneStore::new();
+        let catalog = DomainName::from_absolute_str("catalog.test.").unwrap();
+
+        store.insert_loading_hidden(catalog.clone());
+        store.insert_snapshot(ZoneSnapshot::active(catalog.clone(), Some(1), Vec::new()));
+
+        assert_eq!(store.active_count(), 0);
+        assert!(!store.has_active_zone());
+        assert!(store.published_zone_metadata().is_empty());
+        assert_eq!(store.zone_metadata().len(), 1);
+
+        store.show_zone(&catalog);
+        assert_eq!(store.active_count(), 1);
+        assert_eq!(store.published_zone_metadata().len(), 1);
+
+        store.hide_zone(&catalog);
+        assert_eq!(store.active_count(), 0);
+        assert!(store.published_zone_metadata().is_empty());
+    }
+
+    #[test]
     fn offline_snapshots_returns_zones_in_stable_order() {
         let store = ZoneStore::new();
         store.insert_loading(DomainName::from_absolute_str("z.test.").unwrap());
@@ -2597,6 +2863,94 @@ mod tests {
         assert!(!prefix_lengths.spilled());
         assert_eq!(key.as_slice(), b"\x04test\x07example\x05child\x03www");
         assert_eq!(prefix_lengths.as_slice(), &[5, 13, 19, 23]);
+    }
+
+    #[test]
+    fn atomic_directory_update_never_exposes_partial_multi_zone_membership() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let store = ZoneStore::new();
+        let old = (0..32)
+            .map(|index| {
+                DomainName::from_absolute_str(&format!("old-{index}.catalog-atomic.test.")).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let new = (0..32)
+            .map(|index| {
+                DomainName::from_absolute_str(&format!("new-{index}.catalog-atomic.test.")).unwrap()
+            })
+            .collect::<Vec<_>>();
+        store.apply_atomic_directory_update(&old, &[], &[], &[]);
+        let old_keys = old
+            .iter()
+            .map(DomainName::canonical_key)
+            .collect::<std::collections::HashSet<_>>();
+        let new_keys = new
+            .iter()
+            .map(DomainName::canonical_key)
+            .collect::<std::collections::HashSet<_>>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let store = store.clone();
+            let stop = stop.clone();
+            let old_keys = old_keys.clone();
+            let new_keys = new_keys.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let observed = store
+                        .zone_metadata()
+                        .into_iter()
+                        .map(|metadata| metadata.origin.canonical_key())
+                        .collect::<std::collections::HashSet<_>>();
+                    assert!(
+                        observed == old_keys || observed == new_keys,
+                        "reader observed a partial directory publication"
+                    );
+                }
+            })
+        };
+
+        for _ in 0..256 {
+            store.apply_atomic_directory_update(&new, &old, &[], &[]);
+            store.apply_atomic_directory_update(&old, &new, &[], &[]);
+        }
+        stop.store(true, Ordering::Release);
+        reader.join().expect("directory reader does not panic");
+    }
+
+    #[test]
+    fn ten_thousand_zone_batch_publication_has_linear_clone_work() {
+        let store = ZoneStore::new();
+        let initial = (0..10_000)
+            .map(|index| {
+                DomainName::from_absolute_str(&format!("zone-{index:05}.scale.test.")).unwrap()
+            })
+            .collect::<Vec<_>>();
+        store.insert_loading_batch(&initial, &[]);
+
+        assert_eq!(store.len(), initial.len());
+        assert_eq!(
+            store.publication_clone_work(),
+            0,
+            "one empty-to-10k batch must not repeatedly clone the growing directory"
+        );
+
+        let replacements = (0..1_000)
+            .map(|index| {
+                DomainName::from_absolute_str(&format!("replacement-{index:05}.scale.test."))
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        store.apply_atomic_directory_update(&replacements, &initial[..1_000], &[], &[]);
+
+        assert_eq!(store.len(), 10_000);
+        assert_eq!(
+            store.publication_clone_work(),
+            10_000,
+            "a 1k-zone replacement must clone the 10k directory once, not once per zone"
+        );
+        assert!(store.contains_exact_zone_for_control(&replacements[999]));
+        assert!(!store.contains_exact_zone_for_control(&initial[999]));
     }
 
     #[test]

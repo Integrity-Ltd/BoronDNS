@@ -58,6 +58,13 @@ The retained logs show:
   read-only root filesystem, dropped capabilities, `no-new-privileges`, and
   rejection of a write probe under the read-only root.
 
+After this retained evidence run, the current package and smoke harnesses were
+strengthened with archive-local SHA-256 verification of the image config and
+every manifest layer. That verification now prevents daemon-cached content
+from hiding a missing or corrupted archive object before the behavioral
+`docker load` check; it does not retroactively extend the evidence recorded
+above.
+
 ## Remaining Related Work
 
 This evidence verifies local package/image creation, checksums, and smoke

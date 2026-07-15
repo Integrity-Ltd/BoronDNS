@@ -618,6 +618,7 @@ OXIDEDNS_DIST_DIR="$workdir/dist" \
 
 docker run -d \
     --name "$oxide_container" \
+    --ulimit nofile=65536:65536 \
     --network host \
     --read-only \
     --cap-drop ALL \

@@ -2022,7 +2022,7 @@ fn parse_hex_payload(value: &str) -> Result<Vec<u8>> {
         .chars()
         .filter(|byte| !byte.is_ascii_whitespace())
         .collect();
-    if normalized.is_empty() || normalized.len() % 2 != 0 {
+    if normalized.is_empty() || !normalized.len().is_multiple_of(2) {
         bail!("query.payload_hex must contain an even number of hex digits");
     }
     let mut payload = Vec::with_capacity(normalized.len() / 2);
