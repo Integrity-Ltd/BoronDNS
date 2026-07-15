@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use arc_swap as _;
 use base64 as _;
+use borondns_core as _;
 use hmac as _;
 use libc as _;
-use borondns_core as _;
 use serde as _;
 use sha1 as _;
 use sha2 as _;

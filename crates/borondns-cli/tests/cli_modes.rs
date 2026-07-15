@@ -7,10 +7,10 @@ use std::{
 };
 
 use anyhow as _;
-use clap as _;
-use getrandom as _;
 use borondns_core as _;
 use borondns_server as _;
+use clap as _;
+use getrandom as _;
 use time as _;
 use tokio as _;
 use tracing as _;

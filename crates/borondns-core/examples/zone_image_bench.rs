@@ -7,8 +7,6 @@ use std::{
 
 use arc_swap as _;
 use base64 as _;
-use hmac as _;
-use libc as _;
 use borondns_core::{
     dns::{
         AnswerOptions, DatagramAction, DnsCookieContext, DomainName, ExtendedDnsErrorsMode,
@@ -25,6 +23,8 @@ use borondns_core::{
         ZoneImagePlanSectionSummary, ZoneImagePlanSummary,
     },
 };
+use hmac as _;
+use libc as _;
 use serde as _;
 use sha1::{Digest, Sha1};
 use sha2 as _;

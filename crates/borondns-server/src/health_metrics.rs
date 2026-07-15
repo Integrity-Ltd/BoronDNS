@@ -21,7 +21,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use flate2::{Compression, write::GzEncoder};
 use borondns_core::{
     config::{
         HealthConfig, MAX_LATENCY_HISTOGRAM_BUCKETS, MetricsHotPathDetail, ObservabilityConfig,
@@ -29,6 +28,7 @@ use borondns_core::{
     dns::{ChaosQueryOutcome, DnsCookieRequestStatus, DomainName, ZoneImageServeFailureReason},
     zone::{PublishedZone, ZoneShapeHistogramBucket, ZoneState, ZoneStore},
 };
+use flate2::{Compression, write::GzEncoder};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},

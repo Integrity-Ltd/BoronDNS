@@ -5,7 +5,6 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
-use clap::{ArgAction, Parser, Subcommand};
 use borondns_core::{
     ConfigError, ConfigWarning, LogFormatConfig, ServerConfig, config::ExtendedDnsErrorsConfig,
 };
@@ -13,6 +12,7 @@ use borondns_server::{
     BUILD_COMMIT, BUILD_RUST_VERSION, BUILD_TIMESTAMP, BUILD_VERSION, Runtime, RuntimeError,
     TransferError,
 };
+use clap::{ArgAction, Parser, Subcommand};
 #[cfg(test)]
 use rcgen as _;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
