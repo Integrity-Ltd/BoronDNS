@@ -600,6 +600,7 @@ unit_is_exactly_active() {
 	[[ "$active" != inactive && "$active" != failed ]] || return 1
 }
 soak_evidence_is_complete() {
+	[[ -f "$host_evidence/scenario-results.tsv" ]] || return 1
 	local -a validator=(
 		python3 "$remote_repo/scripts/validate-collected-campaign.py" soak-host "$host_evidence" "$expected_commit"
 		--expected-duration "$duration"
