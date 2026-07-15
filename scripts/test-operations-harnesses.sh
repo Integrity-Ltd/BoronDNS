@@ -195,10 +195,14 @@ publish_test_root_runner() {
 materialize_campaign_helpers() {
     local fixture_repo="$1" relative
     for relative in scripts/campaign-env.sh scripts/campaign-lock-helper.py; do
-        install -D -m "$(stat -c %a "$repo_root/$relative")" "$repo_root/$relative" "$fixture_repo/$relative"
         if git -C "$fixture_repo" ls-files --error-unmatch -- "$relative" >/dev/null 2>&1; then
-            git -C "$fixture_repo" update-index --assume-unchanged -- "$relative"
+            git -C "$fixture_repo" update-index --no-assume-unchanged -- "$relative"
+            if ! cmp -s "$repo_root/$relative" "$fixture_repo/$relative"; then
+                install -D -m "$(stat -c %a "$repo_root/$relative")" "$repo_root/$relative" "$fixture_repo/$relative"
+                git -C "$fixture_repo" update-index --assume-unchanged -- "$relative"
+            fi
         else
+            install -D -m "$(stat -c %a "$repo_root/$relative")" "$repo_root/$relative" "$fixture_repo/$relative"
             printf '/%s\n' "$relative" >>"$fixture_repo/.git/info/exclude"
         fi
     done
@@ -7253,7 +7257,7 @@ cp "$repo_root/scripts/campaign-env.sh" "$poison_repo/scripts/campaign-env.sh"
 cp "$repo_root/scripts/campaign-lock-helper.py" "$poison_repo/scripts/campaign-lock-helper.py"
 git -C "$poison_repo" add -f scripts/fuzz-campaign.sh scripts/campaign-env.sh scripts/campaign-lock-helper.py
 git -C "$poison_repo" -c user.name=BoronDNS -c user.email=tests@borondns.invalid \
-    commit -qm 'materialize current fuzz campaign harness'
+    commit -qm 'materialize current fuzz campaign harness' --allow-empty
 mkdir -p "$poison_repo/target" "$poison_repo/fuzz/target" "$workdir/poison-build" "$workdir/poison-evidence" "$workdir/poison-bin" "$workdir/trusted-fuzz-bin"
 touch "$poison_repo/target/operator-sentinel" "$poison_repo/fuzz/target/operator-sentinel"
 # shellcheck disable=SC2016
