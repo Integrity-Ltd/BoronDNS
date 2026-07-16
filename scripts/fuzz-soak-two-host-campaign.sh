@@ -80,6 +80,7 @@ created_utc=""
 plan_created_utc=""
 sampler_deadline_epoch_seconds=""
 target_setup_reserve_seconds=600
+target_setup_reserve_per_unit_seconds=30
 target_activation_reserve_seconds=300
 sampler_probe_budget_seconds=10
 sampler_terminal_overhead_seconds=5
@@ -89,6 +90,16 @@ max_nanosecond_seconds=9223372036
 max_target_repeat=1000
 max_expanded_targets=10000
 max_sampler_interval_seconds=86400
+
+size_target_setup_reserve() {
+    local expanded_target_count="$1" scaled_reserve
+    [[ "$expanded_target_count" =~ ^[1-9][0-9]*$ && "$expanded_target_count" -le "$max_expanded_targets" ]] ||
+        die "invalid expanded fuzz target count for setup reserve: $expanded_target_count"
+    scaled_reserve=$((expanded_target_count * target_setup_reserve_per_unit_seconds))
+    if ((scaled_reserve > target_setup_reserve_seconds)); then
+        target_setup_reserve_seconds="$scaled_reserve"
+    fi
+}
 
 cleanup_plan_staging() {
     local final_status="$?" cleanup_failed=0 path prefix label lock_root acquired
@@ -427,6 +438,7 @@ set_defaults() {
     require_bounded_positive_integer "--sampler-interval" "$sampler_interval" "$max_sampler_interval_seconds"
     ((${#targets[@]} <= max_expanded_targets / target_repeat)) ||
         die "expanded fuzz target count exceeds the supported maximum $max_expanded_targets"
+    size_target_setup_reserve "$((${#targets[@]} * target_repeat))"
     prepare_plan_timing_schedule
 
     command -v rustup >/dev/null 2>&1 || die "rustup is required to authenticate the fuzz toolchain"
@@ -1890,6 +1902,7 @@ load_plan() {
     require_bounded_positive_integer "saved sampler_interval_seconds" "$sampler_interval_seconds" "$max_sampler_interval_seconds"
     ((${#targets[@]} <= max_expanded_targets)) ||
         die "saved expanded fuzz target count exceeds the supported maximum $max_expanded_targets"
+    size_target_setup_reserve "${#targets[@]}"
     ((created_epoch <= 9223372036854775807 - duration_seconds - 3600 - target_setup_reserve_seconds)) ||
         die "saved fuzz sampler deadline exceeds signed 64-bit epoch time"
     expected_sampler_deadline=$((created_epoch + duration_seconds + 3600 + target_setup_reserve_seconds))
